@@ -1436,6 +1436,8 @@
       "write_paths": [
         "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/",
         "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/",
+        "android/app/src/main/kotlin/com/meshcoreone/android/app/content/",
+        "android/app/src/test/kotlin/com/meshcoreone/android/app/content/",
         "docs/android/deviations/WP-218.md",
         "docs/android/evidence/WP-218/"
       ],

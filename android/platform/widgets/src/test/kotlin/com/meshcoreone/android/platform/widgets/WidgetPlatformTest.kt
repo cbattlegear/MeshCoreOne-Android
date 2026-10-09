@@ -97,5 +97,12 @@ class WidgetPlatformTest {
         assertTrue(service.exported)
         assertEquals("android.permission.BIND_QUICK_SETTINGS_TILE", service.permission)
         assertNotNull(service.metaData)
+        @Suppress("DEPRECATION")
+        val requestedPermissions = context.packageManager.getPackageInfo(
+            context.packageName,
+            PackageManager.GET_PERMISSIONS,
+        ).requestedPermissions.orEmpty().toSet()
+        assertFalse("android.permission.RECEIVE_BOOT_COMPLETED" in requestedPermissions)
+        assertFalse("android.permission.WAKE_LOCK" in requestedPermissions)
     }
 }

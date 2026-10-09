@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from controller.errors import PortError
+from controller.capabilities import CapabilityEngine
 from controller.model import load_manifest
 from controller.paths import permits
 from controller.paths import git_path
@@ -31,6 +32,21 @@ WP_302_SCOPE_APPROVAL = {
     "authority": "User-directed approved necessary WP-302 launcher and unit-navigation support",
     "acceptance": "Ownership/traceability admission only; no source, parity, human or merge acceptance",
 }
+
+def capability_support_admitted(manifest, wp_id, relative):
+    if not (
+        relative.startswith("android/app/src/main/kotlin/")
+        and relative.endswith(".kt")
+    ):
+        return False
+    policy = load_json(manifest.repo / "docs" / "android" / "automation-policy.json", 512 * 1024)
+    admission = CapabilityEngine(policy).admit(
+        wp_id,
+        manifest.wp(wp_id)["write_paths"],
+        relative,
+        "add-direct-support-wiring",
+    )
+    return admission.capability_id == "app-build-launcher"
 
 
 def navigation_scope_admitted(manifest, relative):
@@ -69,7 +85,8 @@ def port_map(manifest):
         for wp_id, reason in android_only:
             declared = permits(manifest.wp(wp_id)["write_paths"], relative)
             nav_allowed = wp_id == "WP-302" and not declared and navigation_scope_admitted(manifest, relative)
-            if not reason.strip() or not (declared or nav_allowed):
+            capability_allowed = not declared and not nav_allowed and capability_support_admitted(manifest, wp_id, relative)
+            if not reason.strip() or not (declared or nav_allowed or capability_allowed):
                 raise PortError(f"Invalid Android-only owner/write path: {relative}")
         for declaration in generated:
             generator, separator, declared_inputs = declaration.partition("; inputs: ")

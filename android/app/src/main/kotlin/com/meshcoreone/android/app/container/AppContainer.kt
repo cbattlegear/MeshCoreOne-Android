@@ -129,6 +129,8 @@ class AppContainerDependencies(
         override fun stringList(key: String): List<String>? = null
         override fun setStringList(key: String, value: List<String>) = Unit
     },
+    /** Real process/store/RF/elevation adapters for line-of-sight; network terrain remains optional to mesh. */
+    val lineOfSight: com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies? = null,
     val newBootstrapDebugLog: (CoroutineScope) -> DebugLogBuffer? = { null },
     /** Releases process-owned resources (database, storage) once the runtime has closed. */
     val onClose: suspend () -> Unit = {},
@@ -242,6 +244,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     internal val nodesMessages get() = dependencies.nodesMessages
     internal val nodesAnnouncer get() = dependencies.nodesAnnouncer
     internal val nodesPreferences get() = dependencies.nodesPreferences
+    val lineOfSight = dependencies.lineOfSight
     internal val offlineMaps: OfflineMapController
         get() = checkNotNull(dependencies.offlineMaps) { "Production map dependencies were not installed" }
 

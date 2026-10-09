@@ -95,6 +95,8 @@ import com.meshcoreone.android.feature.remotenodes.RemoteNodesEntry
 import com.meshcoreone.android.feature.settings.SettingsEntry
 import com.meshcoreone.android.feature.tools.ToolsEntry
 import com.meshcoreone.android.feature.tools.diagnostics.ToolsDiagnosticsDependencies
+import com.meshcoreone.android.feature.tools.los.LineOfSightEntry
+import com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies
 import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -131,8 +133,9 @@ fun NativeNavigationShell(
     map: MapFeatureDependencies? = null,
     tools: ToolsDiagnosticsDependencies? = null,
     nodes: NodesFeatureDependencies? = null,
+    lineOfSight: LineOfSightFeatureDependencies? = null,
     content: @Composable (NavigationDestination, (FeatureRoute) -> Unit) -> Unit = { destination, navigate ->
-        ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, coordinator)
+        ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, lineOfSight, coordinator)
     },
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
@@ -402,6 +405,7 @@ private fun ExistingFeatureContent(
     map: MapFeatureDependencies?,
     tools: ToolsDiagnosticsDependencies?,
     nodes: NodesFeatureDependencies?,
+    lineOfSight: LineOfSightFeatureDependencies?,
     coordinator: NavigationCoordinator,
 ) {
     val navigationState by coordinator.state.collectAsStateWithLifecycle()
@@ -447,7 +451,12 @@ private fun ExistingFeatureContent(
             }
             MapEntry(route, navigate, map, focus, coordinator::clearPendingMapFocus)
         }
-        FeatureId.TOOLS -> ToolsEntry(route, navigate, tools)
+        FeatureId.TOOLS -> {
+            val opensLineOfSight =
+                (destination as? NavigationDestination.Tool)?.selection == ToolSelection.LINE_OF_SIGHT
+            if (opensLineOfSight && lineOfSight != null) LineOfSightEntry(lineOfSight)
+            else ToolsEntry(route, navigate, tools)
+        }
         FeatureId.SETTINGS -> SettingsEntry(route, navigate)
         FeatureId.ONBOARDING -> OnboardingEntry(
             route,

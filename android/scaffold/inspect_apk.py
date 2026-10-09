@@ -35,6 +35,7 @@ def inspect_apk():
     # WP-303 adds optional coarse location before WP-206 connectivity permissions (manifest order).
     expected = [
         "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.CAMERA",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.BLUETOOTH_SCAN",
         "android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE",

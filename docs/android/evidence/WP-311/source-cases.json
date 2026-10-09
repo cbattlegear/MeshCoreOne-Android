@@ -1,20 +1,24 @@
 {
  "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
  "owned_case_count": 98,
- "bound_case_count": 96,
- "unbound": [
-  {
-   "id": "ContactShareContentTests::uri is meshcore contact/add and round-trips()",
-   "source": "MC1Tests/Views/Contacts/ContactShareContentTests.swift",
-   "reason": "needs the real meshcore://contact/add encoder (ContactService.exportContactURI, WP-209 / PR #49, internal ContactUriBuilder) and parser (MeshCoreURLParser.parseContactURL, WP-405, not ported); the feature only delegates through ContactUriCodec, so a fake codec would not exercise source behavior. See WP-311.md B-1"
-  },
+ "bound_case_count": 98,
+ "cases": [
   {
    "id": "ContactShareContentTests::uri preserves contact type()",
+   "class": "com.meshcoreone.android.app.deeplinks.MeshCoreUriParserTest",
+   "method": "contactShareContentUsesRealEncoderAndParser",
+   "disposition": "source-behavior",
    "source": "MC1Tests/Views/Contacts/ContactShareContentTests.swift",
-   "reason": "same encoder/parser dependency as the round-trip case (WP-209 export + WP-405 parse); deferred rather than faked. See WP-311.md B-1"
-  }
- ],
- "cases": [
+   "junit": "passed"
+  },
+  {
+   "id": "ContactShareContentTests::uri is meshcore contact/add and round-trips()",
+   "class": "com.meshcoreone.android.app.deeplinks.MeshCoreUriParserTest",
+   "method": "contactShareContentUsesRealEncoderAndParser",
+   "disposition": "source-behavior",
+   "source": "MC1Tests/Views/Contacts/ContactShareContentTests.swift",
+   "junit": "passed"
+  },
   {
    "id": "ContactsViewModelTests::hasLoadedOnce starts false()",
    "class": "com.meshcoreone.android.feature.nodes.contacts.ContactsViewModelTest",
@@ -783,5 +787,6 @@
    "source": "MC1Tests/Views/Contacts/ScanContactQRFeedbackTests.swift",
    "junit": "passed"
   }
- ]
+ ],
+ "unbound": []
 }

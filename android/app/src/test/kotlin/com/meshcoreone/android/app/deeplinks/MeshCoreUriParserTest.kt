@@ -23,6 +23,23 @@ import kotlinx.coroutines.test.runTest
 class MeshCoreUriParserTest {
     @Test
     @SourceCases(
+        "ContactShareContentTests::uri is meshcore contact/add and round-trips()",
+        "ContactShareContentTests::uri preserves contact type()",
+    )
+    fun contactShareContentUsesRealEncoderAndParser() {
+        val key = Bytes.parseHex("B7".repeat(32))!!
+        ContactType.entries.forEach { type ->
+            val uri = ContactService.exportContactURI("Alice Repeater", key, type)
+            val parsed = assertContact(uri)
+            assertTrue(uri.startsWith("meshcore://contact/add?"))
+            assertEquals("Alice Repeater", parsed.name)
+            assertEquals(key, parsed.publicKey)
+            assertEquals(type, parsed.contactType)
+        }
+    }
+
+    @Test
+    @SourceCases(
         "MeshCoreURLParserTests::parseContactURL falls back to .chat for an out-of-range type without trapping()",
         "MeshCoreURLParserTests::parseContactURL maps type=2 to .repeater()",
         "MeshCoreURLParserTests::Every contact type round-trips through export and parse()",

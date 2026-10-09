@@ -86,6 +86,9 @@ import com.meshcoreone.android.feature.chats.ChatsEntry
 import com.meshcoreone.android.feature.map.MapEntry
 import com.meshcoreone.android.feature.map.MapFeatureDependencies
 import com.meshcoreone.android.feature.nodes.NodesEntry
+import com.meshcoreone.android.feature.nodes.NodesDestination
+import com.meshcoreone.android.feature.nodes.NodesNavigation
+import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.onboarding.OnboardingEntry
 import com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies
 import com.meshcoreone.android.feature.remotenodes.RemoteNodesEntry
@@ -127,8 +130,9 @@ fun NativeNavigationShell(
     onboarding: OnboardingFeatureDependencies? = null,
     map: MapFeatureDependencies? = null,
     tools: ToolsDiagnosticsDependencies? = null,
+    nodes: NodesFeatureDependencies? = null,
     content: @Composable (NavigationDestination, (FeatureRoute) -> Unit) -> Unit = { destination, navigate ->
-        ExistingFeatureContent(destination, navigate, onboarding, map, tools, coordinator)
+        ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, coordinator)
     },
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
@@ -397,6 +401,7 @@ private fun ExistingFeatureContent(
     onboarding: OnboardingFeatureDependencies?,
     map: MapFeatureDependencies?,
     tools: ToolsDiagnosticsDependencies?,
+    nodes: NodesFeatureDependencies?,
     coordinator: NavigationCoordinator,
 ) {
     val navigationState by coordinator.state.collectAsStateWithLifecycle()
@@ -411,7 +416,31 @@ private fun ExistingFeatureContent(
     val route = FeatureRoute(feature)
     when (feature) {
         FeatureId.CHATS -> ChatsEntry(route, navigate)
-        FeatureId.NODES -> NodesEntry(route, navigate)
+        FeatureId.NODES -> NodesEntry(
+            route = route,
+            onNavigate = navigate,
+            dependencies = nodes,
+            destination = when (destination) {
+                is NavigationDestination.ContactDetail -> NodesDestination.Detail(destination.contact)
+                NavigationDestination.Discovery -> NodesDestination.Discovery
+                else -> NodesDestination.List
+            },
+            navigation = object : NodesNavigation {
+                override fun openContact(contact: com.meshcoreone.android.core.model.ContactDTO) =
+                    coordinator.navigateToContactDetail(contact)
+
+                override fun openDiscovery() = coordinator.navigateToDiscovery()
+                override fun openChat(contact: com.meshcoreone.android.core.model.ContactDTO) =
+                    coordinator.navigateToChat(contact)
+
+                override fun openMap(latitude: Double, longitude: Double) =
+                    coordinator.navigateToMap(latitude, longitude)
+
+                override fun back() {
+                    coordinator.back()
+                }
+            },
+        )
         FeatureId.MAP -> {
             val focus = navigationState.pendingMapFocus?.let {
                 com.meshcoreone.android.core.maps.GeoPoint(it.latitude, it.longitude)

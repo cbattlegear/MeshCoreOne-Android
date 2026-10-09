@@ -33,6 +33,15 @@ class ConsumerLockTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             reader.verify_delta(before, after, admitted)
 
+    def test_exact_admitted_replacement_is_preserved(self):
+        before, after, admitted = self.state()
+        original, replacement = next(iter(reader.REPLACEMENTS.items()))
+        before["debugRuntimeClasspath"].add(original)
+        after["debugRuntimeClasspath"].add(original)
+        after["debugRuntimeClasspath"].remove(original)
+        after["debugRuntimeClasspath"].add(replacement)
+        reader.verify_delta(before, after, admitted)
+
     def test_later_artifact_is_preserved(self):
         before, after, admitted = self.state()
         after["debugRuntimeClasspath"].add("example:later-work-package:1.0")

@@ -2,6 +2,9 @@
 package com.meshcoreone.android.app.container
 
 import android.app.Application
+import android.content.Context
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
 import com.meshcoreone.android.app.state.ProcessForegroundState
 import com.meshcoreone.android.core.connectivity.ConnectivityDiagnostics
 import com.meshcoreone.android.core.connectivity.ConnectivityPlatform
@@ -52,6 +55,10 @@ import com.meshcoreone.android.core.maps.OfflineLayer
 import com.meshcoreone.android.core.maps.OfflineLayerPolicy
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.maps.UnavailableOfflineMapBackend
+import com.meshcoreone.android.core.ui.UiErrorMapper
+import com.meshcoreone.android.feature.nodes.deps.Announcer
+import com.meshcoreone.android.feature.nodes.deps.NodesMessage
+import com.meshcoreone.android.feature.nodes.deps.UserFacingMessages
 
 /**
  * The production composition of [AppContainer]. Implemented platform services are bound here; remaining unavailable
@@ -170,6 +177,13 @@ object AndroidAppContainerFactory {
                 mainScope = mainScope,
                 onboardingPlatform = onboardingPlatform,
                 offlineMaps = offlineMaps,
+                nodesMessages = UserFacingMessages { failure ->
+                    UiErrorMapper().message(failure).resolve(application.resources)
+                },
+                nodesAnnouncer = Announcer { message ->
+                    announceForAccessibility(application, message.resolve(application))
+                },
+                nodesPreferences = SharedPreferencesStringLists(application),
                 foreground = foreground,
                 knownEndpoints = endpoints,
                 regionStore = DataStoreRegionSelectionStore(storage.preferences),
@@ -193,4 +207,23 @@ object AndroidAppContainerFactory {
         notificationDelivery.retryPendingActions()
         return container
     }
+}
+
+private fun announceForAccessibility(context: Context, text: String) {
+    val manager = context.getSystemService(AccessibilityManager::class.java)
+    if (!manager.isEnabled) return
+    val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_ANNOUNCEMENT)
+    event.packageName = context.packageName
+    event.className = AndroidAppContainerFactory::class.java.name
+    event.text.add(text)
+    manager.sendAccessibilityEvent(event)
+}
+
+private fun NodesMessage.resolve(context: Context): String = when (this) {
+    is NodesMessage.Text -> value
+    is NodesMessage.Joined -> parts.joinToString(separator) { it.resolve(context) }
+    is NodesMessage.Resource -> context.getString(
+        id,
+        *args.map { if (it is NodesMessage) it.resolve(context) else it }.toTypedArray(),
+    )
 }

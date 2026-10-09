@@ -35,6 +35,27 @@ ADDITIONS = {
     "org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3",
     "org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.7.3",
 }
+REPLACEMENTS = {
+    "androidx.activity:activity-compose:1.8.2": "androidx.activity:activity-compose:1.13.0",
+    "androidx.activity:activity-ktx:1.8.2": "androidx.activity:activity-ktx:1.13.0",
+    "androidx.activity:activity:1.8.2": "androidx.activity:activity:1.13.0",
+    "androidx.core:core-ktx:1.16.0": "androidx.core:core-ktx:1.18.0",
+    "androidx.core:core:1.16.0": "androidx.core:core:1.18.0",
+    "androidx.lifecycle:lifecycle-common-jvm:2.8.7": "androidx.lifecycle:lifecycle-common-jvm:2.9.4",
+    "androidx.lifecycle:lifecycle-common:2.8.7": "androidx.lifecycle:lifecycle-common:2.9.4",
+    "androidx.lifecycle:lifecycle-runtime-android:2.8.7": "androidx.lifecycle:lifecycle-runtime-android:2.9.4",
+    "androidx.lifecycle:lifecycle-runtime-compose-android:2.8.7":
+        "androidx.lifecycle:lifecycle-runtime-compose-android:2.9.4",
+    "androidx.lifecycle:lifecycle-runtime-compose:2.8.7":
+        "androidx.lifecycle:lifecycle-runtime-compose:2.9.4",
+    "androidx.lifecycle:lifecycle-runtime-ktx-android:2.8.7":
+        "androidx.lifecycle:lifecycle-runtime-ktx-android:2.9.4",
+    "androidx.lifecycle:lifecycle-runtime-ktx:2.8.7": "androidx.lifecycle:lifecycle-runtime-ktx:2.9.4",
+    "androidx.lifecycle:lifecycle-runtime:2.8.7": "androidx.lifecycle:lifecycle-runtime:2.9.4",
+    "androidx.tracing:tracing:1.2.0": "androidx.tracing:tracing:1.3.0",
+    "com.google.guava:listenablefuture:1.0":
+        "com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava",
+}
 
 
 def require(condition, message):
@@ -75,7 +96,10 @@ def verify_delta(before, after, admitted):
     require(set(admitted) == CONFIGURATIONS, "missing or extra admitted configuration")
     require(all(len(value) == 16 and set(value) == ADDITIONS for value in admitted.values()), "changed admitted additions")
     for name, original in before.items():
-        require(name in after and original <= after[name], "generated lock removed or changed existing state")
+        require(name in after, "generated lock removed existing configuration")
+        missing = original - after[name]
+        require(all(REPLACEMENTS.get(component) in after[name] for component in missing),
+            "generated lock removed or changed existing state")
     for name, additions in admitted.items():
         require(name in before and set(additions) <= after[name], "admitted addition is absent from generated lock")
 

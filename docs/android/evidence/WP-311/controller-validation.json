@@ -1,0 +1,29 @@
+{
+  "result": "valid",
+  "tracked_reference_files": 1866,
+  "kinds": {
+    "apple-glue": 2,
+    "generated": 1,
+    "license": 43,
+    "production": 1058,
+    "reference": 60,
+    "resource": 234,
+    "support": 40,
+    "test": 428
+  },
+  "owned_files": 1812,
+  "excluded_files": 54,
+  "work_packages": 65,
+  "dependency_edges": 185,
+  "human_gates": [
+    "WP-000",
+    "WP-001",
+    "WP-002",
+    "WP-003",
+    "WP-006",
+    "WP-406",
+    "WP-505",
+    "WP-506"
+  ],
+  "manifest_sha256": "58f7ebd7f46bbe0636c71005f20776efe139a287279e4f4708b25ce6bfa3f892"
+}

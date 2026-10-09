@@ -6,7 +6,13 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from controller.ci_evidence import EXPECTED_APK_PERMISSIONS, counts, lint_evidence, suite_counts
+from controller.ci_evidence import (
+    EXPECTED_APK_PERMISSIONS,
+    counts,
+    lint_evidence,
+    suite_counts,
+    validate_graph_runtime,
+)
 from controller.errors import PortError
 
 REPO = Path(__file__).resolve().parents[3]
@@ -32,6 +38,40 @@ def junit_report(path: Path, tests=1, failures=0, errors=0, skipped=0):
 
 
 class LiveReportTests(unittest.TestCase):
+    def write_runtime_reports(self, root: Path, runtime_rows: list[str]):
+        (root / "module-graph.tsv").write_text(
+            "consumer\tproducer\tconfiguration\n:app\t:core:model\tdebugRuntimeClasspath\n",
+            encoding="utf-8",
+        )
+        (root / "runtime-dependencies.tsv").write_text(
+            "artifact\tdeclared_license\tlicense_url\tlicense_pom\tlicense_pom_sha256\tlegal_gate\n"
+            + "\n".join(runtime_rows)
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def test_runtime_component_may_declare_multiple_distinct_licenses(self):
+        digest = "a" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_runtime_reports(root, [
+                f"example:component:1\tApache-2.0\thttps://example.test/apache\texample:component:1\t{digest}\thuman-review-pending",
+                f"example:component:1\tBSD-3-Clause\thttps://example.test/bsd\texample:component:1\t{digest}\thuman-review-pending",
+            ])
+            validate_graph_runtime(root)
+
+    def test_duplicate_runtime_license_declaration_rejects(self):
+        digest = "a" * 64
+        row = (
+            f"example:component:1\tApache-2.0\thttps://example.test/apache\t"
+            f"example:component:1\t{digest}\thuman-review-pending"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_runtime_reports(root, [row, row.replace(digest, "b" * 64)])
+            with self.assertRaisesRegex(PortError, "Duplicate runtime license declaration"):
+                validate_graph_runtime(root)
+
     def test_apk_inspector_and_controller_require_the_same_exact_permissions(self):
         module = ast.parse((REPO / "android/scaffold/inspect_apk.py").read_text(encoding="utf-8"))
         expected = next(

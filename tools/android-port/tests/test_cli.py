@@ -21,7 +21,7 @@ from controller.render import cloud_payload, input_page, issue_payload, local_pa
 from controller.test_runner import run_suite
 from controller.verification_config import project_content_scope
 from controller.validate import main as validate_main
-from portmap import port_map, WP_302_SCOPE_APPROVAL, WP_302_SCOPE_PROOF, SUPPORT_SCOPE_RECEIPT
+from portmap import port_map, WP_302_SCOPE_APPROVAL, WP_302_SCOPE_PROOF
 
 
 class CliTests(unittest.TestCase):
@@ -309,10 +309,10 @@ class ProvenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(port_map(self.temporary_manifest(directory)), [])
 
-    def test_capability_support_receipt_admits_only_its_exact_trusted_path_and_operation(self):
+    def test_trusted_capability_path_operation_admits_direct_app_support_and_nothing_else(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            relative = "android/app/Support.kt"
+            relative = "android/app/src/main/kotlin/example/Support.kt"
             source = root / relative
             source.parent.mkdir(parents=True)
             source.write_text("// AndroidOnly: WP-101 direct app wiring\n", encoding="utf-8")
@@ -320,38 +320,12 @@ class ProvenanceTests(unittest.TestCase):
             policy = root / "docs" / "android" / "automation-policy.json"
             policy.parent.mkdir(parents=True)
             policy.write_bytes(policy_source.read_bytes())
-            receipt = policy.parent / "evidence" / "WP-101" / SUPPORT_SCOPE_RECEIPT
-            receipt.parent.mkdir(parents=True)
-            valid = {
-                "schema_version": 1,
-                "repository": "cbattlegear/MeshCoreOne-Android",
-                "work_package": "WP-101",
-                "source_sha": REFERENCE_SHA,
-                "base_sha": "a" * 40,
-                "session_id": "support-test",
-                "paths": [{
-                    "path": relative,
-                    "operation": "add-direct-support-wiring",
-                    "capability": "app-build-launcher",
-                }],
-            }
-            receipt.write_text(json.dumps(valid), encoding="utf-8")
             self.assertEqual(["WP-101"], port_map(self.temporary_manifest(directory))[0]["android_only"])
-            for field, value in (
-                ("work_package", "WP-218"),
-                ("source_sha", "b" * 40),
-                ("base_sha", "not-a-sha"),
-                ("session_id", ""),
-                ("unexpected", True),
-            ):
-                wrong = copy.deepcopy(valid)
-                wrong[field] = value
-                receipt.write_text(json.dumps(wrong), encoding="utf-8")
-                with self.subTest(field=field), self.assertRaises(PortError):
-                    port_map(self.temporary_manifest(directory))
-            wrong = copy.deepcopy(valid)
-            wrong["paths"][0]["operation"] = "unknown-operation"
-            receipt.write_text(json.dumps(wrong), encoding="utf-8")
+
+            source.unlink()
+            outside = root / "android" / "core" / "Support.kt"
+            outside.parent.mkdir(parents=True)
+            outside.write_text("// AndroidOnly: WP-101 unsupported wiring\n", encoding="utf-8")
             with self.assertRaises(PortError):
                 port_map(self.temporary_manifest(directory))
 

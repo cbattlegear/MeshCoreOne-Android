@@ -3,7 +3,7 @@
 Frozen source: `db14559b39d32322b06477c6ae676112f583db50`.
 Integrated base: `origin/main` at
 `30ea05458be2a49d8757f9c0fe12a5c3609bf9c2`. This is local candidate evidence,
-not a CI, merge, device, hardware or measured-reception receipt.
+not CI, merge, device, hardware or measured-reception evidence.
 
 ## Source and behavior accounting
 
@@ -50,6 +50,11 @@ Passed on the integrated WP-316 base in 4m21s:
 - `validateModuleGraph`: 30 modules, no forbidden production edge or Android
   JVM leakage.
 
+An exact corrected-head forced rerun used
+`android\gradlew.bat :feature:tools:testDebugUnitTest :app:testDebugUnitTest
+--rerun-tasks --console=plain --max-workers=2` and passed in 5m43s with the
+same 36/644 feature, 41/547 app and 9/141 LoS discovery/pass counts.
+
 ```text
 python tools\android-port\portmap.py
 python tools\android-port\controller\validate.py
@@ -65,17 +70,17 @@ cd tools\android-port\tests
 python -m unittest test_cli
 ```
 
-Passed: 28 tests in 30.351s. This includes the new fail-closed capability
-support-receipt test, which proves only the exact trusted path and operation are
-admitted and rejects unknown capabilities and out-of-rule paths.
+Passed: 28 tests in 19.767s. This includes the fail-closed trusted
+path-plus-operation test: app-owned Kotlin support is admitted by the existing
+`app-build-launcher` capability, while an out-of-rule core path is rejected.
 
-## Dependency and support receipts
+## Dependency and support scope
 
 `feature:tools` now directly consumes the already approved `core:maps` module.
 `android/gradle/dependency-locks/feature-tools.lockfile` records only that
 resolved MapLibre/core-maps graph; no new external dependency was introduced.
-`support-scope.json` binds the app adapter to its source pin, integrated base,
-session, exact support path, operation and trusted capability.
+The app adapter is admitted by the existing trusted `app-build-launcher`
+path-plus-operation policy.
 
 ## Limits of this evidence
 

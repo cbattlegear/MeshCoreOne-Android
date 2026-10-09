@@ -33,7 +33,7 @@ internal fun declaredLicenses(pom: File): List<DeclaredLicense> {
             val url = license.child("url")?.textContent?.trim()
             require(!name.isNullOrBlank() && !url.isNullOrBlank()) { "Incomplete declared license: ${pom.name}" }
             DeclaredLicense(name, url)
-        }
+        }.distinct()
 }
 
 internal fun generateRuntimeDependencyInventory(project: Project, destination: File) {

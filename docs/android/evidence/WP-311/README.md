@@ -25,7 +25,7 @@ device, camera hardware or radio hardware was used.
 | `gradlew.bat :app:testDebugUnitTest --tests com.meshcoreone.android.app.deeplinks.MeshCoreUriParserTest.contactShareContentUsesRealEncoderAndParser --dependency-verification=strict --no-daemon --quiet --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process` | Passed. One selected test; all three contact types round-trip through the real encoder/parser. |
 | `gradlew.bat :feature:nodes:lintDebug --dependency-verification=strict --no-daemon --quiet --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process` | Passed; HTML and SARIF reports generated under `android/feature/nodes/build/reports/`. |
 | `gradlew.bat :app:assembleDebug --dependency-verification=strict --no-daemon --quiet --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process` | Passed after integrating current `origin/main`; debug APK assembled. |
-| `gradlew.bat :core:designsystem:verifyThemePackaging --dependency-verification=strict --no-daemon --quiet --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process` | Passed after admitting optional `CAMERA` in the exact APK permission allowlist; package `com.meshcoreone.android.debug`, min/target 31/37, notices and test-fixture exclusions verified. |
+| `gradlew.bat :core:designsystem:verifyThemePackaging --dependency-verification=strict --no-daemon --quiet --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process` | Passed with the exact debug APK permission set including the legitimate optional `CAMERA` permission; package `com.meshcoreone.android.debug`, min/target 31/37, notices and test-fixture exclusions verified. |
 | `gradlew.bat validateModuleGraph --dependency-verification=strict --no-daemon --quiet --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process` | Passed; the feature retains no `core:services` edge. |
 | `python tools\android-port\portmap.py` | Passed, exit 0. |
 
@@ -63,7 +63,7 @@ The 175 feature tests comprise the predecessor's 173 logic tests plus two QR out
 
 CameraX `1.6.2` and ZXing `3.5.4` were resolved through the existing repositories. Strict
 verification metadata and only the affected `feature-nodes`/`app` lock states are committed.
-The APK packaging allowlist is updated for the optional `CAMERA` permission. No Google services,
+The exact debug APK permission set includes the legitimate optional `CAMERA` permission. No Google services,
 analytics, accounts or unrelated permissions were added.
 
 ## Limits

@@ -6,7 +6,13 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from controller.ci_evidence import EXPECTED_APK_PERMISSIONS, counts, lint_evidence, suite_counts
+from controller.ci_evidence import (
+    EXPECTED_APK_PERMISSIONS,
+    counts,
+    lint_evidence,
+    suite_counts,
+    validate_graph_runtime,
+)
 from controller.errors import PortError
 
 REPO = Path(__file__).resolve().parents[3]
@@ -32,6 +38,29 @@ def junit_report(path: Path, tests=1, failures=0, errors=0, skipped=0):
 
 
 class LiveReportTests(unittest.TestCase):
+    def test_runtime_inventory_preserves_distinct_licenses_for_one_component(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            reports = Path(temporary)
+            (reports / "module-graph.tsv").write_text(
+                "consumer\tproducer\tconfiguration\n:app\t:core:model\tdebugRuntimeClasspath\n",
+                encoding="utf-8",
+            )
+            header = (
+                "artifact\tdeclared_license\tlicense_url\tlicense_pom\t"
+                "license_pom_sha256\tlegal_gate\n"
+            )
+            coordinate = "androidx.camera:camera-core:1.6.2"
+            digest = "a" * 64
+            rows = [
+                f"{coordinate}\tApache-2.0\thttps://apache.org/license\t{coordinate}\t{digest}\thuman-review-pending",
+                f"{coordinate}\tBSD-3-Clause\thttps://opensource.org/license/bsd\t{coordinate}\t{digest}\thuman-review-pending",
+            ]
+            (reports / "runtime-dependencies.tsv").write_text(
+                header + "\n".join(rows) + "\n",
+                encoding="utf-8",
+            )
+            validate_graph_runtime(reports)
+
     def test_apk_inspector_and_controller_require_the_same_exact_permissions(self):
         module = ast.parse((REPO / "android/scaffold/inspect_apk.py").read_text(encoding="utf-8"))
         expected = next(

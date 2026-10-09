@@ -33,6 +33,16 @@ class DependencyInventoryTest {
     }
 
     @Test
+    fun `identical upstream declarations produce one provenance record`() {
+        val declaration =
+            "<license><name>Apache-2.0</name><url>https://apache.org/licenses/LICENSE-2.0</url></license>"
+        assertEquals(
+            listOf(DeclaredLicense("Apache-2.0", "https://apache.org/licenses/LICENSE-2.0")),
+            declaredLicenses(pom("<project><licenses>$declaration$declaration</licenses></project>")),
+        )
+    }
+
+    @Test
     fun `incomplete declarations fail explicitly`() {
         assertFailsWith<IllegalArgumentException> {
             declaredLicenses(pom("<project><licenses><license><name>Unknown</name></license></licenses></project>"))

@@ -1,7 +1,7 @@
 # WP-314 evidence
 
 Frozen source: `db14559b39d32322b06477c6ae676112f583db50`.
-Candidate base: `e2a9653df43a0939cd3c6919a298ea76c2c2403d`.
+Integrated base: `9b60b6965ce009e58517e8451f16f94502ae41f5`.
 
 ## Implemented scope
 
@@ -25,7 +25,7 @@ Windows, JDK 21.0.12.1, Android SDK 37.2/build-tools 37.0.0:
 
 ./gradlew :feature:tools:testDebugUnitTest :feature:tools:lintDebug
   PASS
-  34 suites, 640 tests, 0 failures, 0 errors, 0 skipped
+  35 suites, 641 tests, 0 failures, 0 errors, 0 skipped
   WP-314 trace/discovery suites: 13 suites, 196 tests
 
 ./gradlew validateModuleGraph

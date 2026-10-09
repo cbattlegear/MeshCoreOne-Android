@@ -12,11 +12,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.container.createToolsFeatureDependencies
+import com.meshcoreone.android.app.container.createToolsDiagnosticsDependencies
 import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
 import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
 import com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome
@@ -110,13 +112,19 @@ open class MainActivity : ComponentActivity() {
                 val resolved by produceContainer()
                 resolved?.let { answer ->
                     OnboardingGate(host.navigation, answer.container?.onboarding) { bound ->
+                        val tools = remember(answer.container) {
+                            answer.container?.let { container ->
+                                container.createToolsFeatureDependencies(
+                                    AndroidRecentHopsStorage(getSharedPreferences("tools", MODE_PRIVATE)),
+                                    container.createToolsDiagnosticsDependencies(),
+                                )
+                            }
+                        }
                         NativeNavigationShell(
                             host.navigation,
                             onboarding = bound?.forRerun(),
                             map = answer.container?.mapFeature,
-                            tools = answer.container?.createToolsFeatureDependencies(
-                                AndroidRecentHopsStorage(getSharedPreferences("tools", MODE_PRIVATE)),
-                            ),
+                            tools = tools,
                         )
                     }
                 }

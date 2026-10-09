@@ -33,6 +33,8 @@ import com.meshcoreone.android.core.ui.ScaffoldAvailabilityKey
 import com.meshcoreone.android.core.ui.ScaffoldFeatureContent
 import com.meshcoreone.android.feature.tools.discovery.NodeDiscoveryRoute
 import com.meshcoreone.android.feature.tools.discovery.NodeDiscoveryFeatureDependencies
+import com.meshcoreone.android.feature.tools.diagnostics.ToolsDiagnosticsDependencies
+import com.meshcoreone.android.feature.tools.diagnostics.ToolsDiagnosticsScreen
 import com.meshcoreone.android.feature.tools.navigation.ToolSelection
 import com.meshcoreone.android.feature.tools.trace.RecentHopsStorage
 import com.meshcoreone.android.feature.tools.trace.TraceDiagnostics
@@ -48,6 +50,7 @@ data class ToolsFeatureDependencies(
     val diagnostics: TraceDiagnostics,
     val radioId: () -> com.meshcoreone.android.core.model.RadioId?,
     val generation: StateFlow<Int>,
+    val toolsDiagnostics: ToolsDiagnosticsDependencies,
 )
 
 @Composable
@@ -70,17 +73,28 @@ fun ToolsEntry(
         ToolSelection.NODE_DISCOVERY -> NodeDiscoveryRoute(
             dependencies?.let { NodeDiscoveryRoute.Dependencies(it.discovery, it.diagnostics) },
         )
+        ToolSelection.CLI, ToolSelection.RX_LOG, ToolSelection.NOISE_FLOOR -> dependencies?.let {
+            ToolsDiagnosticsScreen(it.toolsDiagnostics, selection)
+        } ?: unavailableTool(route, onNavigate, selection)
         else -> ScaffoldFeatureContent(
-            FeatureId.TOOLS,
-            route,
-            FeatureShellCopy(
+            FeatureId.TOOLS, route, FeatureShellCopy(
                 toolTitle(selection),
                 stringResource(com.meshcoreone.android.core.l10n.R.string.scaffold_tools_description),
                 stringResource(com.meshcoreone.android.core.l10n.R.string.scaffold_run_radio_tool),
-            ),
-            onNavigate,
+            ), onNavigate,
         )
     }
+}
+
+@Composable
+private fun unavailableTool(route: FeatureRoute, onNavigate: (FeatureRoute) -> Unit, tool: ToolSelection) {
+    ScaffoldFeatureContent(
+        FeatureId.TOOLS, route, FeatureShellCopy(
+            toolTitle(tool),
+            stringResource(com.meshcoreone.android.core.l10n.R.string.scaffold_tools_description),
+            stringResource(com.meshcoreone.android.core.l10n.R.string.scaffold_run_radio_tool),
+        ), onNavigate,
+    )
 }
 
 @Composable

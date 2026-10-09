@@ -10,6 +10,7 @@ import com.meshcoreone.android.feature.tools.discovery.NodeDiscoveryContactAdder
 import com.meshcoreone.android.feature.tools.discovery.NodeDiscoveryDirectory
 import com.meshcoreone.android.feature.tools.discovery.NodeDiscoveryFeatureDependencies
 import com.meshcoreone.android.feature.tools.discovery.NodeDiscoverySession
+import com.meshcoreone.android.feature.tools.diagnostics.ToolsDiagnosticsDependencies
 import com.meshcoreone.android.feature.tools.trace.RecentHopsStorage
 import com.meshcoreone.android.feature.tools.trace.TraceDiagnostics
 import com.meshcoreone.android.feature.tools.trace.TraceNodeDirectory
@@ -20,7 +21,10 @@ import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.flow.mapNotNull
 
-fun AppContainer.createToolsFeatureDependencies(recentHops: RecentHopsStorage): ToolsFeatureDependencies {
+fun AppContainer.createToolsFeatureDependencies(
+    recentHops: RecentHopsStorage,
+    toolsDiagnostics: ToolsDiagnosticsDependencies,
+): ToolsFeatureDependencies {
     val diagnostics = TraceDiagnostics { operation, error ->
         Logger.getLogger("com.meshcoreone.android.tools").log(Level.WARNING, operation, error)
     }
@@ -68,5 +72,6 @@ fun AppContainer.createToolsFeatureDependencies(recentHops: RecentHopsStorage): 
         diagnostics,
         { appState.connectedDevice?.radioId },
         appState.servicesVersion,
+        toolsDiagnostics,
     )
 }

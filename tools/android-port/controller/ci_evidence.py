@@ -192,6 +192,7 @@ def validate_graph_runtime(root: Path):
 # Exact merged debug-APK permissions (WP-206 connectivity, WP-303 onboarding, plus the scaffold receiver permission).
 EXPECTED_APK_PERMISSIONS = [
     "android.permission.ACCESS_COARSE_LOCATION",
+    "android.permission.CAMERA",
     "android.permission.BLUETOOTH_CONNECT",
     "android.permission.BLUETOOTH_SCAN",
     "android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE",

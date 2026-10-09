@@ -183,6 +183,8 @@ class RadioSessionContainer private constructor(
         NotificationRoomReader(roomServerService), ConversationsNotifierAdapter(syncCoordinator),
     )
 
+    suspend fun getStatsRadio() = settingsService.getStatsRadio()
+
     // endregion
 
     // region Sync graph

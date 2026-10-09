@@ -1,2 +1,42 @@
-<!-- AndroidOnly: WP-002 Widget/tile boundary without components. -->
-<manifest />
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-403 Optional status widget and user-invoked connection tile. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Glance's WorkManager transport must not widen the app's permission surface. -->
+    <uses-permission
+        android:name="android.permission.RECEIVE_BOOT_COMPLETED"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.WAKE_LOCK"
+        tools:node="remove" />
+
+    <application>
+        <receiver
+            android:name="com.meshcoreone.android.platform.widgets.MeshStatusWidgetReceiver"
+            android:directBootAware="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/mesh_status_widget_info" />
+        </receiver>
+
+        <service
+            android:name="com.meshcoreone.android.platform.widgets.MeshConnectionTileService"
+            android:directBootAware="true"
+            android:exported="true"
+            android:icon="@drawable/ic_mesh_status"
+            android:label="@string/widget_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+    </application>
+</manifest>

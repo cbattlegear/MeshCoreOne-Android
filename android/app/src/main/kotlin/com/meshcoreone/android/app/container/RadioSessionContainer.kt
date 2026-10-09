@@ -20,6 +20,9 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
+import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.MeshEvent
+import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.runtime.ConnectionError
 import com.meshcoreone.android.core.runtime.FactoryOwnership
@@ -78,6 +81,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -103,6 +107,14 @@ class RadioSessionContainer private constructor(
     private val session: MeshCoreSession = inputs.connection.session
     private val radioId: RadioId = token.radioId
     private val gaps = GapReporter { message -> logger.info(message) }
+
+    internal suspend fun sendToolTrace(tag: UInt, authCode: UInt, flags: UByte, path: Bytes): MessageSentInfo =
+        session.sendTrace(tag, authCode, flags, path)
+
+    internal suspend fun sendToolDiscovery(filter: UByte, prefixOnly: Boolean): UInt =
+        session.sendNodeDiscoverRequest(filter, prefixOnly)
+
+    internal fun toolEvents(): Flow<MeshEvent> = session.events()
 
     override val dataStore: PersistenceStoreProtocol = env.store
 

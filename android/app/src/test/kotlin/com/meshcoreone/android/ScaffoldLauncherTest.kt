@@ -45,13 +45,19 @@ class ScaffoldLauncherTest {
         compose.onNodeWithTag("unavailable-action").performScrollTo().assertIsNotEnabled()
     }
 
+    private fun available(id: String) {
+        compose.onNodeWithTag("feature:$id")
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(ScaffoldAvailabilityKey, "AVAILABLE"))
+    }
+
     @Test
-    fun launcherAndFiveTabsNeverPresentFeatureSuccess() {
+    fun launcherAndFiveTabsReportFeatureAvailability() {
         unavailable("chats.root")
         compose.onNodeWithTag("bottom-navigation").assertIsDisplayed()
         AppTab.entries.forEach { tab ->
             compose.onNodeWithTag("tab:${tab.name}").performClick().assertIsSelected()
-            unavailable("${tab.name.lowercase()}.root")
+            if (tab == AppTab.TOOLS) available("tools.root") else unavailable("${tab.name.lowercase()}.root")
         }
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
         unavailable("chats.root")

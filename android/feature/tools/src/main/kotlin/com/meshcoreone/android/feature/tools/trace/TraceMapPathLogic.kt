@@ -26,6 +26,16 @@ data class TraceMapPin(val id: UUID, val coordinate: Coordinate, val inPath: Boo
 
 enum class PathPinTapResult { ADDED, REMOVED, REJECTED_MIDDLE_HOP, IGNORED }
 
+// PortedFrom: MC1/Views/Map/MapLine+SNR.swift@db14559b39d32322b06477c6ae676112f583db50
+enum class TraceLineQuality { GOOD, MEDIUM, WEAK, UNTRACED }
+
+fun traceLineQuality(snr: Double?): TraceLineQuality = when {
+    snr == null -> TraceLineQuality.UNTRACED
+    snr > 0.0 -> TraceLineQuality.GOOD
+    snr > -6.0 -> TraceLineQuality.MEDIUM
+    else -> TraceLineQuality.WEAK
+}
+
 /** Map-side view of a [TracePathStateHolder] (source `TracePathMapViewModel`). Call from the main thread. */
 class TraceMapPathLogic(private val trace: TracePathStateHolder) {
     var userLocation: Coordinate? = null

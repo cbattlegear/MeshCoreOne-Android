@@ -96,6 +96,7 @@ import com.meshcoreone.android.feature.tools.diagnostics.rxlog.RxLogListState
 import com.meshcoreone.android.feature.tools.diagnostics.rxlog.RxLogPresentation
 import com.meshcoreone.android.feature.tools.diagnostics.rxlog.RxLogRouteFilter
 import com.meshcoreone.android.feature.tools.diagnostics.rxlog.RxLogStateHolder
+import com.meshcoreone.android.feature.tools.navigation.ToolSelection
 import kotlinx.coroutines.launch
 
 private enum class DiagnosticsPage(val title: Int) {
@@ -105,8 +106,17 @@ private enum class DiagnosticsPage(val title: Int) {
 }
 
 @Composable
-fun ToolsDiagnosticsScreen(dependencies: ToolsDiagnosticsDependencies, modifier: Modifier = Modifier) {
-    var selected by rememberSaveable { mutableStateOf(DiagnosticsPage.CLI) }
+fun ToolsDiagnosticsScreen(
+    dependencies: ToolsDiagnosticsDependencies,
+    selection: ToolSelection = ToolSelection.CLI,
+    modifier: Modifier = Modifier,
+) {
+    val initialPage = when (selection) {
+        ToolSelection.RX_LOG -> DiagnosticsPage.RX_LOG
+        ToolSelection.NOISE_FLOOR -> DiagnosticsPage.NOISE_FLOOR
+        else -> DiagnosticsPage.CLI
+    }
+    var selected by rememberSaveable(initialPage) { mutableStateOf(initialPage) }
     val connectionVersion by dependencies.connectionVersion.collectAsStateWithLifecycle()
     Column(modifier.fillMaxSize()) {
         Row(

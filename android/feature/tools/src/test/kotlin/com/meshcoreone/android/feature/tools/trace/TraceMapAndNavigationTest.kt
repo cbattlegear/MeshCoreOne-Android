@@ -11,6 +11,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class TraceMapAndNavigationTest {
+    @Test
+    fun `trace line quality preserves source SNR boundaries`() {
+        assertEquals(TraceLineQuality.UNTRACED, traceLineQuality(null))
+        assertEquals(TraceLineQuality.GOOD, traceLineQuality(0.01))
+        assertEquals(TraceLineQuality.MEDIUM, traceLineQuality(0.0))
+        assertEquals(TraceLineQuality.MEDIUM, traceLineQuality(-5.99))
+        assertEquals(TraceLineQuality.WEAK, traceLineQuality(-6.0))
+    }
+
     private val harness = TraceHarness()
     private val trace = harness.holder
     private val map = TraceMapPathLogic(trace)

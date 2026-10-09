@@ -17,6 +17,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.meshcoreone.android.app.container.AppContainer
+import com.meshcoreone.android.app.container.createToolsFeatureDependencies
 import com.meshcoreone.android.app.container.createToolsDiagnosticsDependencies
 import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
 import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
@@ -30,6 +31,7 @@ import com.meshcoreone.android.app.navigation.NavigationState
 import com.meshcoreone.android.app.container.onboarding.OnboardingGate
 import com.meshcoreone.android.core.connectivity.pairing.CompanionChooserHost
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.feature.tools.trace.AndroidRecentHopsStorage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -111,7 +113,12 @@ open class MainActivity : ComponentActivity() {
                 resolved?.let { answer ->
                     OnboardingGate(host.navigation, answer.container?.onboarding) { bound ->
                         val tools = remember(answer.container) {
-                            answer.container?.createToolsDiagnosticsDependencies()
+                            answer.container?.let { container ->
+                                container.createToolsFeatureDependencies(
+                                    AndroidRecentHopsStorage(getSharedPreferences("tools", MODE_PRIVATE)),
+                                    container.createToolsDiagnosticsDependencies(),
+                                )
+                            }
                         }
                         NativeNavigationShell(
                             host.navigation,

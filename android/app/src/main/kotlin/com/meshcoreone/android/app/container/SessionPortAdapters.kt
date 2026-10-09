@@ -38,12 +38,15 @@ import com.meshcoreone.android.core.services.remote.NodeConfigContactsChangedNot
 import com.meshcoreone.android.core.services.remote.NodeConfigSettingsPort
 import com.meshcoreone.android.core.services.remote.RemoteNodePasswordStore
 import com.meshcoreone.android.core.services.remote.RemoteNodeService
+import com.meshcoreone.android.core.services.remote.RemoteNodeError
 import com.meshcoreone.android.core.services.remote.RepeaterAdminService
 import com.meshcoreone.android.core.services.remote.RoomAdminService
 import com.meshcoreone.android.core.services.remote.RoomServerService
 import com.meshcoreone.android.core.services.remote.handleBLEReconnection
 import com.meshcoreone.android.core.services.remote.handleIncomingMessage
 import com.meshcoreone.android.core.services.remote.markAsRead
+import com.meshcoreone.android.core.services.remote.login
+import com.meshcoreone.android.core.services.remote.logout
 import com.meshcoreone.android.core.services.sync.claimManualContactSync
 import com.meshcoreone.android.core.services.sync.setManualContactSyncActive
 import com.meshcoreone.android.core.services.sync.SyncAdvertContactSyncOutcome
@@ -65,6 +68,18 @@ import com.meshcoreone.android.core.services.sync.onDisconnected
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import com.meshcoreone.android.feature.tools.diagnostics.ToolsDiagnosticsDependencies
+import com.meshcoreone.android.feature.tools.diagnostics.cli.CliErrorPresentation
+import com.meshcoreone.android.feature.tools.diagnostics.cli.CliNodeDirectory
+import com.meshcoreone.android.feature.tools.diagnostics.cli.CliRemoteFault
+import com.meshcoreone.android.feature.tools.diagnostics.cli.CliRemoteNodePort
+import com.meshcoreone.android.feature.tools.diagnostics.cli.CliRepeaterAdminPort
+import com.meshcoreone.android.feature.tools.diagnostics.cli.CliSettingsPort
+import com.meshcoreone.android.feature.tools.diagnostics.cli.CliToolFeatureDependencies
+import com.meshcoreone.android.feature.tools.diagnostics.noisefloor.RadioStatsSource
+import com.meshcoreone.android.feature.tools.diagnostics.rxlog.RxLogContactSource
+import com.meshcoreone.android.feature.tools.diagnostics.rxlog.RxLogFeatureDependencies
+import com.meshcoreone.android.feature.tools.diagnostics.rxlog.RxLogFeed
 
 // region Contacts / node config
 
@@ -220,6 +235,102 @@ internal class SyncRepeaterAdminAdapter(private val admin: RepeaterAdminService)
 
 internal class SyncRemoteNodeAdapter(private val remote: RemoteNodeService) : SyncRemoteNodeServicing {
     override suspend fun handleBLEReconnection(sessions: Set<EntityKey>) = remote.handleBLEReconnection(sessions)
+}
+
+// endregion
+
+// region Tools diagnostics
+
+fun AppContainer.createToolsDiagnosticsDependencies(): ToolsDiagnosticsDependencies {
+    fun session(): RadioSessionContainer? = sessions.current as? RadioSessionContainer
+    val directory = ToolsNodeDirectoryAdapter { session() }
+    val remote = ToolsRemoteNodeAdapter { session() }
+    val settings = ToolsSettingsAdapter { session() }
+    val rxLog = ToolsRxLogFeedAdapter { session() }
+    return ToolsDiagnosticsDependencies(
+        cli = CliToolFeatureDependencies(
+            repeaterAdminService = {
+                session()?.let { graph ->
+                    CliRepeaterAdminPort { key, command, timeout ->
+                        graph.repeaterAdminService.sendRawCommand(key, command, timeout)
+                    }
+                }
+            },
+            remoteNodeService = { session()?.let { remote } },
+            settingsService = { session()?.let { settings } },
+            dataStore = { session()?.let { directory } },
+            radioId = { appState.currentRadioId },
+            connectedDevice = { appState.connectedDevice },
+            sendSelfAdvert = { flood -> session()?.advertisementService?.sendSelfAdvertisement(flood) ?: Unit },
+        ),
+        cliErrors = CliErrorPresentation(
+            remoteFault = { failure ->
+                when (failure) {
+                    is RemoteNodeError.Timeout -> CliRemoteFault.Timeout
+                    is RemoteNodeError.PasswordNotFound -> CliRemoteFault.PasswordNotFound
+                    is RemoteNodeError.LoginFailed -> CliRemoteFault.LoginFailed(failure.reason)
+                    is RemoteNodeError.Cancelled -> CliRemoteFault.Cancelled
+                    else -> null
+                }
+            },
+        ),
+        rxLog = RxLogFeatureDependencies(
+            rxLogService = { session()?.let { rxLog } },
+            dataStore = { session()?.let { RxLogContactSource { radioId -> it.dataStore.fetchContacts(radioId) } } },
+            radioId = { appState.currentRadioId },
+        ),
+        radioStats = { session()?.let { graph -> RadioStatsSource { graph.getStatsRadio() } } },
+        isConnected = { session() != null },
+        localPublicKeyPrefix = { appState.connectedDevice?.publicKey },
+        connectionVersion = appState.servicesVersion,
+    )
+}
+
+private class ToolsNodeDirectoryAdapter(private val resolve: () -> RadioSessionContainer?) : CliNodeDirectory {
+    override suspend fun fetchContacts(radioId: RadioId) = checkNotNull(resolve()).dataStore.fetchContacts(radioId)
+    override suspend fun fetchChannels(radioId: RadioId) = checkNotNull(resolve()).dataStore.fetchChannels(radioId)
+}
+
+private class ToolsRemoteNodeAdapter(private val resolve: () -> RadioSessionContainer?) : CliRemoteNodePort {
+    private val service get() = checkNotNull(resolve()).remoteNodeService
+    override suspend fun createSession(radioId: RadioId, contact: ContactDTO) =
+        service.createSession(radioId, contact).let { EntityKey(it.radioId, it.id) }
+    override suspend fun login(
+        session: EntityKey, password: String, pathLength: UByte, onTimeoutKnown: suspend (Long) -> Unit,
+    ) = service.login(session, password, pathLength, onTimeoutKnown).success
+    override suspend fun logout(session: EntityKey) = service.logout(session)
+    override suspend fun retrievePassword(contact: ContactDTO) = service.retrievePassword(contact)
+    override suspend fun storePassword(password: String, publicKey: Bytes) = service.storePassword(password, publicKey)
+    override suspend fun deletePassword(contact: ContactDTO) = service.deletePassword(contact)
+}
+
+private class ToolsSettingsAdapter(private val resolve: () -> RadioSessionContainer?) : CliSettingsPort {
+    private val service get() = checkNotNull(resolve()).settingsService
+    override suspend fun getTime() = service.getTime()
+    override suspend fun setTime(date: java.time.Instant) = service.setTime(date)
+    override suspend fun queryDevice() = service.queryDevice()
+    override suspend fun getSelfInfo() = service.getSelfInfo()
+    override suspend fun getBattery() = service.getBattery()
+    override suspend fun setNodeNameVerified(name: String) = service.setNodeNameVerified(name)
+    override suspend fun setManualLocationVerified(latitude: Double, longitude: Double) =
+        service.setManualLocationVerified(latitude, longitude)
+    override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerVerified(power)
+    override suspend fun setRadioParamsVerified(
+        frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
+    ) = service.setRadioParamsVerified(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate)
+    override suspend fun setOtherParamsVerified(device: com.meshcoreone.android.core.model.DeviceDTO, multiAcks: UByte) =
+        service.setOtherParamsVerified(device, multiAcks = multiAcks)
+    override suspend fun setPathHashModeVerified(mode: UByte) = service.setPathHashModeVerified(mode)
+    override suspend fun getCustomVars() = service.getCustomVars()
+    override suspend fun setCustomVar(key: String, value: String) = service.setCustomVar(key, value)
+    override suspend fun reboot() = service.reboot()
+}
+
+private class ToolsRxLogFeedAdapter(private val resolve: () -> RadioSessionContainer?) : RxLogFeed {
+    private val service get() = checkNotNull(resolve()).rxLogService
+    override suspend fun loadExistingEntries() = service.loadExistingEntries()
+    override fun entryStream() = service.entryStream()
+    override suspend fun clearEntries() = service.clearEntries()
 }
 
 // endregion

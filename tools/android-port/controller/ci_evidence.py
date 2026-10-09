@@ -189,9 +189,11 @@ def validate_graph_runtime(root: Path):
             raise PortError("Malformed runtime license provenance or invented legal approval")
 
 
-# Exact merged debug-APK permissions (WP-206 connectivity, WP-303 onboarding, plus the scaffold receiver permission).
+# Exact merged debug-APK permissions (WP-206 connectivity, WP-303 onboarding,
+# WP-315 camera tools, plus the scaffold receiver permission).
 EXPECTED_APK_PERMISSIONS = [
     "android.permission.ACCESS_COARSE_LOCATION",
+    "android.permission.CAMERA",
     "android.permission.BLUETOOTH_CONNECT",
     "android.permission.BLUETOOTH_SCAN",
     "android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE",

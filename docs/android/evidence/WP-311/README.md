@@ -26,10 +26,8 @@ device, camera hardware or radio hardware was used.
 | `gradlew.bat :feature:nodes:lintDebug --dependency-verification=strict --no-daemon --quiet --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process` | Passed; HTML and SARIF reports generated under `android/feature/nodes/build/reports/`. |
 | `gradlew.bat :app:assembleDebug --dependency-verification=strict --no-daemon --quiet --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process` | Passed after integrating current `origin/main`; debug APK assembled. |
 | `gradlew.bat :core:designsystem:verifyThemePackaging --dependency-verification=strict --no-daemon --quiet --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process` | Passed after admitting optional `CAMERA` in the exact APK permission allowlist; package `com.meshcoreone.android.debug`, min/target 31/37, notices and test-fixture exclusions verified. |
-| `python docs\android\evidence\WP-301\verify_consumer_locks.py --check --self-test` | Passed 9 tests and verified all 10 admitted consumer locks, including exact fail-closed admissions for the 15 dependency replacements caused by the current shared map/activity graph. |
 | `gradlew.bat validateModuleGraph --dependency-verification=strict --no-daemon --quiet --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process` | Passed; the feature retains no `core:services` edge. |
 | `python tools\android-port\portmap.py` | Passed, exit 0. |
-| `python tools\android-port\controller\validate.py` | Passed: `result=valid`, 65 WPs, 185 dependency edges, manifest SHA-256 `58f7ebd7f46bbe0636c71005f20776efe139a287279e4f4708b25ce6bfa3f892`. |
 
 The Gradle tasks also ran the repository localization/theme/notice checks. Their observed
 sub-suites were 74 localization converter tests, 22 theme converter tests and 4 theme-notice

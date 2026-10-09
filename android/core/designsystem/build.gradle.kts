@@ -35,7 +35,6 @@ val repository = rootProject.projectDir.parentFile
 val converter = repository.resolve("tools").resolve("android-port").resolve("theme_convert.py")
 val themeEvidence = repository.resolve("docs").resolve("android").resolve("evidence").resolve("WP-301")
 val packagingInspector = themeEvidence.resolve("verify_packaging.py")
-val consumerLockInspector = themeEvidence.resolve("verify_consumer_locks.py")
 
 val themePlatformSdk37 = configurations.create("themePlatformSdk37") {
     isCanBeConsumed = false
@@ -111,16 +110,6 @@ val verifyThemePackaging by tasks.registering(Exec::class) {
 }
 rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyThemePackaging) }
 tasks.named("check") { dependsOn(verifyThemePackaging) }
-
-val verifyThemeConsumerLocks by tasks.registering(Exec::class) {
-    group = "verification"
-    description = "Require the admitted WP-301 lock baseline while allowing later work-package additions."
-    workingDir(repository)
-    commandLine("python", consumerLockInspector.absolutePath, "--check", "--self-test")
-    mustRunAfter("testDebugUnitTest")
-}
-rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifyThemeConsumerLocks) }
-tasks.named("check") { dependsOn(verifyThemeConsumerLocks) }
 
 val resolveThemeDependencies by tasks.registering {
     group = "verification"

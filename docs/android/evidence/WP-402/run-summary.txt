@@ -1,0 +1,20 @@
+WP-402 repair run (Windows x64, verified Temurin 21 / Android 37.2 toolchain, no device).
+Base: origin/main 1a33aa11 (includes merged WP-401 PR #152 and WP-308 PR #143).
+Frozen Swift source/test pin: db14559b39d32322b06477c6ae676112f583db50.
+No device, emulator, iOS or hardware verification is claimed.
+
+android/gradlew.bat -p android :platform:notifications:testDebugUnitTest --dependency-verification lenient --no-daemon
+  -> BUILD SUCCESSFUL; 6 discovered, 6 passed, 0 failed, 0 errors, 0 skipped.
+  -> These are the module's merged WP-401 JVM tests. WP-402's 12 dependency-free androidTest cases compile below;
+     they are not claimed as executed because the approved WP-402 write scope does not include build-script wiring.
+
+android/gradlew.bat -p android :platform:notifications:compileDebugAndroidTestKotlin :platform:notifications:lintDebug --dependency-verification lenient --no-daemon
+  -> BUILD SUCCESSFUL; lint reported 0 errors.
+
+android/gradlew.bat -p android :app:assembleDebug --dependency-verification lenient --no-daemon
+  -> BUILD SUCCESSFUL.
+
+python tools/android-port/controller/validate.py
+  -> valid.
+python tools/android-port/portmap.py
+  -> exit 0.

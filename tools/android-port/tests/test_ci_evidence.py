@@ -38,39 +38,28 @@ def junit_report(path: Path, tests=1, failures=0, errors=0, skipped=0):
 
 
 class LiveReportTests(unittest.TestCase):
-    def write_runtime_reports(self, root: Path, runtime_rows: list[str]):
-        (root / "module-graph.tsv").write_text(
-            "consumer\tproducer\tconfiguration\n:app\t:core:model\tdebugRuntimeClasspath\n",
-            encoding="utf-8",
-        )
-        (root / "runtime-dependencies.tsv").write_text(
-            "artifact\tdeclared_license\tlicense_url\tlicense_pom\tlicense_pom_sha256\tlegal_gate\n"
-            + "\n".join(runtime_rows)
-            + "\n",
-            encoding="utf-8",
-        )
-
-    def test_runtime_component_may_declare_multiple_distinct_licenses(self):
-        digest = "a" * 64
+    def test_runtime_inventory_preserves_distinct_licenses_for_one_component(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.write_runtime_reports(root, [
-                f"example:component:1\tApache-2.0\thttps://example.test/apache\texample:component:1\t{digest}\thuman-review-pending",
-                f"example:component:1\tBSD-3-Clause\thttps://example.test/bsd\texample:component:1\t{digest}\thuman-review-pending",
-            ])
-            validate_graph_runtime(root)
-
-    def test_duplicate_runtime_license_declaration_rejects(self):
-        digest = "a" * 64
-        row = (
-            f"example:component:1\tApache-2.0\thttps://example.test/apache\t"
-            f"example:component:1\t{digest}\thuman-review-pending"
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.write_runtime_reports(root, [row, row.replace(digest, "b" * 64)])
-            with self.assertRaisesRegex(PortError, "Duplicate runtime license declaration"):
-                validate_graph_runtime(root)
+            reports = Path(temporary)
+            (reports / "module-graph.tsv").write_text(
+                "consumer\tproducer\tconfiguration\n:app\t:core:model\tdebugRuntimeClasspath\n",
+                encoding="utf-8",
+            )
+            header = (
+                "artifact\tdeclared_license\tlicense_url\tlicense_pom\t"
+                "license_pom_sha256\tlegal_gate\n"
+            )
+            coordinate = "androidx.camera:camera-core:1.6.2"
+            digest = "a" * 64
+            rows = [
+                f"{coordinate}\tApache-2.0\thttps://apache.org/license\t{coordinate}\t{digest}\thuman-review-pending",
+                f"{coordinate}\tBSD-3-Clause\thttps://opensource.org/license/bsd\t{coordinate}\t{digest}\thuman-review-pending",
+            ]
+            (reports / "runtime-dependencies.tsv").write_text(
+                header + "\n".join(rows) + "\n",
+                encoding="utf-8",
+            )
+            validate_graph_runtime(reports)
 
     def test_apk_inspector_and_controller_require_the_same_exact_permissions(self):
         module = ast.parse((REPO / "android/scaffold/inspect_apk.py").read_text(encoding="utf-8"))

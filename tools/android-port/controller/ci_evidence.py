@@ -177,12 +177,12 @@ def validate_graph_runtime(root: Path):
     runtime = report_tsv(root / "runtime-dependencies.tsv", [
         "artifact", "declared_license", "license_url", "license_pom", "license_pom_sha256", "legal_gate",
     ])
-    declarations = {
-        (row["artifact"], row["declared_license"], row["license_url"])
+    provenance = {
+        (row["artifact"], row["declared_license"], row["license_url"], row["license_pom"])
         for row in runtime
     }
-    if len(declarations) != len(runtime):
-        raise PortError("Duplicate runtime license declaration")
+    if len(provenance) != len(runtime):
+        raise PortError("Duplicate runtime license provenance")
     for row in runtime:
         if (
             row["artifact"].count(":") != 2 or row["license_pom"].count(":") != 2

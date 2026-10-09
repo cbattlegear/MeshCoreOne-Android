@@ -2,7 +2,7 @@
 
 Frozen source: `db14559b39d32322b06477c6ae676112f583db50`.
 Integrated base: `origin/main` at
-`30ea05458be2a49d8757f9c0fe12a5c3609bf9c2`. This is local candidate evidence,
+`13f79acffb01e196012816890ae62eda5a005077`. This is local candidate evidence,
 not CI, merge, device, hardware or measured-reception evidence.
 
 ## Source and behavior accounting

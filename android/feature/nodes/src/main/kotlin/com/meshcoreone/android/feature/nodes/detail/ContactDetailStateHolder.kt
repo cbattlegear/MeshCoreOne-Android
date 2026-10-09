@@ -105,6 +105,9 @@ class ContactDetailStateHolder(
 
     fun setNickname(text: String) = mutableState.update { it.copy(nickname = text) }
     fun beginEditingNickname() = mutableState.update { it.copy(isEditingNickname = true) }
+    fun cancelEditingNickname() = mutableState.update {
+        it.copy(nickname = it.contact.nickname.orEmpty(), isEditingNickname = false)
+    }
     fun clearError() = mutableState.update { it.copy(errorMessage = null) }
     fun cancelConfirmation() = mutableState.update { it.copy(pendingConfirmation = null) }
 

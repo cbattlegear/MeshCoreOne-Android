@@ -125,6 +125,7 @@ open class MainActivity : ComponentActivity() {
                             onboarding = bound?.forRerun(),
                             map = answer.container?.mapFeature,
                             tools = tools,
+                            nodes = answer.container?.nodesFeature,
                         )
                     }
                 }

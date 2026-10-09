@@ -1,2 +1,6 @@
 <!-- AndroidOnly: WP-002 Nodes entry shell. -->
-<manifest />
+<!-- AndroidOnly: WP-311 Camera permission is isolated to optional QR scanning; manual paste remains available. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+</manifest>

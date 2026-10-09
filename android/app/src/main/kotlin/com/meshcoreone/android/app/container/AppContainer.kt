@@ -55,6 +55,9 @@ import com.meshcoreone.android.core.services.rendering.ChatCoordinatorRegistry
 import com.meshcoreone.android.core.services.rendering.DraftStore
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.sync.SyncLogSink
+import com.meshcoreone.android.feature.nodes.deps.Announcer
+import com.meshcoreone.android.feature.nodes.deps.StringListPreferences
+import com.meshcoreone.android.feature.nodes.deps.UserFacingMessages
 import java.time.Instant
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineScope
@@ -120,6 +123,12 @@ class AppContainerDependencies(
     /** Platform pieces for the onboarding flow; null leaves onboarding unbound (the shell shows no fake flow). */
     val onboardingPlatform: com.meshcoreone.android.app.container.onboarding.OnboardingPlatform? = null,
     val offlineMaps: OfflineMapController? = null,
+    val nodesMessages: UserFacingMessages = UserFacingMessages { it.message ?: "Operation failed" },
+    val nodesAnnouncer: Announcer = Announcer {},
+    val nodesPreferences: StringListPreferences = object : StringListPreferences {
+        override fun stringList(key: String): List<String>? = null
+        override fun setStringList(key: String, value: List<String>) = Unit
+    },
     val newBootstrapDebugLog: (CoroutineScope) -> DebugLogBuffer? = { null },
     /** Releases process-owned resources (database, storage) once the runtime has closed. */
     val onClose: suspend () -> Unit = {},
@@ -229,6 +238,10 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
 
     /** Process-scoped map data binding; the feature owns rendering and never reaches into the service graph. */
     val mapFeature by lazy(::createMapFeatureDependencies)
+    val nodesFeature by lazy(::createNodesFeatureDependencies)
+    internal val nodesMessages get() = dependencies.nodesMessages
+    internal val nodesAnnouncer get() = dependencies.nodesAnnouncer
+    internal val nodesPreferences get() = dependencies.nodesPreferences
     internal val offlineMaps: OfflineMapController
         get() = checkNotNull(dependencies.offlineMaps) { "Production map dependencies were not installed" }
 

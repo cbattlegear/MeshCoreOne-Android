@@ -23,11 +23,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as T
 import com.meshcoreone.android.core.ui.FeatureShellCopy
+import com.meshcoreone.android.core.ui.ScaffoldAvailabilityKey
 import com.meshcoreone.android.core.ui.ScaffoldFeatureContent
 import com.meshcoreone.android.feature.tools.discovery.NodeDiscoveryRoute
 import com.meshcoreone.android.feature.tools.discovery.NodeDiscoveryFeatureDependencies
@@ -83,7 +85,12 @@ fun ToolsEntry(
 
 @Composable
 private fun ToolsHome(onSelect: (ToolSelection) -> Unit) {
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .testTag("feature:tools.root")
+            .semantics { this[ScaffoldAvailabilityKey] = "AVAILABLE" },
+    ) {
         Text(
             stringResource(T.toolsTitle),
             style = MaterialTheme.typography.headlineMedium,

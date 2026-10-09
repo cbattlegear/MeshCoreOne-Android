@@ -91,6 +91,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies
 import com.meshcoreone.android.feature.remotenodes.RemoteNodesEntry
 import com.meshcoreone.android.feature.settings.SettingsEntry
 import com.meshcoreone.android.feature.tools.ToolsEntry
+import com.meshcoreone.android.feature.tools.ToolsFeatureDependencies
 import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -125,8 +126,9 @@ fun NativeNavigationShell(
     /** Bound onboarding dependencies for the Settings "radio setup" route; null keeps the not-yet-ported shell. */
     onboarding: OnboardingFeatureDependencies? = null,
     map: MapFeatureDependencies? = null,
+    tools: ToolsFeatureDependencies? = null,
     content: @Composable (NavigationDestination, (FeatureRoute) -> Unit) -> Unit = { destination, navigate ->
-        ExistingFeatureContent(destination, navigate, onboarding, map, coordinator)
+        ExistingFeatureContent(destination, navigate, onboarding, map, tools, coordinator)
     },
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
@@ -394,6 +396,7 @@ private fun ExistingFeatureContent(
     navigate: (FeatureRoute) -> Unit,
     onboarding: OnboardingFeatureDependencies?,
     map: MapFeatureDependencies?,
+    tools: ToolsFeatureDependencies?,
     coordinator: NavigationCoordinator,
 ) {
     val navigationState by coordinator.state.collectAsStateWithLifecycle()
@@ -415,7 +418,18 @@ private fun ExistingFeatureContent(
             }
             MapEntry(route, navigate, map, focus, coordinator::clearPendingMapFocus)
         }
-        FeatureId.TOOLS -> ToolsEntry(route, navigate)
+        FeatureId.TOOLS -> {
+            val selected = (destination as? NavigationDestination.Tool)?.selection?.let {
+                com.meshcoreone.android.feature.tools.navigation.ToolSelection.valueOf(it.name)
+            }
+            ToolsEntry(
+                route,
+                navigate,
+                selected,
+                { coordinator.navigateToTool(ToolSelection.valueOf(it.name)) },
+                tools,
+            )
+        }
         FeatureId.SETTINGS -> SettingsEntry(route, navigate)
         FeatureId.ONBOARDING -> OnboardingEntry(
             route,

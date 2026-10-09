@@ -1,46 +1,46 @@
 # WP-314 evidence
 
-External contribution, no lease. Local macOS runs only, not CI or acceptance receipts.
-Frozen source `db14559b39d32322b06477c6ae676112f583db50`; base `372fbc58` (origin/main).
-Scope: logic layer only (see `docs/android/deviations/WP-314.md`).
+Frozen source: `db14559b39d32322b06477c6ae676112f583db50`.
+Candidate base: `e2a9653df43a0939cd3c6919a298ea76c2c2403d`.
 
-## Commands
+## Implemented scope
 
-Environment: JDK 21, Android command-line SDK, private Gradle/Android homes, `--dependency-verification lenient`.
+- Live trace listener and per-generation app/session adapter.
+- Editable repeater path, hash width, automatic return, single/batch execution, partial/failure and
+  cancellation states.
+- Saved-path load/delete/run persistence and source-compatible recent-hop preferences.
+- Shared MapLibre route result with hop labels, numeric SNR accessibility text, and source SNR line
+  quality.
+- Repeater/sensor discovery, localized sorting, existing-contact state, add action, scan timeout and
+  explicit stop.
+- Adaptive tools-home navigation through the existing Navigation 3 list/detail shell.
 
+## Local verification
+
+Windows, JDK 21.0.12.1, Android SDK 37.2/build-tools 37.0.0:
+
+```text
+./gradlew :feature:tools:compileDebugKotlin :app:compileDebugKotlin
+  PASS
+
+./gradlew :feature:tools:testDebugUnitTest :feature:tools:lintDebug
+  PASS
+  34 suites, 640 tests, 0 failures, 0 errors, 0 skipped
+  WP-314 trace/discovery suites: 13 suites, 196 tests
+
+./gradlew validateModuleGraph
+  PASS: 30 modules; no forbidden production edges or Android JVM leakage
+
+python tools/android-port/portmap.py
+python tools/android-port/controller/validate.py
+  PASS
 ```
-./gradlew :feature:tools:cleanTestDebugUnitTest :feature:tools:testDebugUnitTest :feature:tools:lintDebug validateModuleGraph   # x3
-python3.13 tools/android-port/portmap.py
-python3.13 tools/android-port/controller/validate.py
-```
 
-## Observed results
+The tools module dependency lock was regenerated because WP-314 now consumes the already-approved
+`:core:maps` MapLibre adapter. No dependency version or verification-metadata change was made.
 
-- `:feature:tools:testDebugUnitTest`: 13 suites, 195 tests, 0 failures, 0 errors, 0 skipped (three clean runs at 193 tests, then two tests were added by the mutation review; the final run is 195).
-- `lintDebug`: no issues. `validateModuleGraph`: passed; feature:tools edges are core:contracts/ui/l10n only.
-- 139 owned source cases (`docs/android/test-cases.json`): **139 bound with `@OriginalCase` and passed** in the JUnit XML, 0 unbound, 0 unknown bindings. Per-case class/method/disposition/result: [`source-cases.json`](source-cases.json). 56 further tests are native WP-314 tests (execution/timeouts, batch, cancellation, save, discovery, saved paths, map logic, navigation, oracle vectors).
-- Ids by suite: TracePathViewModelTests families 104, RepeaterResolverTests 18 (the parameterized `key display byte count` family is one id covering its 5 argument rows), BatchTrace families 15, TracePathListenerTests 2.
+## Evidence limits
 
-## Deferred (no source test ids)
-
-Every owned test id is logic, so none is deferred. Deferred are production-only UI/map items with no unit tests in the source: Compose views (`TracePathView`, `TracePathListView`, rows, sheets, `SavedPath*View`, `NodeDiscoveryView/RowView`, `Tools*View/Column`, `ToolDestinationView`, `MiniSparkline`, `TotalDistanceRow`, `DistanceInfoSheetView`) and map rendering (`TracePathMapView`, toolbar/floating/actions sections, map lines/badges/camera of `TracePathMapViewModel`). Needs core:ui, WP-302 shell and MapLibre admission.
-
-## Oracles (`oracles/`, `.swift.txt` sources + recorded output; swiftc 6.3.2, macOS 26.5.1)
-
-`distance` (CLLocation vectors), `text` (trimming, isHexDigit, Character count, uppercased, canonical equality, localized compares), `ws` (full `.whitespaces` scalar enumeration), `codes` (verbatim copies of the code parser and width inference run on edge inputs).
-
-## Mutation checks
-
-Each applied to main code from a clean test run, then restored (final tree re-tested green):
-
-| Mutation | Failing tests |
-| --- | --- |
-| Response tag not checked | 3 |
-| Device id not checked | 1 |
-| No 500 ms inter-trace gap | 1 |
-| `canSavePath` ignores path change | 1 (after adding a test; the source test was vacuous because `addNode` clears the result) |
-| Match kind always exact | 1 (after adding a test) |
-| Batch send-suspended guard removed | 1 |
-| Scan duration x100 | 3 |
-
-Survivor: dropping the odd-length guard in `autoReturnOutboundCount` is an equivalent mutant (an even-length list can never equal its mirror).
+No physical radio, device, GPS, release signing, installation, or hardware reception verification
+was performed. Deterministic topology and protocol fixtures are simulations and are not reported as
+measured packet reception.

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "repository": "cbattlegear/MeshCoreOne-Android",
+  "work_package": "WP-315",
+  "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+  "base_sha": "9b60b6965ce009e58517e8451f16f94502ae41f5",
+  "session_id": "2d5cad82-a6e3-4abf-977d-83f5d3653227",
+  "paths": [
+    {
+      "path": "android/app/src/main/kotlin/com/meshcoreone/android/app/container/AppLineOfSight.kt",
+      "operation": "add-direct-support-wiring",
+      "capability": "app-build-launcher"
+    }
+  ]
+}

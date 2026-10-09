@@ -120,6 +120,7 @@ object AndroidAppContainerFactory {
         val bonding = BondingCoordinator(bondGateway, clock)
         val addresses = java.util.concurrent.ConcurrentHashMap<java.util.UUID, String>()
         val holder = java.util.concurrent.atomic.AtomicReference<AppContainer>()
+        val contentHttp = com.meshcoreone.android.app.content.OkHttpContentFetching()
         val notificationDelivery = AndroidMessagingNotificationDelivery(application, mainScope) { response ->
             val current = holder.get() ?: return@AndroidMessagingNotificationDelivery false
             val session = current.sessions.current ?: return@AndroidMessagingNotificationDelivery false
@@ -184,6 +185,7 @@ object AndroidAppContainerFactory {
                     announceForAccessibility(application, message.resolve(application))
                 },
                 nodesPreferences = SharedPreferencesStringLists(application),
+                lineOfSight = createLineOfSightFeatureDependencies(application, contentHttp) { holder.get()?.appState },
                 foreground = foreground,
                 knownEndpoints = endpoints,
                 regionStore = DataStoreRegionSelectionStore(storage.preferences),
@@ -200,6 +202,7 @@ object AndroidAppContainerFactory {
                     store.close()
                     storeScope.cancel()
                     companionScope.cancel()
+                    contentHttp.close()
                 },
             ),
         )

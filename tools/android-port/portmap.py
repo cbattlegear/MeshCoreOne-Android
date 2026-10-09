@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from controller.errors import PortError
+from controller.capabilities import CapabilityEngine
 from controller.model import load_manifest
 from controller.paths import permits
 from controller.paths import git_path
@@ -31,6 +32,45 @@ WP_302_SCOPE_APPROVAL = {
     "authority": "User-directed approved necessary WP-302 launcher and unit-navigation support",
     "acceptance": "Ownership/traceability admission only; no source, parity, human or merge acceptance",
 }
+
+SUPPORT_SCOPE_RECEIPT = "support-scope.json"
+SUPPORT_SCOPE_FIELDS = {
+    "schema_version", "repository", "work_package", "source_sha", "base_sha",
+    "session_id", "paths",
+}
+
+
+def capability_support_admitted(manifest, wp_id, relative):
+    receipt_path = manifest.repo / "docs" / "android" / "evidence" / wp_id / SUPPORT_SCOPE_RECEIPT
+    if not receipt_path.is_file():
+        return False
+    receipt = load_json(receipt_path, 64 * 1024)
+    if not isinstance(receipt, dict) or set(receipt) != SUPPORT_SCOPE_FIELDS:
+        raise PortError(f"Malformed capability support receipt: {receipt_path.relative_to(manifest.repo)}")
+    if (receipt["schema_version"] != 1 or receipt["repository"] != "cbattlegear/MeshCoreOne-Android"
+            or receipt["work_package"] != wp_id
+            or receipt["source_sha"] != manifest.data["reference"]["commit"]
+            or not isinstance(receipt["base_sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", receipt["base_sha"])
+            or not isinstance(receipt["session_id"], str) or not receipt["session_id"]):
+        raise PortError(f"Stale capability support receipt: {receipt_path.relative_to(manifest.repo)}")
+    paths = receipt["paths"]
+    if not isinstance(paths, list) or not paths:
+        raise PortError(f"Empty capability support receipt: {receipt_path.relative_to(manifest.repo)}")
+    matching = []
+    for row in paths:
+        if not isinstance(row, dict) or set(row) != {"path", "operation", "capability"}:
+            raise PortError(f"Malformed capability support path: {receipt_path.relative_to(manifest.repo)}")
+        if row["path"] == relative:
+            matching.append(row)
+    if not matching:
+        return False
+    policy = load_json(manifest.repo / "docs" / "android" / "automation-policy.json", 512 * 1024)
+    engine = CapabilityEngine(policy)
+    for row in matching:
+        admission = engine.admit(wp_id, manifest.wp(wp_id)["write_paths"], row["path"], row["operation"])
+        if admission.capability_id != row["capability"] or admission.capability_id == "wp-owned":
+            raise PortError(f"Incorrect capability support binding: {relative}")
+    return True
 
 
 def navigation_scope_admitted(manifest, relative):
@@ -69,7 +109,8 @@ def port_map(manifest):
         for wp_id, reason in android_only:
             declared = permits(manifest.wp(wp_id)["write_paths"], relative)
             nav_allowed = wp_id == "WP-302" and not declared and navigation_scope_admitted(manifest, relative)
-            if not reason.strip() or not (declared or nav_allowed):
+            capability_allowed = not declared and not nav_allowed and capability_support_admitted(manifest, wp_id, relative)
+            if not reason.strip() or not (declared or nav_allowed or capability_allowed):
                 raise PortError(f"Invalid Android-only owner/write path: {relative}")
         for declaration in generated:
             generator, separator, declared_inputs = declaration.partition("; inputs: ")

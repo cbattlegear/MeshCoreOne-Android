@@ -25,10 +25,11 @@ Windows, JDK 21.0.12.1, Android SDK 37.2/build-tools 37.0.0:
 
 ./gradlew :feature:tools:testDebugUnitTest :feature:tools:lintDebug
   PASS
-  35 suites, 641 tests, 0 failures, 0 errors, 0 skipped
+  36 suites, 645 tests, 0 failures, 0 errors, 0 skipped
   WP-314 trace/discovery suites: 13 suites, 196 tests
 
-./gradlew validateModuleGraph
+./gradlew runtimeDependencyInventory validateModuleGraph
+  PASS: 195 linked runtime artifact inputs verified
   PASS: 30 modules; no forbidden production edges or Android JVM leakage
 
 python tools/android-port/portmap.py
@@ -37,7 +38,8 @@ python tools/android-port/controller/validate.py
 ```
 
 The tools module dependency lock was regenerated because WP-314 now consumes the already-approved
-`:core:maps` MapLibre adapter. No dependency version or verification-metadata change was made.
+`:core:maps` MapLibre adapter. Gradle-generated SHA-256 entries admit only POMs resolved by the linked
+runtime inventory after current-main integration; no dependency version changed.
 
 ## Evidence limits
 

@@ -7,6 +7,15 @@ import android.os.Bundle
 import com.meshcoreone.android.app.container.AndroidAppContainerFactory
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.state.ProcessForegroundState
+import com.meshcoreone.android.core.contracts.domain.ConnectionIssue
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.runtime.ConnectionError
+import com.meshcoreone.android.platform.widgets.ConnectionRequestOrigin
+import com.meshcoreone.android.platform.widgets.ConnectionRequestResult
+import com.meshcoreone.android.platform.widgets.WidgetConnectionBridge
+import com.meshcoreone.android.platform.widgets.WidgetConnectionOwner
+import com.meshcoreone.android.platform.widgets.WidgetConnectionView
+import com.meshcoreone.android.platform.widgets.WidgetRadioStatus
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
@@ -14,6 +23,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -32,6 +44,7 @@ class MeshCoreApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        installWidgetConnectionOwner()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {
                 if (foreground.activityStarted()) onForegroundEdge()
@@ -60,6 +73,47 @@ class MeshCoreApplication : Application() {
                 pending.completeExceptionally(failure)
             }
         }
+    }
+
+    private fun installWidgetConnectionOwner() {
+        WidgetConnectionBridge.install(this, processScope, object : WidgetConnectionOwner {
+            override val status: Flow<WidgetConnectionView>
+                get() = kotlinx.coroutines.flow.flow {
+                    val current = pending.await()
+                    emitAll(current.connectionManager.snapshot.map { snapshot ->
+                        WidgetConnectionView(
+                            status = when (snapshot.state) {
+                                DeviceConnectionState.DISCONNECTED -> WidgetRadioStatus.DISCONNECTED
+                                DeviceConnectionState.CONNECTING -> WidgetRadioStatus.CONNECTING
+                                DeviceConnectionState.CONNECTED -> WidgetRadioStatus.CONNECTED
+                                DeviceConnectionState.SYNCING -> WidgetRadioStatus.SYNCING
+                                DeviceConnectionState.READY -> WidgetRadioStatus.READY
+                            },
+                            hasSavedDevice = current.connectionPort.lastConnectedDeviceId != null,
+                            reconnecting = snapshot.blePhase ==
+                                com.meshcoreone.android.core.contracts.domain.BleLinkPhase.AUTO_RECONNECTING,
+                            permissionDenied = snapshot.issue is ConnectionIssue.PermissionDenied,
+                        )
+                    })
+                }
+
+            override suspend fun requestConnection(origin: ConnectionRequestOrigin): ConnectionRequestResult {
+                val current = pending.await()
+                if (current.connectionManager.connectionState != DeviceConnectionState.DISCONNECTED) {
+                    return ConnectionRequestResult.AlreadyActive
+                }
+                val deviceId = current.connectionPort.lastConnectedDeviceId
+                    ?: return ConnectionRequestResult.NoSavedDevice
+                return try {
+                    current.connectionPort.connect(deviceId, forceReconnect = false)
+                    ConnectionRequestResult.Requested
+                } catch (missing: ConnectionError.DeviceNotFound) {
+                    ConnectionRequestResult.NoSavedDevice
+                } catch (denied: SecurityException) {
+                    ConnectionRequestResult.PermissionDenied
+                }
+            }
+        })
     }
 
     private fun onForegroundEdge() {

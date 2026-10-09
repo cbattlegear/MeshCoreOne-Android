@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-403 Android platform labels not present in the WidgetKit source. Runtime status uses generated source translations. -->
+<resources>
+    <string name="widget_app_name">MeshCore One</string>
+    <string name="widget_description">Radio connection status</string>
+    <string name="widget_tile_label">MeshCore One connection</string>
+</resources>

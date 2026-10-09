@@ -95,6 +95,8 @@ import com.meshcoreone.android.feature.remotenodes.RemoteNodesEntry
 import com.meshcoreone.android.feature.settings.SettingsEntry
 import com.meshcoreone.android.feature.tools.ToolsEntry
 import com.meshcoreone.android.feature.tools.ToolsFeatureDependencies
+import com.meshcoreone.android.feature.tools.los.LineOfSightEntry
+import com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies
 import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -131,8 +133,9 @@ fun NativeNavigationShell(
     map: MapFeatureDependencies? = null,
     tools: ToolsFeatureDependencies? = null,
     nodes: NodesFeatureDependencies? = null,
+    lineOfSight: LineOfSightFeatureDependencies? = null,
     content: @Composable (NavigationDestination, (FeatureRoute) -> Unit) -> Unit = { destination, navigate ->
-        ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, coordinator)
+        ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, lineOfSight, coordinator)
     },
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
@@ -402,6 +405,7 @@ private fun ExistingFeatureContent(
     map: MapFeatureDependencies?,
     tools: ToolsFeatureDependencies?,
     nodes: NodesFeatureDependencies?,
+    lineOfSight: LineOfSightFeatureDependencies?,
     coordinator: NavigationCoordinator,
 ) {
     val navigationState by coordinator.state.collectAsStateWithLifecycle()
@@ -451,13 +455,19 @@ private fun ExistingFeatureContent(
             val selected = (destination as? NavigationDestination.Tool)?.selection?.let {
                 com.meshcoreone.android.feature.tools.navigation.ToolSelection.valueOf(it.name)
             }
-            ToolsEntry(
-                route,
-                navigate,
-                selected,
-                { coordinator.navigateToTool(ToolSelection.valueOf(it.name)) },
-                tools,
-            )
+            if (selected == com.meshcoreone.android.feature.tools.navigation.ToolSelection.LINE_OF_SIGHT &&
+                lineOfSight != null
+            ) {
+                LineOfSightEntry(lineOfSight)
+            } else {
+                ToolsEntry(
+                    route,
+                    navigate,
+                    selected,
+                    { coordinator.navigateToTool(ToolSelection.valueOf(it.name)) },
+                    tools,
+                )
+            }
         }
         FeatureId.SETTINGS -> SettingsEntry(route, navigate)
         FeatureId.ONBOARDING -> OnboardingEntry(

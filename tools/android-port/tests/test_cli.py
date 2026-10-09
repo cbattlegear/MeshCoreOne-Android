@@ -309,6 +309,26 @@ class ProvenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(port_map(self.temporary_manifest(directory)), [])
 
+    def test_trusted_capability_path_operation_admits_direct_app_support_and_nothing_else(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            relative = "android/app/src/main/kotlin/example/Support.kt"
+            source = root / relative
+            source.parent.mkdir(parents=True)
+            source.write_text("// AndroidOnly: WP-101 direct app wiring\n", encoding="utf-8")
+            policy_source = REPO / "docs" / "android" / "automation-policy.json"
+            policy = root / "docs" / "android" / "automation-policy.json"
+            policy.parent.mkdir(parents=True)
+            policy.write_bytes(policy_source.read_bytes())
+            self.assertEqual(["WP-101"], port_map(self.temporary_manifest(directory))[0]["android_only"])
+
+            source.unlink()
+            outside = root / "android" / "core" / "Support.kt"
+            outside.parent.mkdir(parents=True)
+            outside.write_text("// AndroidOnly: WP-101 unsupported wiring\n", encoding="utf-8")
+            with self.assertRaises(PortError):
+                port_map(self.temporary_manifest(directory))
+
     def test_wp302_only_exact_launcher_and_navigation_unit_prefix_with_actual_approval(self):
         paths = (
             "android/app/src/main/kotlin/com/meshcoreone/android/MainActivity.kt",

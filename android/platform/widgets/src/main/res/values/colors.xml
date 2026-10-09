@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-403 High-contrast widget colors independent of an Activity theme. -->
+<resources>
+    <color name="widget_background">#1F252A</color>
+    <color name="widget_primary_text">#FFFFFF</color>
+    <color name="widget_secondary_text">#D3D7DB</color>
+    <color name="widget_action_text">#7DD3FC</color>
+</resources>

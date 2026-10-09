@@ -1,7 +1,7 @@
 # WP-314 evidence
 
 Frozen source: `db14559b39d32322b06477c6ae676112f583db50`.
-Integrated base: `9b60b6965ce009e58517e8451f16f94502ae41f5`.
+Integrated base: `ccfe64c4eb708e256ff0cffcb2ed11e4267a12f1`.
 
 ## Implemented scope
 

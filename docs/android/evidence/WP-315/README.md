@@ -40,25 +40,15 @@ android\gradlew.bat :feature:tools:testDebugUnitTest :feature:tools:lintDebug \
   :app:testDebugUnitTest validateModuleGraph --console=plain --max-workers=2
 ```
 
-Passed in 7m14s:
+Passed on the integrated WP-316 base in 4m21s:
 
-- `:feature:tools:testDebugUnitTest`: 35 suites, 643 tests, 0 failures,
+- `:feature:tools:testDebugUnitTest`: 36 suites, 644 tests, 0 failures,
   0 errors, 0 skipped; the LoS subset was 9 suites and 141 tests.
 - `:app:testDebugUnitTest`: 41 suites, 547 tests, 0 failures, 0 errors,
   0 skipped.
 - `:feature:tools:lintDebug`: passed with no reported issue.
 - `validateModuleGraph`: 30 modules, no forbidden production edge or Android
   JVM leakage.
-
-The final feature-only rerun after source camera-fit alignment used:
-
-```text
-android\gradlew.bat :feature:tools:testDebugUnitTest :feature:tools:lintDebug \
-  --console=plain --max-workers=2
-```
-
-Passed in 3m10s: 35 suites and 643 tests, with 0 failures, 0 errors and
-0 skipped; lint passed. The LoS subset remained 9 suites and 141 tests.
 
 ```text
 python tools\android-port\portmap.py
@@ -75,7 +65,7 @@ cd tools\android-port\tests
 python -m unittest test_cli
 ```
 
-Passed: 28 tests in 23.998s. This includes the new fail-closed capability
+Passed: 28 tests in 30.351s. This includes the new fail-closed capability
 support-receipt test, which proves only the exact trusted path and operation are
 admitted and rejects unknown capabilities and out-of-rule paths.
 

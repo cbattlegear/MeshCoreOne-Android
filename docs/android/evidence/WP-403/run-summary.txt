@@ -1,5 +1,5 @@
 WP-403 verification (Windows x64, Temurin 21, Android SDK Platform 37.2 / Build Tools 37.0.0).
-Integrated base: origin/main e2a9653df43a0939cd3c6919a298ea76c2c2403d.
+Integrated base: origin/main 9b60b6965ce009e58517e8451f16f94502ae41f5.
 Frozen Swift source/test pin: db14559b39d32322b06477c6ae676112f583db50.
 Acceptance: WP-403-behavior, WP-403-boundaries, WP-403-source-test-parity.
 No device, emulator, iOS, launcher/OEM, hardware or signing verification is claimed.

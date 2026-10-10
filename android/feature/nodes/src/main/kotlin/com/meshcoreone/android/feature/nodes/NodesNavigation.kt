@@ -8,6 +8,7 @@ interface NodesNavigation {
     fun openDiscovery()
     fun openChat(contact: ContactDTO)
     fun openMap(latitude: Double, longitude: Double)
+    fun openRemoteNode(contact: ContactDTO, action: RemoteNodeAction)
     fun back()
 
     companion object {
@@ -16,10 +17,14 @@ interface NodesNavigation {
             override fun openDiscovery() = Unit
             override fun openChat(contact: ContactDTO) = Unit
             override fun openMap(latitude: Double, longitude: Double) = Unit
+            override fun openRemoteNode(contact: ContactDTO, action: RemoteNodeAction) = Unit
             override fun back() = Unit
         }
+
     }
 }
+
+enum class RemoteNodeAction { MANAGEMENT, TELEMETRY, SAVED_HISTORY, JOIN_ROOM }
 
 sealed interface NodesDestination {
     data object List : NodesDestination

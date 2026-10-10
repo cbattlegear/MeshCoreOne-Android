@@ -262,6 +262,10 @@ class NodeSettingsStateHolder(
             update { it.copy(errorMessage = RemoteNodesText.resource(AppRemoteNodesStrings.remoteNodesSettingsRadioNotLoaded)) }
             return
         }
+        if (!NodeSettingsValidation.validRadioFields(frequency, bandwidth, spreadingFactor, codingRate)) {
+            update { it.copy(errorMessage = RemoteNodesText.resource(AppRemoteNodesStrings.remoteNodesSettingsRadioApplyFailed)) }
+            return
+        }
         update { it.copy(isApplying = true, errorMessage = null) }
         val command = "set radio ${SwiftDoubleText.describe(frequency)},${SwiftDoubleText.describe(bandwidth)}," +
             "$spreadingFactor,$codingRate"

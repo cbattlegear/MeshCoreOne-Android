@@ -1,0 +1,190 @@
+// AndroidOnly: WP-313 Adapt the existing service graph without introducing a feature-to-feature dependency.
+package com.meshcoreone.android.app.container
+
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.NeighborBaseline
+import com.meshcoreone.android.core.model.*
+import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
+import com.meshcoreone.android.core.protocol.event.*
+import com.meshcoreone.android.core.services.device.FirmwareDeviceErrorCode
+import com.meshcoreone.android.core.services.device.RadioOptions
+import com.meshcoreone.android.core.services.remote.BinaryProtocolError
+import com.meshcoreone.android.core.services.remote.RemoteNodeError
+import com.meshcoreone.android.core.services.remote.RepeaterAdminService
+import com.meshcoreone.android.core.services.remote.RoomAdminService
+import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesClock
+import com.meshcoreone.android.feature.remotenodes.dependencies.*
+import java.time.Instant
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.nanoseconds
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+
+internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiDependencies =
+    object : RemoteNodesUiDependencies {
+        override val radioOptions = RemoteRadioOptions(
+            RadioOptions.bandwidthsKHz, RadioOptions.spreadingFactors.toList(), RadioOptions.codingRates.toList(),
+        )
+        override val updates = combine(
+            connectionManager.snapshot, appState.servicesVersion, appState.contactsVersion, appState.sessionStateChangeCount,
+        ) { _, _, _, _ ->
+            RemoteNodesConnection(
+                appState.currentRadioId,
+                sessions.current?.token?.toString(),
+                appState.connectionState == DeviceConnectionState.READY,
+            )
+        }
+
+        override suspend fun catalog(): RemoteNodesCatalog {
+            val radio = appState.currentRadioId ?: return RemoteNodesCatalog(emptyList(), emptyList(), emptyList())
+            val store = appState.offlineDataStore ?: throw RemoteNodeError.NotConnected()
+            return RemoteNodesCatalog(
+                store.fetchContacts(radio).toList(), store.fetchDiscoveredNodes(radio).toList(),
+                store.fetchRemoteNodeSessions(radio).toList(),
+            )
+        }
+
+        override fun services(): RemoteNodesFeatureDependencies {
+            val bound = sessions.current
+            val store = appState.offlineDataStore
+            return object : RemoteNodesFeatureDependencies {
+                private fun active() = bound?.takeIf { sessions.current === it }
+                private fun requireActive(radioId: RadioId) {
+                    if (active()?.token?.radioId != radioId) throw RemoteNodeError.NotConnected()
+                }
+                private fun requireActive() {
+                    if (active() == null) throw RemoteNodeError.NotConnected()
+                }
+                override val clock = object : RemoteNodesClock {
+                    override val now: Instant get() = Instant.now()
+                    override val elapsed: Duration get() = System.nanoTime().nanoseconds
+                    override suspend fun sleep(duration: Duration) = delay(duration)
+                }
+                override val faults = AppRemoteNodeFaults
+                override fun repeaterAdmin() = active()?.repeaterAdminService?.let { AppRepeaterAdmin(it) { radio -> active()?.token?.radioId == radio } }
+                override fun roomAdmin() = active()?.roomAdminService?.let { AppRoomAdmin(it) { radio -> active()?.token?.radioId == radio } }
+                override fun binaryTelemetry() = active()?.binaryProtocolService?.let { service ->
+                    BinaryTelemetryPort { publicKey -> requireActive(); service.requestTelemetry(publicKey) }
+                }
+                override fun historyStore() = store?.let { remoteNodeHistoryStore(it, it, it) }
+                override fun connectedRadioId() = active()?.token?.radioId
+                override fun deviceHashSize() = active()?.let { appState.connectedDevice?.hashSize?.let(Math::toIntExact) }
+                override fun nodeSnapshots(): NodeSnapshotPort? = active()?.nodeSnapshotService?.let { service ->
+                    object : NodeSnapshotPort {
+                        override suspend fun recordSnapshot(
+                            nodePublicKey: Bytes, status: NodeStatusMetrics?, telemetry: SnapshotList<TelemetrySnapshotEntry>?,
+                            neighbors: SnapshotList<NeighborSnapshotEntry>?, location: NodeLocationFix?,
+                        ): java.util.UUID? {
+                            requireActive()
+                            return service.recordSnapshot(nodePublicKey, status, telemetry, neighbors, location)
+                        }
+                        override suspend fun neighborBaseline(nodePublicKey: Bytes): NeighborBaseline {
+                            requireActive()
+                            return service.neighborBaseline(nodePublicKey)
+                        }
+                        override suspend fun previousStatusSnapshot(nodePublicKey: Bytes, before: Instant): NodeStatusSnapshotDTO? {
+                            requireActive()
+                            return service.previousStatusSnapshot(nodePublicKey, before)
+                        }
+                        override suspend fun fetchSnapshots(nodePublicKey: Bytes, since: Instant?): SnapshotList<NodeStatusSnapshotDTO> {
+                            requireActive()
+                            return service.fetchSnapshots(nodePublicKey, since)
+                        }
+                    }
+                }
+                override fun contactOcv(): ContactOcvPort? = active()?.contactService?.let { service ->
+                    object : ContactOcvPort {
+                        override suspend fun getContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                            requireActive(radioId)
+                            return service.getContact(radioId, publicKey)
+                        }
+                        override suspend fun updateContactOCVSettings(contactId: java.util.UUID, preset: String, customArray: String?) {
+                            val radioId = active()?.token?.radioId ?: throw RemoteNodeError.NotConnected()
+                            service.updateContactOCVSettings(EntityKey(radioId, contactId), preset, customArray)
+                        }
+                    }
+                }
+                override fun login(): RemoteNodeLoginPort? = active()?.let { service ->
+                    object : RemoteNodeLoginPort {
+                        override suspend fun retrievePassword(contact: ContactDTO): String? {
+                            requireActive(contact.radioId)
+                            return service.remoteNodeService.retrievePassword(contact)
+                        }
+                        override suspend fun deletePassword(contact: ContactDTO) {
+                            requireActive(contact.radioId)
+                            service.remoteNodeService.deletePassword(contact)
+                        }
+                        override suspend fun resetPath(radioId: RadioId, publicKey: Bytes) {
+                            requireActive(radioId)
+                            service.contactService.resetPath(radioId, publicKey)
+                        }
+                        override suspend fun connectAsAdmin(
+                            radioId: RadioId, contact: ContactDTO, password: String, rememberPassword: Boolean,
+                            pathLength: UByte, onTimeoutKnown: suspend (Long) -> Unit,
+                        ): RemoteNodeSessionDTO {
+                            requireActive(radioId)
+                            return service.repeaterAdminService.connectAsAdmin(radioId, contact, password, rememberPassword, pathLength, onTimeoutKnown)
+                        }
+                        override suspend fun joinRoom(
+                            radioId: RadioId, contact: ContactDTO, password: String, rememberPassword: Boolean,
+                            pathLength: UByte, onTimeoutKnown: suspend (Long) -> Unit,
+                        ): RemoteNodeSessionDTO {
+                            requireActive(radioId)
+                            return service.roomServerService.joinRoom(radioId, contact, password, rememberPassword, pathLength, onTimeoutKnown)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+internal object AppRemoteNodeFaults : RemoteNodeFaultClassifier {
+    override fun isTimeout(error: Throwable) = error is RemoteNodeError.Timeout
+    override fun isRemoteNoResponseYet(error: Throwable): Boolean {
+        val mesh = when (error) {
+            is RemoteNodeError.SessionError -> error.error
+            is BinaryProtocolError.SessionError -> error.error
+            else -> return false
+        }
+        return mesh is MeshCoreException.DeviceError && mesh.code == FirmwareDeviceErrorCode.remoteNodeNoResponseYet
+    }
+    override fun isBinarySessionTimeout(error: Throwable) =
+        error is BinaryProtocolError.SessionError && error.error is MeshCoreException.Timeout
+}
+
+internal class AppRepeaterAdmin(private val service: RepeaterAdminService, private val isActive: (RadioId) -> Boolean) : RepeaterAdminPort {
+    private fun checked(key: EntityKey): EntityKey {
+        if (!isActive(key.radioId)) throw RemoteNodeError.NotConnected()
+        return key
+    }
+    override suspend fun sendCommand(session: EntityKey, command: String, timeout: Duration) = service.sendCommand(checked(session), command, timeout)
+    override suspend fun sendRawCommand(session: EntityKey, command: String, timeout: Duration) = service.sendRawCommand(checked(session), command, timeout)
+    override fun setCLIHandler(handler: suspend (ContactMessage, ContactDTO) -> Unit) = service.setCLIHandler(handler)
+    override suspend fun requestStatus(session: EntityKey, timeout: Duration?) = service.requestStatus(checked(session), timeout)
+    override suspend fun requestTelemetry(session: EntityKey, timeout: Duration?) = service.requestTelemetry(checked(session), timeout)
+    override suspend fun requestOwnerInfo(session: EntityKey, timeout: Duration?) = service.requestOwnerInfo(checked(session), timeout)
+    override suspend fun fetchAllNeighbors(session: EntityKey, timeout: Duration?) = service.fetchAllNeighbors(checked(session), timeout = timeout)
+    override fun setStatusHandler(handler: suspend (StatusResponse) -> Unit) = service.setStatusHandler(handler)
+    override fun setTelemetryHandler(handler: suspend (TelemetryResponse) -> Unit) = service.setTelemetryHandler(handler)
+    override fun setNeighboursHandler(handler: suspend (NeighboursResponse) -> Unit) = service.setNeighboursHandler(handler)
+    override fun clearHandlers() = service.clearHandlers()
+    override fun clearStatusHandlers() = service.clearStatusHandlers()
+}
+
+internal class AppRoomAdmin(private val service: RoomAdminService, private val isActive: (RadioId) -> Boolean) : RoomAdminPort {
+    private fun checked(key: EntityKey): EntityKey {
+        if (!isActive(key.radioId)) throw RemoteNodeError.NotConnected()
+        return key
+    }
+    override suspend fun sendCommand(session: EntityKey, command: String, timeout: Duration) = service.sendCommand(checked(session), command, timeout)
+    override suspend fun sendRawCommand(session: EntityKey, command: String, timeout: Duration) = service.sendRawCommand(checked(session), command, timeout)
+    override fun setCLIHandler(handler: suspend (ContactMessage, ContactDTO) -> Unit) = service.setCLIHandler(handler)
+    override suspend fun requestStatus(session: EntityKey, timeout: Duration?) = service.requestStatus(checked(session), timeout)
+    override suspend fun requestTelemetry(session: EntityKey, timeout: Duration?) = service.requestTelemetry(checked(session), timeout)
+    override fun setStatusHandler(handler: suspend (StatusResponse) -> Unit) = service.setStatusHandler(handler)
+    override fun setTelemetryHandler(handler: suspend (TelemetryResponse) -> Unit) = service.setTelemetryHandler(handler)
+    override fun clearHandlers() = service.clearHandlers()
+    override fun clearStatusHandlers() = service.clearStatusHandlers()
+}

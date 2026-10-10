@@ -1,5 +1,6 @@
 // PortedFrom: MC1/State/NavigationCoordinator.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/MainSidebarView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Contacts/ContactDetailView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.navigation
 
 import com.meshcoreone.android.core.contracts.AppTab
@@ -93,6 +94,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             pendingContactDetail = contact, selectedContact = contact, nodesShowingDiscovery = false,
         )
     }
+
+    fun navigateToRemoteNode(contact: ContactDTO, action: com.meshcoreone.android.feature.nodes.RemoteNodeAction) =
+        mutableState.update { it.push(AppTab.NODES, NavigationDestination.RemoteNode(contact, action)) }
 
     fun navigateToMap(latitude: Double, longitude: Double) = mutableState.update {
         it.select(AppTab.MAP).copy(pendingMapFocus = MapFocusRequest(latitude, longitude))
@@ -410,6 +414,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         fun clearRadioSelection(state: NavigationState): NavigationState =
             clearDeviceSelection(state).removeDestinations {
                 it is NavigationDestination.Chat || it is NavigationDestination.ContactDetail ||
+                    it is NavigationDestination.RemoteNode ||
                     it == NavigationDestination.Discovery
             }.copy(selectedContact = null, nodesShowingDiscovery = false, chatsSelectedRoute = null)
     }

@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.model.OCVPreset
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesClock
+import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesText
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodeHistoryStore
 import com.meshcoreone.android.feature.remotenodes.resolver.NeighborNameResolver
 import com.meshcoreone.android.feature.remotenodes.telemetry.MeasurementSystem
@@ -26,6 +27,8 @@ data class TelemetryHistoryOverviewState(
     val contacts: List<ContactDTO> = emptyList(),
     val discoveredNodes: List<DiscoveredNodeDTO> = emptyList(),
     val timeRange: HistoryTimeRange = HistoryTimeRange.DEFAULT,
+    val isLoading: Boolean = false,
+    val error: RemoteNodesText? = null,
 ) {
     val hasSnapshots: Boolean get() = snapshots.isNotEmpty()
 }
@@ -72,21 +75,25 @@ class TelemetryHistoryOverviewStateHolder(
     fun hasRadioData(snapshots: List<NodeStatusSnapshotDTO>): Boolean = snapshots.any { it.hasRadioMetrics }
 
     /**
-     * Swift `loadData(dataStore:publicKey:radioID:)`: a snapshot failure leaves no snapshots, a contact
-     * failure keeps the previous OCV curve, and contact or discovered-node failures (`try?`) leave empty
-     * lists. Cancellation always propagates.
+     * Swift `loadData(dataStore:publicKey:radioID:)`, adapted to retain previously loaded values and
+     * expose failed reads instead of displaying success-shaped empty history. Cancellation propagates.
      */
     suspend fun loadData(store: RemoteNodeHistoryStore, publicKey: Bytes, radioId: RadioId) {
-        val snapshots = attempt { store.fetchNodeStatusSnapshots(publicKey, null).toList() }
-        _state.update { it.copy(snapshots = snapshots ?: emptyList()) }
+        _state.update { it.copy(isLoading = true, error = null) }
+        try {
+            val snapshots = attempt { store.fetchNodeStatusSnapshots(publicKey, null).toList() }
+            if (snapshots != null) _state.update { it.copy(snapshots = snapshots) }
 
-        val contact = attempt { store.fetchContact(radioId, publicKey) }
-        if (contact != null) _state.update { it.copy(ocvArray = contact.activeOCVArray) }
+            val contact = attempt { store.fetchContact(radioId, publicKey) }
+            if (contact != null) _state.update { it.copy(ocvArray = contact.activeOCVArray) }
 
-        val contacts = attempt { store.fetchContacts(radioId).toList() }
-        _state.update { it.copy(contacts = contacts ?: emptyList()) }
-        val discovered = attempt { store.fetchDiscoveredNodes(radioId).toList() }
-        _state.update { it.copy(discoveredNodes = discovered ?: emptyList()) }
+            val contacts = attempt { store.fetchContacts(radioId).toList() }
+            if (contacts != null) _state.update { it.copy(contacts = contacts) }
+            val discovered = attempt { store.fetchDiscoveredNodes(radioId).toList() }
+            if (discovered != null) _state.update { it.copy(discoveredNodes = discovered) }
+        } finally {
+            _state.update { it.copy(isLoading = false) }
+        }
     }
 
     /** Swift `resolveNeighborName(prefix:)`: the resolver policy without a user location. */
@@ -99,6 +106,7 @@ class TelemetryHistoryOverviewStateHolder(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
+        _state.update { it.copy(error = RemoteNodesText.Failure(e)) }
         null
     }
 }

@@ -2,6 +2,7 @@
 // PortedFrom: MC1/State/AppTab.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/MainSidebarView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Navigation/ChatRoute.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Contacts/ContactDetailView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.navigation
 
 import com.meshcoreone.android.core.contracts.AppTab
@@ -56,6 +57,10 @@ sealed interface NavigationDestination {
     data class Root(val tab: AppTab) : NavigationDestination
     data class Chat(val selection: ChatSelection) : NavigationDestination
     data class ContactDetail(val contact: ContactDTO) : NavigationDestination
+    data class RemoteNode(
+        val contact: ContactDTO,
+        val action: com.meshcoreone.android.feature.nodes.RemoteNodeAction,
+    ) : NavigationDestination
     data object Discovery : NavigationDestination
     data class Tool(val selection: ToolSelection) : NavigationDestination
     data class Setting(val selection: SettingsDetail) : NavigationDestination

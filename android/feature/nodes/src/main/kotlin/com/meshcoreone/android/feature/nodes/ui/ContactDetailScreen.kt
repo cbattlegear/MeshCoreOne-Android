@@ -63,6 +63,7 @@ import com.meshcoreone.android.core.model.RepeaterResolvable
 import com.meshcoreone.android.core.model.uppercaseHexString
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.NodesNavigation
+import com.meshcoreone.android.feature.nodes.RemoteNodeAction
 import com.meshcoreone.android.feature.nodes.detail.ContactDetailPresentation
 import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
 import com.meshcoreone.android.feature.nodes.detail.DetailAction
@@ -263,7 +264,10 @@ internal fun ContactDetailScreen(
                                     DetailAction.SHARE_VIA_ADVERT -> scope.launch { holder.shareViaAdvert() }
                                     DetailAction.FAVORITE -> holder.setFavorite(!state.isFavorite)
                                     DetailAction.PING -> scope.launch { holder.pingRepeater() }
-                                    else -> Unit
+                                    DetailAction.MANAGEMENT -> navigation.openRemoteNode(contact, RemoteNodeAction.MANAGEMENT)
+                                    DetailAction.TELEMETRY -> navigation.openRemoteNode(contact, RemoteNodeAction.TELEMETRY)
+                                    DetailAction.SAVED_HISTORY -> navigation.openRemoteNode(contact, RemoteNodeAction.SAVED_HISTORY)
+                                    DetailAction.JOIN_ROOM -> navigation.openRemoteNode(contact, RemoteNodeAction.JOIN_ROOM)
                                 }
                             },
                         )
@@ -401,7 +405,7 @@ private fun DetailActionButton(
         DetailAction.SHARE_VIA_ADVERT -> C.contactsDetailShareViaAdvert
         DetailAction.FAVORITE -> if (state.isFavorite) C.contactsDetailRemoveFromFavorites else C.contactsDetailAddToFavorites
     }
-    val needsRadio = action in setOf(DetailAction.JOIN_ROOM, DetailAction.SEND_MESSAGE, DetailAction.PING, DetailAction.SHARE_VIA_ADVERT)
+    val needsRadio = action in setOf(DetailAction.JOIN_ROOM, DetailAction.SEND_MESSAGE, DetailAction.PING, DetailAction.SHARE_VIA_ADVERT, DetailAction.MANAGEMENT, DetailAction.TELEMETRY)
     Button(
         onClick = onClick,
         enabled = (!needsRadio || radioEnabled) && !(action == DetailAction.PING && state.isPinging) &&

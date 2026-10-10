@@ -20,6 +20,7 @@ import com.meshcoreone.android.feature.remotenodes.telemetry.MeasurementSystem
 import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
@@ -161,7 +162,7 @@ class TelemetryHistoryOverviewContentTest {
     }
 
     @Test
-    fun `load failures fall back like Swift`() = runSuspend {
+    fun `load failures retain prior data and expose the failure`() = runSuspend {
         store.saveNodeStatusSnapshot(key, batteryMillivolts = 3800u)
         store.saveContact(contact(OCVPreset.LI_FE_PO4.rawValue))
         load()
@@ -174,10 +175,18 @@ class TelemetryHistoryOverviewContentTest {
         store.contactsError = IOException("disk")
         store.discoveredError = IOException("disk")
         load()
-        assertTrue(holder.state.value.snapshots.isEmpty())
+        assertEquals(1, holder.state.value.snapshots.size)
         assertEquals(OCVPreset.LI_FE_PO4.ocvArray.toList(), holder.state.value.ocvArray, "contact failure keeps the curve")
-        assertTrue(holder.state.value.contacts.isEmpty())
+        assertEquals(1, holder.state.value.contacts.size)
         assertTrue(holder.state.value.discoveredNodes.isEmpty())
+        assertTrue(holder.state.value.error is RemoteNodesText.Failure)
+        assertFalse(holder.state.value.isLoading)
+        store.snapshotError = null
+        store.contactError = null
+        store.contactsError = null
+        store.discoveredError = null
+        load()
+        assertEquals(null, holder.state.value.error)
     }
 
     @Test
@@ -185,6 +194,7 @@ class TelemetryHistoryOverviewContentTest {
         store.snapshotError = CancellationException("stop")
         assertFailsWith<CancellationException> { load() }
         assertEquals(0, store.contactReads)
+        assertFalse(holder.state.value.isLoading)
     }
 
     @Test

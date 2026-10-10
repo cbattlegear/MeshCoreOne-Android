@@ -88,10 +88,14 @@ import com.meshcoreone.android.feature.map.MapFeatureDependencies
 import com.meshcoreone.android.feature.nodes.NodesEntry
 import com.meshcoreone.android.feature.nodes.NodesDestination
 import com.meshcoreone.android.feature.nodes.NodesNavigation
+import com.meshcoreone.android.feature.nodes.RemoteNodeAction
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.onboarding.OnboardingEntry
 import com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies
 import com.meshcoreone.android.feature.remotenodes.RemoteNodesEntry
+import com.meshcoreone.android.feature.remotenodes.RemoteNodeLaunch
+import com.meshcoreone.android.feature.remotenodes.RemoteNodeLaunchAction
+import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodesUiDependencies
 import com.meshcoreone.android.feature.settings.SettingsEntry
 import com.meshcoreone.android.feature.tools.ToolsEntry
 import com.meshcoreone.android.feature.tools.ToolsFeatureDependencies
@@ -134,8 +138,9 @@ fun NativeNavigationShell(
     tools: ToolsFeatureDependencies? = null,
     nodes: NodesFeatureDependencies? = null,
     lineOfSight: LineOfSightFeatureDependencies? = null,
+    remoteNodes: RemoteNodesUiDependencies? = null,
     content: @Composable (NavigationDestination, (FeatureRoute) -> Unit) -> Unit = { destination, navigate ->
-        ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, lineOfSight, coordinator)
+        ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, lineOfSight, remoteNodes, coordinator)
     },
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
@@ -274,6 +279,12 @@ fun NativeNavigationShell(
                             }
                         },
                         actions = {
+                            if (state.selectedTab == AppTab.NODES) {
+                                androidx.compose.material3.TextButton(
+                                    { coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES)) },
+                                    Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
+                                ) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)) }
+                            }
                             IconButton(
                                 onClick = { coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING)) },
                                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("open-radio-setup"),
@@ -338,7 +349,7 @@ private class ListDetailStrategy(
         val root = entries.lastOrNull { it.metadata["destination"] == NavigationDestination.Root(tab) } ?: return null
         val last = entries.last()
         val destination = last.metadata["destination"]
-        if (destination is NavigationDestination.Auxiliary) return null
+        if (destination is NavigationDestination.Auxiliary || destination is NavigationDestination.RemoteNode) return null
         val selected = if (last == root) listOf(root) else listOf(root, last)
         return ListDetailScene(last.contentKey, selected, entries.dropLast(1), tiled, tab)
     }
@@ -406,6 +417,7 @@ private fun ExistingFeatureContent(
     tools: ToolsFeatureDependencies?,
     nodes: NodesFeatureDependencies?,
     lineOfSight: LineOfSightFeatureDependencies?,
+    remoteNodes: RemoteNodesUiDependencies?,
     coordinator: NavigationCoordinator,
 ) {
     val navigationState by coordinator.state.collectAsStateWithLifecycle()
@@ -416,6 +428,7 @@ private fun ExistingFeatureContent(
         is NavigationDestination.Tool -> FeatureId.TOOLS
         is NavigationDestination.Setting -> FeatureId.SETTINGS
         is NavigationDestination.Auxiliary -> destination.feature
+        is NavigationDestination.RemoteNode -> FeatureId.REMOTE_NODES
     }
     val route = FeatureRoute(feature)
     when (feature) {
@@ -439,6 +452,11 @@ private fun ExistingFeatureContent(
 
                 override fun openMap(latitude: Double, longitude: Double) =
                     coordinator.navigateToMap(latitude, longitude)
+
+                override fun openRemoteNode(
+                    contact: com.meshcoreone.android.core.model.ContactDTO,
+                    action: RemoteNodeAction,
+                ) = coordinator.navigateToRemoteNode(contact, action)
 
                 override fun back() {
                     coordinator.back()
@@ -476,6 +494,21 @@ private fun ExistingFeatureContent(
             { target -> coordinator.back(); navigate(target) },
             onboarding,
         )
-        FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate)
+        FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate, remoteNodes, cliContent = { session, send, enabled ->
+            AppRemoteNodeCli(session, send, enabled)
+        }, launch = (destination as? NavigationDestination.RemoteNode)?.let {
+            RemoteNodeLaunch(
+                it.contact,
+                when (it.action) {
+                    RemoteNodeAction.MANAGEMENT -> RemoteNodeLaunchAction.MANAGEMENT
+                    RemoteNodeAction.TELEMETRY -> RemoteNodeLaunchAction.TELEMETRY
+                    RemoteNodeAction.SAVED_HISTORY -> RemoteNodeLaunchAction.SAVED_HISTORY
+                    RemoteNodeAction.JOIN_ROOM -> RemoteNodeLaunchAction.JOIN_ROOM
+                },
+            )
+        }, onDismiss = { coordinator.back() }, onJoinRoom = {
+            coordinator.back()
+            coordinator.navigateToRoom(it)
+        })
     }
 }

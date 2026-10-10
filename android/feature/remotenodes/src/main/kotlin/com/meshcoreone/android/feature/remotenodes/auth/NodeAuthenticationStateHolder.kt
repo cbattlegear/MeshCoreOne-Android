@@ -119,8 +119,10 @@ class NodeAuthenticationStateHolder(
                     service.deletePassword(contact)
                 } catch (error: CancellationException) {
                     throw error
-                } catch (_: Exception) {
-                    // Swift logs "Failed to delete saved password" and still completes the login.
+                } catch (error: Exception) {
+                    java.util.logging.Logger.getLogger(NodeAuthenticationStateHolder::class.java.name).log(
+                        java.util.logging.Level.WARNING, "Failed to delete saved password", error,
+                    )
                 }
             }
             finish(null, keepAuthenticating = true)

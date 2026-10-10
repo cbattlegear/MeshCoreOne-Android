@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.NeighborBaseline
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
@@ -53,6 +54,9 @@ internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiD
                 private fun requireActive(radioId: RadioId) {
                     if (active()?.token?.radioId != radioId) throw RemoteNodeError.NotConnected()
                 }
+                private fun requireActive() {
+                    if (active() == null) throw RemoteNodeError.NotConnected()
+                }
                 override val clock = object : RemoteNodesClock {
                     override val now: Instant get() = Instant.now()
                     override val elapsed: Duration get() = System.nanoTime().nanoseconds
@@ -62,35 +66,56 @@ internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiD
                 override fun repeaterAdmin() = active()?.repeaterAdminService?.let { AppRepeaterAdmin(it) { radio -> active()?.token?.radioId == radio } }
                 override fun roomAdmin() = active()?.roomAdminService?.let { AppRoomAdmin(it) { radio -> active()?.token?.radioId == radio } }
                 override fun binaryTelemetry() = active()?.binaryProtocolService?.let { service ->
-                    BinaryTelemetryPort(service::requestTelemetry)
+                    BinaryTelemetryPort { publicKey -> requireActive(); service.requestTelemetry(publicKey) }
                 }
                 override fun historyStore() = store?.let { remoteNodeHistoryStore(it, it, it) }
                 override fun connectedRadioId() = active()?.token?.radioId
-                override fun deviceHashSize() = active()?.let { appState.connectedDevice?.hashSize }
+                override fun deviceHashSize() = active()?.let { appState.connectedDevice?.hashSize?.let(Math::toIntExact) }
                 override fun nodeSnapshots(): NodeSnapshotPort? = active()?.nodeSnapshotService?.let { service ->
                     object : NodeSnapshotPort {
                         override suspend fun recordSnapshot(
                             nodePublicKey: Bytes, status: NodeStatusMetrics?, telemetry: SnapshotList<TelemetrySnapshotEntry>?,
                             neighbors: SnapshotList<NeighborSnapshotEntry>?, location: NodeLocationFix?,
-                        ) = service.recordSnapshot(nodePublicKey, status, telemetry, neighbors, location)
-                        override suspend fun neighborBaseline(nodePublicKey: Bytes) = service.neighborBaseline(nodePublicKey)
-                        override suspend fun previousStatusSnapshot(nodePublicKey: Bytes, before: Instant) =
-                            service.previousStatusSnapshot(nodePublicKey, before)
-                        override suspend fun fetchSnapshots(nodePublicKey: Bytes, since: Instant?) =
-                            service.fetchSnapshots(nodePublicKey, since)
+                        ): java.util.UUID? {
+                            requireActive()
+                            return service.recordSnapshot(nodePublicKey, status, telemetry, neighbors, location)
+                        }
+                        override suspend fun neighborBaseline(nodePublicKey: Bytes): NeighborBaseline {
+                            requireActive()
+                            return service.neighborBaseline(nodePublicKey)
+                        }
+                        override suspend fun previousStatusSnapshot(nodePublicKey: Bytes, before: Instant): NodeStatusSnapshotDTO? {
+                            requireActive()
+                            return service.previousStatusSnapshot(nodePublicKey, before)
+                        }
+                        override suspend fun fetchSnapshots(nodePublicKey: Bytes, since: Instant?): SnapshotList<NodeStatusSnapshotDTO> {
+                            requireActive()
+                            return service.fetchSnapshots(nodePublicKey, since)
+                        }
                     }
                 }
                 override fun contactOcv(): ContactOcvPort? = active()?.contactService?.let { service ->
                     object : ContactOcvPort {
-                        override suspend fun getContact(radioId: RadioId, publicKey: Bytes) = service.getContact(radioId, publicKey)
-                        override suspend fun updateContactOCVSettings(contactId: java.util.UUID, preset: String, customArray: String?) =
-                            service.updateContactOCVSettings(contactId, preset, customArray)
+                        override suspend fun getContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                            requireActive(radioId)
+                            return service.getContact(radioId, publicKey)
+                        }
+                        override suspend fun updateContactOCVSettings(contactId: java.util.UUID, preset: String, customArray: String?) {
+                            val radioId = active()?.token?.radioId ?: throw RemoteNodeError.NotConnected()
+                            service.updateContactOCVSettings(EntityKey(radioId, contactId), preset, customArray)
+                        }
                     }
                 }
                 override fun login(): RemoteNodeLoginPort? = active()?.let { service ->
                     object : RemoteNodeLoginPort {
-                        override suspend fun retrievePassword(contact: ContactDTO) = service.remoteNodeService.retrievePassword(contact)
-                        override suspend fun deletePassword(contact: ContactDTO) = service.remoteNodeService.deletePassword(contact)
+                        override suspend fun retrievePassword(contact: ContactDTO): String? {
+                            requireActive(contact.radioId)
+                            return service.remoteNodeService.retrievePassword(contact)
+                        }
+                        override suspend fun deletePassword(contact: ContactDTO) {
+                            requireActive(contact.radioId)
+                            service.remoteNodeService.deletePassword(contact)
+                        }
                         override suspend fun resetPath(radioId: RadioId, publicKey: Bytes) {
                             requireActive(radioId)
                             service.contactService.resetPath(radioId, publicKey)
@@ -140,7 +165,7 @@ internal class AppRepeaterAdmin(private val service: RepeaterAdminService, priva
     override suspend fun requestStatus(session: EntityKey, timeout: Duration?) = service.requestStatus(checked(session), timeout)
     override suspend fun requestTelemetry(session: EntityKey, timeout: Duration?) = service.requestTelemetry(checked(session), timeout)
     override suspend fun requestOwnerInfo(session: EntityKey, timeout: Duration?) = service.requestOwnerInfo(checked(session), timeout)
-    override suspend fun fetchAllNeighbors(session: EntityKey, timeout: Duration?) = service.fetchAllNeighbors(checked(session), timeout)
+    override suspend fun fetchAllNeighbors(session: EntityKey, timeout: Duration?) = service.fetchAllNeighbors(checked(session), timeout = timeout)
     override fun setStatusHandler(handler: suspend (StatusResponse) -> Unit) = service.setStatusHandler(handler)
     override fun setTelemetryHandler(handler: suspend (TelemetryResponse) -> Unit) = service.setTelemetryHandler(handler)
     override fun setNeighboursHandler(handler: suspend (NeighboursResponse) -> Unit) = service.setNeighboursHandler(handler)

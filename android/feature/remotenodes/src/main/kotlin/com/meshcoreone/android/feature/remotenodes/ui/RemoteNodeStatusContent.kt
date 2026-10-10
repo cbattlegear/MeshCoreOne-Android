@@ -97,7 +97,7 @@ internal fun RemoteNodeStatusContent(
                     RemoteStatusMetric(L.remoteNodesStatusBattery, NodeStatusDisplay.battery(response, state.ocvValues, locale), StatusDelta.battery(state.batteryDeltaMV), locale)
                     RemoteValue(stringResource(L.remoteNodesStatusUptime), remoteText(NodeStatusDisplay.uptime(response)))
                     RemoteValue(stringResource(L.remoteNodesStatusAirtime), NodeStatusDisplay.airtime(response)?.let { airtime ->
-                        "${remoteText(airtime.tx)} / ${remoteText(airtime.rx)}"
+                        "TX ${remoteText(airtime.tx)} / RX ${remoteText(airtime.rx)}"
                     }.orEmpty())
                     RemoteValue(stringResource(L.remoteNodesStatusAirtimePercent), NodeStatusDisplay.airtimePercent(response, locale))
                     RemoteStatusMetric(L.remoteNodesStatusLastSnr, NodeStatusDisplay.lastSnr(response, locale), StatusDelta.snr(state.snrDelta), locale)

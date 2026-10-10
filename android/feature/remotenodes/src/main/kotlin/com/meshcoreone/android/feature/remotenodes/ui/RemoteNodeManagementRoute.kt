@@ -61,6 +61,7 @@ internal fun RemoteNodeManagementRoute(
     var showHistory by rememberSaveable { mutableStateOf(initialHistory) }
     var pending by remember { mutableStateOf<PendingAction?>(null) }
     var routeError by remember { mutableStateOf<RemoteNodesText?>(null) }
+    var showIdentity by remember { mutableStateOf(false) }
     val canWrite by rememberUpdatedState(ready && session.isAdmin)
     val connected by rememberUpdatedState(ready)
     var telemetryConfigured by remember { mutableStateOf(false) }
@@ -102,8 +103,9 @@ internal fun RemoteNodeManagementRoute(
     Column(modifier.fillMaxHeight().padding(horizontal = 12.dp).testTag("remote-management")) {
         TextButton(onBack, Modifier.heightIn(min = 48.dp)) { Text(stringResource(L.remoteNodesDone)) }
         RemoteHeading(session.name)
-        RemoteValue(stringResource(L.remoteNodesRoomPublicKey), session.publicKeyHex)
-        RemoteValue(stringResource(L.remoteNodesRoomPermission), stringResource(
+        TextButton({ showIdentity = !showIdentity }) { Text(stringResource(L.remoteNodesRoomPublicKey)) }
+        if (showIdentity) Text(session.publicKeyHex)
+        Text(stringResource(
             if (session.isAdmin) L.remoteNodesPermissionAdmin
             else if (session.canPost) L.remoteNodesPermissionMember else L.remoteNodesPermissionGuest,
         ))
@@ -162,7 +164,7 @@ internal fun RemoteNodeManagementRoute(
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    routeError = RemoteNodesText.Failure(failure)
+                    routeError = AddRegionForm.submitError(failure)
                 }
             }
         }

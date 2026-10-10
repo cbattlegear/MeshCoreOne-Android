@@ -93,6 +93,39 @@ class NodeSettingsApplyTest {
 
     // MARK: radio
 
+    @Test
+    fun `invalid native radio drafts never reach transport`() = runSuspend {
+        val invalid = listOf(
+            listOf(Double.NaN, 250.0, 10L, 5L),
+            listOf(Double.POSITIVE_INFINITY, 250.0, 10L, 5L),
+            listOf(149.999, 250.0, 10L, 5L),
+            listOf(2500.001, 250.0, 10L, 5L),
+            listOf(915.0, Double.NaN, 10L, 5L),
+            listOf(915.0, 500.001, 10L, 5L),
+            listOf(915.0, 250.0, 4L, 5L),
+            listOf(915.0, 250.0, 13L, 5L),
+            listOf(915.0, 250.0, 10L, Long.MIN_VALUE),
+            listOf(915.0, 250.0, 10L, 9L),
+        )
+        invalid.forEach { fields ->
+            val recorder = CommandRecorder()
+            val holder = configured(recorder)
+            holder.setRadio(fields[0].toDouble(), fields[1].toDouble(), fields[2].toLong(), fields[3].toLong())
+            holder.applyRadioSettings()
+            assertTrue(recorder.commands.isEmpty())
+            assertEquals(RemoteNodesText.resource(AppRemoteNodesStrings.remoteNodesSettingsRadioApplyFailed), holder.state.value.errorMessage)
+            assertFalse(holder.state.value.isApplying)
+        }
+        for (frequency in listOf(150.0, 2500.0)) {
+            val recorder = CommandRecorder()
+            val holder = configured(recorder)
+            holder.setRadio(frequency, 7.8, 5L, 8L)
+            holder.applyRadioSettings()
+            assertEquals(1, recorder.commands.size)
+            assertNull(holder.state.value.errorMessage)
+        }
+    }
+
     @Test @OriginalCase("NodeSettingsRadioApplyTests::apply radio settings sends only set radio and clears modified flag()")
     fun `apply radio settings sends only set radio and clears modified flag`() = runSuspend {
         val recorder = CommandRecorder()

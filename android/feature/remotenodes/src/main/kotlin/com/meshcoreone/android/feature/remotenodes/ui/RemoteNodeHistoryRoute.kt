@@ -12,9 +12,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
+import com.meshcoreone.android.core.model.NodeStatusSnapshotDTO
 import com.meshcoreone.android.feature.remotenodes.common.*
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodeHistoryStore
 import com.meshcoreone.android.feature.remotenodes.history.*
@@ -35,7 +38,7 @@ internal fun RemoteNodeHistoryRoute(session: RemoteNodeSessionDTO, store: Remote
     val state by holder.state.collectAsStateWithLifecycle()
     var refresh by remember { mutableIntStateOf(0) }
     var fullMap by remember { mutableStateOf(false) }
-    var selectedReport by remember { mutableStateOf<String?>(null) }
+    var selectedReport by remember { mutableStateOf<NodeStatusSnapshotDTO?>(null) }
     LaunchedEffect(holder, refresh) {
         if (store != null) holder.loadData(store, session.publicKey, session.radioId)
     }
@@ -76,23 +79,45 @@ internal fun RemoteNodeHistoryRoute(session: RemoteNodeSessionDTO, store: Remote
                 val reports = LocationHistoryPreview.locationReports(content.filteredSnapshots)
                 if (reports.isNotEmpty()) {
                     val ascending = content.filteredSnapshots.sortedBy { it.timestamp }
-                    val path = remember(ascending, fullMap) { LocationPathMapBuilder.build(ascending, decimatePins = !fullMap) }
+                    val path = remember(ascending) { LocationPathMapBuilder.build(ascending) }
                     val region = path.points.map { it.coordinate }.boundingRegion()
                     RemoteNodeMapContent(
                         stringResource(L.remoteNodesStatusLocationMapTitle), path.points, path.lines, region,
                         surface = mapSurface,
                         onSelect = { marker ->
                             val report = path.reports[marker.id]
-                            selectedReport = reports.firstOrNull { it.id == report?.id }?.let {
-                                LocationReportRowText.detailLine(it, locale, zone, system)
-                            }
+                            selectedReport = reports.firstOrNull { it.id == report?.id }
                         },
                     )
-                    selectedReport?.let { Text(it) }
-                    TextButton({ fullMap = !fullMap }) { Text(stringResource(if (fullMap) L.remoteNodesDone else L.remoteNodesStatusViewOnMap)) }
+                    selectedReport?.let { Text(LocationReportRowText.detailLine(it, locale, zone, system)) }
+                    TextButton({ fullMap = true }) { Text(stringResource(L.remoteNodesStatusViewOnMap)) }
+                    RemoteHeading(stringResource(L.remoteNodesHistoryLocationReportsHeader))
                     reports.forEach { report ->
-                        TextButton({ selectedReport = LocationReportRowText.detailLine(report, locale, zone, system) }) {
+                        TextButton({ selectedReport = report; fullMap = true }) {
                             Text(LocationReportRowText.detailLine(report, locale, zone, system))
+                        }
+                    }
+                    if (fullMap) Dialog(
+                        onDismissRequest = { fullMap = false },
+                        properties = DialogProperties(usePlatformDefaultWidth = false),
+                    ) {
+                        Surface(Modifier.fillMaxSize().testTag("remote-history-full-map")) {
+                            BoxWithConstraints {
+                                val mapHeight = maxHeight * .65f
+                                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+                                    TextButton({ fullMap = false }) { Text(stringResource(L.remoteNodesDone)) }
+                                    val fullPath = remember(ascending) { LocationPathMapBuilder.build(ascending, decimatePins = false) }
+                                    RemoteNodeMapContent(
+                                        stringResource(L.remoteNodesStatusLocationMapTitle), fullPath.points, fullPath.lines,
+                                        selectedReport?.validCoordinate?.let { CoordinateRegion.around(it, .02) } ?: region,
+                                        surface = mapSurface, mapHeight = mapHeight,
+                                        onSelect = { marker ->
+                                            selectedReport = reports.firstOrNull { it.id == fullPath.reports[marker.id]?.id }
+                                        },
+                                    )
+                                    selectedReport?.let { Text(LocationReportRowText.detailLine(it, locale, zone, system)) }
+                                }
+                            }
                         }
                     }
                 } else {

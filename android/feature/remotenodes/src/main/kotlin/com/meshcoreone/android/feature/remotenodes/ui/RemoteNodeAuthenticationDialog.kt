@@ -21,11 +21,14 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.remotenodes.auth.*
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesText
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodesFeatureDependencies
+import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodesCatalog
+import java.util.Locale
 
 @Composable
 internal fun RemoteNodeAuthenticationDialog(
     contact: ContactDTO,
     dependencies: RemoteNodesFeatureDependencies,
+    catalog: RemoteNodesCatalog,
     onCancel: () -> Unit,
     onSuccess: (RemoteNodeSessionDTO) -> Unit,
 ) {
@@ -79,7 +82,14 @@ internal fun RemoteNodeAuthenticationDialog(
                     Checkbox(state.useFloodRouting, holder::setUseFloodRouting, enabled = holder.hasStoredPath && !state.isAuthenticating)
                     Text(stringResource(L.remoteNodesAuthFloodRouting))
                 }
-                RemoteValue(stringResource(L.remoteNodesAuthPath), if (contact.isFloodRouted) stringResource(L.remoteNodesAuthNoRouteSet) else contact.pathString)
+                RemoteHeading(stringResource(L.remoteNodesAuthPath))
+                when (val route = NodeRoutePathPresentation.of(contact, catalog.contacts, catalog.discoveredNodes, null, Locale.getDefault())) {
+                    NodeRoutePath.NoRoute -> Text(stringResource(L.remoteNodesAuthNoRouteSet))
+                    is NodeRoutePath.Route -> {
+                        Text(remoteText(route.summary))
+                        route.hops.forEach { RemoteValue(it.hex, remoteText(it.name)) }
+                    }
+                }
                 Text(remoteText(NodeAuthenticationPresentation.pathFooter(holder.hasStoredPath, state.useFloodRouting)))
                 RemoteFailure(prefillError)
                 NodeAuthenticationPresentation.authenticationFooter(state, role).forEach { Text(remoteText(it)) }

@@ -55,6 +55,7 @@ fun RemoteNodesEntry(
     var selectedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var historySession by remember { mutableStateOf<RemoteNodeSessionDTO?>(null) }
     var initialHistory by remember { mutableStateOf(false) }
+    var historyLaunch by remember { mutableIntStateOf(0) }
     var loginContact by remember { mutableStateOf<ContactDTO?>(null) }
     val selected = data.catalog.sessions.firstOrNull { "${it.radioId}:${it.publicKeyHex}" == selectedKey }
         ?: historySession?.takeIf { "${it.radioId}:${it.publicKeyHex}" == selectedKey }
@@ -92,7 +93,7 @@ fun RemoteNodesEntry(
                                 ) { Text(stringResource(L.remoteNodesAuthManagement)) }
                             },
                         )
-                        TextButton({ initialHistory = true; selectedKey = "${contact.radioId}:${contact.publicKeyHex}"; historySession = RemoteNodeSessionDTO(
+                        TextButton({ initialHistory = true; historyLaunch++; selectedKey = "${contact.radioId}:${contact.publicKeyHex}"; historySession = RemoteNodeSessionDTO(
                             radioId = contact.radioId, publicKey = contact.publicKey, name = contact.displayName,
                             role = if (contact.type == ContactType.REPEATER) com.meshcoreone.android.core.model.RemoteNodeRole.REPEATER
                             else com.meshcoreone.android.core.model.RemoteNodeRole.ROOM_SERVER,
@@ -104,9 +105,9 @@ fun RemoteNodesEntry(
                         TextButton({ initialHistory = false; selectedKey = "${session.radioId}:${session.publicKeyHex}" }) { Text(session.name) }
                     }
                 }
-                if (selected != null) key(selected.id, data.connection.generation, selected.permissionLevel, data.connection.ready) {
+                if (selected != null) key(selected.id, data.connection.generation, selected.permissionLevel, data.connection.ready, data.error != null, historyLaunch, initialHistory) {
                     RemoteNodeManagementRoute(
-                        selected, services, data.catalog, data.connection.ready && selected.isConnected && selected.radioId == data.connection.radioId,
+                        selected, services, data.catalog, data.connection.ready && !data.loading && data.error == null && selected.isConnected && selected.radioId == data.connection.radioId,
                         Modifier.weight(.6f), onBack = { selectedKey = null },
                         onAuthenticate = {
                             loginContact = data.catalog.contacts.firstOrNull {
@@ -123,7 +124,7 @@ fun RemoteNodesEntry(
         }
     }
     loginContact?.let { contact ->
-        if (services != null) RemoteNodeAuthenticationDialog(contact, services, onCancel = { loginContact = null }) {
+        if (services != null) RemoteNodeAuthenticationDialog(contact, services, data.catalog, onCancel = { loginContact = null }) {
             historySession = it.copy(isConnected = false, permissionLevel = com.meshcoreone.android.core.model.RoomPermissionLevel.GUEST)
             selectedKey = "${it.radioId}:${it.publicKeyHex}"
             initialHistory = false

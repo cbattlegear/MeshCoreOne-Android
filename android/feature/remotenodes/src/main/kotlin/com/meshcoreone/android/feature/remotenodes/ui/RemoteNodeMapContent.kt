@@ -11,12 +11,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings
 import com.meshcoreone.android.core.maps.*
 import com.meshcoreone.android.feature.remotenodes.map.CoordinateRegion
 import com.meshcoreone.android.feature.remotenodes.map.MapPoint
 import com.meshcoreone.android.feature.remotenodes.map.SnrBadge
+import com.meshcoreone.android.feature.remotenodes.map.boundingRegion
 import com.meshcoreone.android.feature.remotenodes.telemetry.MeasurementSystem
 import java.util.Locale
 import com.meshcoreone.android.feature.remotenodes.map.MapLine as NodeMapLine
@@ -65,12 +67,13 @@ internal fun RemoteNodeMapContent(
     onSelect: (MapMarker) -> Unit = {},
     surface: RemoteNodesMapSurface = NativeRemoteNodesMapSurface,
     onCameraChanged: (MapCamera) -> Unit = {},
+    mapHeight: Dp = 320.dp,
 ) {
     val locale = Locale.getDefault()
     val system = MeasurementSystem.of(locale)
     val unit = stringResource(SnrBadge.UNIT_TEXT_RESOURCE)
     val presentation = remember(points, lines, region, locale, system, unit) { remoteMapPresentation(points, lines, region, locale, system, unit) }
-    var encodedCamera by rememberSaveable { mutableStateOf<String?>(null) }
+    var encodedCamera by rememberSaveable(region) { mutableStateOf<String?>(null) }
     var labels by rememberSaveable { mutableStateOf(true) }
     var clusters by rememberSaveable { mutableStateOf(true) }
     var style by rememberSaveable { mutableStateOf(MapStyle.STANDARD) }
@@ -95,14 +98,19 @@ internal fun RemoteNodeMapContent(
             availability is MapLayerAvailability.Unavailable -> Text(availability.reason, color = MaterialTheme.colorScheme.error)
             else -> surface(
                 presentation.copy(style = style, camera = encodedCamera?.let(MapCamera::decode) ?: presentation.camera),
-                clusters, labels, title, { encodedCamera = it.encode(); onCameraChanged(it) }, onSelect, Modifier.fillMaxWidth().height(320.dp),
+                clusters, labels, title, { encodedCamera = it.encode(); onCameraChanged(it) }, onSelect, Modifier.fillMaxWidth().height(mapHeight),
             )
         }
+        TextButton({
+            encodedCamera = remoteMapPresentation(points, lines, points.map { it.coordinate }.boundingRegion(), locale, system, unit).camera?.encode()
+        }) { Text(stringResource(AppMapStrings.mapControlsCenterAll)) }
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Checkbox(labels, { labels = it })
-            Text(stringResource(AppMapStrings.mapControlsShowLabels))
+            Text(stringResource(AppMapStrings.mapControlsShowLabels), Modifier.weight(1f))
+        }
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Checkbox(clusters, { clusters = it })
-            Text(stringResource(AppMapStrings.mapControlsClusterNodes))
+            Text(stringResource(AppMapStrings.mapControlsClusterNodes), Modifier.weight(1f))
         }
         presentation.attribution.forEach { attribution ->
             TextButton({ uri.openUri(attribution.legalUri) }) { Text(attribution.label) }

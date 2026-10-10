@@ -263,17 +263,7 @@ fun AppContainer.createToolsDiagnosticsDependencies(): ToolsDiagnosticsDependenc
             connectedDevice = { appState.connectedDevice },
             sendSelfAdvert = { flood -> session()?.advertisementService?.sendSelfAdvertisement(flood) ?: Unit },
         ),
-        cliErrors = CliErrorPresentation(
-            remoteFault = { failure ->
-                when (failure) {
-                    is RemoteNodeError.Timeout -> CliRemoteFault.Timeout
-                    is RemoteNodeError.PasswordNotFound -> CliRemoteFault.PasswordNotFound
-                    is RemoteNodeError.LoginFailed -> CliRemoteFault.LoginFailed(failure.reason)
-                    is RemoteNodeError.Cancelled -> CliRemoteFault.Cancelled
-                    else -> null
-                }
-            },
-        ),
+        cliErrors = appCliErrors,
         rxLog = RxLogFeatureDependencies(
             rxLogService = { session()?.let { rxLog } },
             dataStore = { session()?.let { RxLogContactSource { radioId -> it.dataStore.fetchContacts(radioId) } } },

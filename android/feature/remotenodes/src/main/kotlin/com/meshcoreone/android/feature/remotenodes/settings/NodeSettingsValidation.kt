@@ -40,6 +40,13 @@ object NodeSettingsValidation {
     /** Firmware limit on the `set owner.info` value length. */
     const val OWNER_INFO_MAX_LENGTH = 119
 
+    fun validRadioFields(frequency: Double, bandwidth: Double, spreadingFactor: Long, codingRate: Long): Boolean =
+        frequency.isFinite() && bandwidth.isFinite() &&
+            frequency * 1000 in PacketBuilder.FREQUENCY_RANGE_KHZ.let { it.first.toDouble()..it.last.toDouble() } &&
+            bandwidth * 1000 in PacketBuilder.BANDWIDTH_RANGE_HZ.let { it.first.toDouble()..it.last.toDouble() } &&
+            spreadingFactor in PacketBuilder.SPREADING_FACTOR_RANGE.first.toLong()..PacketBuilder.SPREADING_FACTOR_RANGE.last.toLong() &&
+            codingRate in PacketBuilder.CODING_RATE_RANGE.first.toLong()..PacketBuilder.CODING_RATE_RANGE.last.toLong()
+
     fun validateBehaviorFields(advertInterval: Long?, floodInterval: Long?, floodMaxHops: Long?): BehaviorValidationErrors =
         BehaviorValidationErrors(
             advertInterval = if (advertInterval != null && advertInterval != 0L && advertInterval !in advertIntervalMinutesRange) {

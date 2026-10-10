@@ -303,7 +303,32 @@ class CliTests(unittest.TestCase):
 
 class ProvenanceTests(unittest.TestCase):
     def temporary_manifest(self, directory):
+        from controller.scope_amendment import AMENDMENT_PATH
+
+        amendment = Path(directory) / AMENDMENT_PATH
+        amendment.parent.mkdir(parents=True, exist_ok=True)
+        amendment.write_bytes((REPO / AMENDMENT_PATH).read_bytes())
         return replace(base_manifest(), repo=Path(directory))
+
+    def test_navigation_scope_requires_the_actual_immutable_translation_amendment(self):
+        from controller.scope_amendment import AMENDMENT_PATH
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = self.temporary_manifest(directory)
+            proof = root / WP_302_SCOPE_PROOF
+            proof.parent.mkdir(parents=True, exist_ok=True)
+            proof.write_text(json.dumps(WP_302_SCOPE_APPROVAL), encoding="utf-8")
+            source = root / WP_302_SCOPE_APPROVAL["write_paths"][0]
+            source.parent.mkdir(parents=True)
+            source.write_text("// AndroidOnly: WP-302 approved native shell support\n", encoding="utf-8")
+            amendment = root / AMENDMENT_PATH
+            amendment.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(PortError, "identity drift"):
+                port_map(manifest)
+            amendment.unlink()
+            with self.assertRaisesRegex(PortError, "Missing JSON"):
+                port_map(manifest)
 
     def test_absent_android_tree_is_unported_not_feature_success(self):
         with tempfile.TemporaryDirectory() as directory:

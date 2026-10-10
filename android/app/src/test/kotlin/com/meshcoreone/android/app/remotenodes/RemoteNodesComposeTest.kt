@@ -35,6 +35,10 @@ import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.model.RoomPermissionLevel
 import com.meshcoreone.android.core.model.RemoteNodeRole
 import com.meshcoreone.android.feature.remotenodes.RemoteNodesEntry
+import com.meshcoreone.android.feature.remotenodes.RemoteNodeLaunch
+import com.meshcoreone.android.feature.remotenodes.RemoteNodeLaunchAction
+import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.feature.nodes.RemoteNodeAction
 import com.meshcoreone.android.feature.remotenodes.ui.RemoteNodesMapSurface
 import org.junit.After
 import org.junit.Before
@@ -71,7 +75,7 @@ class RemoteNodesComposeTest {
     @After fun destroyHost() { host.pause().stop().destroy() }
     private fun text(id: Int) = host.get().getString(id)
 
-    private fun show() {
+    private fun show(launch: RemoteNodeLaunch? = null, onJoinRoom: (com.meshcoreone.android.core.model.RemoteNodeSessionDTO) -> Unit = {}) {
         host.get().setContent {
             CompositionLocalProvider(LocalDensity provides Density(1f, font.floatValue)) {
                 Box(Modifier.width(width.value).height(1000.dp)) {
@@ -83,7 +87,7 @@ class RemoteNodesComposeTest {
                                 Button({ camera(MapCamera(GeoPoint(38.0, -121.0), .05, .05)) }) { Text("Move fixture camera") }
                             }
                         }
-                        RemoteNodesEntry(FeatureRoute(FeatureId.REMOTE_NODES), {}, fixture, mapSurface = map)
+                        RemoteNodesEntry(FeatureRoute(FeatureId.REMOTE_NODES), {}, fixture, mapSurface = map, launch = launch, onJoinRoom = onJoinRoom)
                     }
                 }
             }
@@ -179,6 +183,23 @@ class RemoteNodesComposeTest {
         compose.onNodeWithText(text(L.remoteNodesHistoryNoSnapshotsMessage)).assertDoesNotExist()
     }
 
+    @Test fun catalogUpdatesDoNotReloadTheHistorySnapshotUntilTheUserRefreshes() {
+        show(); open()
+        compose.onNodeWithTag("remote-history").performClick()
+        compose.waitForIdle()
+        assertEquals("Opening history must read one snapshot", 1, fixture.historyReads)
+        compose.runOnIdle {
+            fixture.sessions = listOf(fixture.session.copy(name = "Updated synthetic name"))
+            fixture.publish()
+        }
+        compose.onNodeWithText("Updated synthetic name").assertExists()
+        assertEquals(1, fixture.historyReads)
+        compose.onNode(hasText(text(L.remoteNodesStatusRefresh)) and hasAnyAncestor(hasTestTag("remote-history-content")))
+            .performScrollTo().assertIsDisplayed().performClick()
+        compose.waitForIdle()
+        assertEquals("Explicit refresh must read one new snapshot", 2, fixture.historyReads)
+    }
+
     @Test fun authenticationCancelStopsThePendingLoginAndKeepsTheCatalogReachable() {
         fixture.sessions = emptyList()
         show(); compose.onNodeWithTag("open-node:${fixture.contact.id}").performClick()
@@ -217,6 +238,87 @@ class RemoteNodesComposeTest {
         assertEquals(AppTab.NODES, navigation.state.value.selectedTab)
         compose.onNodeWithTag("navigation-back").performClick()
         compose.onNodeWithTag("remote-node-list").assertDoesNotExist()
+    }
+
+    @Test fun contactHistoryNavigationRemainsPrivateAndWorksWithoutLoginOrRadio() {
+        fixture.connection = fixture.connection.copy(ready = false)
+        fixture.snapshots = emptyList()
+        fixture.publish()
+        val navigation = NavigationCoordinator()
+        navigation.navigateToContactDetail(fixture.contact)
+        navigation.navigateToRemoteNode(fixture.contact, RemoteNodeAction.SAVED_HISTORY)
+        val tokens = com.meshcoreone.android.app.navigation.NavigationSavedState.encode(navigation.state.value)
+        assertFalse(tokens.any { fixture.publicKey.hexString in it || fixture.contact.name in it })
+        host.get().setContent {
+            MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) { NativeNavigationShell(navigation, remoteNodes = fixture) }
+        }
+        compose.onNodeWithTag("remote-history-content").assertExists()
+        assertEquals(0, fixture.loginStarted)
+        assertTrue(fixture.commands.isEmpty())
+        compose.onNodeWithTag("navigation-back").performClick()
+        assertTrue(navigation.state.value.activeStack.last().destination is com.meshcoreone.android.app.navigation.NavigationDestination.ContactDetail)
+        navigation.replaceRadio(com.meshcoreone.android.core.model.RadioId(java.util.UUID.randomUUID()))
+        assertFalse(navigation.state.value.stacks.values.flatten().any { it.destination is com.meshcoreone.android.app.navigation.NavigationDestination.RemoteNode })
+    }
+
+    @Test fun contactTelemetryAuthenticatesWithoutExposingAdminSettings() {
+        fixture.loginResult = fixture.session
+        show(RemoteNodeLaunch(fixture.contact, RemoteNodeLaunchAction.TELEMETRY))
+        compose.onNodeWithTag("remote-login-password").performTextInput("password")
+        compose.onNodeWithTag("remote-login").performClick()
+        compose.onNodeWithTag("remote-management").assertExists()
+        compose.onNodeWithTag("remote-tab:SETTINGS").assertDoesNotExist()
+        expand(L.remoteNodesStatusTitle)
+        compose.waitUntil { fixture.statusReads > 0 }
+        assertTrue(fixture.commands.isEmpty())
+    }
+
+    @Test fun roomJoinReturnsTheAuthenticatedRoomToTheAppConversationConsumer() {
+        val room = fixture.contact.copy(typeRawValue = ContactType.ROOM.rawValue)
+        fixture.contacts = listOf(room)
+        fixture.loginResult = fixture.session.copy(role = RemoteNodeRole.ROOM_SERVER, permissionLevel = RoomPermissionLevel.READ_WRITE)
+        var joined: com.meshcoreone.android.core.model.RemoteNodeSessionDTO? = null
+        show(RemoteNodeLaunch(room, RemoteNodeLaunchAction.JOIN_ROOM)) { joined = it }
+        compose.onNodeWithTag("remote-login-password").performTextInput("password")
+        compose.onNodeWithTag("remote-login").performClick()
+        compose.waitUntil { joined != null }
+        assertEquals(fixture.loginResult, joined)
+        assertTrue(requireNotNull(joined).canPost)
+        assertEquals(1, fixture.loginStarted)
+    }
+
+    @Test fun chatNodeTelemetryUsesBinaryPublicKeyIdentityWithoutRemoteLogin() {
+        val chat = fixture.contact.copy(typeRawValue = ContactType.CHAT.rawValue)
+        fixture.contacts = listOf(chat)
+        show(RemoteNodeLaunch(chat, RemoteNodeLaunchAction.TELEMETRY))
+        compose.onNodeWithTag("direct-node-telemetry").assertExists()
+        compose.onNodeWithTag("direct-telemetry-refresh").performClick()
+        compose.waitUntil { fixture.binaryReads == 1 }
+        compose.onNodeWithText("72.5 °F").assertExists()
+        assertEquals(0, fixture.loginStarted)
+        assertTrue(fixture.commands.isEmpty())
+    }
+
+    @Test fun realContactDetailActionsOpenOfflineHistoryAndAuthenticatedManagement() {
+        fixture.snapshots = emptyList()
+        fixture.loginResult = fixture.session
+        val navigation = NavigationCoordinator()
+        navigation.navigateToContactDetail(fixture.contact)
+        host.get().setContent {
+            MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
+                NativeNavigationShell(navigation, nodes = fixture.nodes, remoteNodes = fixture)
+            }
+        }
+        compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsDetailSavedHistory))
+            .performScrollTo().performClick()
+        compose.onNodeWithTag("remote-history-content").assertExists()
+        compose.onNodeWithTag("navigation-back").performClick()
+        compose.onNode(hasText(text(com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsDetailManagement)) and !hasTestTag("open-remote-nodes"))
+            .performScrollTo().performClick()
+        compose.onNodeWithTag("remote-login-password").performTextInput("password")
+        compose.onNodeWithTag("remote-login").performClick()
+        compose.onNodeWithTag("remote-tab:SETTINGS").assertExists()
+        assertEquals(1, fixture.loginStarted)
     }
 
     @Test fun missingLocationPickerUsesCameraSelectionAndRequiresConfirmationBeforeRemoteWrite() {

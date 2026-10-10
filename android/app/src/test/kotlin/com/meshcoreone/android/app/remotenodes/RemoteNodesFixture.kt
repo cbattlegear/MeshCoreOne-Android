@@ -9,6 +9,8 @@ import com.meshcoreone.android.core.protocol.lpp.LPPEncoder
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesClock
 import com.meshcoreone.android.feature.remotenodes.dependencies.*
+import com.meshcoreone.android.feature.nodes.deps.*
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import java.time.Instant
 import java.util.UUID
 import kotlin.time.Duration
@@ -37,16 +39,19 @@ internal class RemoteNodesFixture :
     val commands = mutableListOf<String>()
     var loginStarted = 0
     var loginCancelled = 0
+    var loginResult: RemoteNodeSessionDTO? = null
+    var binaryReads = 0
     var statusReads = 0
+    var historyReads = 0
     var historyError: Exception? = null
     var location = Coordinate(37.7, -122.4)
     var snapshots = listOf(
         NodeStatusSnapshotDTO(
-            nodePublicKey = publicKey, timestamp = Instant.now().minusSeconds(3600), batteryMillivolts = 3850u,
+            nodePublicKey = publicKey, timestamp = NOW.minusSeconds(3600), batteryMillivolts = 3850u,
             latitude = 37.7, longitude = -122.4, altitude = 42.0,
         ),
         NodeStatusSnapshotDTO(
-            nodePublicKey = publicKey, timestamp = Instant.now(), batteryMillivolts = 3900u,
+            nodePublicKey = publicKey, timestamp = NOW, batteryMillivolts = 3900u,
             latitude = 37.8, longitude = -122.5, altitude = 43.0,
         ),
     )
@@ -59,7 +64,7 @@ internal class RemoteNodesFixture :
     override suspend fun catalog() = RemoteNodesCatalog(contacts, emptyList(), sessions)
     override fun services(): RemoteNodesFeatureDependencies = this
     override val clock = object : RemoteNodesClock {
-        override val now get() = Instant.now()
+        override val now get() = NOW
         override val elapsed get() = Duration.ZERO
         override suspend fun sleep(duration: Duration) = delay(duration)
     }
@@ -68,12 +73,50 @@ internal class RemoteNodesFixture :
         override fun isRemoteNoResponseYet(error: Throwable) = false
         override fun isBinarySessionTimeout(error: Throwable) = false
     }
+    val nodes = NodesFeatureDependencies(
+        session = object : NodesSession {
+            override fun connectionState() = DeviceConnectionState.READY
+            override fun connectedDevice(): DeviceDTO? = null
+            override fun currentRadioId() = radio
+            override fun offlineDataStore(): NodesDataStore? = null
+            override fun servicesDataStore(): NodesDataStore? = null
+            override fun contactService(): NodesContactService? = null
+            override fun advertisementService(): NodesAdvertisementService? = null
+            override fun traceService(): NodesTraceService? = null
+            override fun notificationCleanup(): NodesNotificationCleanup? = null
+        },
+        uriCodec = object : ContactUriCodec {
+            override fun exportContactUri(name: String, publicKey: Bytes, type: ContactType): String = error("Unexpected fixture URI export")
+            override fun parseContactUri(text: String): ScannedContact? = error("Unexpected fixture URI import")
+        },
+        timeouts = object : FirmwareTimeouts {
+            override fun pathDiscoverySeconds(suggestedTimeoutMs: UInt): Double = error("Unexpected fixture discovery")
+            override fun pathDiscoveryRetransmitInterval(suggestedTimeoutMs: UInt): Duration? = error("Unexpected fixture discovery")
+            override fun zeroHopSeconds(suggestedTimeoutMs: UInt): Double = error("Unexpected fixture ping")
+        },
+        messages = UserFacingMessages { it.message ?: it.javaClass.simpleName },
+        announcer = Announcer { error("Unexpected fixture announcement") },
+        preferences = object : StringListPreferences {
+            private val values = mutableMapOf<String, List<String>>()
+            override fun stringList(key: String) = values[key]
+            override fun setStringList(key: String, value: List<String>) { values[key] = value }
+        },
+        clock = object : NodesClock {
+            override val wallNow get() = NOW
+            override val elapsed get() = Duration.ZERO
+            override suspend fun sleep(duration: Duration) = delay(duration)
+        },
+    )
     override fun repeaterAdmin(): RepeaterAdminPort = this
     override fun roomAdmin(): RoomAdminPort = this
-    override fun binaryTelemetry(): BinaryTelemetryPort? = null
+    override fun binaryTelemetry(): BinaryTelemetryPort = BinaryTelemetryPort { key ->
+        check(key == publicKey)
+        binaryReads++
+        TelemetryResponse(publicKey.prefix(6), null, LPPEncoder().apply { addTemperature(1u, 22.5) }.encode())
+    }
     override fun nodeSnapshots(): NodeSnapshotPort? = null
     override fun contactOcv(): ContactOcvPort = this
-    override fun historyStore(): RemoteNodeHistoryStore = this
+    override fun historyStore(): RemoteNodeHistoryStore = object : RemoteNodeHistoryStore by this {}
     override fun login(): RemoteNodeLoginPort = this
     override fun connectedRadioId() = connection.radioId.takeIf { connection.ready }
     override fun deviceHashSize() = 1
@@ -125,6 +168,7 @@ internal class RemoteNodesFixture :
     override fun clearHandlers() { clearStatusHandlers(); cliHandler = null }
     override fun clearStatusHandlers() { statusSlot = null; telemetrySlot = null; neighborsHandler = null }
     override suspend fun fetchNodeStatusSnapshots(nodePublicKey: Bytes, since: Instant?): SnapshotList<NodeStatusSnapshotDTO> {
+        historyReads++
         historyError?.let { throw it }
         return snapshots.filter { it.nodePublicKey == nodePublicKey }.snapshot()
     }
@@ -142,10 +186,19 @@ internal class RemoteNodesFixture :
     ): RemoteNodeSessionDTO {
         loginStarted++
         onTimeoutKnown(30)
+        loginResult?.let {
+            sessions = listOf(it)
+            publish()
+            return it
+        }
         try { awaitCancellation() } finally { loginCancelled++ }
     }
     override suspend fun joinRoom(
         radioId: RadioId, contact: ContactDTO, password: String, rememberPassword: Boolean, pathLength: UByte,
         onTimeoutKnown: suspend (Long) -> Unit,
     ) = connectAsAdmin(radioId, contact, password, rememberPassword, pathLength, onTimeoutKnown)
+
+    private companion object {
+        val NOW: Instant = Instant.parse("2025-04-18T06:40:00Z")
+    }
 }

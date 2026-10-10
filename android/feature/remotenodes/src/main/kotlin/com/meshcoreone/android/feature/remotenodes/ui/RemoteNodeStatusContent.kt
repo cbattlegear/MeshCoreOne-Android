@@ -113,23 +113,7 @@ internal fun RemoteNodeStatusContent(
                     }
                 }
             }
-            RemoteSection(
-                L.remoteNodesStatusTelemetry, state.telemetryExpanded,
-                { helper.setTelemetryExpanded(!state.telemetryExpanded); if (!state.telemetryLoaded && !state.isLoadingTelemetry) telemetryRequest() },
-                state.isLoadingTelemetry, false, ready, telemetryRequest,
-            ) {
-                RemoteFailure(state.telemetrySectionError)
-                if (state.telemetryLoaded && state.cachedDataPoints.isEmpty()) Text(stringResource(L.remoteNodesStatusNoSensorData))
-                state.groupedDataPoints.forEach { group ->
-                    if (state.hasMultipleChannels) RemoteHeading(remoteText(com.meshcoreone.android.feature.remotenodes.history.TelemetrySensorCharts.channelHeader(group.channel.toLong())))
-                    telemetryRows(group.dataPoints, state.ocvValues).forEach { row ->
-                        RemoteValue(stringResource(row.labelRes), row.dataPoint.formattedValue(locale, system))
-                        row.batteryPercentage?.let { Text("$it%") }
-                    }
-                }
-                if (state.currentLocationFix != null) TextButton({ map = "location" }) { Text(stringResource(L.remoteNodesStatusViewOnMap)) }
-                else if (state.telemetryLoaded) Text(stringResource(L.remoteNodesStatusNoTelemetryData))
-            }
+            RemoteTelemetrySection(helper, ready, telemetryRequest) { map = "location" }
             if (repeaterState != null && repeater != null) {
                 val context = NeighborResolutionContext(catalog.contacts, catalog.discoveredNodes, null, locale)
                 RemoteSection(
@@ -213,6 +197,35 @@ internal fun RemoteNodeStatusContent(
             if (connected) helper.saveOCVSettings(state.selectedOCVPreset, if (state.selectedOCVPreset == OCVPreset.CUSTOM) OcvCustomCurve.parse(curve) else state.ocvValues)
             else helper.setStatusSectionError(RemoteNodesText.Resource(L.remoteNodesSettingsNoService))
         }
+    }
+}
+
+@Composable
+internal fun RemoteTelemetrySection(
+    helper: NodeStatusStateHolder,
+    ready: Boolean,
+    request: () -> Unit,
+    onMap: () -> Unit,
+) {
+    val state by helper.state.collectAsStateWithLifecycle()
+    val locale = Locale.getDefault()
+    val system = MeasurementSystem.of(locale)
+    RemoteSection(
+        L.remoteNodesStatusTelemetry, state.telemetryExpanded,
+        { helper.setTelemetryExpanded(!state.telemetryExpanded); if (!state.telemetryLoaded && !state.isLoadingTelemetry) request() },
+        state.isLoadingTelemetry, false, ready, request,
+    ) {
+        RemoteFailure(state.telemetrySectionError)
+        if (state.telemetryLoaded && state.cachedDataPoints.isEmpty()) Text(stringResource(L.remoteNodesStatusNoSensorData))
+        state.groupedDataPoints.forEach { group ->
+            if (state.hasMultipleChannels) RemoteHeading(remoteText(com.meshcoreone.android.feature.remotenodes.history.TelemetrySensorCharts.channelHeader(group.channel.toLong())))
+            telemetryRows(group.dataPoints, state.ocvValues).forEach { row ->
+                RemoteValue(stringResource(row.labelRes), row.dataPoint.formattedValue(locale, system))
+                row.batteryPercentage?.let { Text("$it%") }
+            }
+        }
+        if (state.currentLocationFix != null) TextButton(onMap) { Text(stringResource(L.remoteNodesStatusViewOnMap)) }
+        else if (state.telemetryLoaded) Text(stringResource(L.remoteNodesStatusNoTelemetryData))
     }
 }
 

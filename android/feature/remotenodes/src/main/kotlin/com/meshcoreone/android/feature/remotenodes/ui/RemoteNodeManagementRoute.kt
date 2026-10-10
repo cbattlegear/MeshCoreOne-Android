@@ -39,6 +39,7 @@ internal fun RemoteNodeManagementRoute(
     initialHistory: Boolean = false,
     radioOptions: RemoteRadioOptions? = null,
     mapSurface: RemoteNodesMapSurface = NativeRemoteNodesMapSurface,
+    telemetryOnly: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
     val repeaterSettings = remember(dependencies) {
@@ -55,8 +56,9 @@ internal fun RemoteNodeManagementRoute(
     }
     val helper = if (session.isRepeater) repeaterSettings?.helper else roomSettings?.helper
     val status = if (session.isRepeater) repeaterStatus?.helper else roomStatus?.helper
+    val historyStore = remember(dependencies) { dependencies?.historyStore() }
     var tab by rememberSaveable(session.id) {
-        mutableStateOf(if (session.isAdmin) NodeManagementTab.SETTINGS else NodeManagementTab.TELEMETRY)
+        mutableStateOf(if (session.isAdmin && !telemetryOnly) NodeManagementTab.SETTINGS else NodeManagementTab.TELEMETRY)
     }
     var showHistory by rememberSaveable { mutableStateOf(initialHistory) }
     var pending by remember { mutableStateOf<PendingAction?>(null) }
@@ -67,7 +69,7 @@ internal fun RemoteNodeManagementRoute(
     var telemetryConfigured by remember { mutableStateOf(false) }
 
     LaunchedEffect(dependencies, session.id, ready) {
-        if (ready && session.isAdmin) {
+        if (ready && session.isAdmin && !telemetryOnly) {
             if (session.isRepeater) repeaterSettings?.configure({ dependencies?.repeaterAdmin() }, session)
             else roomSettings?.configure({ dependencies?.roomAdmin() }, session)
         }
@@ -112,7 +114,7 @@ internal fun RemoteNodeManagementRoute(
         if (!session.isAdmin) Text(stringResource(L.remoteNodesStatusGuestMode))
         RemoteFailure(routeError)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (session.isAdmin) NodeManagementTab.entries.forEach { value ->
+            if (session.isAdmin && !telemetryOnly) NodeManagementTab.entries.forEach { value ->
                 FilterChip(
                     selected = !showHistory && tab == value,
                     onClick = { tab = value; showHistory = false },
@@ -126,7 +128,10 @@ internal fun RemoteNodeManagementRoute(
             if (!ready) TextButton(onAuthenticate) { Text(stringResource(L.remoteNodesAuthAuthentication)) }
         }
         when {
-            showHistory -> RemoteNodeHistoryRoute(session, dependencies?.historyStore(), Modifier.weight(1f), mapSurface)
+            showHistory -> RemoteNodeHistoryRoute(
+                session, historyStore, Modifier.weight(1f), mapSurface,
+                dependencies?.clock ?: com.meshcoreone.android.feature.remotenodes.common.SystemRemoteNodesClock,
+            )
             tab == NodeManagementTab.SETTINGS && helper != null -> RemoteNodeSettingsContent(
                 helper, if (session.isRepeater) repeaterSettings else null,
                 if (session.isRoom) roomSettings else null, canWrite, request, Modifier.weight(1f), radioOptions, mapSurface,

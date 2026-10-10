@@ -27,20 +27,37 @@ import java.time.ZoneId
 import java.util.Locale
 
 @Composable
-internal fun RemoteNodeHistoryRoute(session: RemoteNodeSessionDTO, store: RemoteNodeHistoryStore?, modifier: Modifier, mapSurface: RemoteNodesMapSurface) {
+internal fun RemoteNodeHistoryRoute(
+    session: RemoteNodeSessionDTO,
+    store: RemoteNodeHistoryStore?,
+    modifier: Modifier,
+    mapSurface: RemoteNodesMapSurface,
+    clock: RemoteNodesClock = SystemRemoteNodesClock,
+) = RemoteNodeHistoryRoute(session.publicKey, session.radioId, session.isRepeater, store, modifier, mapSurface, clock)
+
+@Composable
+internal fun RemoteNodeHistoryRoute(
+    publicKey: com.meshcoreone.android.core.protocol.bytes.Bytes,
+    radioId: com.meshcoreone.android.core.model.RadioId,
+    isRepeater: Boolean,
+    store: RemoteNodeHistoryStore?,
+    modifier: Modifier,
+    mapSurface: RemoteNodesMapSurface,
+    clock: RemoteNodesClock = SystemRemoteNodesClock,
+) {
     val context = LocalContext.current
     val locale = Locale.getDefault()
     val system = MeasurementSystem.of(locale)
     val zone = ZoneId.systemDefault()
-    val holder = remember(session.id, store, locale, system, zone) {
-        TelemetryHistoryOverviewStateHolder(SystemRemoteNodesClock, zone, locale, system, context::getString)
+    val holder = remember(publicKey, radioId, store, locale, system, zone, clock) {
+        TelemetryHistoryOverviewStateHolder(clock, zone, locale, system, context::getString)
     }
     val state by holder.state.collectAsStateWithLifecycle()
     var refresh by remember { mutableIntStateOf(0) }
     var fullMap by remember { mutableStateOf(false) }
     var selectedReport by remember { mutableStateOf<NodeStatusSnapshotDTO?>(null) }
     LaunchedEffect(holder, refresh) {
-        if (store != null) holder.loadData(store, session.publicKey, session.radioId)
+        if (store != null) holder.loadData(store, publicKey, radioId)
     }
     Column(modifier.verticalScroll(rememberScrollState()).testTag("remote-history-content"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         RemoteHeading(stringResource(L.remoteNodesHistoryOverviewTitle))
@@ -53,7 +70,7 @@ internal fun RemoteNodeHistoryRoute(session: RemoteNodeSessionDTO, store: Remote
                 FilterChip(state.timeRange == range, { holder.setTimeRange(range) }, label = { Text(remoteText(range.label)) })
             }
         }
-        when (val content = TelemetryHistoryOverviewContent.build(holder, session.isRepeater, system)) {
+        when (val content = TelemetryHistoryOverviewContent.build(holder, isRepeater, system)) {
             TelemetryHistoryOverviewContent.Empty -> if (!state.isLoading && state.error == null && store != null) Text(remoteText(TelemetryHistoryOverviewContent.Empty.message))
             is TelemetryHistoryOverviewContent.Loaded -> {
                 content.radio?.let { items ->

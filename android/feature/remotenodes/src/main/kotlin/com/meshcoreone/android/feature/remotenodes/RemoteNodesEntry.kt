@@ -41,6 +41,9 @@ fun RemoteNodesEntry(
     dependencies: RemoteNodesUiDependencies? = null,
     cliContent: RemoteNodeCliContent? = null,
     mapSurface: RemoteNodesMapSurface = NativeRemoteNodesMapSurface,
+    launch: RemoteNodeLaunch? = null,
+    onDismiss: () -> Unit = {},
+    onJoinRoom: (RemoteNodeSessionDTO) -> Unit = {},
 ) {
     if (dependencies == null) {
         ScaffoldFeatureContent(
@@ -75,6 +78,13 @@ fun RemoteNodesEntry(
     val selected = data.catalog.sessions.firstOrNull { "${it.radioId}:${it.publicKeyHex}" == selectedKey }
         ?: historySession?.takeIf { "${it.radioId}:${it.publicKeyHex}" == selectedKey }
     val services = remember(dependencies, data.connection.generation) { dependencies?.services() }
+    if (launch != null) {
+        RemoteNodeContactRoute(
+            launch, services, data.catalog, data.connection, data.loading, data.error,
+            onDismiss, onJoinRoom, { refresh++ }, cliContent, dependencies.radioOptions, mapSurface,
+        )
+        return
+    }
     BackHandler(selectedKey != null || loginContact != null) {
         selectedKey = null
         loginContact = null

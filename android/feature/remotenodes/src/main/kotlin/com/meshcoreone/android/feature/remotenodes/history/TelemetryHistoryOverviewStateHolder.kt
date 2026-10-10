@@ -75,9 +75,8 @@ class TelemetryHistoryOverviewStateHolder(
     fun hasRadioData(snapshots: List<NodeStatusSnapshotDTO>): Boolean = snapshots.any { it.hasRadioMetrics }
 
     /**
-     * Swift `loadData(dataStore:publicKey:radioID:)`: a snapshot failure leaves no snapshots, a contact
-     * failure keeps the previous OCV curve, and contact or discovered-node failures (`try?`) leave empty
-     * lists. Cancellation always propagates.
+     * Swift `loadData(dataStore:publicKey:radioID:)`, adapted to retain previously loaded values and
+     * expose failed reads instead of displaying success-shaped empty history. Cancellation propagates.
      */
     suspend fun loadData(store: RemoteNodeHistoryStore, publicKey: Bytes, radioId: RadioId) {
         _state.update { it.copy(isLoading = true, error = null) }

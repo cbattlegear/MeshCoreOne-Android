@@ -9,8 +9,9 @@ Owner: `nodes-map-ui-engineer`. Existing issue: #121. Dedicated project session:
 Frozen source: `db14559b39d32322b06477c6ae676112f583db50`.
 Manifest SHA-256: `58f7ebd7f46bbe0636c71005f20776efe139a287279e4f4708b25ce6bfa3f892`.
 Policy revision: `1f5f2b54f17595b3bab93edc4f607ccb9e3b2fdd409943e32fd394ec19c3bfd4`.
-Typed reservation revision 7 admits feature, app composition/tests, directly
-resolved dependency locks/checksums and the necessary traceability-validator regression.
+Typed reservation revision 10 admits feature, app composition/tests, directly
+resolved dependency locks/checksums, the necessary traceability-validator regression
+and disjoint WP-311 contact-action callback integration.
 Protected-path main-merge approval remains the coordinator/maintainer's gate.
 
 The #70 implementation is preserved. Native settings, repeater regions, room
@@ -18,7 +19,12 @@ access, authentication, status/telemetry/neighbours, precise charts, history,
 SNR/location maps and coordinate selection now consume the existing holders.
 `AppRemoteNodesFeature` adapts actual services and process persistence.
 MainActivity and the native navigation shell make management reachable from
-Nodes without an extra tab or feature-to-feature dependency.
+Nodes without an extra tab or feature-to-feature dependency. Contact Detail's
+Management, Telemetry, Saved History and Join Room actions now have app-mediated
+destinations. Chat-node telemetry uses the original login-free binary public-key
+port, while repeater/room access authenticates and room join returns the actual
+session to the existing app conversation consumer. Identity-bearing destinations
+are not restored from saved-state tokens and are cleared on radio replacement.
 
 ## Current validation and source discovery
 
@@ -39,14 +45,16 @@ Actual targeted Gradle task selection (strict dependency verification):
 :feature:remotenodes:testDebugUnitTest validateModuleGraph --write-locks
 ```
 
-The targeted diagnostic run discovered/passed 331 feature cases in 38 suites
+The earlier targeted diagnostic run discovered/passed 331 feature cases in 38 suites
 and 44 native/app cases in 4 suites, with no failures, errors or skips.
-The native remote suite runs 10 flows on both simulated SDK31 and SDK37.
+The native remote suite now selects 16 flows on both simulated SDK31 and SDK37.
 It checks real focused input/Backspace/color/height, confirmation and exact
 edited Apply, 200% font and resize, guest/admin/room roles, permission revocation,
 cancelled login, offline/error history, chart values, report/full-map selection,
 attribution, missing-location camera selection, CLI keyboard/accessibility and
-actual Nodes-tab navigation. Six locally rendered PNGs are generated under the
+actual Nodes-tab and Contact Detail navigation, binary chat-node telemetry,
+authenticated telemetry-only access, room join, private route restoration and
+history snapshot lifetime across catalog updates. Six locally rendered PNGs are generated under the
 existing app test artifact directory; they are not committed or claimed as
 physical-device or real MapLibre tile evidence.
 
@@ -66,11 +74,20 @@ provenance are documented in [`../WP-312/README.md`](../WP-312/README.md).
 Current native adaptations are in
 [`../../deviations/WP-313.md`](../../deviations/WP-313.md).
 
-The first declared full local check exposed an inherited duplicate
+The declared full local checks exposed an inherited duplicate
 `androidx.tracing:tracing-android:1.3.0` POM verification entry. The support fix
 removes only the repeated identical entry; its publisher-bound SHA-256 and
 strict metadata verification are unchanged. It is admitted through the
-dependency-resolution capability, not a checksum exception.
+dependency-resolution capability, not a checksum exception. Full graph resolution
+also found that the initial lock generation had not consumed the release compile
+configuration. The actual feature `dependencies --write-locks`, release compilation
+and resolver tasks now generate complete debug/release locks, without speculative
+versions or manual dependency-lock editing.
+
+Final exact-candidate full local verification and a separate initially empty
+user/project-cache strict dependency audit are performed before handoff.
+Their diagnostic status is not an independent CI acceptance bundle; the required
+exact-head hosted job and log remain authoritative.
 
 ## Historical #70 logic-layer observations
 

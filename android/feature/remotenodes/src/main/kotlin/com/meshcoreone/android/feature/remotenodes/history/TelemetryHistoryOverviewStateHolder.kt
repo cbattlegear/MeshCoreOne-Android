@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.model.OCVPreset
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesClock
+import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesText
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodeHistoryStore
 import com.meshcoreone.android.feature.remotenodes.resolver.NeighborNameResolver
 import com.meshcoreone.android.feature.remotenodes.telemetry.MeasurementSystem
@@ -26,6 +27,8 @@ data class TelemetryHistoryOverviewState(
     val contacts: List<ContactDTO> = emptyList(),
     val discoveredNodes: List<DiscoveredNodeDTO> = emptyList(),
     val timeRange: HistoryTimeRange = HistoryTimeRange.DEFAULT,
+    val isLoading: Boolean = false,
+    val error: RemoteNodesText? = null,
 ) {
     val hasSnapshots: Boolean get() = snapshots.isNotEmpty()
 }
@@ -77,6 +80,8 @@ class TelemetryHistoryOverviewStateHolder(
      * lists. Cancellation always propagates.
      */
     suspend fun loadData(store: RemoteNodeHistoryStore, publicKey: Bytes, radioId: RadioId) {
+        _state.update { it.copy(isLoading = true, error = null) }
+        try {
         val snapshots = attempt { store.fetchNodeStatusSnapshots(publicKey, null).toList() }
         _state.update { it.copy(snapshots = snapshots ?: emptyList()) }
 
@@ -87,6 +92,9 @@ class TelemetryHistoryOverviewStateHolder(
         _state.update { it.copy(contacts = contacts ?: emptyList()) }
         val discovered = attempt { store.fetchDiscoveredNodes(radioId).toList() }
         _state.update { it.copy(discoveredNodes = discovered ?: emptyList()) }
+        } finally {
+            _state.update { it.copy(isLoading = false) }
+        }
     }
 
     /** Swift `resolveNeighborName(prefix:)`: the resolver policy without a user location. */
@@ -99,6 +107,7 @@ class TelemetryHistoryOverviewStateHolder(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
+        _state.update { it.copy(error = RemoteNodesText.Failure(e)) }
         null
     }
 }

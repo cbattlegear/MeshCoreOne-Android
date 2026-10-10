@@ -126,6 +126,7 @@ open class MainActivity : ComponentActivity() {
                             map = answer.container?.mapFeature,
                             tools = tools,
                             nodes = answer.container?.nodesFeature,
+                            remoteNodes = answer.container?.remoteNodesFeature,
                             lineOfSight = answer.container?.lineOfSight,
                         )
                     }

@@ -92,6 +92,7 @@ import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.onboarding.OnboardingEntry
 import com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies
 import com.meshcoreone.android.feature.remotenodes.RemoteNodesEntry
+import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodesUiDependencies
 import com.meshcoreone.android.feature.settings.SettingsEntry
 import com.meshcoreone.android.feature.tools.ToolsEntry
 import com.meshcoreone.android.feature.tools.ToolsFeatureDependencies
@@ -134,8 +135,9 @@ fun NativeNavigationShell(
     tools: ToolsFeatureDependencies? = null,
     nodes: NodesFeatureDependencies? = null,
     lineOfSight: LineOfSightFeatureDependencies? = null,
+    remoteNodes: RemoteNodesUiDependencies? = null,
     content: @Composable (NavigationDestination, (FeatureRoute) -> Unit) -> Unit = { destination, navigate ->
-        ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, lineOfSight, coordinator)
+        ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, lineOfSight, remoteNodes, coordinator)
     },
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
@@ -274,6 +276,12 @@ fun NativeNavigationShell(
                             }
                         },
                         actions = {
+                            if (state.selectedTab == AppTab.NODES) {
+                                androidx.compose.material3.TextButton(
+                                    { coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES)) },
+                                    Modifier.testTag("open-remote-nodes"),
+                                ) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)) }
+                            }
                             IconButton(
                                 onClick = { coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING)) },
                                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("open-radio-setup"),
@@ -406,6 +414,7 @@ private fun ExistingFeatureContent(
     tools: ToolsFeatureDependencies?,
     nodes: NodesFeatureDependencies?,
     lineOfSight: LineOfSightFeatureDependencies?,
+    remoteNodes: RemoteNodesUiDependencies?,
     coordinator: NavigationCoordinator,
 ) {
     val navigationState by coordinator.state.collectAsStateWithLifecycle()
@@ -476,6 +485,8 @@ private fun ExistingFeatureContent(
             { target -> coordinator.back(); navigate(target) },
             onboarding,
         )
-        FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate)
+        FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate, remoteNodes) { session, send, enabled ->
+            AppRemoteNodeCli(session, send, enabled)
+        }
     }
 }

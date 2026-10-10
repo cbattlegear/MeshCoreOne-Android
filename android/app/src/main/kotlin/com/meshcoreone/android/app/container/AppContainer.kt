@@ -241,6 +241,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     /** Process-scoped map data binding; the feature owns rendering and never reaches into the service graph. */
     val mapFeature by lazy(::createMapFeatureDependencies)
     val nodesFeature by lazy(::createNodesFeatureDependencies)
+    val remoteNodesFeature by lazy(::createRemoteNodesFeatureDependencies)
     internal val nodesMessages get() = dependencies.nodesMessages
     internal val nodesAnnouncer get() = dependencies.nodesAnnouncer
     internal val nodesPreferences get() = dependencies.nodesPreferences

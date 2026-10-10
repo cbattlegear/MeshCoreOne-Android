@@ -92,10 +92,12 @@ internal fun RemoteNodeSettingsContent(
             }, enabled = editable && state.identityLoaded) { Text(stringResource(L.remoteNodesSettingsPickOnMap)) }
             if (picking) {
                 val coordinate = picked ?: Coordinate(0.0, 0.0)
+                // Selection follows camera reports; only opening the picker initializes its bounds.
+                val initialRegion = remember { CoordinateRegion.around(coordinate, if (picked == null) 80.0 else .05) }
                 RemoteNodeMapContent(
                     stringResource(L.remoteNodesSettingsPickOnMap),
                     listOf(MapPoint(pickId, coordinate, PinStyle.CROSSHAIR, null, false, null, null)),
-                    emptyList(), CoordinateRegion.around(coordinate, if (picked == null) 80.0 else .05),
+                    emptyList(), initialRegion,
                     surface = mapSurface,
                     onCameraChanged = { picked = Coordinate(it.center.latitude, it.center.longitude) },
                 )

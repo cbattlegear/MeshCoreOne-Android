@@ -47,11 +47,11 @@ Actual targeted Gradle task selection (strict dependency verification):
 
 The earlier targeted diagnostic run discovered/passed 331 feature cases in 38 suites
 and 44 native/app cases in 4 suites, with no failures, errors or skips.
-The native remote suite now selects 17 flows on both simulated SDK31 and SDK37.
+The native remote suite now selects 18 flows on both simulated SDK31 and SDK37.
 It checks real focused input/Backspace/color/height, confirmation and exact
 edited Apply, 200% font and resize, guest/admin/room roles, permission revocation,
 cancelled login, offline/error history, chart values, report/full-map selection,
-attribution, missing-location camera selection, CLI keyboard/accessibility and
+attribution, saved/missing-location camera selection, CLI keyboard/accessibility and
 actual Nodes-tab and Contact Detail navigation, binary chat-node telemetry,
 authenticated telemetry-only access, room join, private route restoration and
 history snapshot lifetime across catalog updates. Six locally rendered PNGs are generated under the
@@ -61,6 +61,18 @@ physical-device or real MapLibre tile evidence.
 CLI resource changes also preserve the entered draft and use the new locale for
 subsequent terminal messages; the diagnostics adapter stays stable between
 configuration changes rather than causing repeated composition.
+
+Picker camera regressions emit unequal, non-default latitude/longitude spans
+and assert the next rendered camera retains the complete report while the
+crosshair follows its center. Both saved and missing fixes receive two successive
+pan/zoom reports; the missing-fix first report retains its wide view rather than
+jumping to `.05`. Cancelling and reopening initializes from the unchanged saved
+location, while committing a missing-fix selection still requires confirmation
+before remote writes. The declared targeted selection is
+`:app:testDebugUnitTest --tests "*RemoteNodesComposeTest.*LocationPicker*"`;
+the complete native suite and affected app/remote-nodes lint remain the broader
+regression selection. Exact-head hosted results, not this description, establish
+the final outcome.
 
 The real-container tests use native Room with the existing deterministic radio
 harness. They exercise catalog/OCV/snapshot persistence, offline history, stale

@@ -23,6 +23,7 @@ import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.AppRemoteNodeCli
 import com.meshcoreone.android.core.maps.MapCamera
 import com.meshcoreone.android.core.maps.GeoPoint
+import com.meshcoreone.android.core.maps.MapPresentationState
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.services.remote.RemoteNodeError
@@ -67,6 +68,8 @@ class RemoteNodesComposeTest {
     private val fixture = RemoteNodesFixture()
     private val width = mutableStateOf(390.dp)
     private val font = mutableFloatStateOf(1f)
+    private var nextCamera = MapCamera(GeoPoint(38.0, -121.0), .05, .05)
+    private var renderedMap: MapPresentationState? = null
 
     @Before fun createHost() {
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
@@ -81,10 +84,11 @@ class RemoteNodesComposeTest {
                 Box(Modifier.width(width.value).height(1000.dp)) {
                     MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
                         val map: RemoteNodesMapSurface = { state, _, _, _, camera, select, modifier ->
+                            renderedMap = state
                             Column(modifier.testTag("synthetic-map")) {
                                 Text("Local map fixture: ${state.points.size} markers")
                                 Button({ state.points.firstOrNull()?.let(select) }) { Text("Select fixture report") }
-                                Button({ camera(MapCamera(GeoPoint(38.0, -121.0), .05, .05)) }) { Text("Move fixture camera") }
+                                Button({ camera(nextCamera) }) { Text("Move fixture camera") }
                             }
                         }
                         RemoteNodesEntry(FeatureRoute(FeatureId.REMOTE_NODES), {}, fixture, mapSurface = map, launch = launch, onJoinRoom = onJoinRoom)
@@ -321,18 +325,49 @@ class RemoteNodesComposeTest {
         assertEquals(1, fixture.loginStarted)
     }
 
+    private fun movePickerCamera(camera: MapCamera) {
+        compose.runOnIdle { nextCamera = camera }
+        compose.onNodeWithText("Move fixture camera").performScrollTo().performClick()
+        compose.runOnIdle {
+            val state = requireNotNull(renderedMap)
+            assertEquals("Camera reports must preserve both zoom spans without refitting", camera, state.camera)
+            assertEquals("The crosshair must track the reported center", camera.center, state.points.single().position)
+        }
+    }
+
+    @Test fun savedLocationPickerPreservesRepeatedPanAndZoomReports() {
+        show(); open(); expand(L.remoteNodesSettingsIdentityLocation)
+        compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(MapCamera(GeoPoint(37.7, -122.4), .05, .05), requireNotNull(renderedMap).camera)
+        }
+        movePickerCamera(MapCamera(GeoPoint(38.0, -121.0), .8, 1.4))
+        movePickerCamera(MapCamera(GeoPoint(39.0, -122.0), .3, .7))
+        compose.onNodeWithText(text(L.remoteNodesCancel)).performScrollTo().performClick()
+        compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals("Reopening must initialize from the unchanged saved location",
+                MapCamera(GeoPoint(37.7, -122.4), .05, .05), requireNotNull(renderedMap).camera)
+        }
+        assertFalse(fixture.commands.any { it.startsWith("set lat") || it.startsWith("set lon") })
+    }
+
     @Test fun missingLocationPickerUsesCameraSelectionAndRequiresConfirmationBeforeRemoteWrite() {
         fixture.location = Coordinate(0.0, 0.0)
         show(); open(); expand(L.remoteNodesSettingsIdentityLocation)
         compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(MapCamera(GeoPoint(0.0, 0.0), 80.0, 80.0), requireNotNull(renderedMap).camera)
+        }
         compose.onNodeWithTag("action:${L.remoteNodesDone}").performScrollTo().assertIsNotEnabled()
-        compose.onNodeWithText("Move fixture camera").performScrollTo().performClick()
+        movePickerCamera(MapCamera(GeoPoint(38.0, -121.0), 65.0, 90.0))
+        movePickerCamera(MapCamera(GeoPoint(39.0, -122.0), .4, .9))
         compose.onNodeWithTag("action:${L.remoteNodesDone}").performScrollTo().assertIsEnabled().performClick()
         assertFalse(fixture.commands.any { it.startsWith("set lat") || it.startsWith("set lon") })
         compose.onNodeWithTag("action:${L.remoteNodesSettingsApplyIdentitySettings}").performScrollTo().performClick()
         compose.onNodeWithTag("confirm-remote-action").performClick()
-        compose.waitUntil { fixture.commands.contains("set lon -121.0") }
-        assertTrue(fixture.commands.contains("set lat 38.0"))
+        compose.waitUntil { fixture.commands.contains("set lon -122.0") }
+        assertTrue(fixture.commands.contains("set lat 39.0"))
     }
 
     @Test fun nativeCliKeyboardAndAccessibleHistoryControlsPreserveRebootTimeoutSemantics() {

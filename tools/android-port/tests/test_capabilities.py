@@ -8,6 +8,7 @@ from fixtures import BASE, NOW, policy, settings, test_manifest
 from controller.capabilities import CapabilityEngine
 from controller.errors import PortError
 from controller.ledger import HARD_LOCK_RESOURCES, Identity, Ledger
+from portmap import capability_support_admitted
 
 
 class CapabilityReservationTests(unittest.TestCase):
@@ -36,6 +37,27 @@ class CapabilityReservationTests(unittest.TestCase):
             "android/core/libs.versions.toml", "add-resolved-artifact-checksum",
         )
         self.assertEqual(admission.capability_id, "dependency-resolution-metadata")
+
+    def test_app_support_traceability_includes_native_tests_through_the_same_capability(self):
+        manifest = test_manifest("WP-313")
+        for source_set in ("main", "test", "androidTest"):
+            with self.subTest(source_set=source_set):
+                self.assertTrue(capability_support_admitted(
+                    manifest, "WP-313",
+                    f"android/app/src/{source_set}/kotlin/com/meshcoreone/android/Fixture.kt",
+                ))
+
+    def test_app_test_traceability_does_not_admit_resources_or_unrelated_paths(self):
+        manifest = test_manifest("WP-313")
+        for path in (
+            "android/app/src/test/resources/Fixture.kt",
+            "android/app/src/test/kotlin/Fixture.json",
+            "android/feature/map/src/test/kotlin/Fixture.kt",
+            "android/app/src/unapproved/kotlin/Fixture.kt",
+            "secrets/Fixture.kt",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(capability_support_admitted(manifest, "WP-313", path))
 
     def test_scope_evolution_is_same_owner_idempotent_and_stale_cas_is_safe(self):
         wp = self.manifest.wp("WP-101")

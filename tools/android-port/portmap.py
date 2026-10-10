@@ -35,7 +35,11 @@ WP_302_SCOPE_APPROVAL = {
 
 def capability_support_admitted(manifest, wp_id, relative):
     if not (
-        relative.startswith("android/app/src/main/kotlin/")
+        relative.startswith((
+            "android/app/src/main/kotlin/",
+            "android/app/src/test/kotlin/",
+            "android/app/src/androidTest/kotlin/",
+        ))
         and relative.endswith(".kt")
     ):
         return False

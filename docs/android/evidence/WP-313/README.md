@@ -9,8 +9,8 @@ Owner: `nodes-map-ui-engineer`. Existing issue: #121. Dedicated project session:
 Frozen source: `db14559b39d32322b06477c6ae676112f583db50`.
 Manifest SHA-256: `58f7ebd7f46bbe0636c71005f20776efe139a287279e4f4708b25ce6bfa3f892`.
 Policy revision: `1f5f2b54f17595b3bab93edc4f607ccb9e3b2fdd409943e32fd394ec19c3bfd4`.
-Typed reservation revision 6 admits feature, app composition/tests, directly
-resolved dependency locks and the necessary traceability-validator regression.
+Typed reservation revision 7 admits feature, app composition/tests, directly
+resolved dependency locks/checksums and the necessary traceability-validator regression.
 Protected-path main-merge approval remains the coordinator/maintainer's gate.
 
 The #70 implementation is preserved. Native settings, repeater regions, room
@@ -65,6 +65,12 @@ The shared map provider, explicit unsupported layers and static native alignment
 provenance are documented in [`../WP-312/README.md`](../WP-312/README.md).
 Current native adaptations are in
 [`../../deviations/WP-313.md`](../../deviations/WP-313.md).
+
+The first declared full local check exposed an inherited duplicate
+`androidx.tracing:tracing-android:1.3.0` POM verification entry. The support fix
+removes only the repeated identical entry; its publisher-bound SHA-256 and
+strict metadata verification are unchanged. It is admitted through the
+dependency-resolution capability, not a checksum exception.
 
 ## Historical #70 logic-layer observations
 

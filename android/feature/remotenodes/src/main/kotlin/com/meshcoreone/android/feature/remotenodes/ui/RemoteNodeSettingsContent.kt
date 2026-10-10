@@ -10,7 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -38,7 +38,7 @@ internal fun RemoteNodeSettingsContent(
     mapSurface: RemoteNodesMapSurface,
 ) {
     val state by helper.state.collectAsStateWithLifecycle()
-    val resources = LocalContext.current.resources
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val editable = enabled && !state.isApplying && !state.isRebooting
     var picking by remember { mutableStateOf(false) }

@@ -84,9 +84,26 @@ configuration. The actual feature `dependencies --write-locks`, release compilat
 and resolver tasks now generate complete debug/release locks, without speculative
 versions or manual dependency-lock editing.
 
-Final exact-candidate full local verification and a separate initially empty
-user/project-cache strict dependency audit are performed before handoff.
-Their diagnostic status is not an independent CI acceptance bundle; the required
+The persisted candidate's full local execution discovered/passed 583 app cases
+in 43 suites (including all 32 native remote flow variants) and 331 feature cases
+in 38 suites, with zero failures, errors or skips. Every one of the 175 original
+bindings matched an actual passing JUnit method. The initial full run then
+identified a configuration-unsafe resource read; native resources/formatting now
+observe `LocalResources`/`LocalConfiguration`, rather than suppressing lint.
+
+The separate initially empty user/project-cache dependency audit passed with
+strict metadata and no build-cache reuse:
+
+```text
+:feature:remotenodes:dependencies --configuration debugRuntimeClasspath
+:feature:remotenodes:compileDebugKotlin
+--dependency-verification strict --no-build-cache --max-workers=1
+--project-cache-dir <initially absent private cache>
+```
+
+Final full verification uses
+`python .\tools\android-port\local\check.py --commit HEAD --stages all --distribution Ubuntu-22.04`.
+Its diagnostic status is not an independent CI acceptance bundle; the required
 exact-head hosted job and log remain authoritative.
 
 ## Historical #70 logic-layer observations

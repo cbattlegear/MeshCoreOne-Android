@@ -9,7 +9,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
@@ -24,12 +25,13 @@ import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesText
 
 @Composable
 internal fun remoteText(text: RemoteNodesText): String {
-    val resources = LocalContext.current.resources
+    val resources = LocalResources.current
+    val locale = LocalConfiguration.current.locales[0]
     fun resolve(value: RemoteNodesText): String = when (value) {
         is RemoteNodesText.Verbatim -> value.text
         is RemoteNodesText.Failure -> UiErrorMapper().message(value.error).resolve(resources)
         is RemoteNodesText.Resource -> String.format(
-            resources.configuration.locales[0], resources.getString(value.id),
+            locale, resources.getString(value.id),
             *value.args.map { if (it is RemoteNodesText) resolve(it) else it }.toTypedArray(),
         )
     }

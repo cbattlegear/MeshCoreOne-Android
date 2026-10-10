@@ -19,7 +19,7 @@ class AppRemoteNodesIntegrationTest : RoomProcessTest() {
             h.manager.connect(h.target()); h.settle(); h.assertReady()
             val radio = assertNotNull(h.appState.currentRadioId)
             val contact = ContactDTO(
-                radioId = radio, publicKey = key(42), name = "Synthetic remote", typeRawValue = 2u, lastHeardTimestamp = 0,
+                radioId = radio, publicKey = key(42), name = "Synthetic remote", typeRawValue = 2u, lastHeardTimestamp = 0u,
             )
             val session = RemoteNodeSessionDTO(
                 radioId = radio, publicKey = contact.publicKey, name = contact.name, role = RemoteNodeRole.REPEATER,

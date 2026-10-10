@@ -23,7 +23,7 @@ internal class RemoteNodesFixture :
     val publicKey = Bytes(ByteArray(32) { 0x42 })
     val contact = ContactDTO(
         radioId = radio, publicKey = publicKey, name = "Synthetic repeater",
-        typeRawValue = ContactType.REPEATER.rawValue, outPathLength = 0u, lastHeardTimestamp = 0,
+        typeRawValue = ContactType.REPEATER.rawValue, outPathLength = 0u, lastHeardTimestamp = 0u,
     )
     var session = RemoteNodeSessionDTO(
         radioId = radio, publicKey = publicKey, name = contact.name, role = RemoteNodeRole.REPEATER,

@@ -86,7 +86,8 @@ class RemoteNodesComposeTest {
     @Test fun ownerInfoRemainsReadableWhileFocusedAndApplyUsesTheEditedNativeBinding() {
         show(); open(); expand(L.remoteNodesSettingsContactInfo)
         val field = compose.onNodeWithTag("remote-owner-info").performScrollTo().performClick()
-        field.performTextInput(" extra").assertIsFocused().assertTextContains("KD7ABC extra")
+        field.performTextInput(" extra")
+        field.assertIsFocused().assertTextContains("KD7ABC extra")
         val layouts = mutableListOf<TextLayoutResult>()
         field.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
         assertTrue(layouts.isNotEmpty())
@@ -102,7 +103,8 @@ class RemoteNodesComposeTest {
     @Test fun ownerInfoSupportsDeletionAndSurvivesResizeAndTwoHundredPercentFont() {
         show(); open(); expand(L.remoteNodesSettingsContactInfo)
         val field = compose.onNodeWithTag("remote-owner-info").performScrollTo().performClick()
-        field.performTextReplacement("KD7AB").assertTextContains("KD7AB")
+        field.performTextReplacement("KD7AB")
+        field.assertTextContains("KD7AB")
         compose.runOnIdle { width.value = 834.dp; font.floatValue = 2f }
         field.performScrollTo().assertIsFocused().assertTextContains("KD7AB")
         compose.onNodeWithTag("remote-node-list").assertExists()

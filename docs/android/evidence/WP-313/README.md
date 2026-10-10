@@ -1,4 +1,77 @@
-# WP-313 evidence (logic layer)
+# WP-313 remote-node management evidence
+
+## Current takeover scope
+
+Owner: `nodes-map-ui-engineer`. Existing issue: #121. Dedicated project session:
+`91e69a6a-c119-44bc-8545-1a6ded93d968`; Copilot session:
+`8e2508f9-176f-487c-ace1-d35f40f611cb`. Starting/current integrated base:
+`ffb03a44d20a8ce4f34d402f814e4180c27f0727`.
+Frozen source: `db14559b39d32322b06477c6ae676112f583db50`.
+Manifest SHA-256: `58f7ebd7f46bbe0636c71005f20776efe139a287279e4f4708b25ce6bfa3f892`.
+Policy revision: `1f5f2b54f17595b3bab93edc4f607ccb9e3b2fdd409943e32fd394ec19c3bfd4`.
+Typed reservation revision 6 admits feature, app composition/tests, directly
+resolved dependency locks and the necessary traceability-validator regression.
+Protected-path main-merge approval remains the coordinator/maintainer's gate.
+
+The #70 implementation is preserved. Native settings, repeater regions, room
+access, authentication, status/telemetry/neighbours, precise charts, history,
+SNR/location maps and coordinate selection now consume the existing holders.
+`AppRemoteNodesFeature` adapts actual services and process persistence.
+MainActivity and the native navigation shell make management reachable from
+Nodes without an extra tab or feature-to-feature dependency.
+
+## Current validation and source discovery
+
+Local diagnostic execution used the existing checksum-pinned Linux toolchain:
+Python 3.12.4, JDK 21.0.12.1, Gradle 9.8.0, AGP 9.4.1, Kotlin 2.3.20 and
+SDK 37.2. The exact branch was transported to a task-specific detached Linux
+verification checkout because the Windows worktree's Git indirection and CRLF
+wrapper cannot run directly under WSL.
+
+Actual targeted Gradle task selection (strict dependency verification):
+
+```text
+:app:testDebugUnitTest
+  --tests com.meshcoreone.android.app.remotenodes.*
+  --tests com.meshcoreone.android.app.container.AppRemoteNodesIntegrationTest
+  --tests com.meshcoreone.android.app.container.SessionLifecycleTest
+  --tests com.meshcoreone.android.app.navigation.NavigationComposeTest
+:feature:remotenodes:testDebugUnitTest validateModuleGraph --write-locks
+```
+
+The targeted diagnostic run discovered/passed 331 feature cases in 38 suites
+and 44 native/app cases in 4 suites, with no failures, errors or skips.
+The native remote suite runs 10 flows on both simulated SDK31 and SDK37.
+It checks real focused input/Backspace/color/height, confirmation and exact
+edited Apply, 200% font and resize, guest/admin/room roles, permission revocation,
+cancelled login, offline/error history, chart values, report/full-map selection,
+attribution, missing-location camera selection, CLI keyboard/accessibility and
+actual Nodes-tab navigation. Six locally rendered PNGs are generated under the
+existing app test artifact directory; they are not committed or claimed as
+physical-device or real MapLibre tile evidence.
+
+The real-container tests use native Room with the existing deterministic radio
+harness. They exercise catalog/OCV/snapshot persistence, offline history, stale
+captured-port rejection and exact typed firmware/session fault classification.
+No physical radio communication is used.
+
+All 175 original cases have bindings in `source-cases.json`; its inherited
+`junit` values are historical #70 observations, not a new result bundle. The
+new focus binding and supplemental native input bindings contain no CI result.
+Hosted exact-head job results/logs are authoritative for final automated
+verification; this document does not approve human, legal, radio or signing gates.
+
+The shared map provider, explicit unsupported layers and static native alignment
+provenance are documented in [`../WP-312/README.md`](../WP-312/README.md).
+Current native adaptations are in
+[`../../deviations/WP-313.md`](../../deviations/WP-313.md).
+
+## Historical #70 logic-layer observations
+
+The following original contribution records are retained for provenance. Their
+no-lease, deferred-UI and unavailable-prerequisite statements describe that
+contribution, not the current takeover. Lenient historical macOS runs are not
+used as current strict-verification evidence.
 
 External contribution, no lease. Local macOS runs only, not CI or acceptance receipts.
 Frozen source: `db14559b39d32322b06477c6ae676112f583db50`. Scope: the non-UI code of

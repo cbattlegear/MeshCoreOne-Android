@@ -63,14 +63,14 @@ internal fun RemoteNodeStatusContent(
                         filter, repeaterState.neighborKeyDisplayByteCount, locale,
                     )
                 }
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Checkbox(filter.favoritesOnly, { filter = filter.copy(favoritesOnly = it) })
-                    Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.trustedContactsFavoritesOnly))
-                }
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Checkbox(filter.showDiscovered, { filter = filter.withShowDiscovered(it) }, enabled = !filter.favoritesOnly)
-                    Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapCalloutDiscovered))
-                }
+                RemoteToggle(
+                    com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.trustedContactsFavoritesOnly,
+                    filter.favoritesOnly, { filter = filter.copy(favoritesOnly = it) },
+                )
+                RemoteToggle(
+                    com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapCalloutDiscovered,
+                    filter.showDiscovered, { filter = filter.withShowDiscovered(it) }, !filter.favoritesOnly,
+                )
                 RemoteNodeMapContent(stringResource(L.remoteNodesStatusNeighborsMapTitle), plotted.points, plotted.lines, plotted.region, surface = mapSurface)
                 plotted.unplottable.forEach { item ->
                     RemoteValue(item.displayName, remoteText(NeighborRows.snrText(item.neighbor.snr, locale)))

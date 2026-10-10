@@ -242,10 +242,10 @@ private fun RepeaterBehaviorContent(holder: RepeaterSettingsStateHolder, enabled
         { holder.setBehaviorExpanded(!state.isBehaviorExpanded); if (!state.behaviorLoaded && enabled) scope.launch { holder.fetchBehaviorSettings() } },
         state.isLoadingBehavior, state.behaviorError, enabled, { scope.launch { holder.fetchBehaviorSettings() } },
     ) {
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Switch(state.repeaterEnabled == true, holder::setRepeaterEnabled, enabled = enabled && state.repeaterEnabled != null)
-            Text(stringResource(L.remoteNodesSettingsRepeaterMode))
-        }
+        RemoteToggle(
+            L.remoteNodesSettingsRepeaterMode, state.repeaterEnabled == true, holder::setRepeaterEnabled,
+            enabled && state.repeaterEnabled != null, androidx.compose.ui.semantics.Role.Switch,
+        )
         RemoteBehaviorFields(state.advertIntervalMinutes, state.floodAdvertIntervalHours, state.floodMaxHops, enabled,
             holder::setAdvertIntervalMinutes, holder::setFloodAdvertIntervalHours, holder::setFloodMaxHops)
         RemoteFailure(state.advertIntervalError); RemoteFailure(state.floodAdvertIntervalError); RemoteFailure(state.floodMaxHopsError)
@@ -270,10 +270,10 @@ private fun RoomBehaviorContent(holder: RoomSettingsStateHolder, enabled: Boolea
             enabled = enabled && state.roomAccessLoaded, label = { Text(stringResource(L.remoteNodesRoomSettingsGuestPassword)) },
             visualTransformation = PasswordVisualTransformation(),
         )
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Switch(state.allowReadOnly == true, holder::setAllowReadOnly, enabled = enabled && state.allowReadOnly != null)
-            Text(stringResource(L.remoteNodesRoomSettingsAllowReadOnly))
-        }
+        RemoteToggle(
+            L.remoteNodesRoomSettingsAllowReadOnly, state.allowReadOnly == true, holder::setAllowReadOnly,
+            enabled && state.allowReadOnly != null, androidx.compose.ui.semantics.Role.Switch,
+        )
         RemoteApply(L.remoteNodesRoomSettingsApplyRoomSettings, enabled && state.roomAccessModified && !state.isApplyingRoomAccess) {
             confirm(L.remoteNodesRoomSettingsApplyRoomSettings, holder::applyRoomAccess)
         }

@@ -3,6 +3,7 @@
 package com.meshcoreone.android.feature.remotenodes.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -15,6 +16,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.ui.UiErrorMapper
@@ -67,6 +69,20 @@ internal fun RemoteValue(label: String, value: String) {
 }
 
 @Composable
+internal fun RemoteToggle(label: Int, checked: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true, role: Role = Role.Checkbox) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .toggleable(checked, enabled = enabled, role = role, onValueChange = onChange),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (role == Role.Switch) Switch(checked, null, enabled = enabled)
+        else Checkbox(checked, null, enabled = enabled)
+        Text(stringResource(label), Modifier.weight(1f))
+    }
+}
+
+@Composable
 internal fun RemoteSection(
     title: Int,
     expanded: Boolean,
@@ -81,7 +97,7 @@ internal fun RemoteSection(
         Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             RemoteHeading(
                 stringResource(title),
-                Modifier.weight(1f).clickable(onClick = onExpand).heightIn(min = 48.dp).padding(vertical = 12.dp),
+                Modifier.weight(1f).clickable(role = Role.Button, onClick = onExpand).heightIn(min = 48.dp).padding(vertical = 12.dp),
             )
             if (onReload != null) TextButton(
                 onClick = onReload, enabled = enabled && !loading,

@@ -32,10 +32,11 @@ internal fun RemoteRegionsContent(
             Column(Modifier.padding(start = (RegionFloodToggleRowLayout.visibleDepth(region.depth, 12.0) * 12).dp)) {
                 RemoteValue(stringResource(L.remoteNodesSettingsRegionsRegionName), remoteText(RegionFloodToggleRowLayout.displayName(region)))
                 if (region.isHome) Text(stringResource(L.remoteNodesSettingsRegionsHomeRegion))
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Switch(region.floodAllowed, { confirm(L.remoteNodesSettingsRegionsFloodToggleCaption) { holder.toggleRegionFlood(region.name) } }, enabled = enabled)
-                    Text(stringResource(L.remoteNodesSettingsRegionsFloodToggleCaption))
-                }
+                RemoteToggle(
+                    L.remoteNodesSettingsRegionsFloodToggleCaption, region.floodAllowed,
+                    { confirm(L.remoteNodesSettingsRegionsFloodToggleCaption) { holder.toggleRegionFlood(region.name) } },
+                    enabled, androidx.compose.ui.semantics.Role.Switch,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton({ add = AddRegionForm(selectedParent = if (region.isUnscoped) RepeaterRegionEntry.Parent.Unscoped else RepeaterRegionEntry.Parent.Named(region.name)) }, enabled = enabled) {
                         Text(stringResource(L.remoteNodesSettingsRegionsAddChild))

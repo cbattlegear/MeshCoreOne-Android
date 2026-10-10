@@ -104,14 +104,8 @@ internal fun RemoteNodeMapContent(
         TextButton({
             encodedCamera = remoteMapPresentation(points, lines, points.map { it.coordinate }.boundingRegion(), locale, system, unit).camera?.encode()
         }) { Text(stringResource(AppMapStrings.mapControlsCenterAll)) }
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Checkbox(labels, { labels = it })
-            Text(stringResource(AppMapStrings.mapControlsShowLabels), Modifier.weight(1f))
-        }
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Checkbox(clusters, { clusters = it })
-            Text(stringResource(AppMapStrings.mapControlsClusterNodes), Modifier.weight(1f))
-        }
+        RemoteToggle(AppMapStrings.mapControlsShowLabels, labels, { labels = it })
+        RemoteToggle(AppMapStrings.mapControlsClusterNodes, clusters, { clusters = it })
         presentation.attribution.forEach { attribution ->
             TextButton({ uri.openUri(attribution.legalUri) }) { Text(attribution.label) }
         }

@@ -74,25 +74,20 @@ internal fun RemoteNodeAuthenticationDialog(
                     label = { Text(stringResource(L.remoteNodesAuthPassword)) },
                     visualTransformation = PasswordVisualTransformation(), enabled = !state.isAuthenticating,
                 )
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Checkbox(state.rememberPassword, holder::setRememberPassword, enabled = !state.isAuthenticating)
-                    Text(stringResource(L.remoteNodesAuthRememberPassword))
-                }
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Checkbox(state.useFloodRouting, holder::setUseFloodRouting, enabled = holder.hasStoredPath && !state.isAuthenticating)
-                    Text(stringResource(L.remoteNodesAuthFloodRouting))
-                }
+                RemoteToggle(L.remoteNodesAuthRememberPassword, state.rememberPassword, holder::setRememberPassword, !state.isAuthenticating)
+                RemoteToggle(L.remoteNodesAuthFloodRouting, state.useFloodRouting, holder::setUseFloodRouting, holder.hasStoredPath && !state.isAuthenticating)
                 RemoteHeading(stringResource(L.remoteNodesAuthPath))
                 when (val route = NodeRoutePathPresentation.of(contact, catalog.contacts, catalog.discoveredNodes, null, Locale.getDefault())) {
                     NodeRoutePath.NoRoute -> Text(stringResource(L.remoteNodesAuthNoRouteSet))
-                    is NodeRoutePath.Route -> {
+                    is NodeRoutePath.Route -> if (!state.useFloodRouting) {
                         Text(remoteText(route.summary))
                         route.hops.forEach { RemoteValue(it.hex, remoteText(it.name)) }
                     }
                 }
                 Text(remoteText(NodeAuthenticationPresentation.pathFooter(holder.hasStoredPath, state.useFloodRouting)))
                 RemoteFailure(prefillError)
-                NodeAuthenticationPresentation.authenticationFooter(state, role).forEach { Text(remoteText(it)) }
+                RemoteFailure(state.errorMessage)
+                if (state.errorMessage == null) NodeAuthenticationPresentation.authenticationFooter(state, role).forEach { Text(remoteText(it)) }
                 if (state.isAuthenticating) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
         },

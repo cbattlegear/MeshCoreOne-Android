@@ -279,7 +279,7 @@ fun NativeNavigationShell(
                             if (state.selectedTab == AppTab.NODES) {
                                 androidx.compose.material3.TextButton(
                                     { coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES)) },
-                                    Modifier.testTag("open-remote-nodes"),
+                                    Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
                                 ) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)) }
                             }
                             IconButton(

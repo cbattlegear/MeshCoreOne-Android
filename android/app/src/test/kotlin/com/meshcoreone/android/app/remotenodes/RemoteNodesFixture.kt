@@ -39,6 +39,7 @@ internal class RemoteNodesFixture :
     var loginCancelled = 0
     var statusReads = 0
     var historyError: Exception? = null
+    var location = Coordinate(37.7, -122.4)
     var snapshots = listOf(
         NodeStatusSnapshotDTO(
             nodePublicKey = publicKey, timestamp = Instant.now().minusSeconds(3600), batteryMillivolts = 3850u,
@@ -50,8 +51,8 @@ internal class RemoteNodesFixture :
         ),
     )
     var cliHandler: (suspend (ContactMessage, ContactDTO) -> Unit)? = null
-    var statusHandler: (suspend (StatusResponse) -> Unit)? = null
-    var telemetryHandler: (suspend (TelemetryResponse) -> Unit)? = null
+    var statusSlot: (suspend (StatusResponse) -> Unit)? = null
+    var telemetrySlot: (suspend (TelemetryResponse) -> Unit)? = null
     var neighborsHandler: (suspend (NeighboursResponse) -> Unit)? = null
 
     fun publish() { check(updates.tryEmit(connection)) }
@@ -85,8 +86,8 @@ internal class RemoteNodesFixture :
             "ver" -> "v1.17.1 (fixture)"
             "clock" -> "06:40 - 18/4/2025 UTC"
             "get radio" -> "915.0,250.0,10,5"
-            "get lat" -> "37.7"
-            "get lon" -> "-122.4"
+            "get lat" -> location.latitude.toString()
+            "get lon" -> location.longitude.toString()
             "get repeat" -> "on"
             "get advert.interval" -> "60"
             "get flood.advert.interval" -> "3"
@@ -118,11 +119,11 @@ internal class RemoteNodesFixture :
     override suspend fun requestOwnerInfo(session: EntityKey, timeout: Duration?) = OwnerInfoResponse("v1.17.1", contact.name, "KD7ABC")
     override suspend fun fetchAllNeighbors(session: EntityKey, timeout: Duration?) =
         NeighboursResponse(publicKey.prefix(6), Bytes.of(0, 0, 0, 1), 1, listOf(Neighbour(Bytes.of(1, 2, 3, 4, 5, 6), 30, 5.5)))
-    override fun setStatusHandler(handler: suspend (StatusResponse) -> Unit) { statusHandler = handler }
-    override fun setTelemetryHandler(handler: suspend (TelemetryResponse) -> Unit) { telemetryHandler = handler }
+    override fun setStatusHandler(handler: suspend (StatusResponse) -> Unit) { statusSlot = handler }
+    override fun setTelemetryHandler(handler: suspend (TelemetryResponse) -> Unit) { telemetrySlot = handler }
     override fun setNeighboursHandler(handler: suspend (NeighboursResponse) -> Unit) { neighborsHandler = handler }
     override fun clearHandlers() { clearStatusHandlers(); cliHandler = null }
-    override fun clearStatusHandlers() { statusHandler = null; telemetryHandler = null; neighborsHandler = null }
+    override fun clearStatusHandlers() { statusSlot = null; telemetrySlot = null; neighborsHandler = null }
     override suspend fun fetchNodeStatusSnapshots(nodePublicKey: Bytes, since: Instant?): SnapshotList<NodeStatusSnapshotDTO> {
         historyError?.let { throw it }
         return snapshots.filter { it.nodePublicKey == nodePublicKey }.snapshot()

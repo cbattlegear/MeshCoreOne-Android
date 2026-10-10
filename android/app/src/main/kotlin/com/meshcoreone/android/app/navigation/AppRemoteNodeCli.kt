@@ -104,7 +104,7 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
             confirmButton = { TextButton({
                 pending = null
                 if (canSend) holder.executeCommand(command)
-            }, enabled = canSend) { Text(stringResource(L.remoteNodesSettingsOk)) } },
+            }, Modifier.heightIn(min = 48.dp).testTag("remote-cli-confirm"), enabled = canSend) { Text(stringResource(L.remoteNodesSettingsOk)) } },
         )
     }
 }

@@ -1,15 +1,34 @@
 {
  "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
  "owned_case_count": 175,
- "bound_case_count": 174,
- "unbound": [
+ "bound_case_count": 175,
+ "unbound": [],
+ "native_ui_bindings": [
   {
-   "id": "NodeContactInfoSectionTests::contact info text color stays readable while the field is focused()",
    "source": "MC1Tests/Views/RemoteNodes/NodeContactInfoSectionTests.swift",
-   "reason": "UIKit-hosted focus-color assertion; deferred to the Compose screen"
+   "cases": [
+    "NodeContactInfoSectionTests::typing into contact info updates ownerInfo while focused()",
+    "NodeContactInfoSectionTests::contact info text color stays readable while the field is focused()",
+    "NodeContactInfoSectionTests::apply after typing sends set owner.info with the edited value()"
+   ],
+   "class": "com.meshcoreone.android.app.remotenodes.RemoteNodesComposeTest",
+   "method": "ownerInfoRemainsReadableWhileFocusedAndApplyUsesTheEditedNativeBinding"
+  },
+  {
+   "source": "MC1Tests/Views/RemoteNodes/NodeContactInfoSectionTests.swift",
+   "cases": ["NodeContactInfoSectionTests::backspace on loaded contact info updates ownerInfo()"],
+   "class": "com.meshcoreone.android.app.remotenodes.RemoteNodesComposeTest",
+   "method": "ownerInfoSupportsDeletionAndSurvivesResizeAndTwoHundredPercentFont"
   }
  ],
  "cases": [
+  {
+   "id": "NodeContactInfoSectionTests::contact info text color stays readable while the field is focused()",
+   "class": "com.meshcoreone.android.app.remotenodes.RemoteNodesComposeTest",
+   "method": "ownerInfoRemainsReadableWhileFocusedAndApplyUsesTheEditedNativeBinding",
+   "disposition": "platform-adaptation",
+   "source": "MC1Tests/Views/RemoteNodes/NodeContactInfoSectionTests.swift"
+  },
   {
    "id": "LocationReportFormatTests::Coordinates format to four decimal places with a dotted separator()",
    "class": "com.meshcoreone.android.feature.remotenodes.history.LocationReportFormatTest",

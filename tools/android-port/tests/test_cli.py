@@ -74,7 +74,7 @@ class CliTests(unittest.TestCase):
             if command == "status":
                 self.assertTrue(value["paused"])
                 self.assertEqual(value["dispatch_mode"], "off")
-                self.assertEqual(len(value["work_packages"]), 65)
+                self.assertEqual(len(value["work_packages"]), 64)
                 self.assertTrue(all(not w["completion_reconciled"] for w in value["work_packages"]))
             else:
                 self.assertTrue(value["traceability_only"])
@@ -199,7 +199,7 @@ class CliTests(unittest.TestCase):
             with self.assertRaisesRegex(PortError, "reference advanced/changed"):
                 validate_manifest(original.data, original.exclusions, REPO, amendments=amendments)
 
-    def test_all_65_handoffs_fit_with_inherited_models_and_full_pinned_acceptance(self):
+    def test_all_64_active_handoffs_fit_with_inherited_models_and_full_pinned_acceptance(self):
         manifest, rules = base_manifest(), policy()
         for wp_id in manifest.work_packages:
             with self.subTest(wp=wp_id):

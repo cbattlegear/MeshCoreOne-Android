@@ -47,7 +47,7 @@ Actual targeted Gradle task selection (strict dependency verification):
 
 The earlier targeted diagnostic run discovered/passed 331 feature cases in 38 suites
 and 44 native/app cases in 4 suites, with no failures, errors or skips.
-The native remote suite now selects 16 flows on both simulated SDK31 and SDK37.
+The native remote suite now selects 17 flows on both simulated SDK31 and SDK37.
 It checks real focused input/Backspace/color/height, confirmation and exact
 edited Apply, 200% font and resize, guest/admin/room roles, permission revocation,
 cancelled login, offline/error history, chart values, report/full-map selection,
@@ -57,6 +57,10 @@ authenticated telemetry-only access, room join, private route restoration and
 history snapshot lifetime across catalog updates. Six locally rendered PNGs are generated under the
 existing app test artifact directory; they are not committed or claimed as
 physical-device or real MapLibre tile evidence.
+
+CLI resource changes also preserve the entered draft and use the new locale for
+subsequent terminal messages; the diagnostics adapter stays stable between
+configuration changes rather than causing repeated composition.
 
 The real-container tests use native Room with the existing deterministic radio
 harness. They exercise catalog/OCV/snapshot persistence, offline history, stale

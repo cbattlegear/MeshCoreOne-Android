@@ -359,6 +359,31 @@ class RemoteNodesComposeTest {
         compose.onNodeWithContentDescription(text(AppToolsStrings.toolsCliTabComplete)).assertHasClickAction()
     }
 
+    @Test fun nativeCliConfigurationChangePreservesDraftAndUsesTheNewResourceLocale() {
+        val config = mutableStateOf(android.content.res.Configuration(host.get().resources.configuration))
+        val resources = mutableStateOf(host.get().resources)
+        host.get().setContent {
+            CompositionLocalProvider(
+                androidx.compose.ui.platform.LocalResources provides resources.value,
+                androidx.compose.ui.platform.LocalConfiguration provides config.value,
+            ) {
+                MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
+                    AppRemoteNodeCli(fixture.session, { _, _, _ -> throw RemoteNodeError.Timeout() }, true)
+                }
+            }
+        }
+        val input = compose.onNodeWithTag("remote-cli-input")
+        input.performClick().performTextInput("reboot")
+        compose.runOnIdle {
+            config.value = android.content.res.Configuration(config.value).apply { setLocale(java.util.Locale.GERMANY) }
+            resources.value = host.get().createConfigurationContext(config.value).resources
+        }
+        input.assertTextContains("reboot")
+        input.performKeyInput { pressKey(Key.Enter) }
+        compose.onNodeWithTag("remote-cli-confirm").performClick()
+        compose.onNodeWithText(resources.value.getString(L.remoteNodesNodeCliRebootSent)).assertExists()
+    }
+
     private fun capture(id: String) {
         compose.waitForIdle()
         val bitmap = compose.runOnUiThread {

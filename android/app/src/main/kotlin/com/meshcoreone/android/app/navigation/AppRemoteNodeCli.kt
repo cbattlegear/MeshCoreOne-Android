@@ -12,7 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -28,6 +28,7 @@ import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.feature.remotenodes.settings.RemoteCliSend
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.feature.tools.diagnostics.ResourcesDiagnosticsText
+import com.meshcoreone.android.feature.tools.diagnostics.DiagnosticsText
 import com.meshcoreone.android.feature.tools.diagnostics.cli.*
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.app.container.appCliErrors
@@ -35,10 +36,19 @@ import com.meshcoreone.android.app.container.appCliErrors
 @Composable
 internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend, enabled: Boolean) {
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
+    val resources = LocalResources.current
+    val diagnostics by rememberUpdatedState(remember(resources) { ResourcesDiagnosticsText(resources) })
+    val noService by rememberUpdatedState(stringResource(L.remoteNodesSettingsNoService))
     val currentSend by rememberUpdatedState(send)
     val canSend by rememberUpdatedState(enabled && session.isAdmin)
-    val holder = remember(session.id) { NodeCliStateHolder(scope, ResourcesDiagnosticsText(context.resources), errors = appCliErrors) }
+    val holder = remember(session.id) {
+        NodeCliStateHolder(scope, object : DiagnosticsText {
+            override val locale get() = diagnostics.locale
+            override fun string(id: Int) = diagnostics.string(id)
+            override fun format(id: Int, vararg args: Any) = diagnostics.format(id, *args)
+            override fun joinList(items: List<String>) = diagnostics.joinList(items)
+        }, errors = appCliErrors)
+    }
     val controller = remember(holder) { CliTerminalController(holder, scope) }
     val state by holder.state.collectAsStateWithLifecycle()
     val terminal by controller.state.collectAsStateWithLifecycle()
@@ -48,7 +58,7 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
     val tabComplete = stringResource(AppToolsStrings.toolsCliTabComplete)
     LaunchedEffect(holder) {
         holder.configure(session.name) { command, timeout ->
-            check(canSend) { context.getString(L.remoteNodesSettingsNoService) }
+            check(canSend) { noService }
             currentSend(EntityKey(session.radioId, session.id), command, timeout)
         }
         controller.onAppear()

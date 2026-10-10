@@ -74,7 +74,8 @@ class RepeaterRegionsStateHolder(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            if (faults.isTimeout(error)) update { it.copy(regionsError = true) }
+            update { it.copy(regionsError = true) }
+            setError(RemoteNodesText.Failure(error))
         } finally {
             update { it.copy(isLoadingRegions = false) }
         }
@@ -85,11 +86,13 @@ class RepeaterRegionsStateHolder(
         update { it.copy(isLoadingDefaultScope = true) }
         try {
             val reply = helper.sendAndWait("region default", REGION_TIMEOUT, rawMatching = true)
-            RepeaterRegionParsing.parseDefaultScopeReply(reply)?.let(::applyParsedDefaultScope)
+            val parsed = RepeaterRegionParsing.parseDefaultScopeReply(reply)
+            if (parsed != null) applyParsedDefaultScope(parsed)
+            else setError(RemoteNodesText.resource(AppRemoteNodesStrings.remoteNodesSettingsFailedToLoad))
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
-            // Swift logs and keeps the previous value; a default-scope failure never fails the section.
+        } catch (error: Exception) {
+            setError(RemoteNodesText.Failure(error))
         } finally {
             update { it.copy(isLoadingDefaultScope = false) }
         }

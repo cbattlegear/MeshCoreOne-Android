@@ -20,7 +20,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
-import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteCliSend
+import com.meshcoreone.android.feature.remotenodes.settings.RemoteCliSend
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.feature.tools.diagnostics.ResourcesDiagnosticsText
 import com.meshcoreone.android.feature.tools.diagnostics.cli.*
 
@@ -38,7 +39,7 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
     LaunchedEffect(holder) {
         holder.configure(session.name) { command, timeout ->
             check(canSend) { context.getString(L.remoteNodesSettingsNoService) }
-            currentSend(session, command, timeout)
+            currentSend(EntityKey(session.radioId, session.id), command, timeout)
         }
         controller.onAppear()
     }
@@ -65,7 +66,7 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(controller::onHistoryUp) { Text("↑") }
             TextButton(controller::onHistoryDown) { Text("↓") }
-            TextButton(controller::onTabComplete) { Text("Tab") }
+            TextButton({ controller.onTabComplete() }) { Text("Tab") }
             Button({ pending = state.terminal.currentInput }, enabled = canSend && !state.isWaitingForResponse && state.terminal.currentInput.isNotBlank()) {
                 Text(stringResource(L.remoteNodesSettingsOk))
             }

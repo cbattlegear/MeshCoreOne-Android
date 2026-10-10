@@ -21,6 +21,16 @@ import com.meshcoreone.android.feature.remotenodes.telemetry.MeasurementSystem
 import java.util.Locale
 import com.meshcoreone.android.feature.remotenodes.map.MapLine as NodeMapLine
 
+typealias RemoteNodesMapSurface = @Composable (MapPresentationState, Boolean, Boolean, String, (MapCamera) -> Unit, (MapMarker) -> Unit, Modifier) -> Unit
+
+val NativeRemoteNodesMapSurface: RemoteNodesMapSurface = { state, clusters, labels, description, camera, marker, modifier ->
+    if (MapLibreRuntime.isSupported) {
+        MapLibreMapSurface(state, clusters, labels, description, camera, marker, modifier)
+    } else {
+        Text("MapLibre requires a 64-bit Android device.", color = MaterialTheme.colorScheme.error)
+    }
+}
+
 internal fun remoteMapPresentation(
     points: List<MapPoint>,
     lines: List<NodeMapLine>,
@@ -53,9 +63,8 @@ internal fun RemoteNodeMapContent(
     lines: List<NodeMapLine>,
     region: CoordinateRegion?,
     onSelect: (MapMarker) -> Unit = {},
-    surface: @Composable (MapPresentationState, Boolean, Boolean, String, (MapCamera) -> Unit, (MapMarker) -> Unit, Modifier) -> Unit = { state, clusters, labels, description, camera, marker, modifier ->
-        MapLibreMapSurface(state, clusters, labels, description, camera, marker, modifier)
-    },
+    surface: RemoteNodesMapSurface = NativeRemoteNodesMapSurface,
+    onCameraChanged: (MapCamera) -> Unit = {},
 ) {
     val locale = Locale.getDefault()
     val system = MeasurementSystem.of(locale)
@@ -83,11 +92,10 @@ internal fun RemoteNodeMapContent(
         val availability = MapLibreOpenFreeMap.catalog.layers.getValue(style).availability
         when {
             points.isEmpty() -> Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesHistoryNoSnapshotsMessage))
-            !MapLibreRuntime.isSupported -> Text("MapLibre requires a 64-bit Android device.", color = MaterialTheme.colorScheme.error)
             availability is MapLayerAvailability.Unavailable -> Text(availability.reason, color = MaterialTheme.colorScheme.error)
             else -> surface(
                 presentation.copy(style = style, camera = encodedCamera?.let(MapCamera::decode) ?: presentation.camera),
-                clusters, labels, title, { encodedCamera = it.encode() }, onSelect, Modifier.fillMaxWidth().height(320.dp),
+                clusters, labels, title, { encodedCamera = it.encode(); onCameraChanged(it) }, onSelect, Modifier.fillMaxWidth().height(320.dp),
             )
         }
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {

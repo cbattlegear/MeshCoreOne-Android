@@ -35,6 +35,7 @@ fun RemoteNodesEntry(
     onNavigate: (FeatureRoute) -> Unit,
     dependencies: RemoteNodesUiDependencies? = null,
     cliContent: RemoteNodeCliContent? = null,
+    mapSurface: RemoteNodesMapSurface = NativeRemoteNodesMapSurface,
 ) {
     var refresh by remember { mutableIntStateOf(0) }
     val data by produceState(CatalogState(), dependencies, refresh) {
@@ -115,6 +116,7 @@ fun RemoteNodesEntry(
                         cliContent = cliContent,
                         initialHistory = initialHistory,
                         radioOptions = dependencies?.radioOptions,
+                        mapSurface = mapSurface,
                     )
                 }
             }

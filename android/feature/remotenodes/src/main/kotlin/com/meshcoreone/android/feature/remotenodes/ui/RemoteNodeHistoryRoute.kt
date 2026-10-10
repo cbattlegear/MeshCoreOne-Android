@@ -24,7 +24,7 @@ import java.time.ZoneId
 import java.util.Locale
 
 @Composable
-internal fun RemoteNodeHistoryRoute(session: RemoteNodeSessionDTO, store: RemoteNodeHistoryStore?, modifier: Modifier) {
+internal fun RemoteNodeHistoryRoute(session: RemoteNodeSessionDTO, store: RemoteNodeHistoryStore?, modifier: Modifier, mapSurface: RemoteNodesMapSurface) {
     val context = LocalContext.current
     val locale = Locale.getDefault()
     val system = MeasurementSystem.of(locale)
@@ -80,6 +80,7 @@ internal fun RemoteNodeHistoryRoute(session: RemoteNodeSessionDTO, store: Remote
                     val region = path.points.map { it.coordinate }.boundingRegion()
                     RemoteNodeMapContent(
                         stringResource(L.remoteNodesStatusLocationMapTitle), path.points, path.lines, region,
+                        surface = mapSurface,
                         onSelect = { marker ->
                             val report = path.reports[marker.id]
                             selectedReport = reports.firstOrNull { it.id == report?.id }?.let {

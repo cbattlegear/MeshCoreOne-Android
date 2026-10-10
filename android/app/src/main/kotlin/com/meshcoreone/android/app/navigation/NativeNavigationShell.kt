@@ -485,8 +485,8 @@ private fun ExistingFeatureContent(
             { target -> coordinator.back(); navigate(target) },
             onboarding,
         )
-        FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate, remoteNodes) { session, send, enabled ->
+        FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate, remoteNodes, cliContent = { session, send, enabled ->
             AppRemoteNodeCli(session, send, enabled)
-        }
+        })
     }
 }

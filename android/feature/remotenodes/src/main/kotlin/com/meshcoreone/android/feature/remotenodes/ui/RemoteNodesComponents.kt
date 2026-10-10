@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -35,6 +36,16 @@ internal fun remoteText(text: RemoteNodesText): String {
 
 @Composable
 internal fun RemoteFailure(text: RemoteNodesText?) {
+    LaunchedEffect(text) {
+        fun report(value: RemoteNodesText) {
+            when (value) {
+                is RemoteNodesText.Failure -> UiErrorMapper().present(value.error)
+                is RemoteNodesText.Resource -> value.args.filterIsInstance<RemoteNodesText>().forEach(::report)
+                is RemoteNodesText.Verbatim -> Unit
+            }
+        }
+        if (text != null) report(text)
+    }
     if (text != null) Text(
         remoteText(text),
         Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite }.testTag("remote-error"),

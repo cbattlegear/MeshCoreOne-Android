@@ -38,6 +38,7 @@ internal fun RemoteNodeManagementRoute(
     cliContent: RemoteNodeCliContent? = null,
     initialHistory: Boolean = false,
     radioOptions: RemoteRadioOptions? = null,
+    mapSurface: RemoteNodesMapSurface = NativeRemoteNodesMapSurface,
 ) {
     val scope = rememberCoroutineScope()
     val repeaterSettings = remember(dependencies) {
@@ -123,10 +124,10 @@ internal fun RemoteNodeManagementRoute(
             if (!ready) TextButton(onAuthenticate) { Text(stringResource(L.remoteNodesAuthAuthentication)) }
         }
         when {
-            showHistory -> RemoteNodeHistoryRoute(session, dependencies?.historyStore(), Modifier.weight(1f))
+            showHistory -> RemoteNodeHistoryRoute(session, dependencies?.historyStore(), Modifier.weight(1f), mapSurface)
             tab == NodeManagementTab.SETTINGS && helper != null -> RemoteNodeSettingsContent(
                 helper, if (session.isRepeater) repeaterSettings else null,
-                if (session.isRoom) roomSettings else null, canWrite, request, Modifier.weight(1f), radioOptions,
+                if (session.isRoom) roomSettings else null, canWrite, request, Modifier.weight(1f), radioOptions, mapSurface,
             )
             tab == NodeManagementTab.CLI && helper != null -> {
                 val send = if (session.isRepeater) repeaterSettings?.makeNodeCLISend(session) else roomSettings?.makeNodeCLISend(session)
@@ -138,7 +139,7 @@ internal fun RemoteNodeManagementRoute(
             }
             status != null -> RemoteNodeStatusContent(
                 session, status, if (session.isRepeater) repeaterStatus else null,
-                if (session.isRoom) roomStatus else null, catalog, connected, Modifier.weight(1f),
+                if (session.isRoom) roomStatus else null, catalog, connected, Modifier.weight(1f), mapSurface,
             )
             else -> RemoteFailure(RemoteNodesText.Resource(L.remoteNodesSettingsNoService))
         }

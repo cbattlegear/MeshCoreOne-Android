@@ -37,6 +37,7 @@ internal fun RemoteNodeStatusContent(
     catalog: RemoteNodesCatalog,
     ready: Boolean,
     modifier: Modifier,
+    mapSurface: RemoteNodesMapSurface,
 ) {
     val state by helper.state.collectAsStateWithLifecycle()
     val repeaterState = repeater?.state?.collectAsStateWithLifecycle()?.value
@@ -70,7 +71,7 @@ internal fun RemoteNodeStatusContent(
                     Checkbox(filter.showDiscovered, { filter = filter.withShowDiscovered(it) }, enabled = !filter.favoritesOnly)
                     Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapCalloutDiscovered))
                 }
-                RemoteNodeMapContent(stringResource(L.remoteNodesStatusNeighborsMapTitle), plotted.points, plotted.lines, plotted.region)
+                RemoteNodeMapContent(stringResource(L.remoteNodesStatusNeighborsMapTitle), plotted.points, plotted.lines, plotted.region, surface = mapSurface)
                 plotted.unplottable.forEach { item ->
                     RemoteValue(item.displayName, remoteText(NeighborRows.snrText(item.neighbor.snr, locale)))
                 }
@@ -81,7 +82,7 @@ internal fun RemoteNodeStatusContent(
                         UUID.nameUUIDFromBytes(session.publicKey.toByteArray()), fix.coordinate,
                         PinStyle.LOCATION_FIX_LATEST, session.name, false, null, null,
                     )
-                    RemoteNodeMapContent(stringResource(L.remoteNodesStatusLocationMapTitle), listOf(point), emptyList(), CoordinateRegion.around(fix.coordinate, .05))
+                    RemoteNodeMapContent(stringResource(L.remoteNodesStatusLocationMapTitle), listOf(point), emptyList(), CoordinateRegion.around(fix.coordinate, .05), surface = mapSurface)
                 }
             }
         } else {

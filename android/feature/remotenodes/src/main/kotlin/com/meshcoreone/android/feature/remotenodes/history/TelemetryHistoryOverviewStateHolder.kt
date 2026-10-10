@@ -82,16 +82,16 @@ class TelemetryHistoryOverviewStateHolder(
     suspend fun loadData(store: RemoteNodeHistoryStore, publicKey: Bytes, radioId: RadioId) {
         _state.update { it.copy(isLoading = true, error = null) }
         try {
-        val snapshots = attempt { store.fetchNodeStatusSnapshots(publicKey, null).toList() }
-        _state.update { it.copy(snapshots = snapshots ?: emptyList()) }
+            val snapshots = attempt { store.fetchNodeStatusSnapshots(publicKey, null).toList() }
+            if (snapshots != null) _state.update { it.copy(snapshots = snapshots) }
 
-        val contact = attempt { store.fetchContact(radioId, publicKey) }
-        if (contact != null) _state.update { it.copy(ocvArray = contact.activeOCVArray) }
+            val contact = attempt { store.fetchContact(radioId, publicKey) }
+            if (contact != null) _state.update { it.copy(ocvArray = contact.activeOCVArray) }
 
-        val contacts = attempt { store.fetchContacts(radioId).toList() }
-        _state.update { it.copy(contacts = contacts ?: emptyList()) }
-        val discovered = attempt { store.fetchDiscoveredNodes(radioId).toList() }
-        _state.update { it.copy(discoveredNodes = discovered ?: emptyList()) }
+            val contacts = attempt { store.fetchContacts(radioId).toList() }
+            if (contacts != null) _state.update { it.copy(contacts = contacts) }
+            val discovered = attempt { store.fetchDiscoveredNodes(radioId).toList() }
+            if (discovered != null) _state.update { it.copy(discoveredNodes = discovered) }
         } finally {
             _state.update { it.copy(isLoading = false) }
         }

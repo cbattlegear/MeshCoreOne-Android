@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -18,6 +19,9 @@ import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesText
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteRadioOptions
 import com.meshcoreone.android.feature.remotenodes.settings.*
+import com.meshcoreone.android.feature.remotenodes.map.*
+import com.meshcoreone.android.core.model.Coordinate
+import java.util.UUID
 import java.time.ZoneId
 import java.util.Locale
 import kotlinx.coroutines.launch
@@ -31,10 +35,16 @@ internal fun RemoteNodeSettingsContent(
     confirm: (Int, suspend () -> Unit) -> Unit,
     modifier: Modifier,
     radioOptions: RemoteRadioOptions?,
+    mapSurface: RemoteNodesMapSurface,
 ) {
     val state by helper.state.collectAsStateWithLifecycle()
+    val resources = LocalContext.current.resources
     val scope = rememberCoroutineScope()
     val editable = enabled && !state.isApplying && !state.isRebooting
+    var picking by remember { mutableStateOf(false) }
+    var picked by remember { mutableStateOf<Coordinate?>(null) }
+    val pickId = remember { UUID.randomUUID() }
+    androidx.activity.compose.BackHandler(picking) { picking = false }
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         RemoteFailure(state.errorMessage)
         if (state.isApplying || state.isRebooting) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -76,6 +86,27 @@ internal fun RemoteNodeSettingsContent(
             RemoteFailure(state.latitudeError)
             RemoteNumberField(L.remoteNodesSettingsLongitude, state.longitude, editable, helper::setLongitude)
             RemoteFailure(state.longitudeError)
+            TextButton({
+                picked = Coordinate(state.latitude ?: 0.0, state.longitude ?: 0.0).takeIf { it.isValidFix }
+                picking = true
+            }, enabled = editable && state.identityLoaded) { Text(stringResource(L.remoteNodesSettingsPickOnMap)) }
+            if (picking) {
+                val coordinate = picked ?: Coordinate(0.0, 0.0)
+                RemoteNodeMapContent(
+                    stringResource(L.remoteNodesSettingsPickOnMap),
+                    listOf(MapPoint(pickId, coordinate, PinStyle.CROSSHAIR, null, false, null, null)),
+                    emptyList(), CoordinateRegion.around(coordinate, if (picked == null) 80.0 else .05),
+                    surface = mapSurface,
+                    onCameraChanged = { picked = Coordinate(it.center.latitude, it.center.longitude) },
+                )
+                RemoteValue(stringResource(L.remoteNodesSettingsLatitude), coordinate.latitude.toString())
+                RemoteValue(stringResource(L.remoteNodesSettingsLongitude), coordinate.longitude.toString())
+                TextButton({ picking = false }) { Text(stringResource(L.remoteNodesCancel)) }
+                RemoteApply(L.remoteNodesDone, editable && picked?.isValidFix == true) {
+                    picked?.let { helper.setLocationFromPicker(it.latitude, it.longitude) }
+                    picking = false
+                }
+            }
             RemoteApply(L.remoteNodesSettingsApplyIdentitySettings, editable && state.identitySettingsModified) {
                 confirm(L.remoteNodesSettingsApplyIdentitySettings, helper::applyIdentitySettings)
             }
@@ -142,9 +173,11 @@ internal fun RemoteNodeSettingsContent(
                         DriftUnit.SECOND -> android.icu.util.MeasureUnit.SECOND
                     })
                 }.toTypedArray())
-                Text(remoteText(RemoteNodesText.resource(
-                    if (warning.ahead) L.remoteNodesStatusClockAhead else L.remoteNodesStatusClockBehind, magnitude,
-                )), color = MaterialTheme.colorScheme.error)
+                Text(
+                    if (warning.ahead) L.remoteNodesStatusClockAhead(resources, magnitude)
+                    else L.remoteNodesStatusClockBehind(resources, magnitude),
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
         }
         RemoteHeading(stringResource(L.remoteNodesSettingsDeviceActions))
@@ -168,7 +201,7 @@ internal fun RemoteNumberField(label: Int, value: Double?, enabled: Boolean, onC
     OutlinedTextField(
         draft, { draft = it; onChange(it.toDoubleOrNull() ?: Double.NaN) }, Modifier.fillMaxWidth(),
         label = { Text(stringResource(label)) }, enabled = enabled && value != null,
-        isError = draft.isNotEmpty() && draft.toDoubleOrNull()?.isFinite() != true,
+        isError = value != null && draft.toDoubleOrNull()?.isFinite() != true,
     )
 }
 
@@ -181,7 +214,7 @@ internal fun RemoteIntegerField(label: Int, value: Long?, enabled: Boolean, onCh
     OutlinedTextField(
         draft, { draft = it; onChange(it.toLongOrNull() ?: Long.MIN_VALUE) }, Modifier.fillMaxWidth(),
         label = { Text(stringResource(label)) }, enabled = enabled && value != null,
-        isError = draft.isNotEmpty() && draft.toLongOrNull() == null,
+        isError = value != null && draft.toLongOrNull() == null,
     )
 }
 

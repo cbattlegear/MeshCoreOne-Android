@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.feature.remotenodes.history.*
 import com.meshcoreone.android.feature.remotenodes.telemetry.ChartAccent
+import com.meshcoreone.android.feature.remotenodes.common.SwiftNumberFormat
 import java.time.ZoneId
 import java.util.Locale
 
@@ -76,7 +77,9 @@ internal fun RemoteMetricChart(chart: MetricChartModel) {
                     modifier = Modifier.semantics { contentDescription = "$title. $dateText. ${descriptions.joinToString()}" },
                 )
                 val geometry = MetricChartGeometry(chart, 1f, 1f)
-                geometry.yDomain?.let { domain -> Text("${domain.start} – ${domain.endInclusive} ${chart.unit}") }
+                geometry.yDomain?.let { domain ->
+                    Text("${SwiftNumberFormat.number(domain.start, locale)} – ${SwiftNumberFormat.number(domain.endInclusive, locale)} ${chart.unit}")
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     geometry.startDate?.let { Text(HistoryDateFormat.monthDay(it, locale, zone)) }
                     geometry.endDate?.let { Text(HistoryDateFormat.monthDay(it, locale, zone)) }

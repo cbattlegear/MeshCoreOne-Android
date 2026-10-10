@@ -20,6 +20,7 @@ import com.meshcoreone.android.feature.remotenodes.telemetry.MeasurementSystem
 import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull

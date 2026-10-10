@@ -38,7 +38,6 @@ import com.meshcoreone.android.core.services.remote.NodeConfigContactsChangedNot
 import com.meshcoreone.android.core.services.remote.NodeConfigSettingsPort
 import com.meshcoreone.android.core.services.remote.RemoteNodePasswordStore
 import com.meshcoreone.android.core.services.remote.RemoteNodeService
-import com.meshcoreone.android.core.services.remote.RemoteNodeError
 import com.meshcoreone.android.core.services.remote.RepeaterAdminService
 import com.meshcoreone.android.core.services.remote.RoomAdminService
 import com.meshcoreone.android.core.services.remote.RoomServerService
@@ -69,9 +68,7 @@ import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import com.meshcoreone.android.feature.tools.diagnostics.ToolsDiagnosticsDependencies
-import com.meshcoreone.android.feature.tools.diagnostics.cli.CliErrorPresentation
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliNodeDirectory
-import com.meshcoreone.android.feature.tools.diagnostics.cli.CliRemoteFault
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliRemoteNodePort
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliRepeaterAdminPort
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliSettingsPort

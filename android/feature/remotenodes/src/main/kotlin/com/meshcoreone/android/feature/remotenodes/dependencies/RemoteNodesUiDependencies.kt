@@ -15,8 +15,11 @@ data class RemoteNodesCatalog(
 
 data class RemoteNodesConnection(val radioId: RadioId?, val generation: String?, val ready: Boolean)
 
+data class RemoteRadioOptions(val bandwidthsKHz: List<Double>, val spreadingFactors: List<Long>, val codingRates: List<Long>)
+
 interface RemoteNodesUiDependencies {
     val updates: Flow<RemoteNodesConnection>
+    val radioOptions: RemoteRadioOptions
     suspend fun catalog(): RemoteNodesCatalog
     fun services(): RemoteNodesFeatureDependencies?
 }

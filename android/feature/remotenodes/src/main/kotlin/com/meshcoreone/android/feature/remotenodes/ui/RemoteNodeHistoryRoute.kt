@@ -51,7 +51,7 @@ internal fun RemoteNodeHistoryRoute(session: RemoteNodeSessionDTO, store: Remote
             }
         }
         when (val content = TelemetryHistoryOverviewContent.build(holder, session.isRepeater, system)) {
-            TelemetryHistoryOverviewContent.Empty -> if (!state.isLoading && state.error == null && store != null) Text(remoteText(content.message))
+            TelemetryHistoryOverviewContent.Empty -> if (!state.isLoading && state.error == null && store != null) Text(remoteText(TelemetryHistoryOverviewContent.Empty.message))
             is TelemetryHistoryOverviewContent.Loaded -> {
                 content.radio?.let { items ->
                     RemoteHeading(remoteText(content.radioTitle))
@@ -83,15 +83,15 @@ internal fun RemoteNodeHistoryRoute(session: RemoteNodeSessionDTO, store: Remote
                         onSelect = { marker ->
                             val report = path.reports[marker.id]
                             selectedReport = reports.firstOrNull { it.id == report?.id }?.let {
-                                LocationReportFormat.detailLine(it, locale, zone, system)
+                                LocationReportRowText.detailLine(it, locale, zone, system)
                             }
                         },
                     )
                     selectedReport?.let { Text(it) }
                     TextButton({ fullMap = !fullMap }) { Text(stringResource(if (fullMap) L.remoteNodesDone else L.remoteNodesStatusViewOnMap)) }
                     reports.forEach { report ->
-                        TextButton({ selectedReport = LocationReportFormat.detailLine(report, locale, zone, system) }) {
-                            Text(LocationReportFormat.detailLine(report, locale, zone, system))
+                        TextButton({ selectedReport = LocationReportRowText.detailLine(report, locale, zone, system) }) {
+                            Text(LocationReportRowText.detailLine(report, locale, zone, system))
                         }
                     }
                 } else {

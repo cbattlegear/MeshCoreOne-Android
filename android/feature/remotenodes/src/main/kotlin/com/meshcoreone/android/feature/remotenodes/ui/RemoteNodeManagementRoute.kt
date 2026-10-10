@@ -37,6 +37,7 @@ internal fun RemoteNodeManagementRoute(
     onAuthenticate: () -> Unit,
     cliContent: RemoteNodeCliContent? = null,
     initialHistory: Boolean = false,
+    radioOptions: RemoteRadioOptions? = null,
 ) {
     val scope = rememberCoroutineScope()
     val repeaterSettings = remember(dependencies) {
@@ -63,8 +64,8 @@ internal fun RemoteNodeManagementRoute(
     val connected by rememberUpdatedState(ready)
     var telemetryConfigured by remember { mutableStateOf(false) }
 
-    LaunchedEffect(dependencies, session.id) {
-        if (session.isAdmin) {
+    LaunchedEffect(dependencies, session.id, ready) {
+        if (ready && session.isAdmin) {
             if (session.isRepeater) repeaterSettings?.configure({ dependencies?.repeaterAdmin() }, session)
             else roomSettings?.configure({ dependencies?.roomAdmin() }, session)
         }
@@ -125,7 +126,7 @@ internal fun RemoteNodeManagementRoute(
             showHistory -> RemoteNodeHistoryRoute(session, dependencies?.historyStore(), Modifier.weight(1f))
             tab == NodeManagementTab.SETTINGS && helper != null -> RemoteNodeSettingsContent(
                 helper, if (session.isRepeater) repeaterSettings else null,
-                if (session.isRoom) roomSettings else null, canWrite, request, Modifier.weight(1f),
+                if (session.isRoom) roomSettings else null, canWrite, request, Modifier.weight(1f), radioOptions,
             )
             tab == NodeManagementTab.CLI && helper != null -> {
                 val send = if (session.isRepeater) repeaterSettings?.makeNodeCLISend(session) else roomSettings?.makeNodeCLISend(session)

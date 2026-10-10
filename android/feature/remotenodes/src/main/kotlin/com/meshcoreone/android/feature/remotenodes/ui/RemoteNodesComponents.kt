@@ -15,7 +15,6 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.meshcoreone.android.core.l10n.L10nFormatting
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesText
@@ -26,8 +25,9 @@ internal fun remoteText(text: RemoteNodesText): String {
     fun resolve(value: RemoteNodesText): String = when (value) {
         is RemoteNodesText.Verbatim -> value.text
         is RemoteNodesText.Failure -> UiErrorMapper().message(value.error).resolve(resources)
-        is RemoteNodesText.Resource -> L10nFormatting.string(
-            resources, value.id, *value.args.map { if (it is RemoteNodesText) resolve(it) else it }.toTypedArray(),
+        is RemoteNodesText.Resource -> String.format(
+            resources.configuration.locales[0], resources.getString(value.id),
+            *value.args.map { if (it is RemoteNodesText) resolve(it) else it }.toTypedArray(),
         )
     }
     return resolve(text)

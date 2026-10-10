@@ -262,6 +262,14 @@ class NodeSettingsStateHolder(
             update { it.copy(errorMessage = RemoteNodesText.resource(AppRemoteNodesStrings.remoteNodesSettingsRadioNotLoaded)) }
             return
         }
+        if (!frequency.isFinite() || !bandwidth.isFinite() ||
+            frequency * 1000 !in com.meshcoreone.android.core.protocol.command.PacketBuilder.FREQUENCY_RANGE_KHZ.let { it.first.toDouble()..it.last.toDouble() } ||
+            bandwidth * 1000 !in com.meshcoreone.android.core.protocol.command.PacketBuilder.BANDWIDTH_RANGE_HZ.let { it.first.toDouble()..it.last.toDouble() } ||
+            spreadingFactor !in 5L..12L || codingRate !in 5L..8L
+        ) {
+            update { it.copy(errorMessage = RemoteNodesText.resource(AppRemoteNodesStrings.remoteNodesSettingsRadioApplyFailed)) }
+            return
+        }
         update { it.copy(isApplying = true, errorMessage = null) }
         val command = "set radio ${SwiftDoubleText.describe(frequency)},${SwiftDoubleText.describe(bandwidth)}," +
             "$spreadingFactor,$codingRate"

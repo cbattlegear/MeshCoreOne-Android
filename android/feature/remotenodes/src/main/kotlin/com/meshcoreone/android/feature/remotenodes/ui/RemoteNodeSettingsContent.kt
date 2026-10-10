@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesText
+import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteRadioOptions
 import com.meshcoreone.android.feature.remotenodes.settings.*
 import java.time.ZoneId
 import java.util.Locale
@@ -29,6 +30,7 @@ internal fun RemoteNodeSettingsContent(
     enabled: Boolean,
     confirm: (Int, suspend () -> Unit) -> Unit,
     modifier: Modifier,
+    radioOptions: RemoteRadioOptions?,
 ) {
     val state by helper.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -45,13 +47,13 @@ internal fun RemoteNodeSettingsContent(
             RemoteNumberField(L.remoteNodesSettingsFrequencyMHz, state.frequency, editable) {
                 helper.setRadio(it, state.bandwidth, state.spreadingFactor, state.codingRate)
             }
-            RemoteNumberField(L.remoteNodesSettingsBandwidthKHz, state.bandwidth, editable) {
+            RemoteOptionField(L.remoteNodesSettingsBandwidthKHz, state.bandwidth, radioOptions?.bandwidthsKHz.orEmpty(), editable) {
                 helper.setRadio(state.frequency, it, state.spreadingFactor, state.codingRate)
             }
-            RemoteIntegerField(L.remoteNodesSettingsSpreadingFactor, state.spreadingFactor, editable) {
+            RemoteOptionField(L.remoteNodesSettingsSpreadingFactor, state.spreadingFactor, radioOptions?.spreadingFactors.orEmpty(), editable) {
                 helper.setRadio(state.frequency, state.bandwidth, it, state.codingRate)
             }
-            RemoteIntegerField(L.remoteNodesSettingsCodingRate, state.codingRate, editable) {
+            RemoteOptionField(L.remoteNodesSettingsCodingRate, state.codingRate, radioOptions?.codingRates.orEmpty(), editable) {
                 helper.setRadio(state.frequency, state.bandwidth, state.spreadingFactor, it)
             }
             Text(stringResource(L.remoteNodesSettingsRadioRestartWarning))
@@ -128,6 +130,22 @@ internal fun RemoteNodeSettingsContent(
         ) {
             RemoteValue(stringResource(L.remoteNodesSettingsFirmware), state.firmwareVersion ?: NodeSettingsPresentation.EM_DASH)
             RemoteValue(stringResource(L.remoteNodesSettingsDeviceTime), NodeSettingsPresentation.deviceTime(state, Locale.getDefault(), ZoneId.systemDefault()) ?: NodeSettingsPresentation.EM_DASH)
+            ClockDriftWarning.of(state.clockDrift)?.let { warning ->
+                val formatter = android.icu.text.MeasureFormat.getInstance(
+                    Locale.getDefault(), android.icu.text.MeasureFormat.FormatWidth.SHORT,
+                )
+                val magnitude = formatter.formatMeasures(*warning.parts.map { part ->
+                    android.icu.util.Measure(part.value, when (part.unit) {
+                        DriftUnit.DAY -> android.icu.util.MeasureUnit.DAY
+                        DriftUnit.HOUR -> android.icu.util.MeasureUnit.HOUR
+                        DriftUnit.MINUTE -> android.icu.util.MeasureUnit.MINUTE
+                        DriftUnit.SECOND -> android.icu.util.MeasureUnit.SECOND
+                    })
+                }.toTypedArray())
+                Text(remoteText(RemoteNodesText.resource(
+                    if (warning.ahead) L.remoteNodesStatusClockAhead else L.remoteNodesStatusClockBehind, magnitude,
+                )), color = MaterialTheme.colorScheme.error)
+            }
         }
         RemoteHeading(stringResource(L.remoteNodesSettingsDeviceActions))
         RemoteApply(L.remoteNodesSettingsSyncTime, editable) { confirm(L.remoteNodesSettingsSyncTime, helper::syncTime) }
@@ -143,7 +161,10 @@ internal fun RemoteApply(label: Int, enabled: Boolean, onClick: () -> Unit) {
 
 @Composable
 internal fun RemoteNumberField(label: Int, value: Double?, enabled: Boolean, onChange: (Double) -> Unit) {
-    var draft by remember(value) { mutableStateOf(value?.takeIf { it.isFinite() }?.toString().orEmpty()) }
+    var draft by remember { mutableStateOf(value?.takeIf { it.isFinite() }?.toString().orEmpty()) }
+    LaunchedEffect(value) {
+        if (value?.isFinite() == true && draft.toDoubleOrNull() != value) draft = value.toString()
+    }
     OutlinedTextField(
         draft, { draft = it; onChange(it.toDoubleOrNull() ?: Double.NaN) }, Modifier.fillMaxWidth(),
         label = { Text(stringResource(label)) }, enabled = enabled && value != null,
@@ -153,7 +174,10 @@ internal fun RemoteNumberField(label: Int, value: Double?, enabled: Boolean, onC
 
 @Composable
 internal fun RemoteIntegerField(label: Int, value: Long?, enabled: Boolean, onChange: (Long) -> Unit) {
-    var draft by remember(value) { mutableStateOf(value?.toString().orEmpty()) }
+    var draft by remember { mutableStateOf(value?.toString().orEmpty()) }
+    LaunchedEffect(value) {
+        if (value != null && value != Long.MIN_VALUE && draft.toLongOrNull() != value) draft = value.toString()
+    }
     OutlinedTextField(
         draft, { draft = it; onChange(it.toLongOrNull() ?: Long.MIN_VALUE) }, Modifier.fillMaxWidth(),
         label = { Text(stringResource(label)) }, enabled = enabled && value != null,
@@ -161,6 +185,21 @@ internal fun RemoteIntegerField(label: Int, value: Long?, enabled: Boolean, onCh
     )
 }
 
+@Composable
+private fun <T : Number> RemoteOptionField(label: Int, value: T?, options: List<T>, enabled: Boolean, onChange: (T) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    RemoteValue(stringResource(label), value?.toString() ?: NodeSettingsPresentation.EM_DASH)
+    Box {
+        TextButton({ expanded = true }, enabled = enabled && value != null && options.isNotEmpty()) {
+            Text(stringResource(label))
+        }
+        DropdownMenu(expanded, { expanded = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(text = { Text(option.toString()) }, onClick = { expanded = false; onChange(option) })
+            }
+        }
+    }
+}
 @Composable
 private fun RepeaterBehaviorContent(holder: RepeaterSettingsStateHolder, enabled: Boolean, confirm: (Int, suspend () -> Unit) -> Unit) {
     val state by holder.state.collectAsStateWithLifecycle()

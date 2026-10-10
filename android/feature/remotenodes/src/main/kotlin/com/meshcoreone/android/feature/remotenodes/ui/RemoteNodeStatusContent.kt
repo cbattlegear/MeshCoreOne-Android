@@ -64,7 +64,11 @@ internal fun RemoteNodeStatusContent(
                 }
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     Checkbox(filter.favoritesOnly, { filter = filter.copy(favoritesOnly = it) })
-                    Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapFilterFavorites))
+                    Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.trustedContactsFavoritesOnly))
+                }
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Checkbox(filter.showDiscovered, { filter = filter.withShowDiscovered(it) }, enabled = !filter.favoritesOnly)
+                    Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapCalloutDiscovered))
                 }
                 RemoteNodeMapContent(stringResource(L.remoteNodesStatusNeighborsMapTitle), plotted.points, plotted.lines, plotted.region)
                 plotted.unplottable.forEach { item ->

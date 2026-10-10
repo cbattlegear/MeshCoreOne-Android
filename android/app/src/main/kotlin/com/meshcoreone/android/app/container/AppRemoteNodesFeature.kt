@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.*
 import com.meshcoreone.android.core.services.device.FirmwareDeviceErrorCode
+import com.meshcoreone.android.core.services.device.RadioOptions
 import com.meshcoreone.android.core.services.remote.BinaryProtocolError
 import com.meshcoreone.android.core.services.remote.RemoteNodeError
 import com.meshcoreone.android.core.services.remote.RepeaterAdminService
@@ -22,6 +23,9 @@ import kotlinx.coroutines.flow.combine
 
 internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiDependencies =
     object : RemoteNodesUiDependencies {
+        override val radioOptions = RemoteRadioOptions(
+            RadioOptions.bandwidthsKHz, RadioOptions.spreadingFactors.toList(), RadioOptions.codingRates.toList(),
+        )
         override val updates = combine(
             connectionManager.snapshot, appState.servicesVersion, appState.contactsVersion, appState.sessionStateChangeCount,
         ) { _, _, _, _ ->

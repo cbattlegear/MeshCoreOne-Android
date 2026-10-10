@@ -103,7 +103,7 @@ fun RemoteNodesEntry(
                         TextButton({ initialHistory = false; selectedKey = "${session.radioId}:${session.publicKeyHex}" }) { Text(session.name) }
                     }
                 }
-                if (selected != null) key(selected.id, data.connection.generation, selected.permissionLevel) {
+                if (selected != null) key(selected.id, data.connection.generation, selected.permissionLevel, data.connection.ready) {
                     RemoteNodeManagementRoute(
                         selected, services, data.catalog, data.connection.ready && selected.isConnected && selected.radioId == data.connection.radioId,
                         Modifier.weight(.6f), onBack = { selectedKey = null },
@@ -114,6 +114,7 @@ fun RemoteNodesEntry(
                         },
                         cliContent = cliContent,
                         initialHistory = initialHistory,
+                        radioOptions = dependencies?.radioOptions,
                     )
                 }
             }

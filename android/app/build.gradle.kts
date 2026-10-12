@@ -62,6 +62,7 @@ dependencies {
     implementation("androidx.compose.material3.adaptive:adaptive:1.3.0")
     implementation("androidx.compose.material3.adaptive:adaptive-layout:1.3.0")
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(project(":core:testing"))
     androidTestImplementation(libs.androidx.room.runtime)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
@@ -98,6 +99,8 @@ android {
     sourceSets.getByName("test").kotlin.srcDir(
         "src/androidTest/kotlin/com/meshcoreone/android/app/navigation/cases",
     )
+    // AndroidOnly: WP-501 Test-only cross-component acceptance; never an APK source set.
+    sourceSets.getByName("test").kotlin.srcDir("../parity-tests/src/test/kotlin")
 
     // AndroidOnly: WP-504 Release optimization and isolated, non-shipping workload target.
     buildTypes.getByName("release") {
@@ -155,6 +158,9 @@ val prepareAppPlatformSdks = tasks.register<Sync>("prepareAppPlatformSdks") {
     into(layout.buildDirectory.dir("platform-sdks"))
 }
 tasks.withType<Test>().configureEach {
+    inputs.dir(rootProject.layout.projectDirectory.dir("core/testing/fixtures/reference-codec"))
+    systemProperty("referenceCodecFixtures",
+        rootProject.layout.projectDirectory.dir("core/testing/fixtures/reference-codec").asFile.absolutePath)
     dependsOn(prepareAppPlatformSdks)
     forkEvery = 1
     jvmArgumentProviders.add(ContentPlatformSdkArguments(

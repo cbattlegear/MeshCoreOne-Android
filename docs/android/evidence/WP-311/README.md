@@ -65,6 +65,21 @@ The exact-head candidate then found the merged `platform-widgets` lock lacked re
 memberships. Canonical lock generation produced the same support-file bytes already present on open
 WP-314 PR #157; this repair carries only that shared lock state and none of WP-314's product changes.
 
+### Native screen-level follow-up regressions
+
+Command (from `android/` in PowerShell):
+`.\gradlew.bat resolveScaffoldDependencies :feature:nodes:testDebugUnitTest --tests '*DiscoveryNativeTest' --tests '*DiscoveryViewModelTest' --tests '*ContactDetailNativeTest' --tests '*PathManagementNativeTest' --tests '*ContactPathActionsApi31ComposeTest' --tests '*ContactPathActionsApi37ComposeTest' --tests '*DiscoveryUiApi31ComposeTest' --tests '*DiscoveryUiApi37ComposeTest' --dependency-verification=strict --no-daemon --quiet --max-workers=1 "-Pkotlin.compiler.execution.strategy=in-process"`
+
+Result: exit 0; strict dependency resolution passed; JUnit XML contains **51 discovered, 51
+passed, 0 failures, 0 errors, 0 skipped**. The 6 native Compose screen tests ran under Robolectric
+native graphics at API31/API37, `w360dp-h900dp-mdpi`, RTL and 200% font scale. The disconnected
+Discovery screen test seeds the known radio's offline store, verifies the cached node is visible
+and no progress indicator or contact/radio action remains, and checks Add/Remove are visible with
+at least 48dp targets. The Contact Detail tests scroll to Discover/Edit/Reset Path and verify
+visible bounds and enabled 48dp targets while ready; while disconnected, all three actions remain
+visible with >=48dp targets and are disabled. The other 45 tests cover discovery holder, contact
+detail and path management behavior. `git diff --check` passed.
+
 The Gradle tasks also ran the repository localization/theme/notice checks. Their observed
 sub-suites were 74 localization converter tests, 22 theme converter tests and 4 theme-notice
 tests, all passing. These are supporting checks, not additional WP-311 acceptance counts.
@@ -115,3 +130,63 @@ sorting, delete masking/guarding, unresolvable hops, late discovery responses, g
 matching, hop de-duplication, scan claim ordering and ambiguous repeater resolution were each
 demonstrated to fail at least one owned test when mutated. Frozen Foundation string oracles remain
 under [`oracle/`](oracle/).
+
+## Follow-up #226/#228
+
+Base: `d8181418614a5acaa46f4acde54b741b492ac4b0`; initial implementation candidate:
+`fe67497f4de3b7223aa94860d582fc7b5261394d`. Earlier hosted-check head:
+`c8708313310b76df40be9e75a763fe90dac876e8`. The API31/37 viewport regression and its test
+configuration were added at `d6aa3a63c` and verified locally as recorded below. Frozen source:
+`db14559b39d32322b06477c6ae676112f583db50`. The controller-rendered WP-311
+manifest SHA-256 is `39bd73ab7759d7f65f7ecc681cd472e4763d8c8d3e9f5973bc0c515323611dda`;
+policy revision is `3fc0afa19ad31f0210a5d427f655ef90b50a8e64e818fe3420b188303b99fb20`.
+The merged prerequisite PRs are WP-312 #140 and WP-311 #153.
+
+Command:
+`./gradlew :feature:nodes:testDebugUnitTest --tests '*DiscoveryNativeTest' --tests '*DiscoveryViewModelTest' --tests '*ContactDetailNativeTest' --tests '*PathManagementNativeTest'`
+
+Result: BUILD SUCCESSFUL; 45 discovered, 45 passed, 0 failed, 0 errors, 0 skipped
+(DiscoveryNativeTest 9; DiscoveryViewModelTest 10; ContactDetailNativeTest 13;
+PathManagementNativeTest 13). The new discovery cases assert cached-radio offline reads,
+settled empty state with explicit localized errors when data is unavailable, and no radio action.
+
+The Contact Detail reflow also has local Compose semantics viewport regressions using Robolectric
+native graphics at API 31 and API 37, `w360dp-h900dp-mdpi`, RTL and 200% font scale. They scroll
+the real Contact Detail list and assert Discover, Edit and Reset Path have visible bounds and
+48dp targets in both states: enabled while ready, disabled while disconnected.
+
+Command:
+`./gradlew :feature:nodes:testDebugUnitTest --tests '*ContactPathActionsApi31ComposeTest' --tests '*ContactPathActionsApi37ComposeTest'`
+
+Result: BUILD SUCCESSFUL; 4 discovered, 4 passed, 0 failed, 0 errors, 0 skipped (two per API).
+
+The supplied WP-503 Compose selectors, including
+`offlineDiscoveryHasATextualCachedOutcomeInsteadOfAnUnownedIndefiniteSpinner` and its Reset Path
+`assertIsDisplayed` test, were not present in this worktree and are not claimed as rerun. The
+candidate adds its own native screen-level regressions at the required APIs and viewport; those
+assert equivalent #226/#228 outcomes without claiming the absent selector identities. An earlier
+exploratory version using virtual-looper-only waiting timed out at both APIs; the final harness
+uses bounded polling and drains the main looper before/after each activity, and the final tests
+pass. See the final combined result above. The manifest still declares no WP-311 verification
+command or trusted check identity; local Gradle results are not represented as controller/CI gate
+evidence. No emulator/device, hardware, iOS, signing or release evidence is claimed.
+
+### Exact-head dependency-lock repair
+
+Hosted run `38506813183` for head `c612bc3fa9fbb52f830107b9aee48f32c6d7a466` failed its Linux Android
+build at `:resolveScaffoldDependencies`: the feature-nodes lock recorded `androidx.compose.ui:ui-test`
+on `debugUnitTestLintChecksClasspath`, although the current native semantics test does not resolve
+that dependency. Related stale, lint-only test artifacts were also present. Those unused lock
+memberships were removed without weakening strict dependency verification; API31/API37 Robolectric
+SDK and actual test runtime lock entries remain.
+
+Command (from `android/`):
+`./gradlew resolveScaffoldDependencies :feature:nodes:testDebugUnitTest --tests '*DiscoveryNativeTest' --tests '*DiscoveryViewModelTest' --tests '*ContactDetailNativeTest' --tests '*PathManagementNativeTest' --tests '*ContactPathActionsApi31ComposeTest' --tests '*ContactPathActionsApi37ComposeTest' --dependency-verification=strict --no-daemon --quiet --max-workers=1 "-Pkotlin.compiler.execution.strategy=in-process"`
+
+Result: command exited 0; strict scaffold dependency resolution and all selected node tests completed
+successfully. JUnit XML records 47 tests, 47 passed, 0 failed, 0 errors, 0 skipped. This is local
+evidence only. Exact-head hosted run `38509337209` for
+`86d1692f71f703a62a316d43e904afce981b3547` then passed the Linux Android build (including strict
+scaffold dependency resolution), candidate classification, controller/workflow policy, required
+checklist and `android-ci`; both hosted Swift oracle jobs also passed. GitHub's exact-head result and
+log are authoritative; no duplicate CI bundle is retained.

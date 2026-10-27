@@ -5,10 +5,13 @@ import com.meshcoreone.android.core.connectivity.pairing.DevicePairingError
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.Test
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -31,7 +34,7 @@ class PairingConsentTest {
         assertNull(port.lastRemoved)
         assertEquals(0, port.pickerCalls)
         state.cancelSystemPairingSetup()
-        pairing.await()
+        assertFalse(pairing.await())
         assertEquals(listOf(leftover), port.paired)
         assertFalse(port.isPairingFlowActive)
     }
@@ -53,7 +56,7 @@ class PairingConsentTest {
         assertEquals(1, port.pickerCalls)
         picker.complete(Unit)
         confirmation.join()
-        pairing.await()
+        assertTrue(pairing.await())
         assertTrue(port.paired.isEmpty())
         assertFalse(state.connectionUI.isBusy)
         assertFalse(port.isPairingFlowActive)
@@ -116,6 +119,57 @@ class PairingConsentTest {
         assertFalse(port.isPairingFlowActive)
     }
 
+    @Test fun cancellingTimedRetryWaitsForPickerCleanup() =
+        cancellingRunningForegroundRetryWaitsForPickerCleanup(activate = false)
+
+    @Test fun cancellingActivationRetryWaitsForPickerCleanup() =
+        cancellingRunningForegroundRetryWaitsForPickerCleanup(activate = true)
+
+    private fun cancellingRunningForegroundRetryWaitsForPickerCleanup(activate: Boolean) = runTest {
+        val port = FakeConnectionPort()
+        port.paired += SystemPairedAccessory(UUID.randomUUID(), "Radio")
+        port.pickerOutcomes += { throw DevicePairingError.PickerUnavailable() }
+        val cleanupStarted = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        var cleanupFinished = false
+        port.beforePicker = {
+            if (port.pickerCalls == 2) {
+                try {
+                    awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) {
+                        cleanupStarted.complete(Unit)
+                        releaseCleanup.await()
+                        cleanupFinished = true
+                    }
+                }
+            }
+        }
+        val state = appStateOf(backgroundScope, port)
+        val pairing = async { state.startDeviceScanAndAwait() }
+        runCurrent()
+        state.confirmSystemPairingSetup()!!.join()
+        if (activate) state.handleBecameActive() else testScheduler.advanceTimeBy(1_000)
+        runCurrent()
+        try {
+            assertEquals(2, port.pickerCalls)
+            pairing.cancel()
+            runCurrent()
+            assertTrue(cleanupStarted.isCompleted)
+            assertFalse(pairing.isCompleted)
+            assertFalse(cleanupFinished)
+        } finally {
+            releaseCleanup.complete(Unit)
+        }
+        pairing.join()
+        assertTrue(pairing.isCancelled)
+        assertTrue(cleanupFinished)
+        assertFalse(state.connectionUI.isBusy)
+        assertFalse(state.isFreshPairingForegroundRetry)
+        assertFalse(state.connectionUI.shouldCompleteFreshPairingOnForeground)
+        assertFalse(port.isPairingFlowActive)
+    }
+
     @Test fun removalFailureIsVisibleAndDoesNotOpenThePickerOrReportSuccess() = runTest {
         val port = FakeConnectionPort()
         val leftover = SystemPairedAccessory(UUID.randomUUID(), "Radio")
@@ -125,7 +179,7 @@ class PairingConsentTest {
         val pairing = async { state.startDeviceScanAndAwait() }
         runCurrent()
         state.confirmSystemPairingSetup()!!.join()
-        pairing.await()
+        assertFalse(pairing.await())
         assertTrue(state.connectionUI.showingConnectionFailedAlert)
         assertNotNull(state.connectionUI.connectionFailedMessage)
         assertEquals(listOf(leftover), port.paired)

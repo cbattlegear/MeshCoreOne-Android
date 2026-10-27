@@ -34,7 +34,7 @@ connected cannot report that old link as new-pairing success. Failure state stay
 visible and maps to the existing typed onboarding result.
 
 Caller cancellation propagates as `CancellationException`. The operation cancels
-and joins its scan/confirmation work, cancels its deferred foreground retry and
+and joins its scan/confirmation work, cancels and joins its foreground retry and
 clears busy/deferral state. The non-cancellable section only completes owned
 cancellation cleanup before rethrowing; it does not convert cancellation into
 success. User dismissal remains a domain cancellation. No association is removed
@@ -54,10 +54,14 @@ original-family credit:
 | `PairingStrandedAssociationTests` enumeration, requested removal, declined removal | 5 | `PairingStrandedAssociationTest` in core connectivity |
 | `SystemPairingSetupAppStateTests` complete setup, sheet, foreground and re-entry matrix | 15 | `AppStateBehaviorTest` in App |
 
-`PairingConsentTest` adds seven deterministic consumer cases.
+`PairingConsentTest` adds nine deterministic consumer cases, including cancellation
+while timed and activation-triggered retries await suspending picker cleanup.
 `SystemPairingSetupTest` adds five mounted Compose cases, including system Back.
-`OnboardingConsentIntegrationTest` adds four cases through the real
+`OnboardingConsentIntegrationTest` adds five cases through the real
 `AppStateOnboardingHost`, `PairingCoordinator` and Room-backed process graph.
+Successful discovery is held at the transport connect boundary: the host must
+remain pending until the real graph is ready and App services are wired, then
+return `Connected`, not `Cancelled`.
 `OnboardingGateTest` additionally proves mounting above both root branches.
 
 ## Verification contract

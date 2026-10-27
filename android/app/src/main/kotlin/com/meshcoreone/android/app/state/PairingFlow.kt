@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -46,6 +47,7 @@ class PairingFlow(
         private set
     private var setupConfirmationJob: Job? = null
     private var foregroundRetryJob: Job? = null
+    private var foregroundPairingJob: Job? = null
     private var freshPairingCompletion = 0L
 
     /** Returns true only after a fresh pairing completed; an existing live radio is not consent or success. */
@@ -63,6 +65,8 @@ class PairingFlow(
             withContext(NonCancellable) {
                 scan.cancelAndJoin()
                 setupConfirmationJob?.cancelAndJoin()
+                foregroundRetryJob?.cancelAndJoin()
+                foregroundPairingJob?.cancelAndJoin()
                 cancelSystemPairingSetup()
                 ui.isBusy = false
             }
@@ -124,6 +128,7 @@ class PairingFlow(
     fun cancelSystemPairingSetup() {
         foregroundRetryJob?.cancel()
         foregroundRetryJob = null
+        foregroundPairingJob?.cancel()
         ui.shouldCompleteFreshPairingOnForeground = false
         isFreshPairingForegroundRetry = false
         connection.isPairingFlowActive = false
@@ -212,8 +217,9 @@ class PairingFlow(
         }
     }
 
-    suspend fun resumeFreshPairingIfNeeded() {
-        if (!ui.shouldCompleteFreshPairingOnForeground) return
+    suspend fun resumeFreshPairingIfNeeded() = coroutineScope {
+        if (!ui.shouldCompleteFreshPairingOnForeground) return@coroutineScope
+        foregroundPairingJob = coroutineContext[Job]
         ui.shouldCompleteFreshPairingOnForeground = false
         isFreshPairingForegroundRetry = true
         ui.isBusy = true
@@ -221,6 +227,7 @@ class PairingFlow(
         try {
             withPairingFlowErrorHandling { completeFreshPairing() }
         } finally {
+            foregroundPairingJob = null
             ui.isBusy = false
             isFreshPairingForegroundRetry = false
             if (!ui.shouldCompleteFreshPairingOnForeground) connection.isPairingFlowActive = false

@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.app.container.onboarding.AppStateOnboardingHost
 import com.meshcoreone.android.feature.onboarding.OnboardingConnectOutcome
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.runTest
@@ -15,6 +16,41 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class OnboardingConsentIntegrationTest : RoomProcessTest() {
+    @Test fun successfulPairingReturnsConnectedOnlyAfterTheRealServiceGraphIsWired() = runTest {
+        val h = ContainerHarness(this, store)
+        val connectGate = CompletableDeferred<Unit>()
+        try {
+            val leftover = UUID.randomUUID()
+            val selected = UUID.randomUUID()
+            h.pairing.registered[leftover] = "Leftover radio"
+            h.pairing.discovery = { selected }
+            h.links.configureRadio = { it.connectGate = connectGate }
+            val request = async { AppStateOnboardingHost(h.container).startPairing() }
+            h.eventually("setup prompt") { h.appState.connectionUI.pendingSystemPairingSetup != null }
+            val confirmation = assertNotNull(h.appState.confirmSystemPairingSetup())
+            h.eventually("new radio connect", virtualBudgetMillis = 10_000) { h.links.radios.isNotEmpty() }
+            assertFalse(request.isCompleted)
+            assertFalse(confirmation.isCompleted)
+            assertNull(h.appState.services)
+            assertEquals(0, h.appState.servicesVersion.value)
+            connectGate.complete(Unit)
+            h.eventually("completed fresh pairing", virtualBudgetMillis = 10_000) { request.isCompleted }
+            assertEquals(OnboardingConnectOutcome.Connected, request.await())
+            confirmation.join()
+            h.assertReady()
+            val graph = assertNotNull(h.sessions.current)
+            assertEquals(graph, h.appState.services)
+            assertEquals(graph.syncCoordinator, h.appState.syncCoordinator)
+            assertTrue(h.appState.servicesVersion.value > 0)
+            assertEquals(listOf(leftover), h.pairing.removed)
+            assertFalse(h.appState.connectionUI.isBusy)
+            assertFalse(h.container.connectionPort.isPairingFlowActive)
+        } finally {
+            connectGate.complete(Unit)
+            h.container.close()
+        }
+    }
+
     @Test fun actualOnboardingHostWaitsForConsentAndRejectingPreservesTheRegistry() = runTest {
         val h = ContainerHarness(this, store)
         try {

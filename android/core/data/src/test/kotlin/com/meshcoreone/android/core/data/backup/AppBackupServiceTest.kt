@@ -5,7 +5,12 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import java.io.ByteArrayInputStream
+import java.util.Base64
+import java.util.zip.Inflater
+import java.util.zip.InflaterInputStream
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -58,11 +63,44 @@ class AppBackupServiceTest : BackupRoomTest() {
 
     @OriginalCase("AppBackupServiceTests::Export output is smaller than raw JSON for large payloads()")
     @Test fun compressionHasActualRatio() = runBlocking {
-        seed(envelope(devices = listOf(device()), contacts = (1..20).map { contact(publicKey = key(it), id = id(20L + it)) }))
+        val sourceKeys = (0 until 20).map { value ->
+            Bytes(ByteArray(32) { (value % 255 + 1).toByte() } + byteArrayOf((value / 255).toByte()))
+        }
+        assertCompressionPreservesKeys(sourceKeys, 33)
+    }
+
+    // AndroidOnly: WP-203 Canonical native input is supplemental, not the source's 33-byte fixture.
+    @Test fun canonical32ByteContactKeysAlsoRetainCompressionPredicate() = runBlocking {
+        assertCompressionPreservesKeys((1..20).map(::key), 32)
+    }
+
+    private suspend fun assertCompressionPreservesKeys(expectedKeys: List<Bytes>, expectedWidth: Int) {
+        seed(envelope(devices = listOf(device()), contacts = expectedKeys.mapIndexed { index, publicKey ->
+            contact(publicKey = publicKey, id = id(21L + index))
+        }))
         val result = service.export(store)
-        val expanded = result.data.zlibDecompressed(BackupContract.MAX_EXPANDED_BYTES)
+        val inflater = Inflater(true)
+        val expanded = try {
+            InflaterInputStream(ByteArrayInputStream(result.data.toByteArray()), inflater).use { input ->
+                val bytes = input.readNBytes(64 * 1024)
+                assertEquals("The twenty-contact fixture must fit the bounded independent decoder", -1, input.read())
+                assertTrue(inflater.finished())
+                bytes
+            }
+        } finally {
+            inflater.end()
+        }
         assertTrue(expanded.size > result.data.size)
-        assertEquals(20, codec.parseBackup(result.data).contacts.size)
+        val jsonKeys = backupJson.parseToJsonElement(expanded.toString(Charsets.UTF_8)).jsonObject
+            .getValue("contacts").jsonArray.map { it.jsonObject.getValue("publicKey").jsonPrimitive.content }
+        assertEquals(20, jsonKeys.size)
+        assertEquals(expectedKeys.map { Base64.getEncoder().encodeToString(it.toByteArray()) }.toSet(), jsonKeys.toSet())
+        assertTrue(jsonKeys.all { Base64.getDecoder().decode(it).size == expectedWidth })
+        val decoded = codec.parseBackup(result.data)
+        assertEquals(20, decoded.contacts.size)
+        assertEquals(expectedKeys.toSet(), decoded.contacts.map { it.publicKey }.toSet())
+        assertTrue(decoded.contacts.all { it.publicKey.size == expectedWidth })
+        assertEquals(expectedKeys.toSet(), db.contacts().forRadio(RADIO.value).map { it.publicKey }.toSet())
     }
 
     @OriginalCase("AppBackupServiceTests::Envelope contains expected version()")
@@ -112,8 +150,16 @@ class AppBackupServiceTest : BackupRoomTest() {
         seed(envelope(devices = listOf(sensitive)))
         val exported = codec.parseBackup(service.export(store).data).devices.single()
         assertNotEquals(sensitive.id, exported.id)
-        assertEquals(sensitive.redactedForBackup(exported.id), exported)
+        val expected = sensitive.copy(id = exported.id, blePin = 0u, frequency = 915000u, bandwidth = 250000u,
+            spreadingFactor = 10u, codingRate = 5u, txPower = 20, maxTxPower = 20, latitude = 0.0, longitude = 0.0,
+            clientRepeat = false, pathHashMode = 0u, preRepeatFrequency = null, preRepeatBandwidth = null,
+            preRepeatSpreadingFactor = null, preRepeatCodingRate = null, autoAddConfig = 0u, autoAddMaxHops = 0u,
+            telemetryModeBase = 2u, telemetryModeLoc = 0u, telemetryModeEnv = 0u, advertLocationPolicy = 0u,
+            manualAddContacts = false, multiAcks = 2u, appliedRadioPresetID = null,
+            connectionMethods = SnapshotList.of(ConnectionMethod.WiFi("10.0.0.2", 5000u, "WiFi")))
+        assertEquals(expected, exported)
         assertEquals(0u, exported.blePin); assertEquals(915000u, exported.frequency); assertEquals(250000u, exported.bandwidth)
+        assertEquals(10.toUByte(), exported.spreadingFactor); assertEquals(5.toUByte(), exported.codingRate)
         assertEquals(20.toByte(), exported.txPower); assertEquals(20.toByte(), exported.maxTxPower)
         assertEquals(0.0, exported.latitude, 0.0); assertEquals(0.0, exported.longitude, 0.0)
         assertFalse(exported.clientRepeat); assertEquals(0.toUByte(), exported.pathHashMode)
@@ -161,14 +207,20 @@ class AppBackupServiceTest : BackupRoomTest() {
 
     @OriginalCase("AppBackupServiceTests::Redacted device round-trips through export and import with safe defaults()")
     @Test fun redactedDeviceRoundTripHasSafeDefaults() = runBlocking {
-        seed(envelope(devices = listOf(device(publicKey = key(0xF8)).copy(blePin = 999999u, frequency = 433000u, txPower = 10))))
+        val sensitive = device(publicKey = key(0xF8)).copy(blePin = 999999u, frequency = 433000u, txPower = 10)
+        seed(envelope(devices = listOf(sensitive)))
         val actual = codec.parseBackup(service.export(store).data)
-        db.devices().delete(id(1))
-        val result = service.importBackup(actual, store)
-        assertEquals(1L, result.count(BackupModelKind.DEVICES).inserted)
-        val restored = db.devices().all().single().toDTO()
-        assertEquals(0u, restored.blePin); assertEquals(915000u, restored.frequency); assertEquals(20.toByte(), restored.txPower)
-        assertEquals(key(0xF8), restored.publicKey)
+        withIndependentStore { destination, destinationStore ->
+            assertNotSame(db, destination)
+            assertTrue(destination.devices().all().isEmpty())
+            val result = service.importBackup(actual, destinationStore)
+            assertEquals(1L, result.count(BackupModelKind.DEVICES).inserted)
+            val restored = destination.devices().all().single().toDTO()
+            assertEquals(0u, restored.blePin); assertEquals(915000u, restored.frequency); assertEquals(20.toByte(), restored.txPower)
+            assertEquals(key(0xF8), restored.publicKey)
+            assertNotEquals(sensitive.id, restored.id)
+            assertEquals(sensitive, db.devices().all().single().toDTO())
+        }
     }
 
     @OriginalCase("AppBackupServiceTests::Importing same backup twice results in zero inserts on second pass()")

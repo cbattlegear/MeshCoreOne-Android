@@ -22,7 +22,13 @@ from controller.ledger import Identity, Ledger
 from controller.schema import load_json
 from controller.scope_amendment import (
     bubble_consumer_predecessor, disposable_predecessor, parity_support_predecessor, room_cleanup_predecessor,
-    room_failed_event_predecessor,
+    room_failed_event_predecessor, wp503_accessibility_source_binding_predecessor,
+    room_failed_event_predecessor, consumer_support_predecessor, host_scoped_jvm_predecessor,
+    backup_post_commit_predecessor,
+    rx_projection_regression_predecessor,
+    shared_location_cache_predecessor,
+    reaction_wire_classification_predecessor,
+    shortcut_lifecycle_test_predecessor,
 )
 from local import debug_packaging
 
@@ -2153,6 +2159,101 @@ class DisposableGuestTests(unittest.TestCase):
         self.assertEqual(current, before)
         self.assertEqual(disposable_predecessor(previous), previous)
         text = (REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8")
+        start = text.index('      {\n        "id": "wp404-shortcut-lifecycle-consumer-test",')
+        end = text.index('      {\n        "id": "wp216-reaction-wire-classification",', start)
+        text = text[:start] + text[end:]
+        self.assertEqual(json.loads(text), shortcut_lifecycle_test_predecessor(current))
+        self.assertEqual(json.loads(text), json.loads(subprocess.check_output([
+            "git", "-C", str(REPO), "show",
+            "61fc048e1780173e2603013a8b6d0233d0d63c3b:docs/android/automation-policy.json",
+        ])))
+        self.assertEqual(subprocess.check_output([
+            "git", "-C", str(REPO), "hash-object", "--path=docs/android/automation-policy.json", "--stdin",
+        ], input=text.encode()).strip(), subprocess.check_output([
+            "git", "-C", str(REPO), "rev-parse",
+            "61fc048e1780173e2603013a8b6d0233d0d63c3b:docs/android/automation-policy.json",
+        ]).strip())
+        start = text.index('      {\n        "id": "wp216-reaction-wire-classification",')
+        end = text.index('      {\n        "id": "wp404-shared-location-producer-cache",', start)
+        text = text[:start] + text[end:]
+        self.assertEqual(json.loads(text), reaction_wire_classification_predecessor(current))
+        self.assertEqual(json.loads(text), json.loads(subprocess.check_output([
+            "git", "-C", str(REPO), "show",
+            "de20d1a6f3ff97068076204504ca7c854044bb77:docs/android/automation-policy.json",
+        ])))
+        self.assertEqual(subprocess.check_output([
+            "git", "-C", str(REPO), "hash-object", "--path=docs/android/automation-policy.json", "--stdin",
+        ], input=text.encode()).strip(), subprocess.check_output([
+            "git", "-C", str(REPO), "rev-parse",
+            "de20d1a6f3ff97068076204504ca7c854044bb77:docs/android/automation-policy.json",
+        ]).strip())
+        start = text.index('      {\n        "id": "wp404-shared-location-producer-cache",')
+        end = text.index('      {\n        "id": "wp201-rx-projection-source-regressions",', start)
+        text = text[:start] + text[end:]
+        self.assertEqual(json.loads(text), shared_location_cache_predecessor(current))
+        self.assertEqual(json.loads(text), json.loads(subprocess.check_output([
+            "git", "-C", str(REPO), "show",
+            "d2b649421ae7f31b2ef94b7dee20894abe658d22:docs/android/automation-policy.json",
+        ])))
+        self.assertEqual(subprocess.check_output([
+            "git", "-C", str(REPO), "hash-object", "--path=docs/android/automation-policy.json", "--stdin",
+        ], input=text.encode()).strip(), subprocess.check_output([
+            "git", "-C", str(REPO), "rev-parse",
+            "d2b649421ae7f31b2ef94b7dee20894abe658d22:docs/android/automation-policy.json",
+        ]).strip())
+        start = text.index('      {\n        "id": "wp201-rx-projection-source-regressions",')
+        end = text.index('      {\n        "id": "wp203-backup-post-commit-delivery",', start)
+        text = text[:start] + text[end:]
+        self.assertEqual(json.loads(text), rx_projection_regression_predecessor(current))
+        self.assertEqual(subprocess.check_output([
+            "git", "-C", str(REPO), "hash-object", "--path=docs/android/automation-policy.json", "--stdin",
+        ], input=text.encode()).strip(), subprocess.check_output([
+            "git", "-C", str(REPO), "rev-parse",
+            "3498dead5e5cad13d71936d95ddd6860b7217c8c:docs/android/automation-policy.json",
+        ]).strip())
+        start = text.index('      {\n        "id": "wp203-backup-post-commit-delivery",')
+        end = text.index('      {\n        "id": "persistence-schemas",', start)
+        text = text[:start] + text[end:]
+        self.assertEqual(json.loads(text), backup_post_commit_predecessor(current))
+        self.assertEqual(subprocess.check_output([
+            "git", "-C", str(REPO), "hash-object", "--path=docs/android/automation-policy.json", "--stdin",
+        ], input=text.encode()).strip(), subprocess.check_output([
+            "git", "-C", str(REPO), "rev-parse",
+            "610f606ba:docs/android/automation-policy.json",
+        ]).strip())
+        start = text.index('      {\n        "id": "wp003-host-scoped-jvm-parallelism",')
+        end = text.index('      {\n        "id": "disposable-native-guest",', start)
+        text = text[:start] + text[end:]
+        self.assertEqual(json.loads(text), host_scoped_jvm_predecessor(current))
+        self.assertEqual(subprocess.check_output([
+            "git", "-C", str(REPO), "hash-object", "--path=docs/android/automation-policy.json", "--stdin",
+        ], input=text.encode()).strip(), subprocess.check_output([
+            "git", "-C", str(REPO), "rev-parse",
+            "a8c624bcb095f81a30e5fee671099fa519f608b7:docs/android/automation-policy.json",
+        ]).strip())
+        start = text.index(',\n      {\n        "id": "wp503-accessibility-source-binding",')
+        end = text.index("\n    ]", start)
+        text = text[:start] + text[end:]
+        self.assertEqual(json.loads(text), wp503_accessibility_source_binding_predecessor(current))
+        self.assertEqual(subprocess.check_output([
+            "git", "-C", str(REPO), "hash-object", "--path=docs/android/automation-policy.json", "--stdin",
+        ], input=text.encode()).strip(), subprocess.check_output([
+            "git", "-C", str(REPO), "rev-parse",
+            "f2f481d2e7c2a9029808943529c98c98ef879299:docs/android/automation-policy.json",
+        ]).strip())
+        start = text.index('      {\n        "id": "wp405-uri-region-normalization",')
+        end = text.index('      {\n        "id": "wp-owned",', start)
+        text = text[:start] + text[end:]
+        self.assertEqual(
+            json.loads(text),
+            consumer_support_predecessor(wp503_accessibility_source_binding_predecessor(current)),
+        )
+        self.assertEqual(subprocess.check_output([
+            "git", "-C", str(REPO), "hash-object", "--path=docs/android/automation-policy.json", "--stdin",
+        ], input=text.encode()).strip(), subprocess.check_output([
+            "git", "-C", str(REPO), "rev-parse",
+            "263d30332940f09082709b9d38ee8877dfb9fedd:docs/android/automation-policy.json",
+        ]).strip())
         start = text.index('      {\n        "id": "wp502-room-failed-event-consumer",')
         end = text.index('      {\n        "id": "dependency-resolution-metadata",', start)
         text = text[:start] + text[end:]
@@ -2201,7 +2302,8 @@ class DisposableGuestTests(unittest.TestCase):
         ]).strip())
         for kind in ("resource", "duplicate", "operation", "wp", "path"):
             changed = copy.deepcopy(current)
-            rule = changed["reservation_policy"]["capabilities"][0]
+            rule = next(r for r in changed["reservation_policy"]["capabilities"]
+                        if r["id"] == "disposable-native-guest")
             if kind == "resource":
                 changed["reservation_policy"]["hard_lock_resources"].remove(RESOURCE)
             elif kind == "duplicate":

@@ -520,9 +520,10 @@ class ConnectionManager(
             com.meshcoreone.android.core.protocol.model.AutoAddConfig(0u),
         ) { session.getAutoAddConfig() }
         requireCurrent(owner)
-        val methods = (owner.target as? ConnectionTarget.WiFi)?.let {
-            listOf(ConnectionMethod.WiFi(it.host, it.port))
-        } ?: emptyList()
+        val methods = when (val target = owner.target) {
+            is ConnectionTarget.Bluetooth -> listOf(ConnectionMethod.Bluetooth(target.deviceId))
+            is ConnectionTarget.WiFi -> listOf(ConnectionMethod.WiFi(target.host, target.port))
+        }
         val device = DeviceDTO.fromConnection(deviceId, radioId, info, capabilities, autoAdd, prior, methods, clock.instant)
         val ownership = FactoryOwnership(token)
         // Publish the ownership under the same lock closeGeneration takes: either teardown already ended this
@@ -535,6 +536,7 @@ class ConnectionManager(
                 channelSyncAttempted = { synchronized(lock) { if (isCurrent(owner)) attemptedSync = radioId to clock.instant } },
                 reconcileIdentity = { reconcileIdentity(token) },
             ),
+            transportType = link.type,
         ), ownership)
         ownership.verifyReturned(services)
         synchronized(lock) {

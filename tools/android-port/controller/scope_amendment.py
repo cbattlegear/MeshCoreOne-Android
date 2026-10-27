@@ -3,6 +3,7 @@
 import copy
 from pathlib import Path
 
+from .capabilities import CapabilityEngine
 from .errors import PortError
 from .schema import digest, load_json
 
@@ -382,10 +383,766 @@ ROOM_FAILED_EVENT_CAPABILITY = {
 }
 
 
+WP503_ACCESSIBILITY_SOURCE_BINDING_CAPABILITIES = [
+    {
+        "id": "wp503-accessibility-source-binding",
+        "work_packages": ["WP-503"],
+        "path_rules": ["android/accessibility-tests/language_binding.py"],
+        "operations": ["add-or-update-validator-rule"],
+        "invariants": [
+            "immutable-historical-producer-path-blob",
+            "distinct-current-candidate-path-blob-bound-to-candidate-head",
+            "producer-ancestry-and-selected-fixture-method-identities",
+            "reject-historical-pin-current-pin-and-unrelated-source-drift",
+            "no-fake-refreshed-compatibility",
+        ],
+        "validation": [
+            "positive historical and candidate source-binding assertions",
+            "negative mutation tests for historical pins current pins and unrelated source drift",
+            "exact-candidate validator checks and independent source review before policy landing",
+            "native and Gradle execution locks remain unchanged",
+        ],
+    },
+    {
+        "id": "wp503-accessibility-source-binding-regression",
+        "work_packages": ["WP-503"],
+        "path_rules": ["android/accessibility-tests/test_language_binding.py"],
+        "operations": ["add-regression-fixture-or-test"],
+        "invariants": [
+            "preserve-original-fixture-and-selected-method-assertions",
+            "test-historical-and-current-source-bindings-independently",
+            "reject-historical-current-and-unrelated-source-drift",
+        ],
+        "validation": [
+            "positive historical and candidate binding cases",
+            "negative historical pin current pin and unrelated source mutation cases",
+            "nonzero execution of the declared WP-503 validator suite",
+        ],
+    },
+]
+
+CONSUMER_SUPPORT_CAPABILITIES = [
+    {
+        "id": "wp405-uri-region-normalization",
+        "work_packages": ["WP-405"],
+        "path_rules": [
+            "android/feature/chats/src/main/kotlin/com/meshcoreone/android/feature/chats/list/MeshCoreLinkParser.kt",
+        ],
+        "operations": ["repair-uri-region-normalization"],
+        "invariants": [
+            "pinned-source-db14559b39d32322b06477c6ae676112f583db50-primary-provenance-unchanged",
+            "REGION-only-reuse-existing-utf8Prefix-graphemes-and-MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES-30",
+            "trim-and-nil-empty-after-cap-preserved-no-broader-Unicode-trim-equivalence-claim",
+            "contact-map-scheme-host-path-query-decoding-validation-encoding-secrets-and-failure-unchanged",
+            "actual-external-chat-QR-join-and-local-region-persistence-not-parser-only-credit",
+            "no-protocol-helper-test-resource-build-or-feature-subtree-expansion",
+            "trusted-main-admission-before-product-edit-same-owner-advisory-evolution",
+            "semantic-overlap-serialize-or-transfer-current-producer-no-native-or-Gradle-lock-change",
+        ],
+        "validation": [
+            "exact WP405 path and named-operation admission; other-WP path and operation denial",
+            "future WP405 owned App consumer tests: padded40ASCII becomes30; 29ASCII-plus-combining-grapheme stays29 through external chat and QR joins",
+            "future nil-empty and explicit-secret consumers preserve actual persisted region and secret; no fabricated original-family credit",
+            "affected declared module verification with nonzero discovery and trusted ownership/traceability validators",
+        ],
+    },
+    {
+        "id": "wp201-active-connection-method",
+        "work_packages": ["WP-201"],
+        "path_rules": [
+            "android/core/runtime/src/main/kotlin/com/meshcoreone/android/core/runtime/ConnectionManager.kt",
+        ],
+        "operations": ["persist-active-connection-method"],
+        "invariants": [
+            "pinned-source-db14559b39d32322b06477c6ae676112f583db50-primary-provenance-unchanged",
+            "establish-only-exhaustive-current-Bluetooth-target-deviceId-or-WiFi-host-port-method",
+            "actual-session-identity-to-DeviceDTO-fromConnection-and-DevicePersisting-saveDevice-boundary",
+            "preserve-WiFi-replace-stale-BLE-on-public-key-match-stable-radioId-distinct-from-endpoint",
+            "one-saved-row-no-dropped-preferences-no-merger-lifecycle-service-input-or-heartbeat-rewrite",
+            "WP201-first-ConnectionManager-producer-WP214-serializes-after-its-result",
+            "trusted-main-admission-before-product-edit-same-owner-advisory-evolution",
+            "semantic-overlap-serialize-or-transfer-current-producer-no-native-or-Gradle-lock-change",
+        ],
+        "validation": [
+            "exact WP201 source path and named-operation admission; generic modify create delete and other-WP denial",
+            "future real RuntimeFixture session-to-save tests retain fresh-BLE existing-WiFi and stale-BLE-replacement pinned families",
+            "future endpoint-versus-radioId single-row preferences and existing WiFi behavior assertions",
+            "affected declared runtime verification with nonzero discovery and trusted ownership/traceability validators",
+        ],
+    },
+    {
+        "id": "wp201-connection-method-regression",
+        "work_packages": ["WP-201"],
+        "path_rules": [
+            "android/core/runtime/src/test/kotlin/com/meshcoreone/android/core/runtime/DeviceConnectionMethodPersistenceTest.kt",
+        ],
+        "operations": ["add-connection-method-persistence-regression"],
+        "invariants": [
+            "create-update-and-test-only-this-exact-regression-no-generic-runtime-test-authority",
+            "real-existing-RuntimeFixture-MeshCoreSession-to-saveDevice-not-direct-DTO-only-proxy",
+            "retain-three-pinned-DevicePublicKeyDeduplicationTests-families-no-assertion-weakening",
+            "fresh-BLE-existing-WiFi-stale-BLE-replacement-radioId-endpoint-and-preferences-asserted",
+            "no-RuntimeTestSupport-build-dependency-or-source-ownership-edit",
+            "trusted-main-admission-before-product-edit-same-owner-advisory-evolution",
+            "semantic-overlap-serialize-or-transfer-current-producer-no-native-or-Gradle-lock-change",
+        ],
+        "validation": [
+            "exact WP201 test path and named-operation admission; source sibling other-WP and generic-operation denial",
+            "future declared runtime test runner discovers and passes all three source families with real save-boundary assertions",
+            "trusted ownership/traceability validators; policy regressions are not product acceptance",
+        ],
+    },
+    {
+        "id": "wp214-active-link-channel-sync-input",
+        "work_packages": ["WP-214"],
+        "path_rules": [
+            "android/core/runtime/src/main/kotlin/com/meshcoreone/android/core/runtime/RuntimePorts.kt",
+            "android/core/runtime/src/main/kotlin/com/meshcoreone/android/core/runtime/ConnectionManager.kt",
+            "android/core/runtime/src/test/kotlin/com/meshcoreone/android/core/runtime/RuntimeOwnershipTest.kt",
+        ],
+        "operations": ["add-active-link-channel-sync-input"],
+        "invariants": [
+            "pinned-source-db14559b39d32322b06477c6ae676112f583db50-primary-provenance-unchanged",
+            "RuntimeServiceInputs-required-transportType-TransportType-no-default-or-saved-endpoint-inference",
+            "sole-real-ConnectionManager-establish-factory-call-forwards-actual-link-type-per-generation",
+            "modify-existing-exact-source-and-RuntimeOwnershipTest-only-no-test-helper-or-runtime-subtree-expansion",
+            "preserve-WP201-DeviceDTO-endpoint-semantics-platform-detection-and-unknown-WiFi-fallback",
+            "preserve-ownership-teardown-cancellation-cooldowns-READY-only-heartbeat-and-saved-endpoints",
+            "WP214-waits-for-WP201-ConnectionManager-producer-result-before-overlapping-product-edit",
+            "trusted-main-admission-before-product-edit-same-owner-advisory-evolution",
+            "semantic-overlap-serialize-or-transfer-current-producer-no-native-or-Gradle-lock-change",
+        ],
+        "validation": [
+            "exact WP214 three-path named-operation admission; other-WP sibling path generic-operation and cross-purpose denial",
+            "future RuntimeOwnershipTest factory-input assertions observe actual BLE WiFi and replacement-generation RuntimeLink.type",
+            "future real App channel-sync consumer retains typed-error and pipeline behavior; no source-family credit from support policy",
+            "affected declared module verification with nonzero discovery and trusted ownership/traceability validators",
+        ],
+    },
+    {
+        "id": "wp211-regional-label-localization",
+        "work_packages": ["WP-211"],
+        "path_rules": [
+            "android/app/src/main/kotlin/com/meshcoreone/android/app/container/onboarding/OnboardingRegionPresets.kt",
+            "android/app/src/main/kotlin/com/meshcoreone/android/app/container/onboarding/AppOnboarding.kt",
+            "android/app/src/main/kotlin/com/meshcoreone/android/app/container/AndroidAppContainerFactory.kt",
+            "android/app/src/test/kotlin/com/meshcoreone/android/app/container/onboarding/OnboardingRegionPresetAdapterTest.kt",
+            "android/ui-tests/src/test/kotlin/com/meshcoreone/android/uitests/OnboardingRegionPresetComposeTest.kt",
+        ],
+        "operations": ["repair-regional-label-localization"],
+        "invariants": [
+            "pinned-source-db14559b39d32322b06477c6ae676112f583db50-primary-provenance-unchanged",
+            "modify-five-existing-files-only-actual-app-locale-resources-to-mounted-ServicesRegionCatalog",
+            "factory-OnboardingPlatform-regional-resource-provider-and-import-only-other-factory-blocks-unchanged",
+            "current-app-localized-resources-per-call-including-API31-32-AppLanguages-attach-no-frozen-Application-default-locale",
+            "reuse-generated-RegionalSubdivisionNames-and-core-RegionalAreas-injection-no-shared-resource-edit",
+            "localized-subdivision-sort-label-and-selected-region-display-through-real-picker",
+            "preserve-stable-country-subdivision-IDs-selection-persistence-presets-US-CA-short-form",
+            "preserve-nonUS-AU-disambiguation-Pennsylvania-Texas-and-English-fallback-original-text",
+            "no-new-strings-generator-services-Android-dependency-translation-provider-or-onboarding-redesign",
+            "no-RxLog-ConnectedDeviceEditor-WP212-or-general-App-write-expansion",
+            "trusted-main-admission-before-product-edit-same-owner-advisory-evolution",
+            "semantic-overlap-serialize-or-transfer-current-producer-no-native-or-Gradle-lock-change",
+        ],
+        "validation": [
+            "exact WP211 five-path named-operation admission; other-WP sibling path generic-operation and cross-purpose denial",
+            "future App adapter and mounted OnboardingRegionPresetComposeTest assert retained French German labels through production catalog and picker",
+            "future affected declared module build lint tests with positive nonzero discovery and trusted ownership/traceability validators",
+            "policy regressions are not mounted UI native accessibility or original-family acceptance",
+        ],
+    },
+    {
+        "id": "wp003-scoped-local-verification",
+        "work_packages": ["WP-003"],
+        "path_rules": [
+            "tools/android-port/local/check.py",
+            "tools/android-port/local/fast.py",
+            "tools/android-port/local/run.sh",
+            "tools/android-port/local/hook_test.py",
+        ],
+        "operations": ["wire-scoped-local-verification"],
+        "invariants": [
+            "modify-four-existing-runner-regression-files-only-no-blanket-local-tree",
+            "preserve-trusted-repository-and-installed-runtime-namespace-no-installation-or-namespace-fallback",
+            "preserve-native-Gradle-install-hard-lock-admission-supervision-owned-cleanup-and-execution-identity",
+            "actual-complete-candidate-diff-immutable-current-trusted-base-head-tree-binding",
+            "requested-scopes-cannot-omit-changed-paths-or-verification-obligations",
+            "fixed-declared-task-selections-only-no-arbitrary-Gradle-override",
+            "strict-nonzero-test-discovery-no-failures-errors-skips-or-success-shaped-fallback",
+            "default-full-prepush-and-result-semantics-unchanged-unclassifiable-or-build-change-full-fallback",
+            "existing-hook_test-and-owned-test_local_scope-regressions-no-test-weakening",
+            "pinned-source-db14559b39d32322b06477c6ae676112f583db50-primary-provenance-unchanged",
+            "trusted-main-admission-before-consumer-edit-same-owner-advisory-evolution",
+            "semantic-overlap-serialize-or-transfer-current-producer-no-native-or-Gradle-lock-change",
+        ],
+        "validation": [
+            "exact WP003 four-path named-operation admission; other-WP sibling path generic-operation and cross-purpose denial",
+            "future actual candidate-diff selector and hook regressions retain default full and nonblocking prepush results",
+            "future stale-base-head-tree namespace interlock supervision cleanup omitted-path arbitrary-task and zero-test negative regressions",
+            "declared controller and local runner suites with nonzero discovery; no policy self-consumption runtime deployment or native execution",
+        ],
+    },
+]
+
+
+HOST_SCOPED_JVM_CAPABILITY = {
+    "id": "wp003-host-scoped-jvm-parallelism",
+    "work_packages": ["WP-003"],
+    "path_rules": [
+        "tools/android-port/local/check.py",
+        "tools/android-port/local/fast.py",
+        "tools/android-port/local/run.sh",
+        "tools/android-port/local/hook_test.py",
+        "tools/android-port/local/advisory.py",
+    ],
+    "operations": ["implement-host-scoped-jvm-lanes"],
+    "invariants": [
+        "source-only-host-lane-JVM-interlock-repair-no-runtime-installation-or-live-execution-authority",
+        "one-canonical-shared-durable-ledger-and-repository-no-private-clone-database",
+        "actual-machine-host-and-lane-identities-no-caller-nonce-host-label-bypass",
+        "atomic-bounded-host-slots-from-measured-safe-CPU-and-RAM-capacity-no-fixed-two-slot-policy-ceiling",
+        "serial-default-and-fail-closed-unknown-capacity-host-or-lane-identity",
+        "five-existing-local-paths-only-advisory-optional-real-host-slot-through-inherited-fd8-default-six-key-serial-admission-unchanged",
+        "existing-hard_locks-atomic-allocation-no-new-database-schema-registry-or-reserve-py-change",
+        "per-slot-bundle-repository-report-private-and-Gradle-cache-isolation",
+        "native-and-install-two-sided-exclusion-with-all-JVM-lanes-preserve-canonical-hard-lock-guards",
+        "pidfd-owned-process-supervision-and-bounded-cleanup-no-unrelated-process-termination",
+        "exact-immutable-candidate-base-head-tree-diff-and-declared-task-consumer-closure",
+        "stripped-credentials-isolated-candidate-reports-and-strict-nonzero-discovery-no-failure-error-or-skip",
+        "preserve-default-full-prepush-and-report-validation-no-arbitrary-task-override-or-fake-success",
+        "no-166-row-lease-rewrite-release-recreate-historical-identity-or-authorization-change",
+        "existing-scoped-local-verification-capability-and-no-lock-change-invariant-unchanged",
+        "trusted-main-admission-before-consumer-edit-same-owner-advisory-evolution",
+        "pinned-source-db14559b39d32322b06477c6ae676112f583db50-unchanged",
+    ],
+    "validation": [
+        "exact WP003 path and named-operation positives; generic cross-purpose other-WP and sibling negatives",
+        "future actual same-host independent JVM lanes bounded by atomic measured CPU/RAM slots; serial-default and malformed-capacity denial",
+        "future canonical shared-ledger real-machine identity tests reject private-clone ledger and caller-host-label bypass",
+        "future native-and-install acquire versus held-JVM-lane and JVM acquire versus held-native-install denial in both directions",
+        "future pidfd owned-child cleanup credential stripping exact-candidate task-closure and strict report failure/zero/skip regressions",
+        "declared controller policy and admission suites discover nonzero tests; no policy fixture counts as real remote parallel execution",
+    ],
+}
+
+
+BACKUP_POST_COMMIT_CAPABILITY = {
+    "id": "wp203-backup-post-commit-delivery",
+    "work_packages": ["WP-203"],
+    "path_rules": [
+        "android/app/src/main/kotlin/com/meshcoreone/android/app/container/AppBackupFeature.kt",
+        "android/app/src/test/kotlin/com/meshcoreone/android/app/platform/BackupRegistrationTest.kt",
+        "android/feature/settings/src/main/kotlin/com/meshcoreone/android/feature/settings/app/backup/AppBackupStateHolder.kt",
+        "android/feature/settings/src/main/kotlin/com/meshcoreone/android/feature/settings/app/backup/BackupPorts.kt",
+    ],
+    "operations": ["repair-backup-post-commit-delivery"],
+    "invariants": [
+        "DATA-05-D149-App-backup-adapter-post-commit-delivery-only-no-unrelated-App-or-backup-feature-authority",
+        "pinned-AppBackupService-swift-db14559b39d32322b06477c6ae676112f583db50-ignore-cancellation-after-database-commit",
+        "pre-commit-cancellation-propagates-with-atomic-rollback-no-success-before-real-commit",
+        "post-commit-cancellation-cannot-convert-committed-success-to-error-or-cancellation-receipt",
+        "state-holder-preserves-success-after-engine-return-when-UI-effects-cancel-rethrow-CancellationException-no-nothing-changed-claim",
+        "BackupPorts-contract-doc-only-pre-commit-rollback-versus-committed-result-and-typed-preference-failure",
+        "existing-restored-process-effects-once-only-no-database-reimport-or-duplicate-effects",
+        "typed-CommittedBackupPreferenceException-retains-committed-result-snapshot-and-original-StorageFailure",
+        "preference-only-retry-and-acknowledgement-guard-preserved-no-masked-real-storage-or-refresh-failure",
+        "envelope-v1-Unix-seconds-Codable-bytes-UUIDs-source-compression-50MiB-compressed-512MiB-expanded-unchanged",
+        "real-Room-DataStore-adapter-regression-not-cancellation-swallowing-or-self-derived-success",
+        "WP-203-WP-318-WP-407-primary-provenance-and-original-test-family-accounting-unchanged-no-replayed-credit",
+        "same-owner-stored-identity-and-authorization-immutable-no-impersonation-release-recreate-or-ledger-rewrite",
+        "trusted-main-admission-before-consumer-edit-semantic-overlap-serialized-with-current-producer",
+        "source-only-no-runtime-installation-lock-resource-settings-dispatch-or-merge-authority",
+        "backup-secrets-original-data-errors-and-license-obligations-preserved-no-generic-sensitive-logging",
+    ],
+    "validation": [
+        "exact WP203 four-path named-operation admission; generic cross-purpose all-other-WP and sibling denials",
+        "future actual pre-commit cancellation rollback versus afterCommit cancellation committed success and once-only process effects",
+        "future actual typed locked-preference committed receipt and preference-only retry retain rows and do not duplicate counts or effects",
+        "future genuine post-restore refresh failure remains explicit and cannot be hidden by cancellation repair",
+        "future actual Room-service-AppBackupStateHolder test retains Success after UI-effect cancellation while pre-return cancellation is Cancelled and rethrown",
+        "declared affected backup and App typed regressions with nonzero discovery and no failures errors or skips",
+        "exact complete predecessor object and raw Git-blob equality; policy fixtures are not backup or iOS-Android compatibility evidence",
+    ],
+}
+
+
+RX_PROJECTION_REGRESSION_CAPABILITY = {
+    "id": "wp201-rx-projection-source-regressions",
+    "work_packages": ["WP-201"],
+    "path_rules": [
+        "android/core/data/src/test/kotlin/com/meshcoreone/android/core/data/repository/RxLogSourceTest.kt",
+        "android/core/data/src/test/kotlin/com/meshcoreone/android/core/data/repository/ParityRxMaintenanceOriginalPredicateTest.kt",
+    ],
+    "operations": ["restore-rx-projection-source-regressions"],
+    "invariants": [
+        "DATA-08-pinned-PersistenceStoreTests-and-RxLogEntryDTO-db14559b39d32322b06477c6ae676112f583db50-source-baseline-not-new-adaptation",
+        "two-existing-repository-tests-only-first-corruption-method-and-OriginalCase-annotation-unused-import-cleanup-only",
+        "route999-to-flood-payloadMinus1-to-unknown-version5000-to-zero-path400-to-zero-channel9999-to-null-timestampMinus10-to-null",
+        "exact-checked-failable-projection-no-wrapping-clamping-or-defaults-outside-source-approved-fields",
+        "real-RoomPersistenceStore-fetch-retains-entry-id-radio-raw-bytes-healthy-companion-and-nonempty-result",
+        "compound-and-six-isolated-parameter-families-retained-with-independent-absolute-expected-values",
+        "repeated-reads-preserve-entire-stored-raw-row-no-write-delete-recreate-or-spurious-issue-report",
+        "all-other-test-methods-pruning-batching-retention-ordering-and-primary-WP202-provenance-unchanged",
+        "reject-unapproved-strict-corrupt-projection-adaptation-not-expectation-weakening-or-replayed-source-credit",
+        "RxLogService-source-catch-log-empty-list-and-CancellationException-propagation-unchanged-no-service-or-UI-authority",
+        "no-new-test-create-no-test-subtree-no-converter-schema-migration-build-dependency-or-runtime-authority",
+        "same-owner-stored-identity-and-authorization-preserved-no-impersonation-release-recreate-or-ledger-rewrite",
+        "trusted-main-admission-before-consumer-edit-semantic-overlap-serialized-with-current-producer",
+        "original-raw-data-secrets-and-license-obligations-preserved-no-sensitive-generic-logging",
+    ],
+    "validation": [
+        "exact WP201 two-existing-test named-operation positives; generic create modify cross-purpose all-other-WP and sibling denials",
+        "future actual compound and six-isolated source fallbacks through real Room repository with same identities bytes and healthy companion",
+        "future repeated repository reads prove entire raw-row equality no mutation deletion or spurious issues",
+        "future affected declared original-case tests retain all non-corruption methods and nonzero discovery without failure error or skip",
+        "exact complete trusted predecessor object and raw Git-blob equality; no service production or new test admission",
+        "policy fixtures prove admission only not actual Room service UI Android or original-family acceptance",
+    ],
+}
+
+
+SHARED_LOCATION_CACHE_CAPABILITY = {
+    "id": "wp404-shared-location-producer-cache",
+    "work_packages": ["WP-404"],
+    "path_rules": [
+        "android/app/src/main/kotlin/com/meshcoreone/android/app/content/LocationManagerLocationProducing.kt",
+        "android/app/src/test/kotlin/com/meshcoreone/android/app/content/LocationManagerLocationProducingTest.kt",
+        "android/app/src/main/kotlin/com/meshcoreone/android/app/container/AppAdvertLocation.kt",
+        "android/app/src/main/kotlin/com/meshcoreone/android/app/container/AndroidAppContainerFactory.kt",
+        "android/app/src/test/kotlin/com/meshcoreone/android/app/container/ShortcutAdvertLocationTest.kt",
+        "android/app/src/test/kotlin/com/meshcoreone/android/app/container/ContainerHarness.kt",
+        "docs/android/deviations/WP-404.md",
+        "docs/android/evidence/WP-404/README.md",
+    ],
+    "operations": ["restore-shared-pre-advert-location-cache"],
+    "invariants": [
+        "pinned-LocationService-and-AppState-DeviceActions-db14559b39d32322b06477c6ae676112f583db50",
+        "WP218-primary-provenance-and-original-families-unchanged-no-impersonated-owner-or-replayed-credit",
+        "one-existing-process-owned-producer-initially-absent-immutable-GeoCoordinate-cache",
+        "genuine-success-published-under-active-request-ownership-lock-before-waiter-resume",
+        "same-producer-cache-shared-across-RegionResolver-and-advert-distinct-LocationService-wrappers",
+        "factory-only-binds-read-only-cache-supplier-retain-existing-producer-RegionResolver-and-process-cleanup",
+        "later-success-replaces-cache-failure-null-fix-and-authorization-denial-retain-prior-success",
+        "cancelled-stale-and-late-callbacks-cannot-publish-successor-fix-preserve-signal-ownership",
+        "genuine-CancellationException-propagates-never-falls-through-to-cached-radio-write-or-advert",
+        "preserve-per-device-auto-update-public-policy-confirmation-no-prompt-live-session-and-current-generation-gates",
+        "no-prior-cache-preserves-best-effort-no-location-write-advert-no-fabricated-default-coordinate",
+        "no-private-wrapper-cache-OS-lastKnown-TTL-persistence-new-provider-permission-or-Google-dependency",
+        "eight-exact-paths-only-no-content-glob-core-API-contract-fake-implementor-build-or-unrelated-WP218-authority",
+        "consumer-docs-only-shared-cache-deviation-and-honest-source-bound-evidence-no-other-feature-repair",
+        "trusted-main-admission-and-actual-frozen-3db4cbd567465b9071f4bad8afd5bd2ee90c2f47-run-closeout-before-product-edit",
+        "same-owner-stored-identity-and-authorization-unchanged-no-release-recreate-or-ledger-rewrite",
+        "real-producer-semantic-collision-stop-and-serialize-or-transfer-with-original-evidence",
+        "policy-only-no-runtime-installation-live-cache-ref-default-settings-dispatch-resource-or-merge-authority",
+        "coordinates-secrets-original-data-and-license-obligations-preserved-no-sensitive-generic-logging",
+    ],
+    "validation": [
+        "exact WP404 eight-path named-operation positives; other-WP wrong-operation sibling traversal and malformed-policy denials",
+        "future native producer API31 and API37 initially absent success-before-resume replacement failure-null-denial retention and cancelled-late-callback races",
+        "future cross-wrapper real RegionResolver-side success seeds same advert cache after failed or unauthorized no-prompt refresh",
+        "future actual App Room radio literal-coordinate write-before-advert and no-cache best-effort no-write assertions",
+        "future opt-out public-policy foreign-device flood-decline session-change and genuine cancellation retain zero forbidden effects",
+        "future affected declared whole closure exact mandatory source-bound method identities and nonzero discovery no failures errors or skips",
+        "exact complete trusted predecessor object and raw Git-blob equality; all old capabilities and planner bridges unchanged",
+        "policy fixtures prove admission only not cache behavior JVM native hardware or original-family acceptance",
+    ],
+}
+
+
+REACTION_WIRE_CLASSIFICATION_CAPABILITY = {
+    "id": "wp216-reaction-wire-classification",
+    "work_packages": ["WP-216"],
+    "path_rules": [
+        "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/rendering/ReactionWireFormat.kt",
+    ],
+    "operations": ["reconcile-reaction-wire-classification"],
+    "invariants": [
+        "pinned-ReactionParser-and-MessageDTO-ReactionVisibility-db14559b39d32322b06477c6ae676112f583db50",
+        "WP213-primary-provenance-and-original-families-unchanged-no-same-role-ownership-or-impersonation",
+        "existing-ReactionWireFormat-parse-parseDM-generateMessageHash-only-delegate-to-canonical-ReactionParser-or-minimal-equivalent-reconciliation",
+        "canonical-local-GB11-Character-classification-rejects-ordinary-doubled-ZWJ-not-a-global-SwiftText-change",
+        "preserve-PocketMesh-channel-both-mention-orders-sender-delimiters-and-one-emoji-Character-validation",
+        "preserve-DM-emoji-hash-Pair-shape-and-channel-mention-rejection-no-MeshCoreOpen-classifier-substitution",
+        "preserve-newline-CRLF-invalid-hash-rejection-ASCII-Crockford-case-and-O-I-L-alias-normalization",
+        "hash-bytes-unchanged-SHA256-UTF8-text-LE32-UInt-timestamp-first-five-bytes-eight-Crockford-symbols",
+        "MessageLRUCache-channel-DM-keys-and-contact-sender-radio-identity-unchanged-no-cache-policy-edit",
+        "HiddenOutgoingReactionPredicate-preserves-outgoing-only-isDM-routing-FAILED-visible-and-ordinary-text-visible",
+        "single-exact-production-path-no-rendering-subtree-global-SwiftText-other-production-or-test-path-authority",
+        "no-Unicode-data-notice-policy-dependency-permission-or-legal-acceptance-authority",
+        "existing-WP216-owned-agreement-and-App-classification-tests-remain-under-separate-admission-no-replayed-credit",
+        "same-owner-stored-identity-and-authorization-unchanged-no-release-recreate-or-ledger-rewrite",
+        "trusted-main-admission-before-consumer-edit-real-semantic-collision-serialize-or-transfer-current-producer",
+        "source-only-no-runtime-installation-cache-ref-default-settings-dispatch-resource-or-merge-authority",
+        "original-message-text-bytes-secrets-and-license-obligations-preserved-no-sensitive-generic-logging",
+    ],
+    "validation": [
+        "exact WP216 single-path named-operation positive; all-other-WP wrong-operation sibling traversal and malformed-policy denials",
+        "future existing ReactionWireFormatAgreementTest pinned-oracle and seeded channel parse DM Pair hash and MessageLRUCache agreement",
+        "future existing admitted ReactionGraphemeClassificationTest actual ordinary-doubled-ZWJ visible versus valid reaction and FAILED direction routing",
+        "future affected declared whole closure exact mandatory source-bound method identities and nonzero discovery no failures errors or skips",
+        "exact complete trusted predecessor object and raw Git-blob equality; every old capability and planner bridge unchanged",
+        "policy fixtures prove admission only not GB11 Unicode parser cache UI JVM native or original-family acceptance",
+    ],
+}
+
+
+SHORTCUT_LIFECYCLE_TEST_CAPABILITY = {
+    "id": "wp404-shortcut-lifecycle-consumer-test",
+    "work_packages": ["WP-404"],
+    "path_rules": [
+        "android/app/src/test/kotlin/com/meshcoreone/android/app/navigation/ShortcutLifecycleConsumerTest.kt",
+    ],
+    "operations": ["create", "test", "modify"],
+    "invariants": [
+        "pinned-Intents-seven-families-db14559b39d32322b06477c6ae676112f583db50-primary-provenance-unchanged",
+        "single-exact-App-test-fixture-only-no-production-build-manifest-resources-dependencies-or-wildcards",
+        "actual-AppShortcutContent-LifecycleResumeEffect-ShortcutHost-and-Activity-handoff-not-fake-owner",
+        "real-distinct-Room-containers-null-current-radio-no-foreign-recipient-or-preowner-lookup-queue-location-permission-radio-effects",
+        "independent-old-new-owner-routing-stale-disposal-must-not-uninstall-replacement-and-confirmation-cancellation-zero-target-effects",
+        "real-ShortcutInfo-independent-pinned-twelve-locale-seven-consumed-key-values-not-counts-or-getter-self-comparison",
+        "preserve-original-recipient-single-token-format-and-separate-original-message-no-recursive-substitution",
+        "existing-ColdStart-adaptation-not-BFU-or-background-equivalence-no-new-framework-feature-or-flood-RF-permission",
+        "six-G18-exclusions-foreground-status-advert-reach-map-reach-dialog-background-advert-background-dynamic-send-background-status-unchanged",
+        "overlapping-publication-lifetime-is-observable-test-seam-not-proven-bug-no-automatic-pause-clear-policy",
+        "WP405-ChannelJoinFloodScopeApplier-PendingExternalRoute-distinct-no-same-producer-edit",
+        "existing-WP404-ef87-G09-queue-and-48-mandatory-identities-unchanged-no-replayed-credit",
+        "trusted-main-landing-and-fresh-same-owner-admission-before-future-test-authoring",
+        "same-stored-identity-immutable-authorization-prose-historical-receipts-and-revision-history-supported-same-owner-scope-evolution-normal-new-revisions-and-fresh-bound-receipts-no-impersonation-release-recreate-or-private-ledger-edit",
+        "real-semantic-collision-serialize-or-transfer-current-producer",
+        "normal-supported-own-reservation-acquire-evolve-permitted-no-private-ledger-other-owner-or-liveguard-source-ref-mutation-no-runtime-installation-settings-schedules-publication-or-merge-authority",
+    ],
+    "validation": [
+        "exact WP404 single-test create test modify positives; other-WP wrong-operation sibling traversal malformed-rule denials",
+        "future ShortcutLifecycleConsumerTest actual mounted lifecycle Activity handoff distinct Room owners stale disposal and cancellation",
+        "future real ShortcutInfo original recipient and separate message against independent pinned twelve-locale seven-key matrix",
+        "future declared affected whole closure exact mandatory source-bound method identities nonzero discovery zero failures errors skips",
+        "strict complete exact trusted predecessor object and raw Git-blob equality in BOTH helpers all older capabilities planner bridges unchanged",
+        "policy fixtures prove admission only not JVM native lifecycle UI RF BFU background or original-family acceptance",
+    ],
+}
+
+
+def shortcut_lifecycle_test_predecessor(policy):
+    """Reverse only the exact WP-404 App lifecycle fixture admission."""
+    if not isinstance(policy, dict):
+        raise PortError("Shortcut lifecycle test amendment requires a policy object")
+    result = copy.deepcopy(policy)
+    if "reservation_policy" not in result:
+        return result
+    CapabilityEngine(result)
+    rules = result["reservation_policy"]["capabilities"]
+    selected = [i for i, rule in enumerate(rules)
+                if rule["id"] == SHORTCUT_LIFECYCLE_TEST_CAPABILITY["id"]]
+    path_matches = [
+        rule for rule in rules
+        if set(rule["operations"]) & set(SHORTCUT_LIFECYCLE_TEST_CAPABILITY["operations"])
+        and ("work_packages" not in rule or "WP-404" in rule["work_packages"])
+        and any(CapabilityEngine._matches(pattern, path)
+                for path in SHORTCUT_LIFECYCLE_TEST_CAPABILITY["path_rules"]
+                for pattern in rule["path_rules"])
+    ]
+    if not selected and not path_matches:
+        return result
+    if len(selected) != 1:
+        raise PortError("Shortcut lifecycle test changed outside the exact single-fixture amendment")
+    index = selected[0]
+    if (
+        rules[index] != SHORTCUT_LIFECYCLE_TEST_CAPABILITY
+        or path_matches != [SHORTCUT_LIFECYCLE_TEST_CAPABILITY]
+        or index == 0 or rules[index - 1].get("id") != "generated-resources"
+        or index + 1 >= len(rules) or rules[index + 1] != REACTION_WIRE_CLASSIFICATION_CAPABILITY
+    ):
+        raise PortError("Shortcut lifecycle test changed outside the exact single-fixture amendment")
+    rules.pop(index)
+    return result
+
+
+def reaction_wire_classification_predecessor(policy):
+    """Reverse only the exact WP-216 rendering-wire reconciliation rule."""
+    if not isinstance(policy, dict):
+        raise PortError("Reaction wire classification amendment requires a policy object")
+    result = shortcut_lifecycle_test_predecessor(policy)
+    if "reservation_policy" not in result:
+        return result
+    reservation = result["reservation_policy"]
+    rules = reservation.get("capabilities") if isinstance(reservation, dict) else None
+    if not isinstance(rules, list):
+        raise PortError("Reaction wire classification amendment requires the canonical capability catalog")
+    selected = [i for i, rule in enumerate(rules)
+                if isinstance(rule, dict) and rule.get("id") == REACTION_WIRE_CLASSIFICATION_CAPABILITY["id"]]
+    path_matches = [
+        rule for rule in rules
+        if isinstance(rule, dict) and isinstance(rule.get("path_rules"), list)
+        and isinstance(rule.get("operations"), list)
+        and "reconcile-reaction-wire-classification" in rule["operations"]
+        and ("work_packages" not in rule or (
+            isinstance(rule["work_packages"], list) and "WP-216" in rule["work_packages"]
+        ))
+        and any(CapabilityEngine._matches(pattern, path)
+                for path in REACTION_WIRE_CLASSIFICATION_CAPABILITY["path_rules"]
+                for pattern in rule["path_rules"] if isinstance(pattern, str))
+    ]
+    if not selected and not path_matches:
+        return result
+    if len(selected) != 1:
+        raise PortError("Reaction wire classification changed outside the exact single-path amendment")
+    index = selected[0]
+    if (
+        rules[index] != REACTION_WIRE_CLASSIFICATION_CAPABILITY
+        or path_matches != [REACTION_WIRE_CLASSIFICATION_CAPABILITY]
+        or index == 0 or not isinstance(rules[index - 1], dict)
+        or rules[index - 1].get("id") != "generated-resources"
+        or index + 1 >= len(rules) or rules[index + 1] != SHARED_LOCATION_CACHE_CAPABILITY
+    ):
+        raise PortError("Reaction wire classification changed outside the exact single-path amendment")
+    rules.pop(index)
+    return result
+
+
+def shared_location_cache_predecessor(policy):
+    """Reverse only the exact WP-404 shared producer-cache support rule."""
+    if not isinstance(policy, dict):
+        raise PortError("Shared location cache amendment requires a policy object")
+    result = reaction_wire_classification_predecessor(policy)
+    if "reservation_policy" not in result:
+        return result
+    reservation = result["reservation_policy"]
+    rules = reservation.get("capabilities") if isinstance(reservation, dict) else None
+    if not isinstance(rules, list):
+        raise PortError("Shared location cache amendment requires the canonical capability catalog")
+    selected = [i for i, rule in enumerate(rules)
+                if isinstance(rule, dict) and rule.get("id") == SHARED_LOCATION_CACHE_CAPABILITY["id"]]
+    path_matches = [
+        rule for rule in rules
+        if isinstance(rule, dict) and isinstance(rule.get("path_rules"), list)
+        and isinstance(rule.get("operations"), list)
+        and "restore-shared-pre-advert-location-cache" in rule["operations"]
+        and ("work_packages" not in rule or (
+            isinstance(rule["work_packages"], list) and "WP-404" in rule["work_packages"]
+        ))
+        and any(CapabilityEngine._matches(pattern, path)
+                for path in SHARED_LOCATION_CACHE_CAPABILITY["path_rules"]
+                for pattern in rule["path_rules"] if isinstance(pattern, str))
+    ]
+    if not selected and not path_matches:
+        return result
+    if len(selected) != 1:
+        raise PortError("Shared location cache changed outside the exact eight-path amendment")
+    index = selected[0]
+    if (
+        rules[index] != SHARED_LOCATION_CACHE_CAPABILITY
+        or path_matches != [SHARED_LOCATION_CACHE_CAPABILITY]
+        or index == 0 or not isinstance(rules[index - 1], dict)
+        or rules[index - 1].get("id") != "generated-resources"
+        or index + 1 >= len(rules) or rules[index + 1] != RX_PROJECTION_REGRESSION_CAPABILITY
+    ):
+        raise PortError("Shared location cache changed outside the exact eight-path amendment")
+    rules.pop(index)
+    return result
+
+
+def rx_projection_regression_predecessor(policy):
+    """Reverse only the exact existing-test source-baseline support rule."""
+    if not isinstance(policy, dict):
+        raise PortError("RX projection regression amendment requires a policy object")
+    result = shared_location_cache_predecessor(policy)
+    if "reservation_policy" not in result:
+        return result
+    reservation = result["reservation_policy"]
+    rules = reservation.get("capabilities") if isinstance(reservation, dict) else None
+    if not isinstance(rules, list):
+        raise PortError("RX projection regression amendment requires the canonical capability catalog")
+    selected = [i for i, rule in enumerate(rules)
+                if isinstance(rule, dict) and rule.get("id") == RX_PROJECTION_REGRESSION_CAPABILITY["id"]]
+    path_matches = [
+        rule for rule in rules
+        if isinstance(rule, dict) and isinstance(rule.get("path_rules"), list)
+        and isinstance(rule.get("operations"), list)
+        and "restore-rx-projection-source-regressions" in rule["operations"]
+        and ("work_packages" not in rule or (
+            isinstance(rule["work_packages"], list) and "WP-201" in rule["work_packages"]
+        ))
+        and any(CapabilityEngine._matches(pattern, path)
+                for path in RX_PROJECTION_REGRESSION_CAPABILITY["path_rules"]
+                for pattern in rule["path_rules"] if isinstance(pattern, str))
+    ]
+    if not selected and not path_matches:
+        return result
+    if len(selected) != 1:
+        raise PortError("RX projection capability changed outside the exact two-existing-test amendment")
+    index = selected[0]
+    if (
+        rules[index] != RX_PROJECTION_REGRESSION_CAPABILITY
+        or path_matches != [RX_PROJECTION_REGRESSION_CAPABILITY]
+        or index == 0 or not isinstance(rules[index - 1], dict)
+        or rules[index - 1].get("id") != "generated-resources"
+        or index + 1 >= len(rules) or rules[index + 1] != BACKUP_POST_COMMIT_CAPABILITY
+    ):
+        raise PortError("RX projection capability changed outside the exact two-existing-test amendment")
+    rules.pop(index)
+    return result
+
+
+def backup_post_commit_predecessor(policy):
+    """Reverse only the exact WP-203 adapter support rule."""
+    if not isinstance(policy, dict):
+        raise PortError("Backup post-commit amendment requires a policy object")
+    result = rx_projection_regression_predecessor(policy)
+    if "reservation_policy" not in result:
+        return result
+    reservation = result["reservation_policy"]
+    rules = reservation.get("capabilities") if isinstance(reservation, dict) else None
+    if not isinstance(rules, list):
+        raise PortError("Backup post-commit amendment requires the canonical capability catalog")
+    selected = [i for i, rule in enumerate(rules)
+                if isinstance(rule, dict) and rule.get("id") == BACKUP_POST_COMMIT_CAPABILITY["id"]]
+    path_matches = [
+        rule for rule in rules
+        if isinstance(rule, dict) and isinstance(rule.get("path_rules"), list)
+        and isinstance(rule.get("operations"), list)
+        and "repair-backup-post-commit-delivery" in rule["operations"]
+        and ("work_packages" not in rule or (
+            isinstance(rule["work_packages"], list) and "WP-203" in rule["work_packages"]
+        ))
+        and any(CapabilityEngine._matches(pattern, path)
+                for path in BACKUP_POST_COMMIT_CAPABILITY["path_rules"]
+                for pattern in rule["path_rules"] if isinstance(pattern, str))
+    ]
+    if not selected and not path_matches:
+        return result
+    if len(selected) != 1:
+        raise PortError("Backup post-commit capability changed outside the exact four-path amendment")
+    index = selected[0]
+    if (
+        rules[index] != BACKUP_POST_COMMIT_CAPABILITY
+        or path_matches != [BACKUP_POST_COMMIT_CAPABILITY]
+        or index == 0 or not isinstance(rules[index - 1], dict)
+        or rules[index - 1].get("id") != "generated-resources"
+        or index + 1 >= len(rules) or not isinstance(rules[index + 1], dict)
+        or rules[index + 1].get("id") != "persistence-schemas"
+    ):
+        raise PortError("Backup post-commit capability changed outside the exact four-path amendment")
+    rules.pop(index)
+    return result
+
+
+def host_scoped_jvm_predecessor(policy):
+    """Remove only the exact source-support rule, retaining the complete previous policy."""
+    if not isinstance(policy, dict):
+        raise PortError("Host-scoped JVM amendment requires a policy object")
+    result = backup_post_commit_predecessor(policy)
+    if "reservation_policy" not in result:
+        return result
+    reservation = result["reservation_policy"]
+    rules = reservation.get("capabilities") if isinstance(reservation, dict) else None
+    if not isinstance(rules, list):
+        raise PortError("Host-scoped JVM amendment requires the canonical capability catalog")
+    selected = [i for i, rule in enumerate(rules)
+                if isinstance(rule, dict) and rule.get("id") == HOST_SCOPED_JVM_CAPABILITY["id"]]
+    path_matches = [
+        rule for rule in rules
+        if isinstance(rule, dict) and isinstance(rule.get("path_rules"), list)
+        and isinstance(rule.get("operations"), list)
+        and "implement-host-scoped-jvm-lanes" in rule["operations"]
+        and ("work_packages" not in rule or (
+            isinstance(rule["work_packages"], list) and "WP-003" in rule["work_packages"]
+        ))
+        and any(CapabilityEngine._matches(pattern, path)
+                for path in HOST_SCOPED_JVM_CAPABILITY["path_rules"]
+                for pattern in rule["path_rules"] if isinstance(pattern, str))
+    ]
+    if not selected and not path_matches:
+        return result
+    if (
+        selected != [0] or rules[0] != HOST_SCOPED_JVM_CAPABILITY
+        or path_matches != [HOST_SCOPED_JVM_CAPABILITY]
+        or len(rules) < 2 or rules[1] != DISPOSABLE_CAPABILITY
+    ):
+        raise PortError("Host-scoped JVM capability changed outside the exact bounded amendment")
+    rules.pop(0)
+    return result
+
+
+def wp503_accessibility_source_binding_predecessor(policy):
+    """Reverse only the exact WP-503 validator/test capability pair."""
+    if not isinstance(policy, dict):
+        raise PortError("WP-503 accessibility binding amendment requires a policy object")
+    result = host_scoped_jvm_predecessor(policy)
+    reservation = result.get("reservation_policy")
+    if reservation is None:
+        return result
+    rules = reservation.get("capabilities") if isinstance(reservation, dict) else None
+    if not isinstance(rules, list):
+        raise PortError("WP-503 accessibility binding amendment requires the canonical capability catalog")
+    expected_ids = {rule["id"] for rule in WP503_ACCESSIBILITY_SOURCE_BINDING_CAPABILITIES}
+    selected = [
+        rule for rule in rules
+        if isinstance(rule, dict) and rule.get("id") in expected_ids
+    ]
+    path_matches = [
+        rule for rule in rules
+        if isinstance(rule, dict)
+        and isinstance(rule.get("path_rules"), list)
+        and isinstance(rule.get("operations"), list)
+        and ("work_packages" not in rule or (
+            isinstance(rule["work_packages"], list) and "WP-503" in rule["work_packages"]
+        ))
+        and any(
+            operation in rule["operations"] and CapabilityEngine._matches(pattern, path)
+            for expected in WP503_ACCESSIBILITY_SOURCE_BINDING_CAPABILITIES
+            for operation in expected["operations"]
+            for path in expected["path_rules"]
+            for pattern in rule["path_rules"] if isinstance(pattern, str)
+        )
+    ]
+    if not selected and not path_matches:
+        return result
+    if (
+        selected != WP503_ACCESSIBILITY_SOURCE_BINDING_CAPABILITIES
+        or path_matches != WP503_ACCESSIBILITY_SOURCE_BINDING_CAPABILITIES
+        or len(rules) < 3 or rules[-2:] != WP503_ACCESSIBILITY_SOURCE_BINDING_CAPABILITIES
+        or rules[-3] != RECEIVE_PREFETCH_ADMISSION_CAPABILITY
+    ):
+        raise PortError("WP-503 accessibility binding capabilities changed outside the exact two-rule amendment")
+    del rules[-2:]
+    return result
+
+
+def consumer_support_predecessor(policy):
+    """Reverse only the complete exact consumer-support block; preserve all other policy bytes."""
+    if not isinstance(policy, dict):
+        raise PortError("Consumer support amendment requires a policy object")
+    result = copy.deepcopy(policy)
+    if "reservation_policy" not in result:
+        return result
+    reservation = result["reservation_policy"]
+    rules = reservation.get("capabilities") if isinstance(reservation, dict) else None
+    if not isinstance(rules, list):
+        raise PortError("Consumer support amendment requires the canonical capability catalog")
+    identities = {rule["id"] for rule in CONSUMER_SUPPORT_CAPABILITIES}
+    selected = [i for i, rule in enumerate(rules)
+                if isinstance(rule, dict) and rule.get("id") in identities]
+    if not selected:
+        return result
+    start, end = selected[0], selected[-1] + 1
+    if (
+        rules[start:end] != CONSUMER_SUPPORT_CAPABILITIES
+        or len(selected) != len(CONSUMER_SUPPORT_CAPABILITIES)
+        or start == 0 or not isinstance(rules[start - 1], dict)
+        or rules[start - 1].get("id") != "disposable-native-guest"
+        or end >= len(rules) or not isinstance(rules[end], dict)
+        or rules[end].get("id") != "wp-owned"
+    ):
+        raise PortError("Consumer support capabilities changed outside the exact bounded amendment")
+    del rules[start:end]
+    return result
+
+
 def room_failed_event_predecessor(policy):
     if not isinstance(policy, dict):
         raise PortError("Room failed-event amendment requires a policy object")
-    result = copy.deepcopy(policy)
+    result = wp503_accessibility_source_binding_predecessor(policy)
+    result = consumer_support_predecessor(result)
     reservation = result.get("reservation_policy")
     if reservation is None:
         return result

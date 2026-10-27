@@ -35,6 +35,7 @@ import com.meshcoreone.android.app.container.onboarding.AndroidOnboardingPermiss
 import com.meshcoreone.android.app.container.onboarding.OnboardingPlatform
 import com.meshcoreone.android.app.container.onboarding.WriteBehindOnboardingFlags
 import com.meshcoreone.android.app.container.onboarding.appSettingsOpener
+import com.meshcoreone.android.app.platform.AppLanguages
 import com.meshcoreone.android.core.services.content.LocationService
 import com.meshcoreone.android.core.services.content.RegionResolver
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueProgress
@@ -50,6 +51,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -184,6 +186,7 @@ object AndroidAppContainerFactory {
             locationReporter = locationProducing,
             scans = scanCoordinator,
             openAppSettings = appSettingsOpener(application),
+            regionResources = { AppLanguages.attach(application).resources },
         )
         val chatSendQueueProgress = ChatSendQueueProgress()
         val container = AppContainer(
@@ -217,6 +220,12 @@ object AndroidAppContainerFactory {
                 draftStore = DraftStore(SharedPreferencesDraftDefaults(application)),
                 mainScope = mainScope,
                 onboardingPlatform = onboardingPlatform,
+                advertLocation = AppAdvertLocation(
+                    { id -> storage.devicePreferences.observe(id).first() },
+                    locationProducing,
+                    locationProducing::refreshAuthorization,
+                    currentLocation = { locationProducing.currentLocation },
+                ),
                 offlineMaps = offlineMaps,
                 nodesMessages = UserFacingMessages { failure ->
                     UiErrorMapper().message(failure).resolve(application.resources)

@@ -118,6 +118,7 @@ internal fun RemoteNodeHistoryRoute(
                             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(
                                     LocationReportRowText.relativeTime(report, clock.now, zone).format(locale),
+                                    modifier = Modifier.testTag("remote-history-recency:${report.id}"),
                                     style = MaterialTheme.typography.titleSmall,
                                 )
                                 Text(

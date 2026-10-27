@@ -2,6 +2,9 @@
 // AndroidOnly: WP-313 Mount the history consumer with Android ICU and a fixed clock; no radio or tile access.
 package com.meshcoreone.android.feature.remotenodes.ui
 
+import android.icu.text.DisplayContext
+import android.icu.text.RelativeDateTimeFormatter
+import android.icu.util.ULocale
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -10,6 +13,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -84,7 +91,7 @@ class RemoteNodeHistoryRecencyTest {
     @Test fun pastReportRendersNonemptyRelativeTextThroughAndroidIcu() {
         val text = LocationReportFormat.relativeTime(report.timestamp, now, ZoneId.of("UTC")).format(Locale.US)
         assertTrue(text.isNotEmpty())
-        assertEquals("2h ago", text)
+        assertEquals(twoHoursAgoAndroidText(), text)
     }
 
     @Test fun mountedHistoryShowsRecencyAndAbsoluteDetailAndStillOpensTheSelectedReport() {
@@ -108,7 +115,10 @@ class RemoteNodeHistoryRecencyTest {
         }
         val row = compose.onNodeWithTag("remote-history-report:${report.id}")
         row.performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
-        row.assertTextContains("2h ago")
+        val expectedRecency = twoHoursAgoAndroidText()
+        assertTrue(expectedRecency.isNotEmpty())
+        compose.onNodeWithTag("remote-history-recency:${report.id}", useUnmergedTree = true)
+            .assertIsDisplayed().assertTextEquals(expectedRecency)
         row.assertTextContains("37.7847, -122.4012", substring = true)
         row.assertTextContains("0 ft", substring = true)
         val absoluteTime = LocationReportFormat.absoluteTime(report.timestamp, Locale.US, ZoneId.of("UTC"))
@@ -117,5 +127,15 @@ class RemoteNodeHistoryRecencyTest {
         compose.runOnIdle { assertEquals(1, snapshotReads) }
         row.performClick()
         compose.onNodeWithTag("remote-history-full-map").assertIsDisplayed()
+        compose.onNode(
+            hasText(absoluteTime, substring = true) and hasAnyAncestor(hasTestTag("remote-history-full-map")),
+            useUnmergedTree = true,
+        ).performScrollTo().assertIsDisplayed()
+            .assertTextContains("37.7847, -122.4012", substring = true)
+            .assertTextContains("0 ft", substring = true)
     }
+
+    private fun twoHoursAgoAndroidText(): String = RelativeDateTimeFormatter.getInstance(
+        ULocale.US, null, RelativeDateTimeFormatter.Style.NARROW, DisplayContext.CAPITALIZATION_NONE,
+    ).format(2.0, RelativeDateTimeFormatter.Direction.LAST, RelativeDateTimeFormatter.RelativeUnit.HOURS)
 }

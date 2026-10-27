@@ -164,7 +164,7 @@ class CliSuggestionTouchTest {
 
     private fun chip(label: String): SemanticsNode = nodes().single {
         it.config.contains(SemanticsActions.OnClick) &&
-            it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == label }
+            it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.singleOrNull()?.text == label
     }
 
     private fun pressTab() {
@@ -215,6 +215,11 @@ class CliSuggestionTouchTest {
         repeat(6) {
             Snapshot.sendApplyNotifications()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
+        }
+        // Robolectric draws no frame, so newly composed chips stay unplaced (0x0) until layout is forced.
+        val owner = composeRoot()
+        owner.javaClass.methods.filter { it.name == "measureAndLayout" }.forEach { m ->
+            if (m.parameterCount == 1) m.invoke(owner, true) else m.invoke(owner)
         }
     }
 

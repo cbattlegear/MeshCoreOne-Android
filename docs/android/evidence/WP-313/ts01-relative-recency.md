@@ -76,3 +76,21 @@ recorded in the producer's private frozen handoff after execution; they are
 not substituted for native test results. No reproducible hosted CI bundle is
 created. No Swift, device, TalkBack, hardware, adaptation approval, human-gate
 or whole-WP acceptance is claimed.
+
+## Traceability-only correction after the first guarded attempt
+
+The supported trusted047 attempt for candidate `554e0823e877c76ab0534c9aff2558da8a290405`
+stopped during Python verification: `portmap.py` exited 2 because this ported
+test also declared an `AndroidOnly` disposition. The producer reproduced that
+same error locally before removing only the conflicting header line. The pinned
+`PortedFrom` provenance remains; every test body, helper, assertion and SDK
+configuration is unchanged, as is the production route.
+
+The prior attempt did not reach preflight, scaffold or inspect. Neither method
+on either SDK was discovered or executed: all four mandatory method/SDK
+identities remain **MISSING_NOTRUN**. This correction is source-only under
+`ROOT-WP313-554E082-TRACEABILITY-SOURCE-ONLY-001`; no native retry, preparation or
+publication is authorized. Actual local `portmap.py`, controller validation and
+diff-check results are bound in the new private frozen source handoff, not
+represented as Kotlin/compiler/JUnit results. The old prepared snapshot and
+all prior failure receipts remain immutable.

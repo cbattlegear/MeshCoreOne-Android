@@ -1,5 +1,4 @@
 // PortedFrom: MC1Tests/Formatters/LocationReportFormatTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-313 Mount the history consumer with Android ICU and a fixed clock; no radio or tile access.
 package com.meshcoreone.android.feature.remotenodes.ui
 
 import android.icu.text.DisplayContext

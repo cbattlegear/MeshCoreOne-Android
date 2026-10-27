@@ -11,6 +11,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.withContext
 import org.junit.Test
 import java.util.UUID
@@ -146,13 +147,14 @@ class PairingConsentTest {
             }
         }
         val state = appStateOf(backgroundScope, port)
-        val pairing = async { state.startDeviceScanAndAwait() }
+        val pairing = async(UnconfinedTestDispatcher(testScheduler)) { state.startDeviceScanAndAwait() }
         runCurrent()
         state.confirmSystemPairingSetup()!!.join()
         if (activate) state.handleBecameActive() else testScheduler.advanceTimeBy(1_000)
         runCurrent()
         try {
             assertEquals(2, port.pickerCalls)
+            assertFalse(pairing.isCompleted)
             pairing.cancel()
             runCurrent()
             assertTrue(cleanupStarted.isCompleted)

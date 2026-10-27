@@ -220,17 +220,17 @@ class PairingFlow(
     suspend fun resumeFreshPairingIfNeeded() = coroutineScope {
         if (!ui.shouldCompleteFreshPairingOnForeground) return@coroutineScope
         foregroundPairingJob = coroutineContext[Job]
+        ui.isBusy = true
         ui.shouldCompleteFreshPairingOnForeground = false
         isFreshPairingForegroundRetry = true
-        ui.isBusy = true
         connection.isPairingFlowActive = true
         try {
             withPairingFlowErrorHandling { completeFreshPairing() }
         } finally {
             foregroundPairingJob = null
-            ui.isBusy = false
             isFreshPairingForegroundRetry = false
             if (!ui.shouldCompleteFreshPairingOnForeground) connection.isPairingFlowActive = false
+            ui.isBusy = false
         }
     }
 

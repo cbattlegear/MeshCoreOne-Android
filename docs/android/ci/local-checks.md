@@ -39,6 +39,16 @@ sides of moves remain inputs. Explicit scopes can add obligations, never omit
 changed modules, consumers or required checks. Stale endpoints and malformed
 requests fail; empty diffs, unknown graph expressions, build/dependency/toolchain
 changes and unclassified product inputs widen to the full scaffold.
+An unchanged candidate on a diverged published branch does not need a routine
+rebase: `base` remains the current trusted target, never the older branch point.
+Complete, unreplaced history must establish exactly one common ancestor.
+Obligations include the union of branch-point-to-candidate and
+target-to-candidate changed paths: independently converged branch changes and
+target-only inputs absent from the candidate cannot disappear from selection.
+Normal descendant selection is unchanged. Missing/shallow/replaced/grafted,
+unrelated or ambiguous history and an old candidate that is merely an ancestor
+of the target fail closed. Selection executes the exact candidate tree, not a
+synthetic merge, and does not prove merge compatibility or replace merge checks.
 Every full-scaffold selection retains all four existing stages: Python,
 preflight, scaffold and `inspect` (including APK/alignment inspection). A plan
 that drops inspection is rejected; only narrow no-APK scopes omit that stage.
@@ -83,6 +93,20 @@ no raw XML copy, second result artifact or hosted-CI evidence bundle. A selected
 module without tests retains its compile/lint/graph obligations and an empty
 `junit_cases` list only when the computed plan requires no JUnit directories;
 missing or zero required suites still fail.
+
+After execution has begun, a nonzero Gradle command, strict evidence failure,
+OS error or interruption emits a failure-form affected report to the same run
+log before rethrowing the original exception. It retains the selected
+base/head/tree/scopes/tasks/stages and each available runner's exact pass,
+failure, error and skipped case rows. Each expected JUnit directory is marked
+`available`, `invalid`, or `missing-or-not-run`; missing XML cannot establish
+which individual tests ran. Malformed/truncated/zero/duplicate reports are
+explicitly invalid, never passing evidence. Valid runners are retained even if
+another runner is missing or invalid. Source binding is revalidated before and
+after harvest; a mismatch discards all case attribution and records the error.
+Old reports were removed before the supervised command began. No failure-form
+report prints success or changes the original nonzero/cancellation behavior,
+and report harvesting completes before child cleanup and owned-resource release.
 
 Lightweight selector regression command:
 

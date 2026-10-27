@@ -701,11 +701,251 @@ RX_PROJECTION_REGRESSION_CAPABILITY = {
 }
 
 
+SHARED_LOCATION_CACHE_CAPABILITY = {
+    "id": "wp404-shared-location-producer-cache",
+    "work_packages": ["WP-404"],
+    "path_rules": [
+        "android/app/src/main/kotlin/com/meshcoreone/android/app/content/LocationManagerLocationProducing.kt",
+        "android/app/src/test/kotlin/com/meshcoreone/android/app/content/LocationManagerLocationProducingTest.kt",
+        "android/app/src/main/kotlin/com/meshcoreone/android/app/container/AppAdvertLocation.kt",
+        "android/app/src/main/kotlin/com/meshcoreone/android/app/container/AndroidAppContainerFactory.kt",
+        "android/app/src/test/kotlin/com/meshcoreone/android/app/container/ShortcutAdvertLocationTest.kt",
+        "android/app/src/test/kotlin/com/meshcoreone/android/app/container/ContainerHarness.kt",
+        "docs/android/deviations/WP-404.md",
+        "docs/android/evidence/WP-404/README.md",
+    ],
+    "operations": ["restore-shared-pre-advert-location-cache"],
+    "invariants": [
+        "pinned-LocationService-and-AppState-DeviceActions-db14559b39d32322b06477c6ae676112f583db50",
+        "WP218-primary-provenance-and-original-families-unchanged-no-impersonated-owner-or-replayed-credit",
+        "one-existing-process-owned-producer-initially-absent-immutable-GeoCoordinate-cache",
+        "genuine-success-published-under-active-request-ownership-lock-before-waiter-resume",
+        "same-producer-cache-shared-across-RegionResolver-and-advert-distinct-LocationService-wrappers",
+        "factory-only-binds-read-only-cache-supplier-retain-existing-producer-RegionResolver-and-process-cleanup",
+        "later-success-replaces-cache-failure-null-fix-and-authorization-denial-retain-prior-success",
+        "cancelled-stale-and-late-callbacks-cannot-publish-successor-fix-preserve-signal-ownership",
+        "genuine-CancellationException-propagates-never-falls-through-to-cached-radio-write-or-advert",
+        "preserve-per-device-auto-update-public-policy-confirmation-no-prompt-live-session-and-current-generation-gates",
+        "no-prior-cache-preserves-best-effort-no-location-write-advert-no-fabricated-default-coordinate",
+        "no-private-wrapper-cache-OS-lastKnown-TTL-persistence-new-provider-permission-or-Google-dependency",
+        "eight-exact-paths-only-no-content-glob-core-API-contract-fake-implementor-build-or-unrelated-WP218-authority",
+        "consumer-docs-only-shared-cache-deviation-and-honest-source-bound-evidence-no-other-feature-repair",
+        "trusted-main-admission-and-actual-frozen-3db4cbd567465b9071f4bad8afd5bd2ee90c2f47-run-closeout-before-product-edit",
+        "same-owner-stored-identity-and-authorization-unchanged-no-release-recreate-or-ledger-rewrite",
+        "real-producer-semantic-collision-stop-and-serialize-or-transfer-with-original-evidence",
+        "policy-only-no-runtime-installation-live-cache-ref-default-settings-dispatch-resource-or-merge-authority",
+        "coordinates-secrets-original-data-and-license-obligations-preserved-no-sensitive-generic-logging",
+    ],
+    "validation": [
+        "exact WP404 eight-path named-operation positives; other-WP wrong-operation sibling traversal and malformed-policy denials",
+        "future native producer API31 and API37 initially absent success-before-resume replacement failure-null-denial retention and cancelled-late-callback races",
+        "future cross-wrapper real RegionResolver-side success seeds same advert cache after failed or unauthorized no-prompt refresh",
+        "future actual App Room radio literal-coordinate write-before-advert and no-cache best-effort no-write assertions",
+        "future opt-out public-policy foreign-device flood-decline session-change and genuine cancellation retain zero forbidden effects",
+        "future affected declared whole closure exact mandatory source-bound method identities and nonzero discovery no failures errors or skips",
+        "exact complete trusted predecessor object and raw Git-blob equality; all old capabilities and planner bridges unchanged",
+        "policy fixtures prove admission only not cache behavior JVM native hardware or original-family acceptance",
+    ],
+}
+
+
+REACTION_WIRE_CLASSIFICATION_CAPABILITY = {
+    "id": "wp216-reaction-wire-classification",
+    "work_packages": ["WP-216"],
+    "path_rules": [
+        "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/rendering/ReactionWireFormat.kt",
+    ],
+    "operations": ["reconcile-reaction-wire-classification"],
+    "invariants": [
+        "pinned-ReactionParser-and-MessageDTO-ReactionVisibility-db14559b39d32322b06477c6ae676112f583db50",
+        "WP213-primary-provenance-and-original-families-unchanged-no-same-role-ownership-or-impersonation",
+        "existing-ReactionWireFormat-parse-parseDM-generateMessageHash-only-delegate-to-canonical-ReactionParser-or-minimal-equivalent-reconciliation",
+        "canonical-local-GB11-Character-classification-rejects-ordinary-doubled-ZWJ-not-a-global-SwiftText-change",
+        "preserve-PocketMesh-channel-both-mention-orders-sender-delimiters-and-one-emoji-Character-validation",
+        "preserve-DM-emoji-hash-Pair-shape-and-channel-mention-rejection-no-MeshCoreOpen-classifier-substitution",
+        "preserve-newline-CRLF-invalid-hash-rejection-ASCII-Crockford-case-and-O-I-L-alias-normalization",
+        "hash-bytes-unchanged-SHA256-UTF8-text-LE32-UInt-timestamp-first-five-bytes-eight-Crockford-symbols",
+        "MessageLRUCache-channel-DM-keys-and-contact-sender-radio-identity-unchanged-no-cache-policy-edit",
+        "HiddenOutgoingReactionPredicate-preserves-outgoing-only-isDM-routing-FAILED-visible-and-ordinary-text-visible",
+        "single-exact-production-path-no-rendering-subtree-global-SwiftText-other-production-or-test-path-authority",
+        "no-Unicode-data-notice-policy-dependency-permission-or-legal-acceptance-authority",
+        "existing-WP216-owned-agreement-and-App-classification-tests-remain-under-separate-admission-no-replayed-credit",
+        "same-owner-stored-identity-and-authorization-unchanged-no-release-recreate-or-ledger-rewrite",
+        "trusted-main-admission-before-consumer-edit-real-semantic-collision-serialize-or-transfer-current-producer",
+        "source-only-no-runtime-installation-cache-ref-default-settings-dispatch-resource-or-merge-authority",
+        "original-message-text-bytes-secrets-and-license-obligations-preserved-no-sensitive-generic-logging",
+    ],
+    "validation": [
+        "exact WP216 single-path named-operation positive; all-other-WP wrong-operation sibling traversal and malformed-policy denials",
+        "future existing ReactionWireFormatAgreementTest pinned-oracle and seeded channel parse DM Pair hash and MessageLRUCache agreement",
+        "future existing admitted ReactionGraphemeClassificationTest actual ordinary-doubled-ZWJ visible versus valid reaction and FAILED direction routing",
+        "future affected declared whole closure exact mandatory source-bound method identities and nonzero discovery no failures errors or skips",
+        "exact complete trusted predecessor object and raw Git-blob equality; every old capability and planner bridge unchanged",
+        "policy fixtures prove admission only not GB11 Unicode parser cache UI JVM native or original-family acceptance",
+    ],
+}
+
+
+SHORTCUT_LIFECYCLE_TEST_CAPABILITY = {
+    "id": "wp404-shortcut-lifecycle-consumer-test",
+    "work_packages": ["WP-404"],
+    "path_rules": [
+        "android/app/src/test/kotlin/com/meshcoreone/android/app/navigation/ShortcutLifecycleConsumerTest.kt",
+    ],
+    "operations": ["create", "test", "modify"],
+    "invariants": [
+        "pinned-Intents-seven-families-db14559b39d32322b06477c6ae676112f583db50-primary-provenance-unchanged",
+        "single-exact-App-test-fixture-only-no-production-build-manifest-resources-dependencies-or-wildcards",
+        "actual-AppShortcutContent-LifecycleResumeEffect-ShortcutHost-and-Activity-handoff-not-fake-owner",
+        "real-distinct-Room-containers-null-current-radio-no-foreign-recipient-or-preowner-lookup-queue-location-permission-radio-effects",
+        "independent-old-new-owner-routing-stale-disposal-must-not-uninstall-replacement-and-confirmation-cancellation-zero-target-effects",
+        "real-ShortcutInfo-independent-pinned-twelve-locale-seven-consumed-key-values-not-counts-or-getter-self-comparison",
+        "preserve-original-recipient-single-token-format-and-separate-original-message-no-recursive-substitution",
+        "existing-ColdStart-adaptation-not-BFU-or-background-equivalence-no-new-framework-feature-or-flood-RF-permission",
+        "six-G18-exclusions-foreground-status-advert-reach-map-reach-dialog-background-advert-background-dynamic-send-background-status-unchanged",
+        "overlapping-publication-lifetime-is-observable-test-seam-not-proven-bug-no-automatic-pause-clear-policy",
+        "WP405-ChannelJoinFloodScopeApplier-PendingExternalRoute-distinct-no-same-producer-edit",
+        "existing-WP404-ef87-G09-queue-and-48-mandatory-identities-unchanged-no-replayed-credit",
+        "trusted-main-landing-and-fresh-same-owner-admission-before-future-test-authoring",
+        "same-stored-identity-immutable-authorization-prose-historical-receipts-and-revision-history-supported-same-owner-scope-evolution-normal-new-revisions-and-fresh-bound-receipts-no-impersonation-release-recreate-or-private-ledger-edit",
+        "real-semantic-collision-serialize-or-transfer-current-producer",
+        "normal-supported-own-reservation-acquire-evolve-permitted-no-private-ledger-other-owner-or-liveguard-source-ref-mutation-no-runtime-installation-settings-schedules-publication-or-merge-authority",
+    ],
+    "validation": [
+        "exact WP404 single-test create test modify positives; other-WP wrong-operation sibling traversal malformed-rule denials",
+        "future ShortcutLifecycleConsumerTest actual mounted lifecycle Activity handoff distinct Room owners stale disposal and cancellation",
+        "future real ShortcutInfo original recipient and separate message against independent pinned twelve-locale seven-key matrix",
+        "future declared affected whole closure exact mandatory source-bound method identities nonzero discovery zero failures errors skips",
+        "strict complete exact trusted predecessor object and raw Git-blob equality in BOTH helpers all older capabilities planner bridges unchanged",
+        "policy fixtures prove admission only not JVM native lifecycle UI RF BFU background or original-family acceptance",
+    ],
+}
+
+
+def shortcut_lifecycle_test_predecessor(policy):
+    """Reverse only the exact WP-404 App lifecycle fixture admission."""
+    if not isinstance(policy, dict):
+        raise PortError("Shortcut lifecycle test amendment requires a policy object")
+    result = copy.deepcopy(policy)
+    if "reservation_policy" not in result:
+        return result
+    CapabilityEngine(result)
+    rules = result["reservation_policy"]["capabilities"]
+    selected = [i for i, rule in enumerate(rules)
+                if rule["id"] == SHORTCUT_LIFECYCLE_TEST_CAPABILITY["id"]]
+    path_matches = [
+        rule for rule in rules
+        if set(rule["operations"]) & set(SHORTCUT_LIFECYCLE_TEST_CAPABILITY["operations"])
+        and ("work_packages" not in rule or "WP-404" in rule["work_packages"])
+        and any(CapabilityEngine._matches(pattern, path)
+                for path in SHORTCUT_LIFECYCLE_TEST_CAPABILITY["path_rules"]
+                for pattern in rule["path_rules"])
+    ]
+    if not selected and not path_matches:
+        return result
+    if len(selected) != 1:
+        raise PortError("Shortcut lifecycle test changed outside the exact single-fixture amendment")
+    index = selected[0]
+    if (
+        rules[index] != SHORTCUT_LIFECYCLE_TEST_CAPABILITY
+        or path_matches != [SHORTCUT_LIFECYCLE_TEST_CAPABILITY]
+        or index == 0 or rules[index - 1].get("id") != "generated-resources"
+        or index + 1 >= len(rules) or rules[index + 1] != REACTION_WIRE_CLASSIFICATION_CAPABILITY
+    ):
+        raise PortError("Shortcut lifecycle test changed outside the exact single-fixture amendment")
+    rules.pop(index)
+    return result
+
+
+def reaction_wire_classification_predecessor(policy):
+    """Reverse only the exact WP-216 rendering-wire reconciliation rule."""
+    if not isinstance(policy, dict):
+        raise PortError("Reaction wire classification amendment requires a policy object")
+    result = shortcut_lifecycle_test_predecessor(policy)
+    if "reservation_policy" not in result:
+        return result
+    reservation = result["reservation_policy"]
+    rules = reservation.get("capabilities") if isinstance(reservation, dict) else None
+    if not isinstance(rules, list):
+        raise PortError("Reaction wire classification amendment requires the canonical capability catalog")
+    selected = [i for i, rule in enumerate(rules)
+                if isinstance(rule, dict) and rule.get("id") == REACTION_WIRE_CLASSIFICATION_CAPABILITY["id"]]
+    path_matches = [
+        rule for rule in rules
+        if isinstance(rule, dict) and isinstance(rule.get("path_rules"), list)
+        and isinstance(rule.get("operations"), list)
+        and "reconcile-reaction-wire-classification" in rule["operations"]
+        and ("work_packages" not in rule or (
+            isinstance(rule["work_packages"], list) and "WP-216" in rule["work_packages"]
+        ))
+        and any(CapabilityEngine._matches(pattern, path)
+                for path in REACTION_WIRE_CLASSIFICATION_CAPABILITY["path_rules"]
+                for pattern in rule["path_rules"] if isinstance(pattern, str))
+    ]
+    if not selected and not path_matches:
+        return result
+    if len(selected) != 1:
+        raise PortError("Reaction wire classification changed outside the exact single-path amendment")
+    index = selected[0]
+    if (
+        rules[index] != REACTION_WIRE_CLASSIFICATION_CAPABILITY
+        or path_matches != [REACTION_WIRE_CLASSIFICATION_CAPABILITY]
+        or index == 0 or not isinstance(rules[index - 1], dict)
+        or rules[index - 1].get("id") != "generated-resources"
+        or index + 1 >= len(rules) or rules[index + 1] != SHARED_LOCATION_CACHE_CAPABILITY
+    ):
+        raise PortError("Reaction wire classification changed outside the exact single-path amendment")
+    rules.pop(index)
+    return result
+
+
+def shared_location_cache_predecessor(policy):
+    """Reverse only the exact WP-404 shared producer-cache support rule."""
+    if not isinstance(policy, dict):
+        raise PortError("Shared location cache amendment requires a policy object")
+    result = reaction_wire_classification_predecessor(policy)
+    if "reservation_policy" not in result:
+        return result
+    reservation = result["reservation_policy"]
+    rules = reservation.get("capabilities") if isinstance(reservation, dict) else None
+    if not isinstance(rules, list):
+        raise PortError("Shared location cache amendment requires the canonical capability catalog")
+    selected = [i for i, rule in enumerate(rules)
+                if isinstance(rule, dict) and rule.get("id") == SHARED_LOCATION_CACHE_CAPABILITY["id"]]
+    path_matches = [
+        rule for rule in rules
+        if isinstance(rule, dict) and isinstance(rule.get("path_rules"), list)
+        and isinstance(rule.get("operations"), list)
+        and "restore-shared-pre-advert-location-cache" in rule["operations"]
+        and ("work_packages" not in rule or (
+            isinstance(rule["work_packages"], list) and "WP-404" in rule["work_packages"]
+        ))
+        and any(CapabilityEngine._matches(pattern, path)
+                for path in SHARED_LOCATION_CACHE_CAPABILITY["path_rules"]
+                for pattern in rule["path_rules"] if isinstance(pattern, str))
+    ]
+    if not selected and not path_matches:
+        return result
+    if len(selected) != 1:
+        raise PortError("Shared location cache changed outside the exact eight-path amendment")
+    index = selected[0]
+    if (
+        rules[index] != SHARED_LOCATION_CACHE_CAPABILITY
+        or path_matches != [SHARED_LOCATION_CACHE_CAPABILITY]
+        or index == 0 or not isinstance(rules[index - 1], dict)
+        or rules[index - 1].get("id") != "generated-resources"
+        or index + 1 >= len(rules) or rules[index + 1] != RX_PROJECTION_REGRESSION_CAPABILITY
+    ):
+        raise PortError("Shared location cache changed outside the exact eight-path amendment")
+    rules.pop(index)
+    return result
+
+
 def rx_projection_regression_predecessor(policy):
     """Reverse only the exact existing-test source-baseline support rule."""
     if not isinstance(policy, dict):
         raise PortError("RX projection regression amendment requires a policy object")
-    result = copy.deepcopy(policy)
+    result = shared_location_cache_predecessor(policy)
     if "reservation_policy" not in result:
         return result
     reservation = result["reservation_policy"]

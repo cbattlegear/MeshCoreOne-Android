@@ -1,8 +1,10 @@
 """AndroidOnly: WP-003 Immutable, CI-derived local affected-scope requests."""
 
+import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 from .errors import PortError
 from .model import SHA
@@ -217,7 +219,11 @@ def candidate_plan(repo, base, head, requested=None, *, trusted_base=None, check
     for label, value in (("base", base), ("head", head)):
         if not isinstance(value, str) or SHA.fullmatch(value) is None:
             raise PortError(f"Affected scope requires an immutable {label} commit SHA")
-        if git(repo, "rev-parse", "--verify", value + "^{commit}") != value:
+        try:
+            resolved = git(repo, "rev-parse", "--verify", value + "^{commit}")
+        except subprocess.CalledProcessError as error:
+            raise PortError(f"Affected {label} commit is unavailable; complete history is required") from error
+        if resolved != value:
             raise PortError(f"Affected {label} is not a commit")
     authority = default_base(repo) if trusted_base is None else trusted_base
     if base != authority:
@@ -229,15 +235,34 @@ def candidate_plan(repo, base, head, requested=None, *, trusted_base=None, check
             raise PortError("Affected checkout differs from the immutable candidate inputs")
         if git(repo, "ls-files", "--others", "--exclude-standard", "-z", "--", "android", "tools/android-port"):
             raise PortError("Uncommitted affected build/tool inputs cannot supply candidate evidence")
-    if subprocess.run(
-        ["git", "-C", str(repo), "merge-base", "--is-ancestor", base, head],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    ).returncode:
-        raise PortError("Affected base is not an ancestor of the candidate")
-    raw = subprocess.check_output([
-        "git", "-C", str(repo), "diff", "--name-only", "--no-renames", "-z", base, head, "--",
-    ])
-    paths = sorted({git_path(path.decode("utf-8")) for path in raw.split(b"\0") if path})
+    grafts = git(repo, "rev-parse", "--git-path", "info/grafts")
+    grafts = Path(grafts)
+    if not grafts.is_absolute():
+        grafts = repo / grafts
+    if (
+        git(repo, "rev-parse", "--is-shallow-repository") != "false"
+        or git(repo, "for-each-ref", "--format=%(refname)", "refs/replace/")
+        or grafts.exists()
+    ):
+        raise PortError("Affected lineage requires complete, unreplaced Git history")
+    try:
+        ancestors = git(repo, "merge-base", "--all", base, head).splitlines()
+    except subprocess.CalledProcessError as error:
+        raise PortError("Affected lineage has unknown or unrelated common history") from error
+    if len(ancestors) != 1 or SHA.fullmatch(ancestors[0]) is None:
+        raise PortError("Affected lineage has ambiguous common history")
+    ancestor = ancestors[0]
+    if ancestor == head and head != base:
+        raise PortError("Affected candidate is an ancestor of the trusted target, not a branch candidate")
+    paths = set()
+    # Keep both branch changes already present in the target and target-only
+    # differences absent from the immutable candidate in the obligation set.
+    for start in dict.fromkeys((base, ancestor)):
+        raw = subprocess.check_output([
+            "git", "-C", str(repo), "diff", "--name-only", "--no-renames", "-z", start, head, "--",
+        ])
+        paths.update(git_path(path.decode("utf-8")) for path in raw.split(b"\0") if path)
+    paths = sorted(paths)
     graph_error = None
     try:
         modules = module_inventory(repo, head)
@@ -414,6 +439,62 @@ def validate_runtime_scopes(repo, plan):
 
 def run_scaffold(repo, plan, environment, output, execute, options, *, trusted_base):
     """Execute fixed affected tasks through the already-owned local supervisor."""
+    started = False
+
+    def owned_execute(*arguments):
+        nonlocal started
+        started = True
+        return execute(*arguments)
+
+    try:
+        return _run_scaffold(repo, plan, environment, output, owned_execute, options, trusted_base=trusted_base)
+    except (subprocess.CalledProcessError, PortError, OSError, KeyboardInterrupt) as failure:
+        if started:
+            report = {
+                "kind": "local-affected-only", "result": "failure",
+                **{key: plan[key] for key in ("base", "head", "tree", "scopes", "tasks", "stages")},
+                "failure": {"type": type(failure).__name__, "message": str(failure)},
+                "junit_cases": [], "junit_reports": [],
+            }
+            if isinstance(failure, subprocess.CalledProcessError):
+                report["failure"]["returncode"] = failure.returncode
+            try:
+                validate_plan(repo, plan, trusted_base=trusted_base)
+                directories, _ = report_inputs(repo, plan)
+                from .module_junit import bounded_directory
+
+                for directory in directories:
+                    record = {"directory": directory.relative_to(repo).as_posix()}
+                    try:
+                        bounded_directory(directory, repo)
+                        if not any(directory.glob("TEST-*.xml")):
+                            record["status"] = "missing-or-not-run"
+                        else:
+                            cases = collect_named_cases(repo, [directory])
+                            identities = [(case["class"], case["method"]) for case in cases]
+                            if len(set(identities)) != len(identities):
+                                raise PortError("Duplicate actual test-case identity in failed-run evidence")
+                            record["status"] = "available"
+                            record["counts"] = {
+                                outcome: sum(case["outcome"] == outcome for case in cases)
+                                for outcome in ("passed", "failure", "error", "skipped")
+                            }
+                            report["junit_cases"].extend(cases)
+                    except (PortError, OSError) as error:
+                        record.update(status="invalid", error=str(error))
+                    report["junit_reports"].append(record)
+                validate_plan(repo, plan, trusted_base=trusted_base)
+                report["source_binding"] = "valid"
+            except (PortError, OSError, subprocess.SubprocessError) as error:
+                report.update(source_binding="invalid", junit_cases=[], junit_reports=[], evidence_error=str(error))
+            try:
+                print(json.dumps(report, indent=2), flush=True)
+            except OSError as error:
+                failure.add_note("Failed to emit affected failure evidence: " + str(error))
+        raise
+
+
+def _run_scaffold(repo, plan, environment, output, execute, options, *, trusted_base):
     from . import ci
     from .ci_evidence import collect_lint, collect_suites, lint_evidence, validate_graph_runtime
     from .module_junit import bounded_directory, check_module_tests

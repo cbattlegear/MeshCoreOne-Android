@@ -1,5 +1,21 @@
 # WP-214 evidence
 
+## Current strict activity-timestamp oracle repair
+
+The separately allocated `SM-SYNC-ACTIVITY-ORDER` repair restores the original
+timestamp predicate without changing production clock/range policy. Its
+pre-edit reviewed proposal, deterministic fixture limits, native separation
+controls and pending execution are in
+[activity-order-oracle.md](activity-order-oracle.md).
+The merged #349 and #355 results remain proof only for their own exact bytes.
+
+## Current contact-prune oracle repair
+
+The separately assigned `SM-CONTACT-PRUNE-ORACLE` batch, its eleven original
+families, actual-service/Room mapping and pending execution state are recorded in
+[contact-prune-oracle.md](contact-prune-oracle.md). It starts after merged #349;
+the historical channel/suppression sections below do not claim new-batch acceptance.
+
 ## Inherited WP-201 compile correction (local, unverified)
 
 WP-201 reported an authenticated `:core:runtime:compileTestKotlin` failure in

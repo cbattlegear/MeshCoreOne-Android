@@ -182,6 +182,18 @@ through an automatic transaction or deterministic merge; real overlap serializes
 current producer. Only an unresolved semantic ownership collision, drift, protected/human gate, missing
 authentication/tool capability or substantive product decision escalates.
 
+WP-503's accessibility source-binding exception is limited to two exact paths and operations:
+`add-or-update-validator-rule` on `android/accessibility-tests/language_binding.py`, and
+`add-regression-fixture-or-test` on `android/accessibility-tests/test_language_binding.py`. These are
+WP-503-only capabilities, not broader access to the accessibility tree or additions to `wp-owned`.
+Binding evolution must keep the historical producer/path/blob immutable while recording the current
+candidate path/blob separately, tied to that candidate. It preserves producer ancestry and selected
+fixture/method identities and rejects tampered historical/current pins or unrelated source drift.
+These policy and regression checks do not claim native accessibility acceptance or authorize native or
+Gradle execution. Reversible policy checks strip the appended WP-503 pair before the WP-000
+consumer-support block and historical predecessors; that pair must remain outside the
+`disposable-native-guest`/consumer-support/`wp-owned` boundary.
+
 Each attempt persists repository, WP, backend, base/source/manifest/policy binding, capability IDs,
 operations, actual normalized paths, expiry/budget reservation, bounded repair count and
 issue/task/session/PR identities. Dispatch intent is committed **before** an external mutation. Expiry
@@ -194,7 +206,10 @@ The local helper supports trusted path/operation admission and same-owner compar
 evolution. `release` is only a compatibility name and refuses to delete advisory history; terminal merge
 reconciliation and authenticated successor admission are distinct operations. A stale historical claim
 is not a file lock, and authenticating a new autonomous worker/completion is not the same as admitting
-an isolated source edit. Preserve historical authorization bytes and actual identities/bindings;
+an isolated source edit. Advisory transfer requires the named capability operation; for `wp-owned`, the
+local CLI resolves the path against the trusted manifest only when origin and producer have the same WP.
+The returned transfer attribution does not mutate a lease or admit a successor. Preserve historical
+authorization bytes and actual identities/bindings;
 do not erase claims or reinterpret an idle session as completion.
 
 Repairs target the same actual task/PR or native session, at most three rounds per attempt; requests

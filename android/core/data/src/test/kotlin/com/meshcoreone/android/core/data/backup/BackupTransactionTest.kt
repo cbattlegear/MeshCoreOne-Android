@@ -41,12 +41,34 @@ class BackupTransactionTest : BackupRoomTest() {
 
     @OriginalCase("BackupIntegrationTests::Failed import clears pending data and restores autosave()")
     @Test fun failedRestoreLeavesNoStagedRowsAndNextStoreWriteWorks() = runBlocking {
-        val faulted = newService(BackupImportHooks(beforeCommit = { throw IOException("injected commit failure") }))
-        expectImportFailure { faulted.importBackup(envelope(devices = listOf(device())), store) }
+        val importedDevice = device()
+        val injected = IOException("injected commit failure")
+        var beforeCommitCalls = 0
+        val faulted = newService(BackupImportHooks(beforeCommit = {
+            beforeCommitCalls++
+            assertTrue(db.inTransaction())
+            val staged = db.devices().all().single()
+            assertEquals(importedDevice.radioId.value, staged.radioId)
+            assertEquals(importedDevice.publicKey, staged.publicKey)
+            assertEquals(importedDevice.nodeName, staged.nodeName)
+            throw injected
+        }))
+        val failure = expectImportFailure {
+            faulted.importBackup(envelope(devices = listOf(importedDevice)), store)
+        }
+        assertEquals(1, beforeCommitCalls)
+        when (val error = failure.error) {
+            is AppBackupError.ImportFailed ->
+                assertSame(injected, generateSequence(error.underlying) { it.cause }.last())
+            else -> fail("Expected ImportFailed, got ${error.javaClass.simpleName}")
+        }
         assertFalse(db.inTransaction())
         assertTrue(db.devices().all().isEmpty())
-        store.saveContact(contact().copy(name = "Recovered Contact"))
-        assertEquals("Recovered Contact", db.contacts().forRadio(RADIO.value).single().name)
+        store.saveContact(contact(publicKey = key(0xC1)).copy(name = "Recovered Contact"))
+        val recovered = store.fetchContacts(RADIO)
+        assertEquals(1, recovered.size)
+        assertEquals("Recovered Contact", recovered.single().name)
+        assertEquals(key(0xC1), recovered.single().publicKey)
     }
 
     @OriginalCase("BackupIntegrationTests::Disk-backed container has zero partial state after faulted import is abandoned()")
@@ -73,6 +95,36 @@ class BackupTransactionTest : BackupRoomTest() {
     }
 
     @OriginalCase("BackupIntegrationTests::Task cancellation after DB commit does not throw and returns a successful result()")
+    @Test fun actualPostCommitCallerCancellationStillDeliversCommittedResultWithoutPreferences() = runBlocking {
+        var task: Job? = null
+        var result: ImportResult? = null
+        var failure: CancellationException? = null
+        var commits = 0
+        var laterCancellationPropagated = false
+        val committed = newService(BackupImportHooks(afterCommit = {
+            assertFalse(db.inTransaction())
+            commits++
+            requireNotNull(task).cancel()
+        }))
+        task = launch(start = CoroutineStart.LAZY) {
+            try {
+                result = committed.importBackup(envelope(devices = listOf(device())), store)
+            } catch (cause: CancellationException) { failure = cause }
+            try { currentCoroutineContext().ensureActive() }
+            catch (_: CancellationException) { laterCancellationPropagated = true }
+        }
+        task.start()
+        task.join()
+        assertEquals(1, commits)
+        assertTrue(task.isCancelled)
+        assertNull(failure)
+        assertEquals(1L, result?.count(BackupModelKind.DEVICES)?.inserted)
+        assertEquals(false, result?.userDefaultsRestored)
+        assertEquals(1, db.devices().all().size)
+        assertFalse(storage.preferences.snapshot().contains(AppStorageKey.hasCompletedOnboarding))
+        assertTrue(laterCancellationPropagated)
+    }
+
     @Test fun actualPostCommitCallerCancellationStillDeliversCommittedResultAndPreferences() = runBlocking {
         var task: Job? = null
         var result: ImportResult? = null

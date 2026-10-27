@@ -1,4 +1,5 @@
 // PortedFrom: MC1/Views/RemoteNodes/TelemetryHistoryOverviewView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/RemoteNodes/Location/LocationReportRow.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.remotenodes.ui
 
 import androidx.compose.foundation.horizontalScroll
@@ -110,8 +111,21 @@ internal fun RemoteNodeHistoryRoute(
                     TextButton({ fullMap = true }) { Text(stringResource(L.remoteNodesStatusViewOnMap)) }
                     RemoteHeading(stringResource(L.remoteNodesHistoryLocationReportsHeader))
                     reports.forEach { report ->
-                        TextButton({ selectedReport = report; fullMap = true }) {
-                            Text(LocationReportRowText.detailLine(report, locale, zone, system))
+                        TextButton(
+                            { selectedReport = report; fullMap = true },
+                            Modifier.heightIn(min = 48.dp).testTag("remote-history-report:${report.id}"),
+                        ) {
+                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    LocationReportRowText.relativeTime(report, clock.now, zone).format(locale),
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                                Text(
+                                    LocationReportRowText.detailLine(report, locale, zone, system),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                     if (fullMap) Dialog(

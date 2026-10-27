@@ -184,18 +184,14 @@ class NeighborSNRMapBuilderTest {
         assertEquals(0, result.points.countStyle(PinStyle.REPEATER))
         assertEquals(1, result.unplottable.size)
         assertEquals(NodeNameMatchKind.UNRESOLVED, result.unplottable.firstOrNull()?.matchKind)
-        assertEquals(
-            NeighborNameResolver.fallbackName(neighbor.publicKeyPrefix, keyDisplayByteCount),
-            result.unplottable.firstOrNull()?.displayName,
-        )
+        assertEquals("DEAD", result.unplottable.firstOrNull()?.displayName)
     }
 
     @Test
     @OriginalCase("NeighborSNRMapBuilderTests::unresolved title hex length matches secondary formatting for the same count(keyDisplayByteCount : Int)")
     fun unresolvedTitleHexLengthMatchesSecondaryFormattingForTheSameCount() {
-        for (keyDisplayByteCount in listOf(2, 3)) {
+        for ((keyDisplayByteCount, expected) in listOf(2 to "DEAD", 3 to "DEADBE")) {
             val neighbor = neighbor(listOf(0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01))
-            val expected = NeighborNameResolver.fallbackName(neighbor.publicKeyPrefix, keyDisplayByteCount)
 
             val result = build(
                 centerSession(37.0, -122.0), listOf(neighbor), emptyList(), emptyList(), MapFilterState(),

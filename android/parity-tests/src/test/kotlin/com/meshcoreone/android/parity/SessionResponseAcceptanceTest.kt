@@ -58,9 +58,6 @@ class SessionResponseAcceptanceTest {
         const val SOURCE_SELF_INFO_RESTORED_HEX =
             "050116164444444444444444444444444444444444444444444444444444" +
                 "44444444444400000000000000000000000038f60d0048e801000705526573746f726564"
-        const val SOURCE_CHANNEL_SELF_INFO_HEX =
-            "050000000101010101010101010101010101010101010101010101010101" +
-                "01010101010100000000000000000000000038f60d0048e801000705546573744e6f6465"
         const val SOURCE_CHANNEL_ZERO_HEX =
             "12007a65726f000000000000000000000000000000000000000000000000" +
                 "0000000000000000000000000000000000000000"
@@ -158,7 +155,7 @@ class SessionResponseAcceptanceTest {
         val transport = MockTransport()
         transport.setSupportsWriteWithoutResponse(true)
         val configuration = sourcePipelineConfiguration(window = 2)
-        val session = startSourceSession(transport, configuration, hex(SOURCE_CHANNEL_SELF_INFO_HEX))
+        val session = startSourceSession(transport, configuration, hex(SOURCE_SELF_INFO_TEST_HEX))
         try {
             val call = backgroundScope.async { session.getChannels(listOf(0u, 1u, 2u, 3u)) }
             runCurrent()
@@ -194,7 +191,7 @@ class SessionResponseAcceptanceTest {
         val transport = MockTransport()
         transport.setSupportsWriteWithoutResponse(true)
         val configuration = sourcePipelineConfiguration(idleTimeout = 0.1)
-        val session = startSourceSession(transport, configuration, hex(SOURCE_CHANNEL_SELF_INFO_HEX))
+        val session = startSourceSession(transport, configuration, hex(SOURCE_SELF_INFO_TEST_HEX))
         try {
             val pipeline = backgroundScope.async { session.getChannels(listOf(0u, 1u)) }
             runCurrent()

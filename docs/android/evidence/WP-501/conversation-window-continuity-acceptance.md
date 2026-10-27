@@ -17,11 +17,13 @@ then to 147 for this evidence path. Both actual admissions returned `wp-owned`
 with operation `create`. The historical reservation binding was retained,
 not released/recreated or represented as current-head acceptance.
 
-This is one grouped **test-only, unverified regression candidate**, not a product
-repair or completion of WP-501. It follows the coordinator's release of fixes
+This is one grouped regression candidate, not completion of WP-501. It was authored
+test-only and unverified; the product repair that follows
+([Product repair and local execution](#product-repair-and-local-execution)) is WP-307's
+live-data-path continuation and is recorded here only to bind the observed results. It follows the coordinator's release of fixes
 after the complete original-family investigation; it does not restart that ledger.
-Only the WP-501 test/evidence/deviation roots change. No production, shared
-tooling, parser, spinner, runtime, policy, original source, or device path changes.
+The original candidate changed only the WP-501 test/evidence/deviation roots; the
+repair commit's production edits are listed below.
 
 ## Actual consumer and assertions
 
@@ -126,3 +128,46 @@ hardware to continue software work.
 The exposed tool catalog has no `send_session_message`; direct delivery to
 coordinator `fbbcfbcc-1115-4f05-94f9-9109c347734a` cannot be claimed. This concrete
 test/evidence path is available for its in-session integration.
+
+## Product repair and local execution
+
+The repair continues the source-derived diagnosis above and changes no assertion of the
+eight methods. Hosted run `40332259810` for candidate `b9e32319a` had failed five of the
+eight (`directRefreshPreservesOneHundredLoadedRowsAndTwelveOlderRows`,
+`channelRefreshPreservesOneHundredLoadedRowsAndTwelveOlderRows`,
+`directRefreshDoesNotAdmitTheFiftyFirstProbeRow`,
+`channelRefreshDoesNotAdmitTheFiftyFirstProbeRow`,
+`directRefreshKeepsSentReactionRowsStoredButOutsideTheVisibleWindow`). A local run
+of the merged candidate reproduced exactly those five failures before the repair.
+
+Production changes (owner: WP-307 timeline, with the App adapter and benchmark target
+delegations that implement the new contract member):
+
+- `ChatViewModel.refresh()` anchors on the oldest loaded `sortDate` and uses
+  `fetchMessageWindow(anchorSortDate, floorLimit)` instead of widening by `PAGE_SIZE`.
+- Sent outgoing reaction rows are removed from the visible timeline in `open`,
+  `loadOlder` and `refresh`, while `totalFetchedCount` and paging offsets count every
+  stored row. The App adapter supplies the existing `isHiddenOutgoingReaction` policy.
+- `TimelineDataSource.fetchMessageWindow` and `ChatTimelineDependencies.isHiddenOutgoingReaction`
+  are added; see [WP-307 deviations](../../deviations/WP-307.md) for the adapted
+  spinner-retirement scenario and the frozen-source mapping.
+
+Local executions in the merged worktree (JDK/SDK from the local build cache, offline
+Gradle, `--max-workers=4`):
+
+- Before repair: `:app:testDebugUnitTest --tests '*ConversationWindowContinuityAcceptanceTest*'`
+  ran 8, failed 5 (the five above), passed 3.
+- After repair: the same selection ran 8, failed 0, skipped 0.
+- After repair: `:feature:chats:testDebugUnitTest` ran 394 cases, failed 0, skipped 0
+  (392 existing plus two new hidden-reaction cases).
+- `:app:compileBenchmarkKotlin`: PASS (compiles the third `TimelineDataSource` adapter).
+- After repair: `:app:testDebugUnitTest` restricted to the ten classes that consume the changed
+  timeline/data-source paths (`ChannelAvatarConsumerTest`, `ChatOpenScopeAcceptanceTest`,
+  `ChatPrefetchAdmissionAcceptanceTest`, `ChatRegistrationTest`,
+  `ConversationWindowContinuityAcceptanceTest`, `DurableRetryIntegrationTest`,
+  `FailedSendThreadRecoveryOriginalTest`, `FreshStoreBackupAcceptanceTest`,
+  `MessageBackupAcceptanceTest`, `NotificationDraftRestorationTest`) ran 94, failed 0,
+  skipped 0. The complete `:app:testDebugUnitTest` suite (one forked JVM per class) was **not**
+  run locally; it remains **UNVERIFIED** here and is left to the hosted exact-commit job.
+This is a local candidate result only. The exact-commit hosted job result and log remain
+authoritative; no device, hardware, iOS, signing or license verification occurred.

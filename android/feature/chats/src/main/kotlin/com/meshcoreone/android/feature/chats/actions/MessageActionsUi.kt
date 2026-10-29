@@ -283,6 +283,8 @@ fun MessageActionsContent(
             senderName = message.senderNodeName.orEmpty(),
             contacts = state.directory.contacts,
             initialSelectedIds = confirmedBlockContactIds,
+            contactsLoadFailed = state.blockContactsFailure != null,
+            onRetryContacts = onLoadBlockContacts,
             onConfirm = {
                 confirmedBlockContactIds = it.toSet()
                 onBlockSender(message, it)
@@ -818,6 +820,8 @@ private fun BlockSenderDialog(
     senderName: String,
     contacts: List<ContactDTO>,
     initialSelectedIds: Set<UUID>,
+    contactsLoadFailed: Boolean,
+    onRetryContacts: (() -> Unit)?,
     onConfirm: (Set<UUID>) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -832,6 +836,21 @@ private fun BlockSenderDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(stringResource(AppChatsStrings.chatsBlockSenderLimitation))
+                if (contactsLoadFailed) {
+                    Text(
+                        AppLocalizableStrings.errorPersistenceFetchFailed(
+                            resources,
+                            stringResource(AppChatsStrings.chatsBlockSenderMatchingContacts),
+                        ),
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                    onRetryContacts?.let { retry ->
+                        TextButton(onClick = retry, modifier = Modifier.sharedTouchTarget()) {
+                            Text(stringResource(AppLocalizableStrings.commonTryAgain))
+                        }
+                    }
+                }
                 if (matching.isNotEmpty()) {
                     Text(
                         stringResource(AppChatsStrings.chatsBlockSenderMatchingContacts),

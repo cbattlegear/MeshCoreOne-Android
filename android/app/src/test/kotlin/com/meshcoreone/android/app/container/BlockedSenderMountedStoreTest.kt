@@ -20,6 +20,7 @@ import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.actions.MessageActionsFailure
+import com.meshcoreone.android.feature.chats.actions.MessageActionsDataSource
 import com.meshcoreone.android.feature.chats.actions.MessageActionsRoute
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
@@ -68,6 +69,55 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             }
         }
         return host
+    }
+
+    @Test fun failedContactReadShowsFetchRecoveryAndSuccessfulRetryCanBeCancelledWithoutBlocking() = runTest {
+        val harness = ContainerHarness(this, store)
+        val actual = harness.container.chatsFeature.actions(radio)
+        var reads = 0
+        val source = object : MessageActionsDataSource by actual {
+            override suspend fun contacts(radioId: RadioId): List<ContactDTO> {
+                reads++
+                if (reads == 1) throw IllegalStateException("controlled directory read failure")
+                return actual.contacts(radioId)
+            }
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val holder = MessageActionsStateHolder(source, scope)
+        store.saveMessage(message)
+        val host = mount(holder)
+        try {
+            compose.waitForIdle()
+            assertEquals(0, reads)
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
+                .performScrollTo().performClick()
+            compose.waitUntil(5_000) { holder.state.value.blockContactsFailure != null }
+            val loadError = AppLocalizableStrings.errorPersistenceFetchFailed(
+                host.get().resources,
+                host.get().getString(AppChatsStrings.chatsBlockSenderMatchingContacts),
+            )
+            val saveError = AppLocalizableStrings.errorPersistenceSaveFailed(
+                host.get().resources,
+                host.get().getString(AppChatsStrings.chatsMessageActionBlockSender),
+            )
+            compose.onNodeWithText(loadError).assertExists()
+            compose.onNodeWithText(saveError).assertDoesNotExist()
+            assertNull(holder.state.value.failure)
+            assertTrue(store.fetchBlockedChannelSenders(radio).isEmpty())
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            compose.waitUntil(5_000) { reads == 2 && holder.state.value.blockContactsFailure == null }
+            compose.onNodeWithText(loadError).assertDoesNotExist()
+            compose.onNodeWithText(saveError).assertDoesNotExist()
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsBlockSenderCancel)).performClick()
+            compose.waitForIdle()
+            assertNull(holder.state.value.failure)
+            assertTrue(store.fetchBlockedChannelSenders(radio).isEmpty())
+            assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+        } finally {
+            host.pause().stop().destroy()
+            scope.cancel()
+            harness.container.close()
+        }
     }
 
     @Test fun cancelPreservesHistoryAndConfirmedMountedActionDeletesOnlyTheSelectedSenderRadio() = runTest {

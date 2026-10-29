@@ -37,6 +37,7 @@ sealed interface MessageActionsFailure {
     data object DetailsLoadFailed : MessageActionsFailure
     data object ReactionsLoadFailed : MessageActionsFailure
     data object BlockFailed : MessageActionsFailure
+    data object BlockContactsLoadFailed : MessageActionsFailure
     data object MuteFailed : MessageActionsFailure
 }
 
@@ -59,6 +60,7 @@ data class MessageActionsState(
     val isLoadingReactions: Boolean = false,
     val reactionFailure: MessageActionsFailure.ReactionsLoadFailed? = null,
     val isReactionLoadCancelled: Boolean = false,
+    val blockContactsFailure: MessageActionsFailure.BlockContactsLoadFailed? = null,
 )
 
 class MessageActionsStateHolder(
@@ -158,6 +160,7 @@ class MessageActionsStateHolder(
                     val contacts = dataSource.contacts(radioId)
                     contactsRadioId = radioId
                     mutableState.value = mutableState.value.copy(
+                        blockContactsFailure = null,
                         directory = mutableState.value.directory.copy(
                             contacts = contacts,
                             repeaters = contacts.filter { it.isRepeater },
@@ -167,7 +170,7 @@ class MessageActionsStateHolder(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                mutableState.value = mutableState.value.copy(failure = MessageActionsFailure.BlockFailed)
+                mutableState.value = mutableState.value.copy(blockContactsFailure = MessageActionsFailure.BlockContactsLoadFailed)
             }
         }
     }

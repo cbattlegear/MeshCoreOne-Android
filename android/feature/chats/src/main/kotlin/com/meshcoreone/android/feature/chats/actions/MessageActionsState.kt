@@ -87,6 +87,7 @@ class MessageActionsStateHolder(
                 mutableState.value = mutableState.value.copy(
                     isLoadingDetails = false,
                     repeats = repeats,
+                    blockContactsFailure = null,
                     directory = MessagePathDirectory(
                         contacts,
                         contacts.filter { it.isRepeater },

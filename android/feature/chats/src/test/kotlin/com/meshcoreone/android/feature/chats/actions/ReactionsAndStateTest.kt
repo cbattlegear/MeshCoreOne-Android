@@ -65,6 +65,24 @@ class ReactionsAndStateTest {
     }
 
     @Test
+    fun `successful path directory load clears the block contact load error before cached reuse`() = runBlocking {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u)
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        source.contactRead = { throw IllegalStateException("controlled read failure") }
+        holder.loadBlockContacts(target.radioId)
+        assertIs<MessageActionsFailure.BlockContactsLoadFailed>(holder.state.value.blockContactsFailure)
+        val contacts = listOf(contact(0xAA, name = "RemoteNode"))
+        source.contactRead = { contacts }
+        holder.loadDetails(target)
+        assertEquals(null, holder.state.value.blockContactsFailure)
+        assertSame(contacts, holder.state.value.directory.contacts)
+        holder.loadBlockContacts(target.radioId)
+        assertEquals(2, source.contactReads)
+        assertEquals(null, holder.state.value.blockContactsFailure)
+    }
+
+    @Test
     fun `cancelled block contact read does not become a load or submission failure`() = runBlocking {
         val source = FakeActionsSource()
         val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null)

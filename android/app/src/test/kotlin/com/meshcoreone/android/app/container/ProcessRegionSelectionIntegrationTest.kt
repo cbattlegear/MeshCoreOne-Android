@@ -23,7 +23,7 @@ class ProcessRegionSelectionIntegrationTest : RoomProcessTest() {
         preferences.persist(original)
         val h = ContainerHarness(this, store, regionStore = preferences)
         try {
-            h.appState.loadPersistedRegionSelection()
+            h.container.start().join()
             assertEquals(original, h.appState.regionSelection)
             assertEquals(original, preferences.load())
             h.appState.regionSelection = replacement

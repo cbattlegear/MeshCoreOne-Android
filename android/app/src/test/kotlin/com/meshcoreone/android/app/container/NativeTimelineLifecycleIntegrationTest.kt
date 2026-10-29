@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
@@ -20,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.TestScope
 import org.junit.Test
@@ -28,6 +30,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 class NativeTimelineLifecycleIntegrationTest : RoomProcessTest() {
     @Test fun closedScreenReopensFromRoomWithNewTailAndDraftWithoutKeepingASecondGraph() = runTest {
@@ -134,7 +138,12 @@ class NativeTimelineLifecycleIntegrationTest : RoomProcessTest() {
     }
 
     private suspend fun TestScope.assertClosedOwnerArrival(direct: Boolean) {
-        val h = ContainerHarness(this, store)
+        val syncClock = object : SyncClock {
+            override fun now() = EPOCH
+            override fun elapsed() = testScheduler.currentTime.milliseconds
+            override suspend fun sleep(duration: Duration) = delay(duration)
+        }
+        val h = ContainerHarness(this, store, syncClock = syncClock)
         val closedScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
         val reopenedScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
         val peerKey = key(3)

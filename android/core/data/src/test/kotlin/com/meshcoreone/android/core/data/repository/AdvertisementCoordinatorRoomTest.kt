@@ -328,7 +328,7 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
     private class Source : AdvertisingSessionOps, SessionEventStreaming {
         private val broadcaster = EventBroadcaster<MeshEvent>()
         val handled = mutableListOf<MeshEvent>()
-        override val connectionState: Flow<ConnectionState> = flowOf(ConnectionState.CONNECTED)
+        override val connectionState: Flow<ConnectionState> = flowOf(ConnectionState.Connected)
         override fun events(): Flow<MeshEvent> = events(EventFilter { true })
         override fun events(filter: EventFilter): Flow<MeshEvent> {
             val subscription = broadcaster.subscribe()

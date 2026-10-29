@@ -131,6 +131,7 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         try {
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
+            compose.waitForIdle()
             compose.waitUntil(5_000) { holder.state.value.directory.contacts.any { it.id == selected.id } }
             compose.onNode(isToggleable()).assertIsOff().performClick().assertIsOn()
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()

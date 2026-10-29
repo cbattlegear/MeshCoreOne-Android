@@ -644,11 +644,11 @@ class RepairExecutionTests(unittest.TestCase):
                         + body + "; @Test fun actual() {} }",
                         reject_inherited=reject_inherited,
                     )
-        with self.assertRaisesRegex(PortError, "use-site"):
-            _kotlin_junit_methods(
-                "import org.junit.Rule\nclass T(@get:Rule val rule: Int = 0) : Parent() { "
-                "@Test fun actual() {} }"
-            )
+        for body in ("", " { @Test fun actual() {} }"):
+            with self.subTest(body=body), self.assertRaisesRegex(PortError, "use-site"):
+                _kotlin_junit_methods(
+                    "import org.junit.Rule\nclass T(@get:Rule val rule: Int = 0) : Parent()" + body,
+                )
         with self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
             _kotlin_junit_methods(source, reject_inherited=True)
         for companion in (

@@ -860,15 +860,18 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         raise PortError("Unbalanced Kotlin scope in hosted test source")
 
     inherited_bodies, companion_bodies, header_bodies = set(), {}, []
+    inherited_header_annotations = set()
     inherited_scope, unresolved_scope = False, False
     for start, value in enumerate(tokens):
         if value not in ("class", "interface", "object") or (
             start and tokens[start - 1] in (".", ":")
         ):
             continue
-        index, nesting, inherited = start + 1, [], False
+        index, nesting, inherited, header_annotations = start + 1, [], False, []
         while index < len(tokens):
             current = tokens[index]
+            if current == "@" and nesting:
+                header_annotations.append(index)
             if not nesting:
                 if current == ":":
                     inherited = True
@@ -898,6 +901,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             index += 1
         unresolved_scope |= bool(nesting)
         inherited_scope |= inherited
+        if inherited:
+            inherited_header_annotations.update(header_annotations)
         if inherited and value == "object" and start and tokens[start - 1] == "companion":
             inherited_bodies.update(scopes[start][-1:])
     if reject_inherited and (inherited_scope or unresolved_scope):
@@ -915,7 +920,10 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         # Companion members are visible in their containing class as well.
         visible += [parent + (body,) for parent in tuple(visible)
                     for body in companion_bodies.get(parent, ())]
-        if unresolved_scope or any(inherited_bodies.intersection(parent) for parent in visible):
+        if (
+            unresolved_scope or position in inherited_header_annotations
+            or any(inherited_bodies.intersection(parent) for parent in visible)
+        ):
             return set()
         shadowed = set().union(*(declared_names.get(parent, set()) for parent in visible))
         return imported_non_tests - shadowed

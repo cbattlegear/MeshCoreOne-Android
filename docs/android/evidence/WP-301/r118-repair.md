@@ -124,6 +124,14 @@ The existing retained local Gradle execution lock is tracked in #440. Neither
 condition authorizes bypass, runtime installation, manual lock deletion or
 claims of native test success.
 
+After committing `e0e493e39ebee70cc9ae4d5eb2bc67e024273560`, the supported
+`python tools\android-port\local\check.py --commit
+e0e493e39ebee70cc9ae4d5eb2bc67e024273560 --affected-base
+4322381d521f9ae1ecdddd2569679be7b6edd725` returned `BLOCKED: Installed execution
+runtime is old or mismatched: hook_test.py`. Existing supervised runtime
+reconciliation is tracked in #444. Hosted execution remains the independent
+route; no candidate helper was installed into the privileged runtime.
+
 The trusted shared software lane and change-scoped hosted workflow apply:
 `ci.py preflight`, `ci.py run --stage scaffold`, and `ci.py inspect` with the
 actual selected obligations. Empty WP-301 macro commands do not independently

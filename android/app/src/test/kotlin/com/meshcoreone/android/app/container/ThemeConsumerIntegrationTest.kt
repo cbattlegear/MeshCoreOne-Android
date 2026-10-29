@@ -172,8 +172,8 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
                 }
             }
             compose.onNodeWithTag("incoming", useUnmergedTree = true).assertIsDisplayed()
-            val originalIncoming = layout("incoming")
-            val originalOutgoing = layout("outgoing")
+            val originalIncoming = colors(layout("incoming"))
+            val originalOutgoing = colors(layout("outgoing"))
             val versions = Triple(h.appState.contactsVersion.value, h.appState.conversationsVersion.value, h.appState.servicesVersion.value)
             for (id in listOf(ThemeId.NORD, ThemeId.EMBER)) {
                 storage.preferences.remove(AppearanceStorageKey.selectedThemeID)
@@ -187,8 +187,8 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
                 assertEquals(91, retained)
                 val incoming = layout("incoming")
                 val outgoing = layout("outgoing")
-                assertNotEquals(originalIncoming, incoming)
-                assertNotEquals(originalOutgoing, outgoing)
+                assertNotEquals(originalIncoming, colors(incoming))
+                assertNotEquals(originalOutgoing, colors(outgoing))
                 assertReadable(incoming, incomingBackground)
                 assertReadable(outgoing, outgoingBackground)
                 assertEquals(id.rawValue, storage.preferences.get(AppearanceStorageKey.selectedThemeID))
@@ -249,10 +249,14 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
         return layouts.single().layoutInput.text
     }
 
-    private fun assertReadable(text: AnnotatedString, background: Color) {
+    private fun colors(text: AnnotatedString): List<Color> {
         val hashtag = text.getLinkAnnotations(6, text.length).single().item.styles?.style
         val base = text.spanStyles.first { it.start == 0 && it.end == text.length }.item
-        for (color in listOf(base.color, assertNotNull(hashtag).color)) {
+        return listOf(base.color, assertNotNull(hashtag).color)
+    }
+
+    private fun assertReadable(text: AnnotatedString, background: Color) {
+        for (color in colors(text)) {
             assertTrue(WCAGContrast.contrastRatio(color.toThemeColor(), background.toThemeColor()) >= 4.5)
         }
     }

@@ -293,11 +293,12 @@ class RadioSessionContainer private constructor(
             try {
                 messagePollingService.pauseAutoFetch()
                 messagePollingService.pollAllMessages()
-                stopEventMonitoring()
+                stopEventMonitoring(keepAcknowledgements = true)
             } catch (failure: Throwable) {
                 synchronized(lock) { identityIngestionQuiesced = false }
                 try {
                     if (!isClosed) withContext(NonCancellable) {
+                        stopEventMonitoring(keepAcknowledgements = true)
                         messagePollingService.resumeAutoFetch()
                         ensureListeners()
                     }
@@ -387,7 +388,7 @@ class RadioSessionContainer private constructor(
     }
 
     /** Stops every monitor. In-flight DMs are not failed: the radio re-emits the delivery confirmation on return. */
-    suspend fun stopEventMonitoring(): Unit = monitoringLock.withLock {
+    suspend fun stopEventMonitoring(keepAcknowledgements: Boolean = false): Unit = monitoringLock.withLock {
         if (synchronized(lock) { monitoring != Monitoring.ACTIVE }) return@withLock
         advertisementService.stopEventMonitoring()
         rxLogService.stopEventMonitoring()
@@ -398,8 +399,10 @@ class RadioSessionContainer private constructor(
         } catch (failure: Exception) {
             logger.log(Level.WARNING, "RX log flush on stop failed: ${failure.message}")
         }
-        messageService.stopEventMonitoring()
-        messageService.stopAckExpiryChecking()
+        if (!keepAcknowledgements) {
+            messageService.stopEventMonitoring()
+            messageService.stopAckExpiryChecking()
+        }
         messagePollingService.stopMessageEventMonitoring()
         remoteNodeService.stopEventMonitoring()
         debugLogBuffer.shutdown()

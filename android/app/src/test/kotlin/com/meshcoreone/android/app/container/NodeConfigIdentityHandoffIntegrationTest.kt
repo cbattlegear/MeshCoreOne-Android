@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.ConfigSections
+import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.MeshCoreNodeConfig
@@ -12,6 +14,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.CommandCode
+import com.meshcoreone.android.core.protocol.model.TextType
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimePreferenceSnapshot
@@ -181,6 +184,50 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun anAcknowledgementDuringAReversibleIdentityPauseIsNotLost() = runTest {
+        withIdentityNode { h, node, radio, _ ->
+            val contact = ContactDTO(radioId = node.token.radioId, publicKey = contactKey,
+                name = "Peer", lastHeardTimestamp = null)
+            store.saveContact(contact)
+            val original = radio.respond
+            var acknowledgement: Bytes? = null
+            var heldKeyWrite = false
+            radio.respond = { packet ->
+                when (packet[0]) {
+                    CommandCode.SEND_MESSAGE.rawValue -> {
+                        acknowledgement = sentAndDelivered(packet, radio.publicKey)[1]
+                        listOf(sentReply(packet, radio.publicKey))
+                    }
+                    CommandCode.IMPORT_PRIVATE_KEY.rawValue -> {
+                        heldKeyWrite = true
+                        emptyList()
+                    }
+                    else -> original(packet)
+                }
+            }
+            val message = node.messageService.sendDirectMessage("Pending ACK", contact, TextType.PLAIN_TEXT, null)
+            val work = backgroundScope.async {
+                runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId) }
+            }
+            h.eventually("identity write held with partition ingestion paused") { heldKeyWrite }
+            assertFalse(node.messagePollingService.isAutoFetching)
+            radio.push(assertNotNull(acknowledgement))
+            val delivered = backgroundScope.async {
+                while (store.fetchMessage(EntityKey(node.token.radioId, message.id))?.status != MessageStatus.DELIVERED) {
+                    kotlinx.coroutines.delay(1)
+                }
+            }
+            h.eventually("ACK is persisted before the paused import resumes") { delivered.isCompleted }
+            delivered.await()
+            radio.push(Bytes.of(1, 1))
+            h.eventually("rejected import cleanup") { work.isCompleted }
+            assertTrue(work.await().isFailure)
+            assertTrue(node.messagePollingService.isAutoFetching)
+            assertEquals(MessageStatus.DELIVERED, assertNotNull(
+                store.fetchMessage(EntityKey(node.token.radioId, message.id))).status)
+        }
+    }
+
     private suspend fun TestScope.assertPathUpdateRefreshesTheRealContact(
         h: ContainerHarness, node: RadioSessionContainer, radio: FirmwareRadio, peerKey: Bytes,
     ) {
@@ -189,7 +236,8 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
         radio.knownContacts += contactFrame(peerKey, "After identity import", lastModified = 1001)
         val requests = radio.sent.count { it[0] == CommandCode.GET_CONTACTS.rawValue }
         radio.push(Bytes.of(0x81) + peerKey)
-        h.eventually("resumed advert handler requests a real contact delta", virtualBudgetMillis = 10_000) {
+        h.eventually("resumed advert handler requests a real contact delta",
+            virtualBudgetMillis = 10_000, virtualStepMillis = 100) {
             radio.sent.count { it[0] == CommandCode.GET_CONTACTS.rawValue } > requests
         }
         val refreshed = backgroundScope.async {

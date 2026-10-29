@@ -91,6 +91,7 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             assertEquals(0, reads)
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
+            compose.waitForIdle()
             compose.waitUntil(5_000) { holder.state.value.blockContactsFailure != null }
             val loadError = AppLocalizableStrings.errorPersistenceFetchFailed(
                 host.get().resources,
@@ -105,6 +106,7 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             assertNull(holder.state.value.failure)
             assertTrue(store.fetchBlockedChannelSenders(radio).isEmpty())
             compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain)).performClick()
+            compose.waitForIdle()
             compose.waitUntil(5_000) { reads == 2 && holder.state.value.blockContactsFailure == null }
             compose.onNodeWithText(loadError).assertDoesNotExist()
             compose.onNodeWithText(saveError).assertDoesNotExist()

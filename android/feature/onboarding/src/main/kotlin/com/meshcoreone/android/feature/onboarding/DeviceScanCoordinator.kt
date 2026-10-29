@@ -85,10 +85,10 @@ class DeviceScanCoordinator(
         return PairingBlocker.NONE
     }
 
-    fun retryConnection(deviceId: UUID) = run(initiated = false) { pairing.retryConnection(deviceId) }
+    fun retryConnection(deviceId: UUID) = run(initiated = false, retriedDeviceId = deviceId) { pairing.retryConnection(deviceId) }
     fun connectDemo() = run(initiated = true) { demo.connectDemo() }
 
-    private fun run(initiated: Boolean, action: suspend () -> OnboardingConnectOutcome) {
+    private fun run(initiated: Boolean, retriedDeviceId: UUID? = null, action: suspend () -> OnboardingConnectOutcome) {
         if (mutable.value.localBusy) return
         mutable.update { it.copy(localBusy = true, didInitiatePairing = it.didInitiatePairing || initiated, failure = null) }
         job = scope.launch {
@@ -100,11 +100,11 @@ class DeviceScanCoordinator(
             } catch (failure: Exception) {
                 OnboardingConnectOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
             }
-            apply(outcome)
+            apply(outcome, retriedDeviceId)
         }
     }
 
-    private fun apply(outcome: OnboardingConnectOutcome) {
+    private fun apply(outcome: OnboardingConnectOutcome, retriedDeviceId: UUID?) {
         when (outcome) {
             OnboardingConnectOutcome.Connected -> {
                 mutable.update { it.copy(localBusy = false, otherAppDeviceId = null, successTick = it.successTick + 1) }
@@ -114,8 +114,13 @@ class DeviceScanCoordinator(
                 mutable.update { it.copy(localBusy = false) }
             is OnboardingConnectOutcome.Failed -> mutable.update {
                 it.copy(
-                    localBusy = false, failure = outcome.message,
-                    otherAppDeviceId = outcome.retryDeviceId ?: it.otherAppDeviceId,
+                    localBusy = false, failure = outcome.message.takeUnless { outcome.presentedByConnectionUi },
+                    otherAppDeviceId = when {
+                        outcome.presentedByConnectionUi -> null
+                        outcome.retryDeviceId != null -> outcome.retryDeviceId
+                        retriedDeviceId == it.otherAppDeviceId -> retriedDeviceId
+                        else -> null
+                    },
                     failureTick = it.failureTick + 1,
                 )
             }

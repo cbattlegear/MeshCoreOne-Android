@@ -40,6 +40,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
 import com.meshcoreone.android.feature.onboarding.OnboardingRegionPort
 import com.meshcoreone.android.feature.onboarding.OnboardingWiFiPort
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -97,8 +98,15 @@ class AppStateOnboardingHost(private val container: AppContainer) : OnboardingCo
     }
 
     override suspend fun retryConnect(deviceId: UUID) {
-        container.connectionPort.connect(deviceId, forceReconnect = true)
-        appState.wireServicesIfConnected()
+        try {
+            container.connectionPort.connect(deviceId, forceReconnect = true)
+            appState.wireServicesIfConnected()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            appState.connectionUI.presentSavedDeviceConnectFailure(deviceId, failure)
+            throw failure
+        }
     }
 
     override suspend fun connectWiFi(host: String, port: UShort) = appState.connectViaWiFi(host, port)

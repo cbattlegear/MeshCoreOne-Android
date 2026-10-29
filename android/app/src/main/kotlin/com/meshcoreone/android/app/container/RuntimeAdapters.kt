@@ -72,7 +72,7 @@ class RuntimePairingPort(
         )
     }
 
-    override suspend fun disconnectTransport() = manager.disconnectTransport()
+    override suspend fun disconnectTransport() = manager.disconnectTransport(requireComplete = true)
 
     override suspend fun clearReconnectingDevice() {
         manager.reconnectionCoordinator.cancelTimeout()

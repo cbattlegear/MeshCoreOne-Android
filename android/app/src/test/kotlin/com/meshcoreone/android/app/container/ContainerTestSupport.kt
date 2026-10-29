@@ -101,12 +101,18 @@ internal fun syntheticAddress(id: UUID): String {
  * commands with an empty mesh (no contacts, channels all unconfigured, no queued messages). Tests inspect
  * [sent] and hook [respond] to add behavior.
  */
-internal class FirmwareRadio(private val publicKey: Bytes, private val nodeName: String = "TestNode") : MeshTransport {
+internal class FirmwareRadio(var publicKey: Bytes, private val nodeName: String = "TestNode") : MeshTransport {
     private var inbound = Channel<Bytes>(Channel.UNLIMITED)
-    private var connected = false
+    var connected = false
+        private set
     val sent = mutableListOf<Bytes>()
     var connects = 0
     var closes = 0
+    var disconnecting = false
+        private set
+    var disconnectGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    var disconnectFailure: Exception? = null
+    var retainConnectionOnDisconnect = false
     var readers = 0
     var connectFailure: Exception? = null
     var firmwareVersion: UByte = 9u
@@ -136,7 +142,16 @@ internal class FirmwareRadio(private val publicKey: Bytes, private val nodeName:
     }
 
     override suspend fun disconnect() {
-        if (connected) { connected = false; closes++; inbound.close() }
+        if (connected) {
+            disconnecting = true
+            disconnectGate?.await()
+            disconnectFailure?.let { throw it }
+            if (retainConnectionOnDisconnect) return
+            connected = false
+            closes++
+            inbound.close()
+            disconnecting = false
+        }
     }
 
     override suspend fun isConnected(): Boolean = connected
@@ -176,7 +191,7 @@ internal class FirmwareRadio(private val publicKey: Bytes, private val nodeName:
         else -> throw AssertionError("Unexpected command ${data.hexString}")
     }
 
-    private fun selfPacket(): Bytes =
+    fun selfPacket(): Bytes =
         Bytes.of(5, 1, 22, 22) + publicKey + le32(0) + le32(0) + Bytes.of(0, 0, 2, 0) +
             le32(915_000) + le32(250_000) + Bytes.of(10, 5) + Bytes.utf8(nodeName)
 
@@ -287,9 +302,10 @@ internal class FixedNotificationPreferences : NotificationPreferencesPort {
 
 internal fun newConnectivity(
     pairing: HarnessPairingService = HarnessPairingService(),
+    currentLink: () -> com.meshcoreone.android.core.connectivity.ble.BleLinkSnapshot? = { null },
     onForeground: (Boolean) -> Unit = {},
 ): ConnectivityPlatform = ConnectivityPlatform(
-    pairing, BleLinkInspector(NoSystemLinks, { null }) { BluetoothAvailability.Ready }, SyntheticEndpoints(),
+    pairing, BleLinkInspector(NoSystemLinks, currentLink) { BluetoothAvailability.Ready }, SyntheticEndpoints(),
     SystemLinkAdopter { false }, onForegroundChanged = onForeground,
 )
 

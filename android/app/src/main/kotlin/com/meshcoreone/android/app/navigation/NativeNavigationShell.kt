@@ -142,6 +142,7 @@ fun NativeNavigationShell(
     remoteNodes: RemoteNodesUiDependencies? = null,
     chats: AppChatsFeature? = null,
     settings: com.meshcoreone.android.app.container.AppSettingsFeature? = null,
+    connectionStatus: @Composable () -> Unit = {},
     content: @Composable (NavigationDestination, (FeatureRoute) -> Unit) -> Unit = { destination, navigate ->
         ExistingFeatureContent(destination, navigate, onboarding, map, tools, nodes, lineOfSight, remoteNodes, chats, settings, coordinator)
     },
@@ -263,39 +264,42 @@ fun NativeNavigationShell(
                 contentWindowInsets = WindowInsets.safeDrawing,
                 snackbarHost = { SnackbarHost(snackbar, Modifier.testTag("navigation-error")) },
                 topBar = {
-                    TopAppBar(
-                        expandedHeight = 64.dp * fontScale,
-                        title = {
-                            Text(
-                                stringResource(state.selectedTab.titleResource()),
-                                modifier = Modifier.fillMaxWidth().testTag("navigation-heading").semantics { heading() },
-                            )
-                        },
-                        navigationIcon = {
-                            if (state.canGoBack) {
-                                IconButton(
-                                    onClick = { coordinator.back() },
-                                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("navigation-back"),
-                                ) {
-                                    Icon(painterResource(R.drawable.ic_back), stringResource(Strings.string.scaffold_back))
+                    Column {
+                        TopAppBar(
+                            expandedHeight = 64.dp * fontScale,
+                            title = {
+                                Text(
+                                    stringResource(state.selectedTab.titleResource()),
+                                    modifier = Modifier.fillMaxWidth().testTag("navigation-heading").semantics { heading() },
+                                )
+                            },
+                            navigationIcon = {
+                                if (state.canGoBack) {
+                                    IconButton(
+                                        onClick = { coordinator.back() },
+                                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("navigation-back"),
+                                    ) {
+                                        Icon(painterResource(R.drawable.ic_back), stringResource(Strings.string.scaffold_back))
+                                    }
                                 }
-                            }
-                        },
-                        actions = {
-                            if (state.selectedTab == AppTab.NODES) {
-                                androidx.compose.material3.TextButton(
-                                    { coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES)) },
-                                    Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
-                                ) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)) }
-                            }
-                            IconButton(
-                                onClick = { coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING)) },
-                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("open-radio-setup"),
-                            ) {
-                                Icon(MeshSymbol.RADIO.vector, stringResource(Strings.string.scaffold_onboarding_title))
-                            }
-                        },
-                    )
+                            },
+                            actions = {
+                                if (state.selectedTab == AppTab.NODES) {
+                                    androidx.compose.material3.TextButton(
+                                        { coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES)) },
+                                        Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
+                                    ) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)) }
+                                }
+                                IconButton(
+                                    onClick = { coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING)) },
+                                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("open-radio-setup"),
+                                ) {
+                                    Icon(MeshSymbol.RADIO.vector, stringResource(Strings.string.scaffold_onboarding_title))
+                                }
+                            },
+                        )
+                        connectionStatus()
+                    }
                 },
             ) { padding ->
                 val active = state.activeStack

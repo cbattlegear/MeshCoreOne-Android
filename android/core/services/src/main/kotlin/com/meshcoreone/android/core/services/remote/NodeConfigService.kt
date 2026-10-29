@@ -16,12 +16,16 @@ import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /**
  * Exports device configuration to [MeshCoreNodeConfig] and imports it back, handling section
  * filtering, other-params merging, and safe import ordering (Swift `actor NodeConfigService`).
  *
- * The only mutable state is the late-bound post-identity callback, confined behind [lock]. Like the
+ * The late-bound runtime callbacks are confined behind [lock]. Like the
  * Swift actor (which is reentrant across `await`), concurrent export/import calls are not serialized
  * against each other; each call reads fresh device state.
  */
@@ -42,14 +46,31 @@ class NodeConfigService(
     ) : this(session, settingsService, channelService, NodeConfigContactSaver.from(dataStore), syncCoordinator)
 
     private val lock = Any()
-    private var onPostIdentityImport: (suspend () -> RadioId?)? = null
+    private var onPostIdentityImport: (suspend (Deferred<Unit>) -> RadioId?)? = null
+    private var onIdentityRecovery: (suspend (Deferred<Unit>) -> Unit)? = null
+    private var onIdentityImportStarted: (suspend (Deferred<Unit>) -> Unit)? = null
+    private var onIdentityImportFinished: (suspend (Boolean) -> Unit)? = null
 
     /**
      * Wires a late-bound callback that fires after a private-key import succeeds. Its non-null
      * return value replaces the radio id used by every later import step (channels, contacts).
+     * Graph reconstruction must await the supplied handoff; identity persistence alone must not tear down writers.
      */
-    fun setOnPostIdentityImport(callback: (suspend () -> RadioId?)?) {
+    fun setOnPostIdentityImport(callback: (suspend (Deferred<Unit>) -> RadioId?)?) {
         synchronized(lock) { onPostIdentityImport = callback }
+    }
+
+    fun setOnIdentityRecovery(callback: (suspend (Deferred<Unit>) -> Unit)?) {
+        synchronized(lock) { onIdentityRecovery = callback }
+    }
+
+    fun setOnIdentityImportStarted(callback: (suspend (Deferred<Unit>) -> Unit)?) {
+        synchronized(lock) { onIdentityImportStarted = callback }
+    }
+
+    /** True means the original identity was not written or was verified unchanged and can safely resume. */
+    fun setOnIdentityImportFinished(callback: (suspend (Boolean) -> Unit)?) {
+        synchronized(lock) { onIdentityImportFinished = callback }
     }
 
     /** Whether a sync coordinator was injected at construction. */
@@ -106,21 +127,126 @@ class NodeConfigService(
         radioId: RadioId,
         onProgress: ((ImportProgress) -> Unit)? = null,
     ) {
+        val handoff = CompletableDeferred<Unit>()
+        try {
+            importConfig(config, sections, radioId, handoff, onProgress)
+        } finally {
+            handoff.complete(Unit)
+        }
+    }
+
+    /** A captured UI session releases [identityHandoff] after its final generation checks and refresh. */
+    suspend fun importConfig(
+        config: MeshCoreNodeConfig,
+        sections: ConfigSections,
+        radioId: RadioId,
+        identityHandoff: Deferred<Unit>,
+        onProgress: ((ImportProgress) -> Unit)? = null,
+    ) {
         val plan = buildImportPlan(config, sections)
         val coordinator = syncCoordinator
-        executeConfigImport(
-            plan = plan, sections = sections, radioId = radioId,
-            writers = makeWriters(), logger = logger, onProgress = onProgress,
-            notifyContactsChanged = { coordinator?.notifyContactsChanged() },
-        )
+        val callback = synchronized(lock) { onPostIdentityImport }
+        val recovery = synchronized(lock) { onIdentityRecovery }
+        val started = synchronized(lock) { onIdentityImportStarted }
+        val finished = synchronized(lock) { onIdentityImportFinished }
+        val beforeIdentity = if (callback != null && plan.importPrivateKey != null) {
+            session.currentSelfInfo?.publicKey ?: settingsService.getSelfInfo().publicKey
+        } else null
+        var attemptedIdentityWrite = false
+        var identityImportStarted = false
+        var verifiedUnchangedIdentity = false
+        val committedIdentity = CompletableDeferred<Unit>()
+        var importedIdentity = false
+        var attemptedReconciliation = false
+        var importFailure: Throwable? = null
+        suspend fun reconcile(): RadioId? {
+            attemptedReconciliation = true
+            return withContext(NonCancellable) {
+                try {
+                    callback?.invoke(identityHandoff)
+                } catch (failure: Throwable) {
+                    try {
+                        recovery?.invoke(identityHandoff)
+                    } catch (recoveryFailure: Throwable) {
+                        if (recoveryFailure !== failure) failure.addSuppressed(recoveryFailure)
+                    }
+                    throw failure
+                }
+            }
+        }
+        val writers = makeWriters(::reconcile).copy(importPrivateKey = {
+            started?.invoke(identityHandoff)
+            identityImportStarted = true
+            attemptedIdentityWrite = true
+            settingsService.importPrivateKey(it) {
+                if (committedIdentity.complete(Unit)) {
+                    onProgress?.invoke(ImportProgress(step = ImportStep.PrivateKey, current = 1, total = stepCount(plan)))
+                }
+            }
+            importedIdentity = true
+            verifiedUnchangedIdentity = session.currentSelfInfo?.publicKey == beforeIdentity
+        })
+        try {
+            executeConfigImport(
+                plan = plan, sections = sections, radioId = radioId,
+                writers = writers, logger = logger,
+                onProgress = { progress ->
+                    if (progress.step != ImportStep.PrivateKey || !committedIdentity.isCompleted) onProgress?.invoke(progress)
+                },
+                notifyContactsChanged = { coordinator?.notifyContactsChanged() },
+            )
+        } catch (failure: Throwable) {
+            importFailure = failure
+            throw failure
+        } finally {
+            if (attemptedIdentityWrite && !attemptedReconciliation && callback != null) {
+                try {
+                    withContext(NonCancellable) {
+                        // A cancelled caller can leave a written exchange draining its confirmation.
+                        // The serialized read waits for that exchange before deciding whether identity changed.
+                        if (importedIdentity) {
+                            reconcile()
+                        } else {
+                            val info = try {
+                                settingsService.getSelfInfo()
+                            } catch (failure: Exception) {
+                                if (committedIdentity.isCompleted) {
+                                    logger.error("Confirmed identity import lost its self-info reply; requesting connection recovery")
+                                }
+                                recovery?.invoke(identityHandoff)
+                                throw failure
+                            }
+                            verifiedUnchangedIdentity = info.publicKey == beforeIdentity
+                            if (!verifiedUnchangedIdentity) reconcile()
+                        }
+                    }
+                } catch (failure: Throwable) {
+                    val original = importFailure
+                    if (original == null) throw failure
+                    if (original !== failure) original.addSuppressed(failure)
+                    logger.error("Could not reconcile a partially imported identity: ${failure.javaClass.name}")
+                }
+            }
+            if (identityImportStarted) {
+                try {
+                    withContext(NonCancellable) {
+                        finished?.invoke(!attemptedIdentityWrite || verifiedUnchangedIdentity)
+                    }
+                } catch (failure: Throwable) {
+                    val original = importFailure
+                    if (original == null) throw failure
+                    if (original !== failure) original.addSuppressed(failure)
+                    logger.error("Could not resume unchanged-identity ingestion: ${failure.javaClass.name}")
+                }
+            }
+        }
     }
 
     /** Summarizes what an import would do so the UI can warn about channel overwrites first. */
     suspend fun previewImport(config: MeshCoreNodeConfig, sections: ConfigSections): ImportPreview =
         ImportPreview(buildImportPlan(config, sections).channelsOverwriteExisting)
 
-    private fun makeWriters(): ConfigImportWriters {
-        val callback = synchronized(lock) { onPostIdentityImport }
+    private fun makeWriters(callback: suspend () -> RadioId?): ConfigImportWriters {
         return ConfigImportWriters(
             getSelfInfo = { settingsService.getSelfInfo() },
             importPrivateKey = { settingsService.importPrivateKey(it) },

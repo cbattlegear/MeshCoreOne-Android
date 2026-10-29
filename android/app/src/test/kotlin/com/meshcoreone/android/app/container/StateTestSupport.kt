@@ -81,7 +81,10 @@ internal class FakeConnectionPort : AppConnectionPort {
         lastRemoved = ids.lastOrNull()
         paired.removeAll { it.id in ids }
     }
-    override suspend fun removeFailedPairing(deviceId: UUID) { calls += "removeFailed:$deviceId" }
+    override suspend fun removeFailedPairing(deviceId: UUID) {
+        calls += "removeFailed:$deviceId"
+        removeFailure?.let { throw it }
+    }
     override suspend fun stopBleScanning() { calls += "stopScan" }
     override suspend fun removeStaleNodes(olderThanDays: Int): RemoveUnfavoritedResult {
         calls += "removeStale:$olderThanDays"

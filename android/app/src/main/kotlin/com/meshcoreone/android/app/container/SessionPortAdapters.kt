@@ -113,6 +113,7 @@ internal class NodeConfigSettingsAdapter(private val resolve: () -> SettingsServ
     override suspend fun queryDevice() = settings.queryDevice()
     override suspend fun exportPrivateKey() = settings.exportPrivateKey()
     override suspend fun importPrivateKey(key: Bytes) = settings.importPrivateKey(key)
+    override suspend fun importPrivateKey(key: Bytes, onCommitted: () -> Unit) = settings.importPrivateKey(key, onCommitted)
     override suspend fun setNodeName(name: String) = settings.setNodeName(name)
     override suspend fun setLocation(latitude: Double, longitude: Double) = settings.setLocation(latitude, longitude)
     override suspend fun setRadioParams(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte) =
@@ -175,9 +176,14 @@ internal class SyncNotificationsAdapter(private val notifications: NotificationS
 // region Sync ports
 
 internal class SyncAdvertisementAdapter(private val adverts: AdvertisementService) : SyncAdvertisementServicing {
+    @Volatile private var deltaSyncHandler: (suspend (Boolean) -> SyncAdvertContactSyncOutcome)? = null
     override suspend fun setSyncingContacts(isSyncing: Boolean) = adverts.setSyncingContacts(isSyncing)
     override suspend fun setDeltaSyncHandler(handler: (suspend (fullRefetch: Boolean) -> SyncAdvertContactSyncOutcome)?) {
-        adverts.setDeltaSyncHandler(handler?.let { forward ->
+        deltaSyncHandler = handler
+        restoreDeltaSyncHandler()
+    }
+    fun restoreDeltaSyncHandler() {
+        adverts.setDeltaSyncHandler(deltaSyncHandler?.let { forward ->
             { fullRefetch -> forward(fullRefetch).toAdvertOutcome() }
         })
     }

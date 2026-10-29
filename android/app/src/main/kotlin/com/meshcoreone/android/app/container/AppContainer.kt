@@ -268,6 +268,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             clock = dependencies.runtimeClock,
             closeChatRoute = { closeSelectedChatRoute() },
             themeService = dependencies.themeService,
+            isAppForeground = { foreground.isForeground },
         ),
     )
 

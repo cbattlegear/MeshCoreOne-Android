@@ -84,6 +84,7 @@ class AppSettingsFeature private constructor(
             val connection = live()
             val token = connection.token
             object : NodeConfigSession {
+                private var identityHandoff: kotlinx.coroutines.CompletableDeferred<Unit>? = null
                 override val deviceName = app.connectedDevice?.nodeName.orEmpty()
                 override fun requireCurrent() {
                     if (container.sessions.current !== connection || connection.token != token ||
@@ -114,7 +115,9 @@ class AppSettingsFeature private constructor(
                 override suspend fun preview(config: MeshCoreNodeConfig, sections: ConfigSections) =
                     bound { connection.nodeConfigService.previewImport(config, sections).channelsOverwriteExisting }
                 override suspend fun apply(config: MeshCoreNodeConfig, sections: ConfigSections, progress: (NodeConfigProgress) -> Unit) = bound {
-                    connection.nodeConfigService.importConfig(config, sections, token.radioId) {
+                    check(identityHandoff == null) { "A configuration import is already in progress" }
+                    val handoff = kotlinx.coroutines.CompletableDeferred<Unit>().also { identityHandoff = it }
+                    connection.nodeConfigService.importConfig(config, sections, token.radioId, handoff) {
                         val description = when (val step = it.step) {
                             ImportStep.Position -> resources.getString(S.configImportStepPosition)
                             ImportStep.OtherParameters -> resources.getString(S.configImportStepOtherParameters)
@@ -129,6 +132,10 @@ class AppSettingsFeature private constructor(
                     }
                 }
                 override suspend fun refresh() = bound { connection.settingsService.refreshDeviceInfo(); Unit }
+                override fun finishImport() {
+                    identityHandoff?.complete(Unit)
+                    identityHandoff = null
+                }
             }
         }, object : NodeConfigCodec {
             override fun decode(bytes: ByteArray) = NodeConfigJson.decode(bytes)

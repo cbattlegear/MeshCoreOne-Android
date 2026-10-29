@@ -119,6 +119,10 @@ interface NodeConfigSettingsPort {
     suspend fun queryDevice(): DeviceCapabilities
     suspend fun exportPrivateKey(): Bytes
     suspend fun importPrivateKey(key: Bytes)
+    suspend fun importPrivateKey(key: Bytes, onCommitted: () -> Unit) {
+        importPrivateKey(key)
+        onCommitted()
+    }
     /** Writes the name truncated to `ProtocolLimits.MAX_USABLE_NAME_BYTES` UTF-8 bytes. */
     suspend fun setNodeName(name: String)
     suspend fun setLocation(latitude: Double, longitude: Double)

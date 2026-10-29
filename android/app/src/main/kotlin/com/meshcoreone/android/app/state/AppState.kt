@@ -84,6 +84,7 @@ class AppStateDependencies(
     val now: () -> Instant = Instant::now,
     val chatEnvInputsFactory: (ChatConversationType?, ChatEnvSnapshot) -> EnvInputs = { _, _ -> EnvInputs.DEFAULT },
     val onFreshPairingCompleted: () -> Unit = {},
+    val isAppForeground: () -> Boolean = { false },
     /**
      * Closes the selected chat route when its channel slot changes occupant. [NavigationCoordinator] has no seam
      * that clears only the chats route (WP-302 owns it), so the default pops the top chat of the Chats stack.
@@ -167,6 +168,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         wireServices = { wireServicesIfConnected() },
         disconnect = { reason -> disconnect(reason) },
         onFreshPairingCompleted = deps.onFreshPairingCompleted,
+        isAppForeground = deps.isAppForeground,
     )
 
     val isConfirmingSystemPairingSetup: Boolean get() = pairing.isConfirmingSystemPairingSetup
@@ -197,15 +199,16 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
      * Truthful by construction: it derives only from the runtime connection state and UI timers.
      */
     val statusPillState: StatusPillState
-        get() {
-            val ui = connectionUI.state.value
-            if (ui.syncFailedPillVisible) return StatusPillState.Failed(UiText.Resource(AppLocalizableStrings.statusPillSyncFailed))
-            if (ui.syncActivityCount > 0 || connectionState == DeviceConnectionState.SYNCING) return StatusPillState.Syncing
-            if (ui.showReadyToast) return StatusPillState.Ready
-            if (connectionState == DeviceConnectionState.CONNECTING) return StatusPillState.Connecting
-            if (ui.disconnectedPillVisible) return StatusPillState.Disconnected
-            return StatusPillState.Hidden
-        }
+        get() = statusPillState(connectionUI.state.value, connectionState)
+
+    fun statusPillState(ui: ConnectionUiSnapshot, connectionState: DeviceConnectionState): StatusPillState {
+        if (ui.syncFailedPillVisible) return StatusPillState.Failed(UiText.Resource(AppLocalizableStrings.statusPillSyncFailed))
+        if (ui.syncActivityCount > 0 || connectionState == DeviceConnectionState.SYNCING) return StatusPillState.Syncing
+        if (ui.showReadyToast) return StatusPillState.Ready
+        if (connectionState == DeviceConnectionState.CONNECTING) return StatusPillState.Connecting
+        if (ui.disconnectedPillVisible) return StatusPillState.Disconnected
+        return StatusPillState.Hidden
+    }
 
     /** Whether Settings startup reads should run right now. */
     val canRunSettingsStartupReads: Boolean

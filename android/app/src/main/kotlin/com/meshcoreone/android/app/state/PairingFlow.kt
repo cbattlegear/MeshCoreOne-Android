@@ -40,6 +40,7 @@ class PairingFlow(
     /** Runs after a fresh pairing connects (Swift appends the onboarding region step). */
     private val onFreshPairingCompleted: () -> Unit = {},
     private val freshPairingForegroundRetryDelay: Duration = 400.milliseconds,
+    private val isAppForeground: () -> Boolean = { false },
 ) {
     @Volatile var isConfirmingSystemPairingSetup: Boolean = false
         private set
@@ -237,15 +238,22 @@ class PairingFlow(
     /** Removes a device that failed pairing (wrong PIN) and retries automatically. */
     fun removeFailedPairingAndRetry(): Job? {
         val deviceId = ui.failedPairingDeviceId ?: return null
+        ui.clearPairingFailure()
         return scope.launch {
-            connection.removeFailedPairing(deviceId)
-            ui.failedPairingDeviceId = null
-            if (connection.hasSystemPairingRegistry) {
-                // Removing the association can bounce the scene; wait for the next activation.
-                ui.shouldShowPickerOnForeground = true
-            } else {
-                // No registry confirmation, so activation will not re-fire.
-                startDeviceScan()
+            try {
+                connection.removeFailedPairing(deviceId)
+                ui.failedPairingDeviceId = null
+                if (connection.hasSystemPairingRegistry && !isAppForeground()) {
+                    // Removing the association can bounce the scene; wait for the next activation.
+                    ui.shouldShowPickerOnForeground = true
+                } else {
+                    // Companion disassociation does not leave a foreground host or trigger activation.
+                    startDeviceScan().join()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                ui.presentConnectionFailure(ConnectionUiState.userFacingMessage(failure))
             }
         }
     }

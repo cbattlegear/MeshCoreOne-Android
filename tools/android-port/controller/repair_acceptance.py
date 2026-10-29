@@ -721,6 +721,12 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
 
     token = re.compile(r"`[^`\r\n]+`|[^\W\d]\w*|[^\s]")
     identifier = re.compile(r"[^\W\d]\w*")
+
+    def name_token(value):
+        return identifier.fullmatch(value) is not None or (
+            value.startswith("`") and value.endswith("`") and len(value) > 2
+        )
+
     tokens, index = [], 0
     while index < len(text):
         if text[index].isspace():
@@ -745,19 +751,20 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     if grouped_annotations and source_declarations is None:
         raise PortError("Grouped Kotlin annotations are not supported in hosted test sources")
 
-    class_bodies = {}
+    class_bodies, package = {}, ""
     if declaring_classes is not None or source_declarations is not None or inheritance is not None:
-        package = ""
         for index, value in enumerate(tokens):
             if value != "package" or index and tokens[index - 1] == ".":
                 continue
             parts, cursor = [], index + 1
-            while cursor < len(tokens) and re.fullmatch(r"[^\W\d]\w*", tokens[cursor]):
-                parts.append(tokens[cursor])
+            while cursor < len(tokens) and name_token(tokens[cursor]):
+                parts.append(tokens[cursor].strip("`"))
                 cursor += 1
                 if cursor >= len(tokens) or tokens[cursor] != ".":
                     break
                 cursor += 1
+                if cursor >= len(tokens) or not name_token(tokens[cursor]):
+                    raise PortError("Cannot establish Kotlin package identity")
             if not parts or package:
                 raise PortError("Cannot establish Kotlin package identity")
             package = ".".join(parts)
@@ -814,11 +821,6 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         "org.junit.Rule", "org.junit.ClassRule",
     }
     imports = {}
-    def name_token(value):
-        return identifier.fullmatch(value) is not None or (
-            value.startswith("`") and value.endswith("`") and len(value) > 2
-        )
-
     for start, value in enumerate(tokens):
         if value != "import":
             continue
@@ -864,6 +866,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         raise PortError("Unbalanced Kotlin scope in hosted test source")
 
     inherited_bodies, inherited_companions, companion_bodies, header_bodies = set(), set(), {}, []
+    bodyless_roots = []
     inherited_header_annotations = set()
     inherited_scope, unresolved_scope, bodyless_inheritance = False, False, False
     for start, value in enumerate(tokens):
@@ -942,6 +945,12 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         unresolved_scope |= bool(nesting)
         inherited_scope |= inherited
         bodyless_inheritance |= inherited and declaration_body is None
+        if (
+            value == "class" and declaration_body is None and not inherited
+            and not scopes[start] and start + 1 < len(tokens)
+            and identifier.fullmatch(tokens[start + 1])
+        ):
+            bodyless_roots.append(start)
         if inherited:
             inherited_header_annotations.update(header_annotations)
         if inherited and value == "object" and start and tokens[start - 1] == "companion":
@@ -959,6 +968,12 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             "parents": _kotlin_parent_names(tokens[start + 2:body]),
             "members": members,
             "uncertain": unresolved_scope or grouped_annotations or body in inherited_companions,
+        }
+    for start in bodyless_roots:
+        declarations[-start - 1] = {
+            "name": (package + "." if package else "") + tokens[start + 1],
+            "package": package, "imports": imports, "parents": [], "members": set(),
+            "uncertain": unresolved_scope or grouped_annotations,
         }
     if source_declarations is not None:
         source_declarations.update(declarations)

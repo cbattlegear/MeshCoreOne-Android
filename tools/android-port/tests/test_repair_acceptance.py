@@ -391,6 +391,49 @@ class RepairExecutionTests(unittest.TestCase):
                         "core/maps": [{"class": "sample.OtherTest", "method": METHOD["id"]}],
                     }, compiled)
 
+    def test_escaped_package_segments_preserve_exact_superclass_identity(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        for whole in (False, True):
+            for package in ("fixture.`extra`", "`fixture`.`extra`"):
+                for imported, accepted in (("fixture.Parent", False), ("fixture.extra.Parent", True)):
+                    sources = {
+                        TEST: (
+                            "package sample\nimport org.junit.Rule\nimport " + imported + "\n"
+                            "class MapTest : Parent() { @get:Rule val rule = example; "
+                            "@Test fun keepsListReachable() {} }"
+                        ).encode(),
+                        base: ("package " + package + "\nopen class Parent {}").encode(),
+                    }
+                    manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                    with self.subTest(whole=whole, package=package, imported=imported), patch(
+                        "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                    ):
+                        if accepted:
+                            validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                        else:
+                            with self.assertRaisesRegex(PortError, "superclass|inherited Kotlin"):
+                                validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_bodyless_non_inheriting_superclasses_are_empty_compiled_roots(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        for whole in (False, True):
+            for header in ("Parent", "Parent()", "Parent<T>"):
+                for body in ("", " {}"):
+                    parent = "Parent<String>()" if "<" in header else "Parent()"
+                    sources = {
+                        TEST: (
+                            "package sample\nimport org.junit.Rule\nimport org.junit.Before\n"
+                            "class MapTest : " + parent + " { @get:Rule val rule = example; "
+                            "@Before fun setup() {} @Test fun keepsListReachable() {} }"
+                        ).encode(),
+                        base: ("package sample\nopen class " + header + body).encode(),
+                    }
+                    manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                    with self.subTest(whole=whole, header=header, body=body), patch(
+                        "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                    ):
+                        validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
     def test_superclass_unknown_shadowed_and_cyclic_lineages_fail_in_both_modes(self):
         base = TEST.replace("MapTest.kt", "Parent.kt")
         root = TEST.replace("MapTest.kt", "Root.kt")

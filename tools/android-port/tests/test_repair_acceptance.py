@@ -584,6 +584,9 @@ class RepairExecutionTests(unittest.TestCase):
             "private object Harness : AutoCloseable { override fun close() {} }",
             "private val harness = object : AutoCloseable { override fun close() {} }",
             "private class Harness<T : Any>(val value: T) : Parent<T>() {}",
+            "private class Harness : Comparable<() -> Unit> { "
+            "override fun compareTo(other: () -> Unit) = 0 }",
+            "private class Harness(val build: () -> Unit) {}",
             "private class Harness { annotation class Before; annotation class After }",
             "private class Harness : Parent() { annotation class Before }",
             "private class Harness { companion object { annotation class Before } }",
@@ -637,6 +640,7 @@ class RepairExecutionTests(unittest.TestCase):
 
         for body in (
             "class T : Parent() { @Before fun setup() {} @Test fun actual() {} }",
+            "class T : Parent<() -> Unit>() { @Before fun setup() {} }",
             "class Outer : Parent() { class T { @Before fun setup() {} } }",
             "class T { annotation class Before; @Before fun setup() {} }",
             "class Outer { annotation class Before; class T { @Before fun setup() {} } }",

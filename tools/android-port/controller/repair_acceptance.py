@@ -883,7 +883,9 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     break
             if current in ("(", "[", "<", "{"):
                 nesting.append(current)
-            elif current in (")", "]", ">", "}"):
+            elif current in (")", "]", ">", "}") and not (
+                current == ">" and tokens[index - 1] == "-"
+            ):
                 if not nesting or nesting.pop() != {")": "(", "]": "[", ">": "<", "}": "{"}[current]:
                     unresolved_scope = True
                     break

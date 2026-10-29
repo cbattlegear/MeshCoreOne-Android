@@ -248,6 +248,7 @@ class RadioSessionContainer private constructor(
 
     private val monitoringLock = Mutex()
     private var monitoring = Monitoring.STOPPED
+    private var identityIngestionQuiesced = false
     private var teardown: CompletableDeferred<TeardownReport>? = null
 
     private val isClosed: Boolean get() = synchronized(lock) { closed }
@@ -286,7 +287,18 @@ class RadioSessionContainer private constructor(
         scope.launch { notificationService.setup() }
         // The cycle-forced upward call into the connection manager: an identity import re-resolves the radio id.
         nodeConfigService.setOnIdentityImportStarted { handoff -> inputs.callbacks.beginIdentityImport(handoff) }
-        nodeConfigService.setOnPostIdentityImport { handoff -> inputs.callbacks.reconcileIdentity(handoff) }
+        nodeConfigService.setOnPostIdentityImport { handoff ->
+            synchronized(lock) { identityIngestionQuiesced = true }
+            messagePollingService.pauseAutoFetch()
+            messagePollingService.pollAllMessages()
+            stopEventMonitoring()
+            val effective = inputs.callbacks.reconcileIdentity(handoff)
+            if (effective == null && session.currentSelfInfo?.publicKey == inputs.device.publicKey) {
+                synchronized(lock) { identityIngestionQuiesced = false }
+                ensureListeners()
+            }
+            effective
+        }
         nodeConfigService.setOnIdentityRecovery { handoff -> inputs.callbacks.recoverIdentity(handoff) }
     }
 
@@ -329,7 +341,7 @@ class RadioSessionContainer private constructor(
         enableAutoFetch: Boolean = true,
         enableAdvertisementMonitoring: Boolean = true,
     ): Unit = monitoringLock.withLock {
-        if (synchronized(lock) { closed || monitoring != Monitoring.STOPPED }) return@withLock
+        if (synchronized(lock) { closed || identityIngestionQuiesced || monitoring != Monitoring.STOPPED }) return@withLock
         heardRepeatsService.configure(radio)
         if (enableAdvertisementMonitoring) advertisementService.startEventMonitoring(radio)
         rxLogService.startEventMonitoring(radio)
@@ -417,7 +429,7 @@ class RadioSessionContainer private constructor(
     override suspend fun ensureListeners() {
         startEventMonitoring(radioId)
         monitoringLock.withLock {
-            if (!isClosed && !messagePollingService.isAutoFetching) {
+            if (!isClosed && !synchronized(lock) { identityIngestionQuiesced } && !messagePollingService.isAutoFetching) {
                 messagePollingService.startAutoFetch(radioId)
             }
         }

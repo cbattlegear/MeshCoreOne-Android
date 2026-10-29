@@ -823,7 +823,7 @@ class ConnectionManager(
 
     suspend fun disconnectTransport(requireComplete: Boolean) {
         val owner = synchronized(lock) { retained ?: active } ?: return
-        val report = closeGeneration(owner, true)
+        val report = (if (requireComplete) revalidateRetainedTeardown(owner) else null) ?: closeGeneration(owner, true)
         synchronized(lock) { if (retained === owner) retained = null; if (active === owner) active = null }
         if (!report.isComplete) {
             reporter.report(RuntimeDiagnostic.Teardown(report))
@@ -834,6 +834,22 @@ class ConnectionManager(
                 throw failure
             }
         }
+    }
+
+    private suspend fun revalidateRetainedTeardown(owner: RadioGeneration): TeardownReport? {
+        val physical = synchronized(owner.lock) { owner.physicalClosed?.takeIf { it.isCompleted } } ?: return null
+        val prior = physical.await()
+        if (prior.isComplete) return null
+        val link = owner.link ?: return null
+        if (link.transport.isConnected()) return null
+        synchronized(lock) {
+            if (revision != owner.revision || active !== owner && retained !== owner) return null
+            PhysicalOwnership.release(link.transport, owner.physicalOwner)
+            owner.ownsPhysical = false
+        }
+        val services = synchronized(owner.lock) { owner.servicesClosed }?.await()
+        return TeardownReport(((services?.issues ?: emptyList()) +
+            prior.issues.filter { it.stage != LifecycleStage.CLOSE_TRANSPORT }).snapshot())
     }
 
     override suspend fun handleReconnectionFailure() {

@@ -204,6 +204,16 @@ class SavedDeviceRecoveryIntegrationTest : RoomProcessTest() {
             assertTrue(h.appState.connectionUI.showingConnectionFailedAlert)
             assertEquals(0, h.pairing.removeCalls)
             assertEquals(0, pickerCalls)
+            radio.disconnectFailure = null
+            radio.retainConnectionOnDisconnect = false
+            radio.disconnect()
+            h.appState.handleAuthenticationFailure(device.id, isAppActive = true)
+            assertNotNull(h.appState.removeFailedPairingAndRetry()).join()
+            assertEquals(1, h.pairing.removeCalls)
+            assertEquals(1, pickerCalls)
+            assertFalse(device.id in h.pairing.registered)
+            assertNull(store.fetchDevice(device.id))
+            assertEquals(device.radioId, assertNotNull(store.fetchDevice(device.publicKey)).radioId)
         } finally {
             radio?.let {
                 it.disconnectFailure = null

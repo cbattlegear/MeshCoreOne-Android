@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.ConfigSections
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.MeshCoreNodeConfig
 import com.meshcoreone.android.core.model.RadioId
@@ -20,6 +21,7 @@ import com.meshcoreone.android.core.services.remote.ImportStep
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
 import com.meshcoreone.android.feature.settings.app.nodeconfig.NodeConfigDocuments
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -46,6 +48,44 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             latitude = "0", longitude = "0", lastAdvert = 0u, lastModified = 0u,
         )),
     )
+
+    @Test fun anArrivalDuringThePartitionHandoffRemainsOnTheRadioUntilTheNewGraphOwnsIt() = runTest {
+        val messages = ConcurrentLinkedQueue<Bytes>()
+        withIdentityNode(messageFrames = messages) { h, node, radio, effectiveId ->
+            val handoff = CompletableDeferred<Unit>()
+            try {
+                val work = backgroundScope.async {
+                    node.nodeConfigService.importConfig(config, sections, node.token.radioId, handoff)
+                }
+                h.eventually("remaining writes complete with ingestion quiesced") { work.isCompleted }
+                work.await()
+                assertFalse(node.messagePollingService.isAutoFetching)
+                val stamp = EPOCH.epochSecond.toUInt()
+                messages.add(Bytes.of(0x10, 20, 0, 0) + contactKey.prefix(6) + Bytes.of(0, 0) +
+                    le32(stamp.toLong()) + Bytes.utf8("Arrived during handoff"))
+                radio.push(Bytes.of(0x83))
+                node.ensureListeners()
+                h.settle()
+                assertEquals(1, messages.size)
+                assertEquals(1, h.sessions.created)
+                assertFalse(node.messagePollingService.isAutoFetching)
+                val contact = assertNotNull(store.fetchContact(effectiveId, contactKey))
+                assertTrue(store.fetchMessages(EntityKey(effectiveId, contact.id)).isEmpty())
+                handoff.complete(Unit)
+                h.eventually("replacement consumes the queued arrival in its effective partition", virtualBudgetMillis = 10_000) {
+                    h.sessions.current?.token?.radioId == effectiveId &&
+                        h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                }
+                assertEquals(listOf("Arrived during handoff"),
+                    store.fetchMessages(EntityKey(effectiveId, contact.id)).map { it.text })
+                assertTrue(messages.isEmpty())
+                assertNull(store.fetchContact(node.token.radioId, contactKey))
+                assertTrue(node.isTornDown)
+                assertEquals(2, h.sessions.created)
+                assertTrue(assertNotNull(h.sessions.current).messagePollingService.isAutoFetching)
+            } finally { handoff.complete(Unit) }
+        }
+    }
 
     @Test fun remainingWritesAndProgressUseTheEffectivePartitionBeforeExactlyOneRebuild() = runTest {
         withIdentityNode { h, node, radio, effectiveId ->
@@ -80,6 +120,32 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                 assertEquals(0, node.liveJobCount)
                 assertNotNull(store.fetchContact(effectiveId, contactKey))
             } finally { handoff.complete(Unit) }
+        }
+    }
+
+    @Test fun importingTheCurrentIdentityResumesIngestionWithoutAnUnnecessaryReplacement() = runTest {
+        withIdentityNode { h, node, _, effectiveId ->
+            val first = backgroundScope.async {
+                node.nodeConfigService.importConfig(config, sections, node.token.radioId)
+            }
+            h.eventually("first identity import") { first.isCompleted }
+            first.await()
+            h.eventually("first replacement ready", virtualBudgetMillis = 10_000) {
+                h.sessions.current?.token?.radioId == effectiveId &&
+                    h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
+            val current = assertNotNull(h.sessions.current)
+            val second = backgroundScope.async {
+                current.nodeConfigService.importConfig(config, sections, effectiveId)
+            }
+            h.eventually("unchanged identity import") { second.isCompleted }
+            second.await()
+            h.settle()
+            assertSame(current, h.sessions.current)
+            assertEquals(2, h.sessions.created)
+            assertFalse(current.isTornDown)
+            assertTrue(current.messagePollingService.isAutoFetching)
+            assertFalse(h.manager.shouldDeferOpportunisticReconnect)
         }
     }
 
@@ -391,6 +457,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
     private suspend fun TestScope.withIdentityNode(
         seedGhost: Boolean = true,
         preferencesOverride: ProcessConnectionPreferences? = null,
+        messageFrames: ConcurrentLinkedQueue<Bytes> = ConcurrentLinkedQueue(),
         block: suspend TestScope.(ContainerHarness, RadioSessionContainer, FirmwareRadio, RadioId) -> Unit,
     ) {
         var activeKey = key(7)
@@ -401,6 +468,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             radio.knownContacts += savedContacts
             radio.respond = { packet ->
                 when (packet[0]) {
+                    CommandCode.GET_MESSAGE.rawValue -> listOf(messageFrames.poll() ?: Bytes.of(0x0a))
                     CommandCode.IMPORT_PRIVATE_KEY.rawValue -> {
                         activeKey = newKey
                         radio.publicKey = newKey

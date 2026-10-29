@@ -106,16 +106,18 @@ class BlockedSenderStoreFlowTest : RoomProcessTest() {
         val h = ContainerHarness(this, store)
         try {
             val conversation = TimelineConversation.Channel(ChannelDTO(radioId = radio, index = 0u, name = "Test"))
+            val feature = h.container.chatsFeature
+            runCurrent()
             val stream = h.appState.messageEventStream
             val before = stream.subscriberCount
             val next = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
-                h.container.chatsFeature.timeline(conversation).events.first()
+                feature.timeline(conversation).events.first()
             }
             assertEquals(before + 1, stream.subscriberCount)
             stream.send(MessageEvent.ChannelHistoryDeleted(other))
             runCurrent()
             assertFalse(next.isCompleted)
-            h.container.chatsFeature.actions(radio).blockChannelSender(radio, "Spammer")
+            feature.actions(radio).blockChannelSender(radio, "Spammer")
             assertEquals(TimelineEvent.HistoryChanged(conversation.id), next.await())
             assertEquals(before, stream.subscriberCount)
         } finally { h.container.close() }

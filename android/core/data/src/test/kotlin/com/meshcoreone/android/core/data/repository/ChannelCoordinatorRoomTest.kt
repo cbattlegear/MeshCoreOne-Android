@@ -65,7 +65,7 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
         assertEquals(3L, result.channelsSynced)
         assertTrue(result.errors.isEmpty())
         assertEquals((0..7).map { it.toUByte() }, session.reads)
-        val committed = store.fetchChannels(RADIO_A)
+        val committed = store.fetchChannels(RADIO_A).toList()
         assertEquals(expected, committed.map { ChannelInfo(it.index, it.name, it.secret) })
         assertEquals(listOf(committed), cache.snapshots)
     }

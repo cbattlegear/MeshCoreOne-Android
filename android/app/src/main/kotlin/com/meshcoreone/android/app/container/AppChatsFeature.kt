@@ -431,7 +431,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val events: Flow<TimelineEvent> get() = merge(
             channelHistoryChanges.filter { conversation is TimelineConversation.Channel && it == radio }
                 .map { TimelineEvent.HistoryChanged(conversation.id) },
-            this@AppChatsFeature.events().transform { event ->
+            this@AppChatsFeature.events().transform<MessageEvent, TimelineEvent> { event ->
                 val ids = when (event) {
                     is MessageEvent.DirectMessageReceived -> listOf(event.message.id)
                     is MessageEvent.ChannelMessageReceived -> listOf(event.message.id)

@@ -376,7 +376,8 @@ class RepairExecutionTests(unittest.TestCase):
                 TEST: b"package sample\nimport org.junit.Rule\nimport org.junit.Before\n"
                       b"class MapTest : Parent() { @get:Rule val rule = example; @Before fun setup() {} "
                       b"@Test fun keepsListReachable() {} }",
-                base: b"package sample\nimport roots.Root as Ancestor\nopen class Parent : Ancestor<() -> Unit>() {}",
+                base: b"package sample\nimport roots.Root as Ancestor\n"
+                      b"open class Parent : Ancestor<() -> Unit>() { companion object {} }",
                 root: b"package roots\nimport org.junit.Before\nimport org.junit.After\n"
                       b"open class Root<T> { @Before fun setupRoot() {} @After fun closeRoot() {} }",
             }
@@ -403,6 +404,8 @@ class RepairExecutionTests(unittest.TestCase):
                 "open class Parent { companion object { annotation class Rule } }",
                 "open class Parent { companion object Named { typealias Rule = Other } }",
                 "open class Parent { companion object : Unknown() {} }",
+                "open class Parent { companion object : Unknown() }",
+                "open class Parent { companion object Named : Unknown() }",
                 "open class Parent : Root() {}",
             ):
                 sources = {
@@ -414,6 +417,44 @@ class RepairExecutionTests(unittest.TestCase):
                     sources[root] = b"package sample\nopen class Root { annotation class Rule }"
                 manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
                 with self.subTest(whole=whole, declaration=declaration), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaises(PortError):
+                    validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_direct_bodyless_inherited_companions_fail_in_both_modes(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        for whole in (False, True):
+            for companion in ("companion object : Unknown()", "companion object Named : Unknown()"):
+                sources = {
+                    TEST: (
+                        "package sample\nimport org.junit.Rule\nimport org.junit.Before\n"
+                        "class MapTest : Parent() { @get:Rule val rule = example; @Before fun setup() {} "
+                        "@Test fun keepsListReachable() {} " + companion + " }"
+                    ).encode(),
+                    base: b"package sample\nopen class Parent {}",
+                }
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                with self.subTest(whole=whole, companion=companion), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaises(PortError):
+                    validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_imported_superclass_qualifiers_cannot_bind_unrelated_package_classes(self):
+        outer = TEST.replace("MapTest.kt", "Outer.kt")
+        unrelated = TEST.replace("MapTest.kt", "Unrelated.kt")
+        for whole in (False, True):
+            for qualifier, imported in (("fixtures", "actual.Outer as fixtures"), ("Outer", "actual.Outer")):
+                sources = {
+                    TEST: (
+                        "package sample\nimport org.junit.Rule\nimport " + imported + "\n"
+                        "class MapTest : " + qualifier + ".Parent() { @get:Rule val rule = example; "
+                        "@Test fun keepsListReachable() {} }"
+                    ).encode(),
+                    outer: b"package actual\nopen class Outer { open class Parent { annotation class Rule } }",
+                    unrelated: ("package " + qualifier + "\nopen class Parent {}").encode(),
+                }
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                with self.subTest(whole=whole, qualifier=qualifier), patch(
                     "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
                 ), self.assertRaises(PortError):
                     validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)

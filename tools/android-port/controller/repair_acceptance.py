@@ -860,7 +860,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     if stack:
         raise PortError("Unbalanced Kotlin scope in hosted test source")
 
-    inherited_bodies, companion_bodies, header_bodies = set(), {}, []
+    inherited_bodies, inherited_companions, companion_bodies, header_bodies = set(), set(), {}, []
     inherited_header_annotations = set()
     inherited_scope, unresolved_scope = False, False
     for start, value in enumerate(tokens):
@@ -940,6 +940,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             inherited_header_annotations.update(header_annotations)
         if inherited and value == "object" and start and tokens[start - 1] == "companion":
             inherited_bodies.update(scopes[start][-1:])
+            inherited_companions.update(scopes[start][-1:])
     declarations = {}
     for start, body in header_bodies:
         if scopes[start] or body not in class_bodies:
@@ -951,10 +952,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             "package": package, "imports": imports,
             "parents": _kotlin_parent_names(tokens[start + 2:body]),
             "members": members,
-            "uncertain": unresolved_scope or any(
-                inherited_bodies.intersection(scope) for scope in visible
-                if scope != (body,)
-            ),
+            "uncertain": unresolved_scope or body in inherited_companions,
         }
     if source_declarations is not None:
         source_declarations.update(declarations)
@@ -1182,6 +1180,8 @@ class _KotlinJUnitLineage:
         result = []
         for name in record["parents"]:
             if "." in name:
+                if name.split(".", 1)[0] in record["imports"]:
+                    raise PortError("Cannot resolve imported Kotlin superclass qualifier: " + name)
                 targets = {name}
             else:
                 targets = record["imports"].get(name, {

@@ -1,6 +1,5 @@
 // PortedFrom: MC1Tests/Views/Chats/Components/ReactionDetailsSelectionTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Tests/Views/Chats/ChatViewModelReactionIndexingTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-202 On-demand block-directory reads reuse the screen's completed or in-flight path load.
 package com.meshcoreone.android.feature.chats.actions
 
 import com.meshcoreone.android.core.model.ContactDTO

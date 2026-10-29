@@ -2,6 +2,7 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/ChatSendQueueServiceTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageServiceSendDMBookkeepingTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageServiceACKTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageServiceSendTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // Native adaptation: WP-208 actual Room/process-store and real-session consumers on simulated SDK31, not HIL.
 package com.meshcoreone.android.core.data.messaging
 
@@ -23,6 +24,7 @@ import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.event.ContactMessage
+import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.protocol.model.ResponseCode
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
@@ -514,6 +516,244 @@ class MessagingRoomIntegrationTest {
         assertEquals(0, g.service.pendingAckCount)
         assertEquals(false, g.diagnostics.filterIsInstance<MessagingDiagnostic.UnmatchedAcknowledgement>().single().orphanSentRow)
         assertTrue(completedStatuses(g, events).isEmpty())
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::createPendingMessage stamps lastMessageDate so a first DM appears in the chat list before any send succeeds()")
+    @Test fun pendingFirstDmBecomesAnActualConversationBeforeAnyWireSend() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(50)
+        assertTrue(store.fetchConversations(radio).isEmpty())
+        val message = g.service.createPendingMessage("First DM", contact)
+        assertEquals(MessageDTO(id = message.id, radioId = radio, contactID = contact.id,
+            text = "First DM", timestamp = base.epochSecond.toUInt(), createdAt = base), message)
+        assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(listOf(contact.copy(lastMessageDate = base)), store.fetchConversations(radio).toList())
+        assertTrue(g.firmware.sent().isEmpty())
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::createPendingChannelMessage saves to dataStore with pending status()")
+    @Test fun pendingChannelCreationCommitsItsOriginalFieldsWithoutSending() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(51)
+        val message = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
+        assertEquals(MessageDTO(id = message.id, radioId = radio, channelIndex = 0u,
+            text = "Hello channel", timestamp = base.epochSecond.toUInt(), createdAt = base), message)
+        assertEquals(message, store.fetchMessages(radio, 0u).single())
+        assertTrue(g.firmware.channelSent().isEmpty())
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::sendDirectMessage saves message to dataStore before send attempt()")
+    @Test fun rawDirectSendObservesTheAlreadyCommittedPendingRoomMessage() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(52)
+        g.start()
+        var before: MessageDTO? = null
+        g.firmware.beforeSend = { data ->
+            if (data[0] == CommandCode.SEND_MESSAGE.rawValue) {
+                before = store.fetchMessages(EntityKey(radio, contact.id)).single()
+                assertEquals(MessageStatus.PENDING, before?.status)
+                assertTrue(g.firmware.sent().isEmpty())
+            }
+        }
+        val sent = g.service.sendDirectMessage("Hello", contact)
+        val pending = assertNotNull(before)
+        assertEquals(MessageDTO(id = sent.id, radioId = radio, contactID = contact.id, text = "Hello",
+            timestamp = base.epochSecond.toUInt(), createdAt = base), pending)
+        assertEquals(pending.copy(status = MessageStatus.SENT, ackCode = sent.ackCode), sent)
+        assertEquals(sent, store.fetchMessage(EntityKey(radio, sent.id)))
+        assertEquals(1, g.firmware.sent().size)
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::sendChannelMessage saves message to dataStore before send attempt()")
+    @Test fun rawChannelSendObservesTheAlreadyCommittedPendingRoomMessage() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(53)
+        g.start()
+        var before: MessageDTO? = null
+        g.firmware.beforeSend = { data ->
+            if (data[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue) {
+                before = store.fetchMessages(radio, 0u).single()
+                assertEquals(MessageStatus.PENDING, before?.status)
+                assertTrue(g.firmware.channelSent().isEmpty())
+            }
+        }
+        val events = g.service.statusEvents()
+        val receipt = g.service.sendChannelMessage("Hello channel", 0u, radio)
+        val pending = assertNotNull(before)
+        assertEquals(MessageDTO(id = receipt.id, radioId = radio, channelIndex = 0u, text = "Hello channel",
+            timestamp = base.epochSecond.toUInt(), createdAt = base), pending)
+        assertEquals(pending.copy(status = MessageStatus.SENT), store.fetchMessage(EntityKey(radio, receipt.id)))
+        assertEquals(listOf(MessageStatusEvent.StatusResolved(receipt.id, MessageStatus.SENT, null)),
+            completedStatuses(g, events))
+        assertEquals(1, g.firmware.channelSent().size)
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::sendPendingChannelMessage sets failed status on send error()")
+    @Test fun disconnectedPendingChannelSendCommitsFailureInTheActualStore() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(54)
+        val message = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
+        val events = g.service.statusEvents()
+        assertFailsWith<MessageServiceException> { g.service.sendPendingChannelMessage(message.id) }
+        assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
+        assertTrue(g.firmware.channelSent().isEmpty())
+        assertTrue(completedStatuses(g, events).isEmpty(), "The queue owns pending-send failure publication")
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::resendChannelMessage writes .sent before broadcasting .resent and refreshes counts()")
+    @Test fun channelResendCommitsItsSentStatusAndCountsBeforeTheConsumerEvent() = runTest(scheduler) {
+        seed()
+        val message = MessageDTO(radioId = radio, channelIndex = 0u, text = "Hello channel",
+            timestamp = 42u, createdAt = base.minusSeconds(1), status = MessageStatus.FAILED,
+            heardRepeats = 3, sendCount = 1)
+        store.saveMessage(message)
+        val g = RadioGeneration(55)
+        g.start()
+        val events = g.service.statusEvents()
+        val seen = mutableListOf<MessageDTO?>()
+        val collecting = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            events.events.collect {
+                assertEquals(g.token, it.token)
+                assertEquals(MessageStatusEvent.Resent(message.id), it.event)
+                seen += store.fetchMessage(EntityKey(radio, message.id))
+            }
+        }
+        val stamp = g.service.resendChannelMessage(message.id, preserveTimestamp = false)
+        runCurrent()
+        val expected = message.copy(timestamp = base.epochSecond.toUInt(), status = MessageStatus.SENT,
+            heardRepeats = 0, sendCount = 2)
+        assertEquals(base.epochSecond.toUInt(), stamp)
+        assertEquals(listOf(expected), seen)
+        assertEquals(expected, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(1, g.firmware.channelSent().size)
+        events.close()
+        collecting.cancelAndJoin()
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::resendDirectMessage increments sendCount and broadcasts .resent on a successful resend()")
+    @Test fun acknowledgedDirectResendCommitsExactlyOneCountAndResentEvent() = runTest(scheduler) {
+        seed()
+        val message = MessageDTO(radioId = radio, contactID = contact.id, text = "Hello",
+            timestamp = 42u, createdAt = base.minusSeconds(1), status = MessageStatus.DELIVERED, sendCount = 1)
+        store.saveMessage(message)
+        val g = RadioGeneration(56)
+        g.start()
+        val events = g.service.statusEvents()
+        val result = g.service.resendDirectMessage(message.id, contact, preserveTimestamp = true)
+        assertEquals(MessageStatus.DELIVERED, result.status)
+        assertEquals(2L, result.sendCount)
+        assertEquals(42u, result.timestamp)
+        assertEquals(result, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(listOf<MessageStatusEvent>(
+            MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u),
+            MessageStatusEvent.Resent(message.id)), completedStatuses(g, events))
+        assertEquals(1, g.firmware.sent().size)
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::sendPendingDirectMessage does not bump sendCount or broadcast .resent on first send()")
+    @Test fun firstPendingDirectSendRetainsItsCountAndPublishesOnlyDelivery() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(57)
+        g.start()
+        val message = g.service.createPendingMessage("Hello", contact)
+        val events = g.service.statusEvents()
+        val result = g.service.sendPendingDirectMessage(message.id, contact, preserveTimestamp = true)
+        assertEquals(1L, result.sendCount)
+        assertEquals(MessageStatus.DELIVERED, result.status)
+        assertEquals(message.timestamp, result.timestamp)
+        assertEquals(result, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(listOf(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u)),
+            completedStatuses(g, events))
+        assertEquals(1, g.firmware.sent().size)
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::retry exhaustion leaves the DM .sent with its pending entry alive, never prematurely .failed()")
+    @Test fun actualRetryExhaustionLeavesSentAndOneLiveEntryForTheCheckerToOwn() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(58, config = MessageServiceConfig(maxAttempts = 2, floodAfter = 5, minTimeout = 0.0))
+        g.start()
+        g.firmware.acknowledge = false
+        g.firmware.acceptedAck = Bytes.of(0xA1, 0xB2, 0xC3, 0xD4)
+        val events = g.service.statusEvents()
+        val result = g.service.sendMessageWithRetry("exhaust me", contact)
+        assertEquals(MessageStatus.SENT, result.status)
+        assertEquals(1L, result.sendCount)
+        assertEquals(result, store.fetchMessage(EntityKey(radio, result.id)))
+        assertEquals(1, g.service.pendingAckCount)
+        assertEquals(2, g.firmware.sent().size)
+        assertEquals(listOf<MessageStatusEvent>(
+            MessageStatusEvent.Retrying(result.id, 0, 1),
+            MessageStatusEvent.StatusResolved(result.id, MessageStatus.SENT, null)), completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::a genuine send exception still fails the DM through the outer catch()")
+    @Test fun genuineRawTransportFailureCommitsFailureAndRetiresActualAckTracking() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(59)
+        g.start()
+        val cause = MeshTransportError.SendFailed("controlled raw transport drop")
+        g.firmware.beforeSend = { data ->
+            if (data[0] == CommandCode.SEND_MESSAGE.rawValue) throw cause
+        }
+        val events = g.service.statusEvents()
+        assertSame(cause, assertFailsWith<MeshTransportError.SendFailed> {
+            g.service.sendMessageWithRetry("boom", contact)
+        })
+        val message = store.fetchMessages(EntityKey(radio, contact.id)).single()
+        assertEquals(MessageStatus.FAILED, message.status)
+        assertEquals("boom", message.text)
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.Failed(message.id)), completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::checkExpiredAcks cannot fail a DM while its retry loop is still inside waitForEvent()")
+    @Test fun checkerCannotFailTheActualInFlightRetryAwaitingItsAck() = runTest(scheduler) {
+        exerciseInFlightChecker(grace = 30.0, ageMillis = 0)
+    }
+
+    @OriginalCase("MessageServiceSendTests::checkExpiredAcks respects a slow-preset per-attempt timeout that exceeds a tiny give-up window()")
+    @Test fun actualSlowAttemptSurvivesItsCheckerBeyondTheTinyGiveUpWindow() = runTest(scheduler) {
+        exerciseInFlightChecker(grace = 1.0, ageMillis = 2_000)
+    }
+
+    private suspend fun TestScope.exerciseInFlightChecker(grace: Double, ageMillis: Long) {
+        seed()
+        val g = RadioGeneration(60, config = MessageServiceConfig(maxAttempts = 2, floodAfter = 5, ackGiveUpWindow = grace))
+        g.start()
+        val code = Bytes.of(0x7A, 0x7B, 0x7C, 0x7D)
+        g.firmware.acceptedAck = code
+        g.firmware.acknowledge = false
+        g.firmware.suggestedTimeout = 100_000u
+        val events = g.service.statusEvents()
+        val sending = async { g.service.sendMessageWithRetry("in flight", contact) }
+        runCurrent()
+        assertEquals(1, g.firmware.sent().size)
+        advanceTimeBy(ageMillis)
+        runCurrent()
+        g.service.checkExpiredAcks()
+        val pending = store.fetchMessages(EntityKey(radio, contact.id)).single()
+        assertNotEquals(MessageStatus.FAILED, pending.status)
+        assertEquals(1, g.service.pendingAckCount)
+        assertFalse(sending.isCompleted)
+        g.firmware.pushAck(code, 100u)
+        runCurrent()
+        val delivered = sending.await()
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        assertEquals(100u, delivered.roundTripTime)
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
+        assertEquals(listOf(MessageStatusEvent.StatusResolved(delivered.id, MessageStatus.DELIVERED, 100u)),
+            completedStatuses(g, events))
         g.stop()
     }
 
@@ -1156,9 +1396,11 @@ class MessagingRoomIntegrationTest {
         var acceptedAck: Bytes? = null
         var suggestedTimeout: UInt = 10u
         var lastAck: Bytes? = null
+        var beforeSend: (suspend (Bytes) -> Unit)? = null
         val incomingMessages = ArrayDeque<Bytes>()
         var afterNoMore: (suspend () -> Unit)? = null
         fun sent(): List<Bytes> = mock.sentData.filter { it[0] == CommandCode.SEND_MESSAGE.rawValue }
+        fun channelSent(): List<Bytes> = mock.sentData.filter { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue }
         override suspend fun isConnected() = mock.isConnected()
         override suspend fun connect() = mock.connect()
         override suspend fun disconnect() = mock.disconnect()
@@ -1166,6 +1408,7 @@ class MessagingRoomIntegrationTest {
         override suspend fun supportsWriteWithoutResponse() = false
         override suspend fun supportsPipelinedReads() = false
         override suspend fun send(data: Bytes) {
+            beforeSend?.invoke(data)
             mock.send(data)
             when (CommandCode.fromRawValue(data[0])) {
                 CommandCode.APP_START -> mock.simulateReceive(ByteWriter().appendUInt8(ResponseCode.SELF_INFO.rawValue)

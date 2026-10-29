@@ -772,6 +772,167 @@ class MessagingRoomIntegrationTest {
         g.stop()
     }
 
+    @OriginalCase("MessageServiceACKTests::handleAcknowledgement matches any CRC accumulated across retry attempts()")
+    @Test fun anActualAckForAttemptZeroStillDeliversDuringTheThirdWireAttempt() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(63, config = MessageServiceConfig(maxAttempts = 3, floodAfter = 5, minTimeout = 0.0))
+        g.start()
+        val codes = listOf(Bytes.of(0xAA, 0xAA, 0xAA, 0xAA), Bytes.of(0xBB, 0xBB, 0xBB, 0xBB),
+            Bytes.of(0xCC, 0xCC, 0xCC, 0xCC))
+        g.firmware.acknowledge = false
+        g.firmware.beforeSend = { data ->
+            if (data[0] == CommandCode.SEND_MESSAGE.rawValue) g.firmware.acceptedAck = codes[g.firmware.sent().size]
+        }
+        val events = g.service.statusEvents()
+        val sending = async { g.service.sendMessageWithRetry("Test message", contact) }
+        runCurrent()
+        assertEquals(codes[0], g.firmware.lastAck)
+        advanceTimeBy(13)
+        runCurrent()
+        assertEquals(codes[1], g.firmware.lastAck)
+        advanceTimeBy(13)
+        runCurrent()
+        assertEquals(codes[2], g.firmware.lastAck)
+        assertEquals(3, g.firmware.sent().size)
+        g.firmware.pushAck(codes[0], 500u)
+        runCurrent()
+        val delivered = sending.await()
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        assertEquals(codes[0].readUInt32LE(0), delivered.ackCode)
+        assertEquals(500u, delivered.roundTripTime)
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf<MessageStatusEvent>(
+            MessageStatusEvent.Retrying(delivered.id, 0, 2),
+            MessageStatusEvent.Retrying(delivered.id, 1, 2),
+            MessageStatusEvent.StatusResolved(delivered.id, MessageStatus.DELIVERED, 500u)), completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::handleAcknowledgement updates contact lastMessageDate on late ACK()")
+    @Test fun anActualLateAckUpdatesThePersistedContactAndConversationDate() = runTest(scheduler) {
+        contact = contact.copy(name = "LateAckContact", outPathLength = 2u, outPath = Bytes.of(1, 2),
+            lastAdvertTimestamp = base.epochSecond.toUInt(), lastModified = base.epochSecond.toUInt())
+        seed()
+        val g = RadioGeneration(64, config = MessageServiceConfig(maxAttempts = 2, floodAfter = 5, minTimeout = 0.0))
+        g.start()
+        val code = Bytes.of(0x11, 0x22, 0x33, 0x44)
+        g.firmware.acceptedAck = code
+        g.firmware.acknowledge = false
+        val sent = g.service.sendMessageWithRetry("Test message", contact)
+        assertEquals(MessageStatus.SENT, sent.status)
+        assertNull(store.fetchContact(EntityKey(radio, contact.id))?.lastMessageDate)
+        val events = g.service.statusEvents()
+        g.service.startEventMonitoring()
+        wallOffsetMillis = 1_000
+        val receivedAt = clock.wallClock.instant()
+        g.firmware.pushAck(code, 500u)
+        runCurrent()
+        val updatedContact = assertNotNull(store.fetchContact(EntityKey(radio, contact.id)))
+        assertEquals(contact.copy(lastMessageDate = receivedAt), updatedContact)
+        assertEquals(listOf(updatedContact), store.fetchConversations(radio).toList())
+        val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, sent.id)))
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        assertEquals(500u, delivered.roundTripTime)
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.StatusResolved(sent.id, MessageStatus.DELIVERED, 500u)),
+            completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::failMessageAndRethrow removes pendingAcks entry and rethrows()")
+    @Test fun aNotConnectedExceptionRetiresActualSpeculativeTrackingAndFailsTheCommittedRow() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(65)
+        g.start()
+        g.firmware.beforeSend = { data ->
+            if (data[0] == CommandCode.SEND_MESSAGE.rawValue) {
+                assertEquals(1, g.service.pendingAckCount)
+                throw MeshCoreException.NotConnected()
+            }
+        }
+        val events = g.service.statusEvents()
+        val failure = assertFailsWith<MessageServiceException> { g.service.sendMessageWithRetry("Test message", contact) }
+        assertIs<MeshCoreException.NotConnected>(assertIs<MessageServiceError.SessionError>(failure.error).underlying)
+        val message = store.fetchMessages(EntityKey(radio, contact.id)).single()
+        assertEquals(MessageStatus.FAILED, message.status)
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.Failed(message.id)), completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::finalizeSend preserves roundTripTime after listener-won delivery()")
+    @Test fun theRealListenerWinsBeforeAcceptanceAndFinalizationPreservesItsFirmwareRtt() = runTest(scheduler) {
+        exercisePublicFinalization(Bytes.of(0xAA, 0xBB, 0xCC, 0xDD), 500u, listenerWins = true)
+    }
+
+    @OriginalCase("MessageServiceACKTests::finalizeSend broadcasts .statusResolved when in-loop waitForEvent wins the ACK race()")
+    @Test fun theRealInLoopAckPublishesExactlyOneDeliveredResolution() = runTest(scheduler) {
+        exercisePublicFinalization(Bytes.of(0x11, 0x22, 0x33, 0x44), 500u, listenerWins = false)
+    }
+
+    @OriginalCase("MessageServiceACKTests::finalizeSend delivered branch writes .delivered, updates contact, yields .statusResolved, removes entry()")
+    @Test fun publicFinalizationCommitsDeliveryContactRecencyAndOneResolutionWithoutAnRtt() = runTest(scheduler) {
+        exercisePublicFinalization(Bytes.of(0x10, 0x20, 0x30, 0x40), null, listenerWins = false)
+    }
+
+    @OriginalCase("MessageServiceACKTests::finalizeSend nil branch over an already-.failed row leaves it .failed()")
+    @Test fun exhaustedPublicFinalizationCannotPublishSentOverAnAlreadyFailedRoomRow() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(66, config = MessageServiceConfig(maxAttempts = 2, floodAfter = 5, minTimeout = 0.0))
+        g.start()
+        g.firmware.acknowledge = false
+        g.firmware.acceptedAck = Bytes.of(0xAA, 0xBB, 0xCC, 0xDD)
+        val events = g.service.statusEvents()
+        var failed: MessageDTO? = null
+        val result = g.service.sendMessageWithRetry("already failed", contact, onMessageCreated = {
+            failed = it.copy(status = MessageStatus.FAILED)
+            store.saveMessage(assertNotNull(failed))
+        })
+        assertEquals(assertNotNull(failed), result)
+        assertEquals(result, store.fetchMessage(EntityKey(radio, result.id)))
+        assertEquals(listOf(MessageStatusEvent.Retrying(result.id, 0, 1)), completedStatuses(g, events))
+        g.stop()
+    }
+
+    private suspend fun TestScope.exercisePublicFinalization(code: Bytes, tripTime: UInt?, listenerWins: Boolean) {
+        seed()
+        val g = RadioGeneration(67, config = MessageServiceConfig(maxAttempts = 1, floodAfter = 5))
+        g.start()
+        g.firmware.acceptedAck = code
+        g.firmware.automaticTripTime = tripTime
+        g.firmware.suggestedTimeout = 5_000u
+        val events = g.service.statusEvents()
+        val gate = CompletableDeferred<Unit>()
+        if (listenerWins) {
+            g.service.startEventMonitoring()
+            g.firmware.ackBeforeAcceptance = true
+            g.firmware.acceptanceGate = gate
+        }
+        val sending = async { g.service.sendMessageWithRetry("Test message", contact) }
+        runCurrent()
+        if (listenerWins) {
+            assertFalse(sending.isCompleted)
+            val beforeAcceptance = store.fetchMessages(EntityKey(radio, contact.id)).single()
+            assertEquals(MessageStatus.DELIVERED, beforeAcceptance.status)
+            assertEquals(tripTime, beforeAcceptance.roundTripTime)
+            assertEquals(0, g.service.pendingAckCount)
+            gate.complete(Unit)
+            runCurrent()
+        }
+        val delivered = sending.await()
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        assertEquals(tripTime, delivered.roundTripTime)
+        assertEquals(code.readUInt32LE(0), delivered.ackCode)
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
+        assertEquals(contact.copy(lastMessageDate = base), store.fetchContact(EntityKey(radio, contact.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.StatusResolved(delivered.id, MessageStatus.DELIVERED, tripTime)),
+            completedStatuses(g, events))
+        assertEquals(1, g.firmware.sent().size)
+        g.stop()
+    }
+
     private suspend fun TestScope.exerciseInFlightChecker(grace: Double, ageMillis: Long) {
         seed()
         val g = RadioGeneration(60, config = MessageServiceConfig(maxAttempts = 2, floodAfter = 5, ackGiveUpWindow = grace))
@@ -1437,6 +1598,7 @@ class MessagingRoomIntegrationTest {
         var error: UByte? = null
         var acknowledge = true
         var ackBeforeAcceptance = false
+        var automaticTripTime: UInt? = 123u
         var acceptanceGate: CompletableDeferred<Unit>? = null
         var acceptedAck: Bytes? = null
         var suggestedTimeout: UInt = 10u
@@ -1466,16 +1628,15 @@ class MessagingRoomIntegrationTest {
                         .appendUInt8((data[2].toInt() and 3).toUByte()).append(data.slice(13, data.size)).append(self).toBytes()
                     val ack = acceptedAck ?: Bytes(MessageDigest.getInstance("SHA-256").digest(input.toByteArray())).prefix(4)
                     lastAck = ack
-                    if (acknowledge && ackBeforeAcceptance) pushAck(ack)
+                    if (acknowledge && ackBeforeAcceptance) pushAck(ack, automaticTripTime)
                     acceptanceGate?.await()
                     mock.simulateReceive(ByteWriter().appendUInt8(ResponseCode.MESSAGE_SENT.rawValue).appendUInt8(0u)
                         .append(ack).appendUInt32LE(suggestedTimeout).toBytes())
-                    if (acknowledge && !ackBeforeAcceptance) pushAck(ack)
+                    if (acknowledge && !ackBeforeAcceptance) pushAck(ack, automaticTripTime)
                 }
                 CommandCode.SEND_CHANNEL_MESSAGE -> {
                     error?.let { mock.simulateError(it); return }
-                    mock.simulateReceive(ByteWriter().appendUInt8(ResponseCode.MESSAGE_SENT.rawValue)
-                        .appendUInt8(0u).append(Bytes(ByteArray(4))).appendUInt32LE(suggestedTimeout).toBytes())
+                    mock.simulateOK()
                 }
                 CommandCode.GET_CONTACT_BY_KEY -> mock.simulateError(2u)
                 CommandCode.RESET_PATH -> mock.simulateOK()

@@ -859,7 +859,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     if stack:
         raise PortError("Unbalanced Kotlin scope in hosted test source")
 
-    inherited_bodies, inherited_scope, unresolved_scope = set(), False, False
+    inherited_bodies, companion_bodies = set(), {}
+    inherited_scope, unresolved_scope = False, False
     for start, value in enumerate(tokens):
         if value not in ("class", "interface", "object") or (
             start and tokens[start - 1] in (".", ":")
@@ -874,6 +875,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                 if current == "{":
                     if inherited:
                         inherited_bodies.add(index)
+                    if value == "object" and start and tokens[start - 1] == "companion":
+                        companion_bodies.setdefault(scopes[start], set()).add(index)
                     break
                 if current in ("}", ";", "=", "class", "object", "interface",
                                "fun", "val", "var", "typealias"):
@@ -887,6 +890,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             index += 1
         unresolved_scope |= bool(nesting)
         inherited_scope |= inherited
+        if inherited and value == "object" and start and tokens[start - 1] == "companion":
+            inherited_bodies.update(scopes[start][-1:])
     if reject_inherited and (inherited_scope or unresolved_scope):
         raise PortError("Cannot establish all inherited Kotlin JUnit declarations for changed test source")
     imported_non_tests = {
@@ -896,11 +901,13 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
 
     def non_tests_at(position):
         scope = scopes[position]
-        # Only enclosing classes can contribute inherited annotation names.
-        if unresolved_scope or inherited_bodies.intersection(scope):
+        visible = [scope[:depth] for depth in range(len(scope) + 1)]
+        # Companion members are visible in their containing class as well.
+        visible += [parent + (body,) for parent in tuple(visible)
+                    for body in companion_bodies.get(parent, ())]
+        if unresolved_scope or any(inherited_bodies.intersection(parent) for parent in visible):
             return set()
-        shadowed = set().union(*(declared_names.get(scope[:depth], set())
-                                 for depth in range(len(scope) + 1)))
+        shadowed = set().union(*(declared_names.get(parent, set()) for parent in visible))
         return imported_non_tests - shadowed
 
     for index, value in enumerate(tokens):

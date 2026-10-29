@@ -586,6 +586,7 @@ class RepairExecutionTests(unittest.TestCase):
             "private class Harness<T : Any>(val value: T) : Parent<T>() {}",
             "private class Harness { annotation class Before; annotation class After }",
             "private class Harness : Parent() { annotation class Before }",
+            "private class Harness { companion object { annotation class Before } }",
         )
         for helper in helpers:
             for placement in ("nested-before", "nested-after", "sibling-before", "sibling-after"):
@@ -622,6 +623,14 @@ class RepairExecutionTests(unittest.TestCase):
         self.assertEqual(_kotlin_junit_methods(source), {"actual": "test"})
         with self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
             _kotlin_junit_methods(source, reject_inherited=True)
+        for companion in (
+            "companion object { annotation class Rule }",
+            "companion object : Parent()",
+        ):
+            with self.subTest(companion=companion), self.assertRaisesRegex(PortError, "use-site"):
+                _kotlin_junit_methods(
+                    "import org.junit.Rule\nclass T { " + companion + "; @get:Rule val rule = example }"
+                )
 
     def test_enclosing_inheritance_and_lexical_lifecycle_shadowing_still_fail_closed(self):
         from controller.repair_acceptance import _kotlin_junit_methods
@@ -635,6 +644,10 @@ class RepairExecutionTests(unittest.TestCase):
             "class T { fun helper() { class Before; @Before fun setup() {} } }",
             "class T { class Harness : Parent() { @Before fun setup() {} } }",
             "class T { val harness = object : Parent() { @Before fun setup() {} } }",
+            "class T { companion object { annotation class Before }; @Before fun setup() {} }",
+            "class T { companion object Named { annotation class Before }; @Before fun setup() {} }",
+            "class T { companion object : Parent(); @Before fun setup() {} }",
+            "class T { companion object : Parent() {}; @Before fun setup() {} }",
         ):
             with self.subTest(body=body), self.assertRaisesRegex(
                 PortError, "Ambiguous Kotlin function annotation",

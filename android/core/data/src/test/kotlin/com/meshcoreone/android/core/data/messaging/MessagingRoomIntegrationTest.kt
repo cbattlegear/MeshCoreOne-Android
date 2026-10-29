@@ -899,7 +899,12 @@ class MessagingRoomIntegrationTest {
         seed()
         val g = RadioGeneration(67, config = MessageServiceConfig(maxAttempts = 1, floodAfter = 5))
         g.start()
-        g.firmware.acceptedAck = code
+        val expectedCode = if (listenerWins) {
+            val input = ByteWriter().appendUInt32LE(base.epochSecond.toUInt()).appendUInt8(0u)
+                .append(Bytes.utf8("Test message")).append(self).toBytes()
+            Bytes(MessageDigest.getInstance("SHA-256").digest(input.toByteArray())).prefix(4)
+        } else code
+        g.firmware.acceptedAck = expectedCode
         g.firmware.automaticTripTime = tripTime
         g.firmware.suggestedTimeout = 5_000u
         val events = g.service.statusEvents()
@@ -923,7 +928,7 @@ class MessagingRoomIntegrationTest {
         val delivered = sending.await()
         assertEquals(MessageStatus.DELIVERED, delivered.status)
         assertEquals(tripTime, delivered.roundTripTime)
-        assertEquals(code.readUInt32LE(0), delivered.ackCode)
+        assertEquals(expectedCode.readUInt32LE(0), delivered.ackCode)
         assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
         assertEquals(contact.copy(lastMessageDate = base), store.fetchContact(EntityKey(radio, contact.id)))
         assertEquals(0, g.service.pendingAckCount)

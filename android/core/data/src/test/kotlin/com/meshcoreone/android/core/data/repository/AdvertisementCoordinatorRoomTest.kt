@@ -774,11 +774,11 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
     @Test fun anActualPathOnlyRoundNeverInventsAContactOrDiscoverRow() = runTest(scheduler) {
         withAdvert {
             val seed = unknown(0xE4, "Path only")
-            var calls = 0
+            val flags = mutableListOf<Boolean>()
             foreground = true
-            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            service.setDeltaSyncHandler { flags += it; AdvertContactSyncOutcome.SYNCED }
             send(MeshEvent.PathUpdate(seed.contact.publicKey))
-            assertEquals(1, calls)
+            assertEquals(listOf(false, true), flags)
             assertTrue(store.fetchContacts(RADIO_A).isEmpty())
             assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
             assertTrue(requestedContacts().isEmpty())
@@ -798,7 +798,8 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             advanceTimeBy(50)
             runCurrent()
             assertEquals(0, calls)
-            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertEquals(seed.contact.copy(lastHeardTimestamp = AT.epochSecond.toUInt()), saved(seed.contact))
+            assertEquals(seed.contact.publicKey, store.fetchDiscoveredNodes(RADIO_A).single().publicKey)
             service.setSyncingContacts(false)
             runCurrent()
             assertEquals(1, calls)
@@ -865,16 +866,16 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
     @Test fun aBackgroundPathUpdateWaitsForForegroundWithoutCreatingDiscover() = runTest(scheduler) {
         withAdvert {
             val seed = unknown(0xB3, "Background path")
-            var calls = 0
-            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            val flags = mutableListOf<Boolean>()
+            service.setDeltaSyncHandler { flags += it; AdvertContactSyncOutcome.SYNCED }
             send(MeshEvent.PathUpdate(seed.contact.publicKey))
             advanceTimeBy(80)
             runCurrent()
-            assertEquals(0, calls)
+            assertTrue(flags.isEmpty())
             foreground = true
             service.handleReturnToForeground()
             runCurrent()
-            assertEquals(1, calls)
+            assertEquals(listOf(false, true), flags)
             assertTrue(store.fetchContacts(RADIO_A).isEmpty())
             assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
             assertTrue(requestedContacts().isEmpty())
@@ -941,7 +942,8 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             service.setSyncingContacts(false)
             runCurrent()
             assertEquals(List(cap) { false }, flags)
-            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            val touched = store.fetchDiscoveredNodes(RADIO_A).toList()
+            assertEquals(listOf(seed.contact.publicKey), touched.map { it.publicKey })
             service.setSyncingContacts(true)
             service.setSyncingContacts(false)
             runCurrent()
@@ -949,7 +951,8 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             assertEquals(seed.contact.copy(outPathLength = 1u, outPath = Bytes.of(1),
                 lastModified = seed.contact.lastModified + 1u, lastHeardTimestamp = AT.epochSecond.toUInt()),
                 saved(seed.contact))
-            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty(), "Only path work, not the dropped advert keys, survives")
+            assertEquals(touched, store.fetchDiscoveredNodes(RADIO_A).toList(),
+                "Only path work, not the dropped advert keys, survives")
             expectedErrors = 1
         }
     }
@@ -1077,6 +1080,341 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         }
     }
 
+    @OriginalCase("AdvertisementServiceTests::known contact advert bumps lastHeard without getContact()")
+    @Test fun aKnownAdvertRefreshesTheRealContactAndDiscoverWithoutARadioLookup() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0xB1, "Known")
+            store.upsertDiscoveredNode(RADIO_A, seed.contact.toContactFrame())
+            foreground = true
+            var calls = 0
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            advanceTimeBy(1_000)
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(seed.contact.copy(lastHeardTimestamp = AT.plusSeconds(1).epochSecond.toUInt()), saved(seed.contact))
+            assertEquals(AT.plusSeconds(1), store.fetchDiscoveredNodes(RADIO_A).single().lastHeard)
+            assertEquals(1, calls)
+            assertTrue(requestedContacts().isEmpty())
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::pathUpdate for known contact escalates when incremental leaves lastModified unchanged()")
+    @Test fun anUnchangedIncrementalWatermarkTriggersTheRealPruneFreePathRefresh() = runTest(scheduler) {
+        exerciseKnownPathRefresh(refreshIncremental = false)
+    }
+
+    @OriginalCase("AdvertisementServiceTests::pathUpdate for known contact does not escalate when incremental refreshes lastModified()")
+    @Test fun anActuallyRefreshedIncrementalPathDoesNotFetchAgain() = runTest(scheduler) {
+        exerciseKnownPathRefresh(refreshIncremental = true)
+    }
+
+    private suspend fun TestScope.exerciseKnownPathRefresh(refreshIncremental: Boolean) {
+        withAdvert {
+            val seed = seed(if (refreshIncremental) 0xA2 else 0xA1, "Relay")
+            val old = seed.contact.copy(typeRawValue = ContactType.REPEATER.rawValue,
+                outPathLength = if (refreshIncremental) 1u else 2u,
+                outPath = if (refreshIncremental) Bytes.of(0x11) else Bytes.of(1, 2),
+                latitude = if (refreshIncremental) 1.0 else 10.0, longitude = if (refreshIncremental) 2.0 else 20.0)
+            store.saveContact(old)
+            val expected = old.copy(outPathLength = 2u,
+                outPath = if (refreshIncremental) Bytes.of(0xAA, 0xBB) else Bytes.of(3, 4),
+                lastModified = old.lastModified + if (refreshIncremental) 10u else 50u,
+                latitude = if (refreshIncremental) 1.0 else 10.5, longitude = if (refreshIncremental) 2.0 else 20.5)
+            val flags = mutableListOf<Boolean>()
+            foreground = true
+            service.setDeltaSyncHandler {
+                flags += it
+                if (refreshIncremental || it) store.saveContact(RADIO_A, expected.toContactFrame())
+                AdvertContactSyncOutcome.SYNCED
+            }
+            send(MeshEvent.PathUpdate(old.publicKey))
+            advanceTimeBy(80)
+            runCurrent()
+            assertEquals(if (refreshIncremental) listOf(false) else listOf(false, true), flags)
+            assertEquals(expected, saved(old))
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(requestedContacts().isEmpty())
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::pathUpdate deferred by contact sync still runs()")
+    @Test fun aPathOnlyClaimDefersAndThenRunsWithoutInventingAnAdvert() = runTest(scheduler) {
+        withAdvert {
+            val seed = unknown(0x63, "DeferredPath")
+            val flags = mutableListOf<Boolean>()
+            foreground = true
+            service.setDeltaSyncHandler { flags += it; AdvertContactSyncOutcome.SYNCED }
+            service.setSyncingContacts(true)
+            send(MeshEvent.PathUpdate(seed.contact.publicKey))
+            assertTrue(flags.isEmpty())
+            service.setSyncingContacts(false)
+            runCurrent()
+            assertEquals(listOf(false, true), flags)
+            assertTrue(store.fetchContacts(RADIO_A).isEmpty())
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::re-created contact with a surviving Discover row notifies again()")
+    @Test fun aSurvivingDiscoverDoesNotHideTheActualRecreatedContactFromConsumers() = runTest(scheduler) {
+        withAdvert {
+            val seed = unknown(0x74, "Returning")
+            store.upsertDiscoveredNode(RADIO_A, seed.contact.toContactFrame())
+            foreground = true
+            var calls = 0
+            service.setDeltaSyncHandler {
+                calls++
+                store.saveContact(RADIO_A, seed.contact.toContactFrame())
+                AdvertContactSyncOutcome.SYNCED
+            }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            advanceTimeBy(40)
+            runCurrent()
+            val contact = assertNotNull(store.fetchContact(RADIO_A, seed.contact.publicKey))
+            assertEquals(seed.contact.copy(id = contact.id, lastHeardTimestamp = AT.epochSecond.toUInt()), contact)
+            assertEquals("Returning", store.fetchDiscoveredNodes(RADIO_A).single().name)
+            assertEquals(listOf("Returning"), events.filterIsInstance<AdvertisementEvent.NewContactDiscovered>().map { it.name })
+            assertEquals(1, calls)
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::advert retries touch once then drops key when both fail()")
+    @Test fun twoTypedTouchFailuresDropTheUnknownAdvertWithoutInventingAStoreResult() = runTest(scheduler) {
+        withAdvert {
+            val seed = unknown(0x85, "Unknown")
+            intercepted.touchFailure = PersistenceStoreException(PersistenceStoreError.FetchFailed("controlled advert touch"))
+            foreground = true
+            var calls = 0
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            advanceTimeBy(80)
+            runCurrent()
+            assertEquals(2, intercepted.touchCalls)
+            assertEquals(0, calls)
+            assertTrue(store.fetchContacts(RADIO_A).isEmpty())
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(events.isEmpty())
+            expectedErrors = 2
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::touch failure does not announce a known contact as new()")
+    @Test fun twoActualSqlTouchRollbacksCannotAnnounceALongKnownContactAsNew() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0x51, "LongKnown")
+            rejectTouches()
+            foreground = true
+            var calls = 0
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            advanceTimeBy(60)
+            runCurrent()
+            assertEquals(2, intercepted.touchCalls)
+            assertEquals(seed.contact, saved(seed.contact))
+            assertEquals(0, calls)
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+            expectedErrors = 2
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::contact lookup failure does not escalate to full refetch()")
+    @Test fun aTypedLookupFailureCannotTurnAnActualIncrementalIntoAFullRefetch() = runTest(scheduler) {
+        withAdvert {
+            val seed = unknown(0x96, "Unavailable")
+            intercepted.lookupFailure = PersistenceStoreException(PersistenceStoreError.FetchFailed("controlled contact lookup"))
+            val flags = mutableListOf<Boolean>()
+            foreground = true
+            service.setDeltaSyncHandler { flags += it; AdvertContactSyncOutcome.SYNCED }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            advanceTimeBy(80)
+            runCurrent()
+            assertEquals(listOf(false), flags)
+            assertTrue(store.fetchContacts(RADIO_A).isEmpty())
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+            expectedErrors = 3
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::dropped background adverts retain phone recency(outcome : AdvertContactSyncOutcome)")
+    @Test fun bothDroppedBackgroundOutcomesKeepRealPhoneRecencyInsteadOfTheOldRadioWatermark() = runTest(scheduler) {
+        for (outcome in listOf(AdvertContactSyncOutcome.NOT_READY, AdvertContactSyncOutcome.FAILED)) withAdvert {
+            val seed = seed(0x58, "Dropped")
+            val receivedAt = AT.plusSeconds(86_400 - 3_600)
+            wallOffsetMillis = (86_400 - 3_600) * 1_000L
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            val cutoff = receivedAt.epochSecond.toUInt() - 1u
+            assertTrue(assertNotNull(saved(seed.contact)).matchesStaleNodePrune(cutoff))
+            val rounds = if (outcome == AdvertContactSyncOutcome.FAILED) AdvertisementService.MAX_CONSECUTIVE_DELTA_SYNC_FAILURES else 1
+            var calls = 0
+            service.setDeltaSyncHandler { calls++; outcome }
+            wallOffsetMillis = 86_400_000
+            foreground = true
+            service.handleReturnToForeground()
+            runCurrent()
+            assertEquals(rounds, calls)
+            val after = assertNotNull(saved(seed.contact))
+            assertFalse(after.matchesStaleNodePrune(cutoff))
+            assertEquals(seed.contact.lastModified, after.lastModified)
+            assertEquals(if (outcome == AdvertContactSyncOutcome.NOT_READY) receivedAt.epochSecond.toUInt()
+                else AT.plusSeconds(86_400).epochSecond.toUInt(), after.lastHeardTimestamp)
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+            expectedErrors = if (outcome == AdvertContactSyncOutcome.FAILED) 1 else 0
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::fresh lastHeard protects contact with old lastModified from prune()")
+    @Test fun actualStoredPhoneRecencyProtectsAnOldRadioWatermarkButNotTheStaleControl() = runTest(scheduler) {
+        withAdvert {
+            val fresh = seed(0x5A, "StaleRadio").contact.copy(lastModified = 1_000_000u,
+                lastHeardTimestamp = AT.epochSecond.toUInt())
+            val stale = seed(0x5B, "TrulyStale").contact.copy(lastModified = 1_000_000u,
+                lastHeardTimestamp = 1_000_000u)
+            store.saveContact(fresh)
+            store.saveContact(stale)
+            val cutoff = AT.minusSeconds(30 * 86_400L).epochSecond.toUInt()
+            val fetched = assertNotNull(saved(fresh))
+            assertEquals(fresh, fetched)
+            assertTrue(fetched.lastModified < cutoff)
+            assertFalse(fetched.matchesStaleNodePrune(cutoff))
+            assertTrue(assertNotNull(saved(stale)).matchesStaleNodePrune(cutoff))
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::favorite contact with stale recency does not match stale-node prune()")
+    @Test fun theActuallyStoredFavoriteRemainsProtectedEvenWithBothOldTimestamps() = runTest(scheduler) {
+        withAdvert {
+            val favorite = seed(0x5D, "FavoriteStale").contact.copy(lastModified = 1_000_000u,
+                lastHeardTimestamp = 1_000_000u, isFavorite = true)
+            store.saveContact(favorite)
+            val fetched = assertNotNull(saved(favorite))
+            val cutoff = AT.minusSeconds(30 * 86_400L).epochSecond.toUInt()
+            assertEquals(favorite, fetched)
+            assertTrue(fetched.recencyTimestamp < cutoff)
+            assertFalse(fetched.matchesStaleNodePrune(cutoff))
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::pathUpdate cancel after save does not cascade-delete messages()")
+    @Test fun rollbackAfterTheRadioDeletePreservesTheActualMessageThatArrivedWithTheLateSave() = runTest(scheduler) {
+        exerciseDeletedRound(0xD4, "HasMessages", history = "keep me")
+    }
+
+    @OriginalCase("AdvertisementServiceTests::rolled back key does not escalate to a full refetch()")
+    @Test fun theActuallyRolledBackGhostCannotTriggerAnotherRadioRefetch() = runTest(scheduler) {
+        exerciseDeletedRound(0x52, "Ghost", history = null)
+    }
+
+    @OriginalCase("AdvertisementServiceTests::reconcile skips a contact the radio deleted this round()")
+    @Test fun anExistingMessageProtectedGhostStillCannotAcquireDiscoverOrNewContactEvents() = runTest(scheduler) {
+        exerciseDeletedRound(0x50, "Ghost", history = "guarded rollback", originallyKnown = true)
+    }
+
+    private suspend fun TestScope.exerciseDeletedRound(byte: Int, name: String, history: String?, originallyKnown: Boolean = false) {
+        withAdvert {
+            val seed = if (originallyKnown) seed(byte, "Doomed") else unknown(byte, name)
+            val hold = holdHandler()
+            val flags = mutableListOf<Boolean>()
+            var inserted: ContactDTO? = null
+            var insertedMessage: MessageDTO? = null
+            foreground = true
+            service.setDeltaSyncHandler {
+                flags += it
+                hold.await()
+                store.saveContact(RADIO_A, seed.contact.toContactFrame().copy(name = name))
+                val contact = assertNotNull(store.fetchContact(RADIO_A, seed.contact.publicKey))
+                inserted = contact
+                if (history != null) {
+                    insertedMessage = message(contactID = contact.id, text = history, direction = MessageDirection.INCOMING)
+                    store.saveMessage(assertNotNull(insertedMessage))
+                }
+                AdvertContactSyncOutcome.SYNCED
+            }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertTrue(hold.waiting)
+            send(MeshEvent.ContactDeleted(seed.contact.publicKey))
+            assertNull(store.fetchContact(RADIO_A, seed.contact.publicKey))
+            hold.release()
+            runCurrent()
+            advanceTimeBy(80)
+            runCurrent()
+            assertEquals(listOf(false), flags)
+            if (history == null) {
+                assertNull(store.fetchContact(RADIO_A, seed.contact.publicKey))
+                assertTrue(store.fetchMessages(EntityKey(RADIO_A, assertNotNull(inserted).id), 10, 0).isEmpty())
+            } else {
+                val contact = assertNotNull(store.fetchContact(RADIO_A, seed.contact.publicKey))
+                assertEquals(assertNotNull(inserted).copy(lastHeardTimestamp = AT.epochSecond.toUInt()), contact)
+                assertEquals(listOf(assertNotNull(insertedMessage)), store.fetchMessages(EntityKey(RADIO_A, contact.id), 10, 0).toList())
+            }
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::contact deleted after the commit returns stays tracked for the round()")
+    @Test fun anActualDeleteAfterAnUnrelatedCommitStillCommitsCleanupAndCannotAnnounceTheDeletedPeer() = runTest(scheduler) {
+        withAdvert {
+            val synced = unknown(0x4E, "Synced")
+            val deleted = seed(0x4F, "Doomed")
+            foreground = true
+            var calls = 0
+            service.setDeltaSyncHandler {
+                calls++
+                store.saveContact(RADIO_A, synced.contact.toContactFrame())
+                AdvertContactSyncOutcome.SYNCED
+            }
+            send(MeshEvent.Advertisement(synced.contact.publicKey))
+            assertEquals(1, calls)
+            assertNotNull(store.fetchContact(RADIO_A, synced.contact.publicKey))
+            send(MeshEvent.ContactDeleted(deleted.contact.publicKey))
+            advanceTimeBy(80)
+            runCurrent()
+            assertNull(saved(deleted.contact))
+            assertEquals(listOf(deleted.contact.id), cleanups().single().contactIDs.toList())
+            assertEquals(listOf(synced.contact.publicKey), store.fetchDiscoveredNodes(RADIO_A).map { it.publicKey })
+            assertEquals(listOf("Synced"), events.filterIsInstance<AdvertisementEvent.NewContactDiscovered>().map { it.name })
+            assertEquals(1, calls)
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::teardown mid-handler prevents reconcile writes()")
+    @Test fun aLateCommittedContactCannotReconcileAfterStopWhileTheMonitorIsParked() = runTest(scheduler) {
+        withAdvert {
+            val seed = unknown(0x27, "Late")
+            val parked = unknown(0x28, "Parked")
+            val handler = holdHandler()
+            foreground = true
+            service.setDeltaSyncHandler {
+                withContext(NonCancellable) {
+                    handler.await()
+                    store.saveContact(RADIO_A, seed.contact.toContactFrame())
+                }
+                AdvertContactSyncOutcome.SYNCED
+            }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertTrue(handler.waiting)
+            val hop = holdForeground()
+            send(MeshEvent.Advertisement(parked.contact.publicKey), handled = false)
+            assertTrue(hop.waiting)
+            val stopping = async { stop() }
+            runCurrent()
+            assertFalse(stopping.isCompleted)
+            handler.release()
+            runCurrent()
+            assertNotNull(store.fetchContact(RADIO_A, seed.contact.publicKey))
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+            hop.release()
+            stopping.await()
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
     private suspend fun Rig.assertAdoption(byte: Int, name: String, text: String, timestamp: UInt) {
         val seed = unknown(byte, name)
         val orphan = MessageDTO(radioId = RADIO_A, text = text, timestamp = timestamp, createdAt = AT,
@@ -1149,6 +1487,18 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         var deletion: Hold? = null
         var deleteCalls = 0
         var snapshotFailure: PersistenceStoreException? = null
+        var touchFailure: PersistenceStoreException? = null
+        var lookupFailure: PersistenceStoreException? = null
+        var touchCalls = 0
+        override suspend fun touchContactHeard(radioId: RadioId, publicKey: Bytes, date: Instant): Boolean {
+            touchCalls++
+            touchFailure?.let { throw it }
+            return actual.touchContactHeard(radioId, publicKey, date)
+        }
+        override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+            lookupFailure?.let { throw it }
+            return actual.fetchContact(radioId, publicKey)
+        }
         override suspend fun fetchContactPublicKeys(radioId: RadioId): SnapshotSet<Bytes> {
             snapshotFailure?.let { throw it }
             return actual.fetchContactPublicKeys(radioId)
@@ -1202,6 +1552,8 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         private var foregroundHop: Hold? = null
         private var stopped = false
         private var rejecting = false
+        private var rejectingTouches = false
+        var wallOffsetMillis = 0L
         var foreground = false
         var expectedErrors = 0
         val errors = mutableListOf<String>()
@@ -1216,7 +1568,7 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             },
             object : AdvertisementClock {
                 override fun now(): Duration = scheduler.currentTime.milliseconds
-                override fun wallNow(): Instant = AT.plusMillis(scheduler.currentTime)
+                override fun wallNow(): Instant = AT.plusMillis(scheduler.currentTime + wallOffsetMillis)
                 override suspend fun sleepUntil(deadline: Duration) { delay(deadline - now()) }
             },
             AdvertisementLogSink { _, level, message -> if (level == DebugLogLevel.ERROR) errors += message },
@@ -1284,6 +1636,11 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
                 "BEGIN SELECT RAISE(FAIL, 'controlled advertisement deletion failure'); END")
             rejecting = true
         }
+        fun rejectTouches() {
+            db.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_advert_touch AFTER UPDATE ON contacts " +
+                "BEGIN SELECT RAISE(FAIL, 'controlled advertisement touch failure'); END")
+            rejectingTouches = true
+        }
         suspend fun rejectBufferedFlush() {
             store.saveRxLogEntry(rx())
             // The real pre-delete flush fails even though the revived contact would be skipped.
@@ -1324,6 +1681,10 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             listener?.join()
             owner.cancelAndJoin()
             allowDeletes()
+            if (rejectingTouches) {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_advert_touch")
+                rejectingTouches = false
+            }
             for (seed in seeds) {
                 store.deleteContacts(RADIO_A, SnapshotSet(listOf(seed.contact.publicKey)))
                 store.deleteContacts(RADIO_B, SnapshotSet(listOf(seed.contact.publicKey)))

@@ -129,9 +129,9 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         )
         val host = mount(holder)
         try {
-            compose.waitUntil(5_000) { holder.state.value.directory.contacts.any { it.id == selected.id } }
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
+            compose.waitUntil(5_000) { holder.state.value.directory.contacts.any { it.id == selected.id } }
             compose.onNode(isToggleable()).assertIsOff().performClick().assertIsOn()
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
             compose.waitUntil(5_000) { holder.state.value.failure == MessageActionsFailure.BlockFailed }

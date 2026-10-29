@@ -117,6 +117,7 @@ fun MessageActionsRoute(
         modifier,
         clock,
         localDeviceName,
+        onLoadBlockContacts = { holder.loadBlockContacts(message.radioId) },
     )
 }
 
@@ -135,6 +136,7 @@ fun MessageActionsContent(
     modifier: Modifier = Modifier,
     clock: Clock = Clock.systemDefaultZone(),
     localDeviceName: String? = localDevice?.name,
+    onLoadBlockContacts: (() -> Unit)? = null,
 ) {
     val availability = remember(message) { MessageActionAvailability.forMessage(message) }
     var selectedArrivalId by rememberSaveable(message.id) { mutableStateOf<UUID?>(null) }
@@ -142,6 +144,9 @@ fun MessageActionsContent(
     var showReactionDetails by rememberSaveable(message.id) { mutableStateOf(false) }
     var preferredReaction by rememberSaveable(message.id) { mutableStateOf<String?>(null) }
     var showBlockConfirmation by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(message.id, showBlockConfirmation) {
+        if (showBlockConfirmation) onLoadBlockContacts?.invoke()
+    }
     LaunchedEffect(message.id, showReactionDetails) {
         if (showReactionDetails) onLoadReactions(message.id, preferredReaction)
     }

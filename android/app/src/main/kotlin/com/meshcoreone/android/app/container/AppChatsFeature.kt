@@ -260,7 +260,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    if (firstFailure == null) firstFailure = failure
+                    if (firstFailure == null) firstFailure = failure else firstFailure.addSuppressed(failure)
                 }
             }
             container.sessions.current?.takeIf { it.token.radioId == radio }?.syncCoordinator?.refreshBlockedContactsCache(radio, store)

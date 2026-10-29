@@ -25,6 +25,311 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AdvertisementCoordinatorRoomTest : RepositoryTest() {
+    @OriginalCase("AdvertisementServiceTests::burst of adverts coalesces to one handler call()")
+    @Test fun heldFirstRoundCoalescesFourMoreRealContactsIntoOneFollowupRound() = runTest(scheduler) {
+        withAdvert {
+            val seeds = (0 until 5).map { seed(0xA0 + it, "K${0xA0 + it}") }
+            val hold = holdHandler()
+            var calls = 0
+            foreground = true
+            service.setDeltaSyncHandler {
+                calls++
+                if (calls == 1) hold.await()
+                AdvertContactSyncOutcome.SYNCED
+            }
+            send(MeshEvent.Advertisement(seeds.first().contact.publicKey))
+            assertTrue(hold.waiting)
+            for (seed in seeds.drop(1)) send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(1, calls)
+            hold.release()
+            runCurrent()
+            assertEquals(2, calls)
+            assertEquals(5, store.fetchDiscoveredNodes(RADIO_A).size)
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::min interval delays second delta sync after success()")
+    @Test fun aSuccessfulRoundEnforcesTheExact150MillisecondMinimumInterval() = runTest(scheduler) {
+        withAdvert(minInterval = 150.milliseconds) {
+            val a = seed(0x71, "A")
+            val b = seed(0x72, "B")
+            val flags = mutableListOf<Boolean>()
+            foreground = true
+            service.setDeltaSyncHandler { flags += it; AdvertContactSyncOutcome.SYNCED }
+            send(MeshEvent.Advertisement(a.contact.publicKey))
+            assertEquals(listOf(false), flags)
+            send(MeshEvent.Advertisement(b.contact.publicKey))
+            advanceTimeBy(149)
+            runCurrent()
+            assertEquals(listOf(false), flags)
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(listOf(false, false), flags)
+            assertEquals(setOf(a.contact.publicKey, b.contact.publicKey),
+                store.fetchDiscoveredNodes(RADIO_A).map { it.publicKey }.toSet())
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::armed round that backgrounds before fire does not invoke handler()")
+    @Test fun aRoundThatBackgroundsBeforeIts200MillisecondDeadlineRetainsItsRealWork() = runTest(scheduler) {
+        withAdvert(debounce = 200.milliseconds) {
+            val seed = seed(0xB4, "Armed")
+            var calls = 0
+            foreground = true
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            foreground = false
+            advanceTimeBy(200)
+            runCurrent()
+            assertEquals(0, calls)
+            foreground = true
+            service.handleReturnToForeground()
+            advanceTimeBy(200)
+            runCurrent()
+            assertEquals(1, calls)
+            assertNotNull(saved(seed.contact))
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::nil handler leaves keys pending for later install()")
+    @Test fun installingTheFirstHandlerDrainsAnAlreadyRecordedRealContact() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0x61, "Pending")
+            var calls = 0
+            foreground = true
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(0, calls)
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            runCurrent()
+            assertEquals(1, calls)
+            assertNotNull(saved(seed.contact))
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::setDeltaSyncHandler nil then reinstall still syncs pending keys()")
+    @Test fun explicitlyClearingThenReinstallingTheHandlerStillDrainsTheRecordedContact() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0x8A, "Reinstall")
+            var calls = 0
+            foreground = true
+            service.setDeltaSyncHandler(null)
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(0, calls)
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            runCurrent()
+            assertEquals(1, calls)
+            assertNotNull(saved(seed.contact))
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::handler failure remerges keys and retries()")
+    @Test fun aFailedRoundRetainsTheUnknownKeyForRealPersistenceAndDiscoveryOnRetry() = runTest(scheduler) {
+        withAdvert {
+            val seed = unknown(0xF5, "Retry")
+            var calls = 0
+            foreground = true
+            service.setDeltaSyncHandler {
+                if (++calls == 1) AdvertContactSyncOutcome.FAILED else {
+                    store.saveContact(RADIO_A, seed.contact.toContactFrame())
+                    AdvertContactSyncOutcome.SYNCED
+                }
+            }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(2, calls)
+            assertEquals("Retry", store.fetchContact(RADIO_A, seed.contact.publicKey)?.name)
+            assertEquals(seed.contact.publicKey, store.fetchDiscoveredNodes(RADIO_A).single().publicKey)
+            assertEquals(1, events.filterIsInstance<AdvertisementEvent.NewContactDiscovered>().size)
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::notReady outcome drops drained keys without reschedule or budget spend()")
+    @Test fun notReadyDropsTheOldWorkWithoutDelayingTheNextAdvertByTheMinimumInterval() = runTest(scheduler) {
+        withAdvert(minInterval = 150.milliseconds) {
+            val seed = seed(0x57, "NotReady")
+            var calls = 0
+            foreground = true
+            service.setDeltaSyncHandler {
+                if (++calls == 1) AdvertContactSyncOutcome.NOT_READY else AdvertContactSyncOutcome.SYNCED
+            }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(1, calls)
+            service.handleReturnToForeground()
+            runCurrent()
+            assertEquals(1, calls)
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(2, calls)
+            assertEquals(0L, scheduler.currentTime)
+            assertNotNull(saved(seed.contact))
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::repeated failures stop the retry loop()")
+    @Test fun theFailureCapStopsActualRoundsAndDropsTheirDrainedKey() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0x53, "Flaky")
+            var calls = 0
+            foreground = true
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.FAILED }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(AdvertisementService.MAX_CONSECUTIVE_DELTA_SYNC_FAILURES, calls)
+            service.handleReturnToForeground()
+            runCurrent()
+            assertEquals(AdvertisementService.MAX_CONSECUTIVE_DELTA_SYNC_FAILURES, calls)
+            assertNotNull(saved(seed.contact))
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+            expectedErrors = 1
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::busy rounds keep their keys past the failure cap()")
+    @Test fun busyBackoffsBeyondTheFailureCapStillReachRealPersistenceAndDiscovery() = runTest(scheduler) {
+        withAdvert {
+            val seed = unknown(0x54, "Late")
+            val busyRounds = AdvertisementService.MAX_CONSECUTIVE_DELTA_SYNC_FAILURES + 2
+            var calls = 0
+            foreground = true
+            service.setDeltaSyncHandler {
+                if (++calls <= busyRounds) AdvertContactSyncOutcome.BUSY else {
+                    store.saveContact(RADIO_A, seed.contact.toContactFrame())
+                    AdvertContactSyncOutcome.SYNCED
+                }
+            }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            advanceTimeBy(busyRounds * 5L)
+            runCurrent()
+            assertEquals(busyRounds + 1, calls)
+            assertEquals("Late", store.fetchContact(RADIO_A, seed.contact.publicKey)?.name)
+            assertEquals(1, events.filterIsInstance<AdvertisementEvent.NewContactDiscovered>().size)
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::busy outcome does not stamp min-interval when backoff is non-zero()")
+    @Test fun aBusyRoundUsesIts20MillisecondBackoffNotThe30SecondSuccessInterval() = runTest(scheduler) {
+        withAdvert(minInterval = 30_000.milliseconds, busyBackoff = 20.milliseconds) {
+            val seed = seed(0x87, "Busy")
+            var calls = 0
+            foreground = true
+            service.setDeltaSyncHandler {
+                if (++calls == 1) AdvertContactSyncOutcome.BUSY else AdvertContactSyncOutcome.SYNCED
+            }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            advanceTimeBy(19)
+            runCurrent()
+            assertEquals(1, calls)
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(2, calls)
+            assertNotNull(saved(seed.contact))
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::contactDeleted removes pending key before sync runs()")
+    @Test fun aDeleteBeforeDrainCannotBeRearmedWhenContactSyncFinishes() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0x49, "Doomed")
+            var calls = 0
+            foreground = true
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            service.setSyncingContacts(true)
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertTrue(AdvertisementEvent.ContactUpdated in events)
+            send(MeshEvent.ContactDeleted(seed.contact.publicKey))
+            assertNull(saved(seed.contact))
+            assertEquals(listOf(seed.contact.id), cleanups().single().contactIDs.toList())
+            service.setSyncingContacts(false)
+            runCurrent()
+            assertEquals(0, calls)
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::reconcile skips deleted contact after mid-handler 0x8F()")
+    @Test fun deletingAnUnpersistedContactDuringTheActualRoundCannotAnnounceIt() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0x4A, "NeverPersisted")
+            store.deleteContacts(RADIO_A, SnapshotSet(listOf(seed.contact.publicKey)))
+            val handler = holdHandler()
+            var calls = 0
+            foreground = true
+            service.setDeltaSyncHandler {
+                calls++
+                handler.await()
+                AdvertContactSyncOutcome.SYNCED
+            }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertTrue(handler.waiting)
+            send(MeshEvent.ContactDeleted(seed.contact.publicKey))
+            handler.release()
+            runCurrent()
+            assertEquals(1, calls)
+            assertNull(saved(seed.contact))
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(AdvertisementEvent.ContactUpdated in events)
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::stopEventMonitoring stamps lastHeard for background 0x80()")
+    @Test fun stopStampsTheBackgroundReceiveTimeIntoTheRealContactAndDiscoverRows() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0xB7, "HeardOvernight")
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(seed.contact, saved(seed.contact))
+            stop()
+            assertEquals(seed.contact.copy(lastHeardTimestamp = 1_700_000_000u), saved(seed.contact))
+            val node = store.fetchDiscoveredNodes(RADIO_A).single()
+            assertEquals(seed.contact.publicKey, node.publicKey)
+            assertEquals(AT, node.lastHeard)
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::stop during isInForeground hop does not invoke handler()")
+    @Test fun stopInvalidatesTheRoundParkedAtItsForegroundCheckBeforeCallingTheHandler() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0xD0, "ParkedRound")
+            var calls = 0
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(0, calls)
+            foreground = true
+            val hop = holdForeground()
+            service.handleReturnToForeground()
+            runCurrent()
+            assertTrue(hop.waiting)
+            stop()
+            hop.release()
+            runCurrent()
+            assertEquals(0, calls)
+            assertEquals(seed.contact.copy(lastHeardTimestamp = 1_700_000_000u), saved(seed.contact))
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::stop during handler still stamps drained lastHeard()")
+    @Test fun aCancelledHeldHandlerStillStampsItsDrainedReceiveTimeWithoutAnnouncingAfterStop() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0xD1, "DrainedHeard")
+            val handler = holdHandler()
+            service.setDeltaSyncHandler {
+                withContext(NonCancellable) { handler.await() }
+                AdvertContactSyncOutcome.SYNCED
+            }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(seed.contact, saved(seed.contact))
+            foreground = true
+            service.handleReturnToForeground()
+            runCurrent()
+            assertTrue(handler.waiting)
+            stop()
+            handler.release()
+            runCurrent()
+            assertEquals(seed.contact.copy(lastHeardTimestamp = 1_700_000_000u), saved(seed.contact))
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+        }
+    }
+
     @OriginalCase("AdvertisementServiceTests::background 0x8F queues key and does not deleteContact()")
     @Test fun backgroundDeletePreservesTheRealRowUntilStopDrainsIt() = runTest(scheduler) {
         withAdvert {
@@ -285,8 +590,13 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         }
     }
 
-    private suspend fun TestScope.withAdvert(block: suspend Rig.() -> Unit) {
-        val rig = Rig(this)
+    private suspend fun TestScope.withAdvert(
+        debounce: Duration = Duration.ZERO,
+        minInterval: Duration = Duration.ZERO,
+        busyBackoff: Duration = 5.milliseconds,
+        block: suspend Rig.() -> Unit,
+    ) {
+        val rig = Rig(this, debounce, minInterval, busyBackoff)
         try {
             rig.start()
             rig.block()
@@ -348,7 +658,7 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         private fun unexpected(): Nothing = error("Deletion coordination must not issue radio commands")
     }
 
-    private inner class Rig(private val test: TestScope) {
+    private inner class Rig(private val test: TestScope, debounce: Duration, minInterval: Duration, busyBackoff: Duration) {
         private val owner = SupervisorJob(test.coroutineContext[Job])
         private val scope = CoroutineScope(test.coroutineContext + owner)
         private val source = Source()
@@ -363,7 +673,7 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         val errors = mutableListOf<String>()
         val events = mutableListOf<AdvertisementEvent>()
         val service = AdvertisementService(
-            source, source, intercepted, scope, Duration.ZERO, Duration.ZERO, 5.milliseconds,
+            source, source, intercepted, scope, debounce, minInterval, busyBackoff,
             object : AppStateProvider {
                 override suspend fun isInForeground(): Boolean {
                     foregroundHop?.await()
@@ -399,6 +709,9 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             }
             return Seed(contact, foreign, message).also { seeds += it }
         }
+        suspend fun unknown(byte: Int, name: String): Seed = seed(byte, name).also {
+            store.deleteContacts(RADIO_A, SnapshotSet(listOf(it.contact.publicKey)))
+        }
         fun send(event: MeshEvent, handled: Boolean = true) {
             val before = source.handled.size
             source.send(event)
@@ -421,6 +734,7 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         }
         fun holdForeground(): Hold = Hold().also { foregroundHop = it; holds += it }
         fun holdDelete(): Hold = Hold().also { intercepted.deletion = it; holds += it }
+        fun holdHandler(): Hold = Hold().also { holds += it }
         fun rejectDeletes() {
             db.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_advert_delete AFTER DELETE ON contacts " +
                 "BEGIN SELECT RAISE(FAIL, 'controlled advertisement deletion failure'); END")

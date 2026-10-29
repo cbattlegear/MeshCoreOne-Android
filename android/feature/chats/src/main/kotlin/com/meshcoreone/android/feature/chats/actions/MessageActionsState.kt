@@ -69,14 +69,13 @@ class MessageActionsStateHolder(
     private var reactionRequest = 0L
 
     fun loadDetails(message: MessageDTO) {
-        val availability = MessageActionAvailability.forMessage(message)
-        if (!availability.showsPathDetail && !availability.canBlockSender) return
+        if (!MessageActionAvailability.forMessage(message).showsPathDetail) return
         scope.launch {
             mutableState.value = mutableState.value.copy(isLoadingDetails = true, failure = null)
             try {
                 val contacts = dataSource.contacts(message.radioId)
-                val discovered = if (availability.showsPathDetail) dataSource.discoveredNodes(message.radioId) else emptyList()
-                val repeats = if (availability.showsPathDetail) dataSource.repeats(message.id) else emptyList()
+                val discovered = dataSource.discoveredNodes(message.radioId)
+                val repeats = dataSource.repeats(message.id)
                 mutableState.value = mutableState.value.copy(
                     isLoadingDetails = false,
                     repeats = repeats,
@@ -141,6 +140,24 @@ class MessageActionsStateHolder(
     fun selectEmoji(emoji: String) {
         if (mutableState.value.reactionGroups.any { it.emoji == emoji }) {
             mutableState.value = mutableState.value.copy(selectedEmoji = emoji)
+        }
+    }
+
+    fun loadBlockContacts(radioId: RadioId) {
+        scope.launch {
+            try {
+                val contacts = dataSource.contacts(radioId)
+                mutableState.value = mutableState.value.copy(
+                    directory = mutableState.value.directory.copy(
+                        contacts = contacts,
+                        repeaters = contacts.filter { it.isRepeater },
+                    ),
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                mutableState.value = mutableState.value.copy(failure = MessageActionsFailure.BlockFailed)
+            }
         }
     }
 

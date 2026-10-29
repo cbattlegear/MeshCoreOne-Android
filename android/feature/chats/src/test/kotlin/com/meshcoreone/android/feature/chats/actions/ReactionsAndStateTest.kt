@@ -49,7 +49,7 @@ class ReactionsAndStateTest {
     }
 
     @Test
-    fun `successful block contact retry does not erase an unrelated submission failure`() = runBlocking {
+    fun `successful block contact retry does not erase an unrelated submission failure`() = runBlocking<Unit> {
         val source = FakeActionsSource()
         val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null)
         val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))

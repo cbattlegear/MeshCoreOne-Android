@@ -449,7 +449,7 @@ class MessagingRoomIntegrationTest {
     }
 
     @OriginalCase("ChatSendQueueServiceTests::channel drain treats deviceError(2) as terminal when fetchChannel confirms the channel is gone()")
-    @Test fun theActualChannelServiceNotFoundReplyTerminallyRetiresOnlyItsMissingSlotEnvelope() = runTest(scheduler) {
+    @Test fun theActualChannelServiceUnconfiguredSlotTerminallyRetiresOnlyItsMissingSlotEnvelope() = runTest(scheduler) {
         exerciseChannelNotFound(initialAttempts = 7, boundedWait = false)
     }
 
@@ -468,6 +468,7 @@ class MessagingRoomIntegrationTest {
         channels = ChannelService(g.session, store, null)
         g.start()
         g.firmware.error = 2u
+        g.firmware.emptyChannelSlot = true
         val message = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
         val row = PendingSendDTO.fromEnvelope(ChannelMessageEnvelope(message.id, 0u, true,
             message.text, message.timestamp, "Test Radio"), radio).copy(sequence = 1, attemptCount = initialAttempts)
@@ -480,7 +481,7 @@ class MessagingRoomIntegrationTest {
         g.signals.set(DeviceConnectionState.READY)
         runCurrent()
         if (initialAttempts >= 3) {
-            g.queue.awaitDrainCompletion()
+            withTimeout(5_000) { g.queue.awaitDrainCompletion() }
             assertTrue(store.fetchPendingSends(radio).isEmpty())
             assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, message.id))?.status)
             assertEquals(1, g.firmware.channelQueries().size)
@@ -1918,6 +1919,7 @@ class MessagingRoomIntegrationTest {
     private inner class RoomFirmware : MeshTransport {
         private val mock = MockTransport()
         var error: UByte? = null
+        var emptyChannelSlot = false
         var acknowledge = true
         var ackBeforeAcceptance = false
         var automaticTripTime: UInt? = 123u
@@ -1962,7 +1964,10 @@ class MessagingRoomIntegrationTest {
                     mock.simulateOK()
                 }
                 CommandCode.GET_CONTACT_BY_KEY -> mock.simulateError(2u)
-                CommandCode.GET_CHANNEL -> mock.simulateError(2u)
+                CommandCode.GET_CHANNEL -> if (emptyChannelSlot) {
+                    mock.simulateReceive(ByteWriter().appendUInt8(ResponseCode.CHANNEL_INFO.rawValue)
+                        .appendUInt8(data[1]).append(Bytes(ByteArray(32))).append(Bytes(ByteArray(16))).toBytes())
+                } else mock.simulateError(2u)
                 CommandCode.RESET_PATH -> mock.simulateOK()
                 CommandCode.GET_MESSAGE -> {
                     val empty = incomingMessages.isEmpty()

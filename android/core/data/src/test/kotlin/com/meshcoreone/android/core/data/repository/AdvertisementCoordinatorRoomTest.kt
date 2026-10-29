@@ -1089,6 +1089,7 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             var calls = 0
             service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
             advanceTimeBy(1_000)
+            clock.now = AT.plusSeconds(1)
             send(MeshEvent.Advertisement(seed.contact.publicKey))
             assertEquals(seed.contact.copy(lastHeardTimestamp = AT.plusSeconds(1).epochSecond.toUInt()), saved(seed.contact))
             assertEquals(AT.plusSeconds(1), store.fetchDiscoveredNodes(RADIO_A).single().lastHeard)
@@ -1335,6 +1336,7 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             }
             send(MeshEvent.Advertisement(seed.contact.publicKey))
             assertTrue(hold.waiting)
+            val beforeDeletionDiscover = store.fetchDiscoveredNodes(RADIO_A).toList()
             send(MeshEvent.ContactDeleted(seed.contact.publicKey))
             assertNull(store.fetchContact(RADIO_A, seed.contact.publicKey))
             hold.release()
@@ -1347,10 +1349,10 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
                 assertTrue(store.fetchMessages(EntityKey(RADIO_A, assertNotNull(inserted).id), 10, 0).isEmpty())
             } else {
                 val contact = assertNotNull(store.fetchContact(RADIO_A, seed.contact.publicKey))
-                assertEquals(assertNotNull(inserted).copy(lastHeardTimestamp = AT.epochSecond.toUInt()), contact)
+                assertEquals(assertNotNull(inserted), contact)
                 assertEquals(listOf(assertNotNull(insertedMessage)), store.fetchMessages(EntityKey(RADIO_A, contact.id), 10, 0).toList())
             }
-            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertEquals(beforeDeletionDiscover, store.fetchDiscoveredNodes(RADIO_A).toList())
             assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
         }
     }
@@ -1406,11 +1408,13 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             handler.release()
             runCurrent()
             assertNotNull(store.fetchContact(RADIO_A, seed.contact.publicKey))
-            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            val heardAfterStop = store.fetchDiscoveredNodes(RADIO_A).single()
+            assertEquals(seed.contact.publicKey, heardAfterStop.publicKey)
+            assertEquals(AT, heardAfterStop.lastHeard)
             assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
             hop.release()
             stopping.await()
-            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertEquals(listOf(heardAfterStop), store.fetchDiscoveredNodes(RADIO_A).toList())
             assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
         }
     }

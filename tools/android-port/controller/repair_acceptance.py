@@ -840,46 +840,69 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             test_annotations.add(alias)
         if imported in family_annotations:
             family_annotations.add(alias)
-    declared_names = {
-        tokens[index + 1].strip("`")
-        for index, value in enumerate(tokens[:-1])
-        if value in ("class", "interface", "object", "typealias")
-        and name_token(tokens[index + 1])
-    }
-    def has_inherited_scope():
-        for start, value in enumerate(tokens):
-            if value not in ("class", "interface", "object") or (
-                start and tokens[start - 1] in (".", ":")
-            ):
-                continue
-            index, nesting = start + 1, []
-            while index < len(tokens):
-                current = tokens[index]
-                if not nesting:
-                    if current == ":":
-                        return True
-                    if current in ("{", "}", ";", "=", "class", "object", "interface",
-                                   "fun", "val", "var", "typealias"):
-                        break
-                if current in ("(", "[", "<", "{"):
-                    nesting.append(current)
-                elif current in (")", "]", ">", "}"):
-                    if not nesting or nesting.pop() != {")": "(", "]": "[", ">": "<", "}": "{"}[current]:
-                        return True
-                index += 1
-            if nesting:
-                return True
-        return False
+    scopes, stack, declared_names = [], [], {}
+    for index, value in enumerate(tokens):
+        scope = tuple(stack)
+        scopes.append(scope)
+        if value == "{":
+            stack.append(index)
+        elif value == "}":
+            if not stack:
+                raise PortError("Unbalanced Kotlin scope in hosted test source")
+            stack.pop()
+        if (
+            value in ("class", "interface", "object", "typealias")
+            and not (index and tokens[index - 1] in (".", ":"))
+            and index + 1 < len(tokens) and name_token(tokens[index + 1])
+        ):
+            declared_names.setdefault(scope, set()).add(tokens[index + 1].strip("`"))
+    if stack:
+        raise PortError("Unbalanced Kotlin scope in hosted test source")
 
-    # A nested annotation inherited from a superclass can shadow even an explicit import.
-    inherited_scope = has_inherited_scope()
-    if reject_inherited and inherited_scope:
+    inherited_bodies, inherited_scope, unresolved_scope = set(), False, False
+    for start, value in enumerate(tokens):
+        if value not in ("class", "interface", "object") or (
+            start and tokens[start - 1] in (".", ":")
+        ):
+            continue
+        index, nesting, inherited = start + 1, [], False
+        while index < len(tokens):
+            current = tokens[index]
+            if not nesting:
+                if current == ":":
+                    inherited = True
+                if current == "{":
+                    if inherited:
+                        inherited_bodies.add(index)
+                    break
+                if current in ("}", ";", "=", "class", "object", "interface",
+                               "fun", "val", "var", "typealias"):
+                    break
+            if current in ("(", "[", "<", "{"):
+                nesting.append(current)
+            elif current in (")", "]", ">", "}"):
+                if not nesting or nesting.pop() != {")": "(", "]": "[", ">": "<", "}": "{"}[current]:
+                    unresolved_scope = True
+                    break
+            index += 1
+        unresolved_scope |= bool(nesting)
+        inherited_scope |= inherited
+    if reject_inherited and (inherited_scope or unresolved_scope):
         raise PortError("Cannot establish all inherited Kotlin JUnit declarations for changed test source")
-    non_test_annotations = {
+    imported_non_tests = {
         name for name, targets in imports.items()
-        if not inherited_scope and name not in declared_names
-        and len(targets) == 1 and next(iter(targets)) in known_non_tests
+        if len(targets) == 1 and next(iter(targets)) in known_non_tests
     }
+
+    def non_tests_at(position):
+        scope = scopes[position]
+        # Only enclosing classes can contribute inherited annotation names.
+        if unresolved_scope or inherited_bodies.intersection(scope):
+            return set()
+        shadowed = set().union(*(declared_names.get(scope[:depth], set())
+                                 for depth in range(len(scope) + 1)))
+        return imported_non_tests - shadowed
+
     for index, value in enumerate(tokens):
         if value != "@" or index + 2 >= len(tokens) or tokens[index + 2] != ":":
             continue
@@ -887,7 +910,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         if site == "file":
             continue
         name = tokens[index + 3].strip("`") if index + 3 < len(tokens) else ""
-        if (site == "get" and name in non_test_annotations
+        if (site == "get" and name in non_tests_at(index)
                 and imports[name] in ({"org.junit.Rule"}, {"org.junit.ClassRule"})
                 and (index + 4 >= len(tokens) or tokens[index + 4] != ".")):
             continue
@@ -959,6 +982,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     index += 1
                 if stack:
                     raise PortError("Unclosed Kotlin annotation in hosted test source")
+        non_test_annotations = non_tests_at(start)
         if (
             annotations and not annotations & (test_annotations | family_annotations)
             and not annotations.issubset(non_test_annotations)

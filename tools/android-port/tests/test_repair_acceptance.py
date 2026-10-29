@@ -697,6 +697,14 @@ class RepairExecutionTests(unittest.TestCase):
                 "import org.junit.Before as Setup\n"
                 "class T { class Setup; @Setup fun setup() {} }"
             )
+        for classes in (None, {}):
+            with self.subTest(classes=classes), self.assertRaisesRegex(PortError, "delegate header scope"):
+                _kotlin_junit_methods(
+                    "import org.junit.Before\nclass Fixture : Parent(), Marker by object : Marker "
+                    "by object : Marker {} {} { @Before fun setup() {} } "
+                    "class T { @Test fun actual() {} }",
+                    classes,
+                )
 
     def test_actual_room_suite_lifecycle_does_not_invent_test_methods(self):
         from controller.repair_acceptance import _kotlin_junit_methods

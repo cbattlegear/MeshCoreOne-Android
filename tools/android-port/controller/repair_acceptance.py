@@ -882,6 +882,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     cursor, depth = index + 1, []
                     while cursor < len(tokens):
                         item = tokens[cursor]
+                        if item in ("object", "by") and not depth:
+                            raise PortError("Cannot establish nested Kotlin delegate header scope")
                         if item == "{" and not depth:
                             break
                         if item in ("(", "["):

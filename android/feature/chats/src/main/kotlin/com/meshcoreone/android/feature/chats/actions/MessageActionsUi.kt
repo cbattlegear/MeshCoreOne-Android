@@ -144,6 +144,12 @@ fun MessageActionsContent(
     var showReactionDetails by rememberSaveable(message.id) { mutableStateOf(false) }
     var preferredReaction by rememberSaveable(message.id) { mutableStateOf<String?>(null) }
     var showBlockConfirmation by rememberSaveable { mutableStateOf(false) }
+    var confirmedBlockContactIds by rememberSaveable(message.id, message.radioId) {
+        mutableStateOf(emptySet<UUID>())
+    }
+    LaunchedEffect(message.id, message.radioId, state.blockedSender) {
+        if (state.blockedSender != null) confirmedBlockContactIds = emptySet()
+    }
     LaunchedEffect(message.id, showBlockConfirmation) {
         if (showBlockConfirmation) onLoadBlockContacts?.invoke()
     }
@@ -276,7 +282,9 @@ fun MessageActionsContent(
         BlockSenderDialog(
             senderName = message.senderNodeName.orEmpty(),
             contacts = state.directory.contacts,
+            initialSelectedIds = confirmedBlockContactIds,
             onConfirm = {
+                confirmedBlockContactIds = it.toSet()
                 onBlockSender(message, it)
                 showBlockConfirmation = false
             },
@@ -809,11 +817,12 @@ internal fun reactionRelativeTime(date: Instant, now: Instant, locale: java.util
 private fun BlockSenderDialog(
     senderName: String,
     contacts: List<ContactDTO>,
+    initialSelectedIds: Set<UUID>,
     onConfirm: (Set<UUID>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val resources = LocalResources.current
-    var selected by rememberSaveable { mutableStateOf(emptySet<UUID>()) }
+    var selected by rememberSaveable { mutableStateOf(initialSelectedIds.toSet()) }
     val matching = remember(contacts, senderName) {
         contacts.filter { !it.isBlocked && it.name.equals(senderName, ignoreCase = true) }
     }

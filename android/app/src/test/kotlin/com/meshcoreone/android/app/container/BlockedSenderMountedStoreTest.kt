@@ -113,6 +113,56 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         }
     }
 
+    @Test fun mountedContactSaveFailureRetainsTheConfirmedSelectionForRetry() = runTest {
+        val harness = ContainerHarness(this, store)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val holder = MessageActionsStateHolder(harness.container.chatsFeature.actions(radio), scope)
+        val selected = ContactDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 0x45 }), name = "Spammer",
+            typeRawValue = 1u, lastHeardTimestamp = 0u)
+        val foreign = selected.copy(radioId = RadioId(UUID(0, 2)))
+        store.saveMessage(message)
+        store.saveContact(selected)
+        store.saveContact(foreign)
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_mounted_contact AFTER UPDATE ON contacts WHEN NEW.isBlocked = 1 " +
+                "BEGIN SELECT RAISE(FAIL, 'controlled mounted contact failure'); END",
+        )
+        val host = mount(holder)
+        try {
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
+                .performScrollTo().performClick()
+            compose.waitForIdle()
+            compose.waitUntil(5_000) { holder.state.value.directory.contacts.any { it.id == selected.id } }
+            compose.onNode(isToggleable()).assertIsOff().performClick().assertIsOn()
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
+            compose.waitUntil(5_000) { holder.state.value.failure == MessageActionsFailure.BlockFailed }
+            val error = AppLocalizableStrings.errorPersistenceSaveFailed(
+                host.get().resources, host.get().getString(AppChatsStrings.chatsMessageActionBlockSender),
+            )
+            compose.onNodeWithText(error).performScrollTo().assertIsDisplayed()
+            assertNull(holder.state.value.blockedSender)
+            assertNull(store.fetchMessage(EntityKey(radio, message.id)))
+            assertEquals(selected, store.fetchContact(EntityKey(radio, selected.id)))
+            assertEquals(foreign, store.fetchContact(EntityKey(foreign.radioId, foreign.id)))
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_mounted_contact")
+            compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain))
+                .performScrollTo().performClick()
+            compose.onNode(isToggleable()).assertIsOn()
+            compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
+            compose.waitUntil(5_000) { holder.state.value.blockedSender == "Spammer" }
+            assertEquals(selected.copy(isBlocked = true), store.fetchContact(EntityKey(radio, selected.id)))
+            assertEquals(foreign, store.fetchContact(EntityKey(foreign.radioId, foreign.id)))
+            assertEquals(1, store.fetchBlockedChannelSenders(radio).size)
+            assertNull(holder.state.value.failure)
+            compose.onNodeWithText(error).assertDoesNotExist()
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER IF EXISTS reject_mounted_contact")
+            host.pause().stop().destroy()
+            scope.cancel()
+            harness.container.close()
+        }
+    }
+
     @Test fun mountedFailedDeletionShowsLocalizedRecoveryAndRetryCommitsWithoutDuplicateBlocks() = runTest {
         val harness = ContainerHarness(this, store)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)

@@ -49,6 +49,7 @@ class NodeConfigService(
     private var onPostIdentityImport: (suspend (Deferred<Unit>) -> RadioId?)? = null
     private var onIdentityRecovery: (suspend (Deferred<Unit>) -> Unit)? = null
     private var onIdentityImportStarted: (suspend (Deferred<Unit>) -> Unit)? = null
+    private var onIdentityImportFinished: (suspend (Boolean) -> Unit)? = null
 
     /**
      * Wires a late-bound callback that fires after a private-key import succeeds. Its non-null
@@ -65,6 +66,11 @@ class NodeConfigService(
 
     fun setOnIdentityImportStarted(callback: (suspend (Deferred<Unit>) -> Unit)?) {
         synchronized(lock) { onIdentityImportStarted = callback }
+    }
+
+    /** True means the original identity was not written or was verified unchanged and can safely resume. */
+    fun setOnIdentityImportFinished(callback: (suspend (Boolean) -> Unit)?) {
+        synchronized(lock) { onIdentityImportFinished = callback }
     }
 
     /** Whether a sync coordinator was injected at construction. */
@@ -142,10 +148,13 @@ class NodeConfigService(
         val callback = synchronized(lock) { onPostIdentityImport }
         val recovery = synchronized(lock) { onIdentityRecovery }
         val started = synchronized(lock) { onIdentityImportStarted }
+        val finished = synchronized(lock) { onIdentityImportFinished }
         val beforeIdentity = if (callback != null && plan.importPrivateKey != null) {
             session.currentSelfInfo?.publicKey ?: settingsService.getSelfInfo().publicKey
         } else null
         var attemptedIdentityWrite = false
+        var identityImportStarted = false
+        var verifiedUnchangedIdentity = false
         val committedIdentity = CompletableDeferred<Unit>()
         var importedIdentity = false
         var attemptedReconciliation = false
@@ -167,6 +176,7 @@ class NodeConfigService(
         }
         val writers = makeWriters(::reconcile).copy(importPrivateKey = {
             started?.invoke(identityHandoff)
+            identityImportStarted = true
             attemptedIdentityWrite = true
             settingsService.importPrivateKey(it) {
                 if (committedIdentity.complete(Unit)) {
@@ -174,6 +184,7 @@ class NodeConfigService(
                 }
             }
             importedIdentity = true
+            verifiedUnchangedIdentity = session.currentSelfInfo?.publicKey == beforeIdentity
         })
         try {
             executeConfigImport(
@@ -205,7 +216,8 @@ class NodeConfigService(
                                 recovery?.invoke(identityHandoff)
                                 throw failure
                             }
-                            if (info.publicKey != beforeIdentity) reconcile()
+                            verifiedUnchangedIdentity = info.publicKey == beforeIdentity
+                            if (!verifiedUnchangedIdentity) reconcile()
                         }
                     }
                 } catch (failure: Throwable) {
@@ -213,6 +225,18 @@ class NodeConfigService(
                     if (original == null) throw failure
                     if (original !== failure) original.addSuppressed(failure)
                     logger.error("Could not reconcile a partially imported identity: ${failure.javaClass.name}")
+                }
+            }
+            if (identityImportStarted) {
+                try {
+                    withContext(NonCancellable) {
+                        finished?.invoke(!attemptedIdentityWrite || verifiedUnchangedIdentity)
+                    }
+                } catch (failure: Throwable) {
+                    val original = importFailure
+                    if (original == null) throw failure
+                    if (original !== failure) original.addSuppressed(failure)
+                    logger.error("Could not resume unchanged-identity ingestion: ${failure.javaClass.name}")
                 }
             }
         }

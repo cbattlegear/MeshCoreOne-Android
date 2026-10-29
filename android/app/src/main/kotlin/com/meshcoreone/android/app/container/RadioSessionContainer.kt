@@ -286,19 +286,33 @@ class RadioSessionContainer private constructor(
         env.notificationStrings?.let(notificationService::setStringProvider)
         scope.launch { notificationService.setup() }
         // The cycle-forced upward call into the connection manager: an identity import re-resolves the radio id.
-        nodeConfigService.setOnIdentityImportStarted { handoff -> inputs.callbacks.beginIdentityImport(handoff) }
-        nodeConfigService.setOnPostIdentityImport { handoff ->
+        nodeConfigService.setOnIdentityImportStarted { handoff ->
+            inputs.callbacks.beginIdentityImport(handoff)
             synchronized(lock) { identityIngestionQuiesced = true }
-            messagePollingService.pauseAutoFetch()
-            messagePollingService.pollAllMessages()
-            stopEventMonitoring()
-            val effective = inputs.callbacks.reconcileIdentity(handoff)
-            if (effective == null && session.currentSelfInfo?.publicKey == inputs.device.publicKey) {
+            try {
+                messagePollingService.pauseAutoFetch()
+                messagePollingService.pollAllMessages()
+                stopEventMonitoring()
+            } catch (failure: Throwable) {
+                synchronized(lock) { identityIngestionQuiesced = false }
+                try {
+                    if (!isClosed) withContext(NonCancellable) {
+                        messagePollingService.resumeAutoFetch()
+                        ensureListeners()
+                    }
+                } catch (resumeFailure: Throwable) {
+                    if (resumeFailure !== failure) failure.addSuppressed(resumeFailure)
+                }
+                throw failure
+            }
+        }
+        nodeConfigService.setOnIdentityImportFinished { unchanged ->
+            if (unchanged && !isClosed) {
                 synchronized(lock) { identityIngestionQuiesced = false }
                 ensureListeners()
             }
-            effective
         }
+        nodeConfigService.setOnPostIdentityImport { handoff -> inputs.callbacks.reconcileIdentity(handoff) }
         nodeConfigService.setOnIdentityRecovery { handoff -> inputs.callbacks.recoverIdentity(handoff) }
     }
 
@@ -457,6 +471,7 @@ class RadioSessionContainer private constructor(
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }
             nodeConfigService.setOnPostIdentityImport(null)
             nodeConfigService.setOnIdentityImportStarted(null)
+            nodeConfigService.setOnIdentityImportFinished(null)
             nodeConfigService.setOnIdentityRecovery(null)
             step(LifecycleStage.STOP_SERVICES) { messagePollingService.clearMessageHandlers() }
             step(LifecycleStage.STOP_SERVICES) { syncCoordinator.cancelDiscoveryEventMonitoring() }

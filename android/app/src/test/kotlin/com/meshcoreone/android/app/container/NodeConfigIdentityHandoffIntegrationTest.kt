@@ -49,26 +49,37 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
         )),
     )
 
-    @Test fun anArrivalDuringThePartitionHandoffRemainsOnTheRadioUntilTheNewGraphOwnsIt() = runTest {
+    @Test fun anArrivalDuringKeyReadbackAndPartitionHandoffWaitsForTheNewGraph() = runTest {
         val messages = ConcurrentLinkedQueue<Bytes>()
         withIdentityNode(messageFrames = messages) { h, node, radio, effectiveId ->
             val handoff = CompletableDeferred<Unit>()
+            val original = radio.respond
+            var heldReadback = false
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.APP_START.rawValue && radio.publicKey == newKey && !heldReadback) {
+                    heldReadback = true
+                    emptyList()
+                } else original(packet)
+            }
             try {
                 val work = backgroundScope.async {
                     node.nodeConfigService.importConfig(config, sections, node.token.radioId, handoff)
                 }
-                h.eventually("remaining writes complete with ingestion quiesced") { work.isCompleted }
-                work.await()
+                h.eventually("key readback with ingestion already quiesced") { heldReadback }
                 assertFalse(node.messagePollingService.isAutoFetching)
                 val stamp = EPOCH.epochSecond.toUInt()
                 messages.add(Bytes.of(0x10, 20, 0, 0) + contactKey.prefix(6) + Bytes.of(0, 0) +
                     le32(stamp.toLong()) + Bytes.utf8("Arrived during handoff"))
                 radio.push(Bytes.of(0x83))
                 node.ensureListeners()
-                h.settle()
+                testScheduler.runCurrent()
                 assertEquals(1, messages.size)
                 assertEquals(1, h.sessions.created)
                 assertFalse(node.messagePollingService.isAutoFetching)
+                radio.push(radio.selfPacket())
+                h.eventually("remaining writes complete without consuming the arrival") { work.isCompleted }
+                work.await()
+                assertEquals(1, messages.size)
                 val contact = assertNotNull(store.fetchContact(effectiveId, contactKey))
                 assertTrue(store.fetchMessages(EntityKey(effectiveId, contact.id)).isEmpty())
                 handoff.complete(Unit)
@@ -145,6 +156,25 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertEquals(2, h.sessions.created)
             assertFalse(current.isTornDown)
             assertTrue(current.messagePollingService.isAutoFetching)
+            assertFalse(h.manager.shouldDeferOpportunisticReconnect)
+        }
+    }
+
+    @Test fun aRejectedIdentityWriteResumesTheUnchangedGraph() = runTest {
+        withIdentityNode { h, node, radio, _ ->
+            val original = radio.respond
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) listOf(Bytes.of(1, 1)) else original(packet)
+            }
+            val work = backgroundScope.async {
+                runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId) }
+            }
+            h.eventually("rejected identity import") { work.isCompleted }
+            assertTrue(work.await().isFailure)
+            h.settle()
+            assertSame(node, h.sessions.current)
+            assertEquals(1, h.sessions.created)
+            assertTrue(node.messagePollingService.isAutoFetching)
             assertFalse(h.manager.shouldDeferOpportunisticReconnect)
         }
     }

@@ -12,9 +12,9 @@ import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.MeshCoreNodeConfig
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.CommandCode
-import com.meshcoreone.android.core.protocol.model.TextType
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimePreferenceSnapshot
@@ -205,7 +205,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                     else -> original(packet)
                 }
             }
-            val message = node.messageService.sendDirectMessage("Pending ACK", contact, TextType.PLAIN_TEXT, null)
+            val message = node.messageService.sendDirectMessage("Pending ACK", contact, TextType.PLAIN, null)
             val work = backgroundScope.async {
                 runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId) }
             }

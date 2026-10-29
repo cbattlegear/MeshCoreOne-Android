@@ -407,6 +407,7 @@ class RepairExecutionTests(unittest.TestCase):
                 "open class Parent { companion object : Unknown() }",
                 "open class Parent { companion object Named : Unknown() }",
                 "open class Parent : Root() {}",
+                "open class Parent : Root() { class Root { annotation class Rule } }",
             ):
                 sources = {
                     TEST: b"package sample\nimport org.junit.Rule\nclass MapTest : Parent() { "
@@ -415,6 +416,8 @@ class RepairExecutionTests(unittest.TestCase):
                 }
                 if declaration == "open class Parent : Root() {}":
                     sources[root] = b"package sample\nopen class Root { annotation class Rule }"
+                elif declaration == "open class Parent : Root() { class Root { annotation class Rule } }":
+                    sources[root] = b"package sample\nopen class Root {}"
                 manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
                 with self.subTest(whole=whole, declaration=declaration), patch(
                     "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
@@ -439,18 +442,25 @@ class RepairExecutionTests(unittest.TestCase):
                 ), self.assertRaises(PortError):
                     validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
 
-    def test_imported_superclass_qualifiers_cannot_bind_unrelated_package_classes(self):
+    def test_qualified_superclasses_cannot_bind_unrelated_package_classes(self):
         outer = TEST.replace("MapTest.kt", "Outer.kt")
         unrelated = TEST.replace("MapTest.kt", "Unrelated.kt")
         for whole in (False, True):
-            for qualifier, imported in (("fixtures", "actual.Outer as fixtures"), ("Outer", "actual.Outer")):
+            for qualifier, imported in (
+                ("fixtures", "actual.Outer as fixtures"), ("Outer", "actual.Outer"), ("Local", None),
+            ):
+                header = "package sample\nimport org.junit.Rule\n"
+                if imported:
+                    header += "import " + imported + "\n"
                 sources = {
                     TEST: (
-                        "package sample\nimport org.junit.Rule\nimport " + imported + "\n"
-                        "class MapTest : " + qualifier + ".Parent() { @get:Rule val rule = example; "
+                        header + "class MapTest : " + qualifier + ".Parent() { @get:Rule val rule = example; "
                         "@Test fun keepsListReachable() {} }"
                     ).encode(),
-                    outer: b"package actual\nopen class Outer { open class Parent { annotation class Rule } }",
+                    outer: (
+                        ("package actual\nopen class Outer" if imported else "package sample\nopen class Local")
+                        + " { open class Parent { annotation class Rule } }"
+                    ).encode(),
                     unrelated: ("package " + qualifier + "\nopen class Parent {}").encode(),
                 }
                 manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)

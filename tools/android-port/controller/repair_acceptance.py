@@ -1180,13 +1180,12 @@ class _KotlinJUnitLineage:
         result = []
         for name in record["parents"]:
             if "." in name:
-                if name.split(".", 1)[0] in record["imports"]:
-                    raise PortError("Cannot resolve imported Kotlin superclass qualifier: " + name)
-                targets = {name}
-            else:
-                targets = record["imports"].get(name, {
-                    (record["package"] + "." if record["package"] else "") + name,
-                })
+                raise PortError("Cannot resolve Kotlin superclass qualifier: " + name)
+            if name in record["members"]:
+                raise PortError("Cannot resolve class-scoped Kotlin superclass: " + name)
+            targets = record["imports"].get(name, {
+                (record["package"] + "." if record["package"] else "") + name,
+            })
             if len(targets) != 1:
                 raise PortError("Ambiguous Kotlin superclass import: " + name)
             target = next(iter(targets))

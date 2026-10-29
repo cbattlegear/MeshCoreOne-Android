@@ -74,10 +74,7 @@ internal class TestDevices : DevicePersisting {
     override suspend fun fetchDevices(): SnapshotList<DeviceDTO> = rows.values.snapshot()
     override suspend fun fetchActiveDevice(): DeviceDTO? = rows.values.firstOrNull { it.isActive }
     override suspend fun saveDevice(dto: DeviceDTO) { failure?.let { throw it }; calls += "save"; rows[dto.id] = dto }
-    override suspend fun setActiveDevice(id: UUID) {
-        calls += "active"
-        rows.replaceAll { key, row -> row.copy(isActive = key == id) }
-    }
+    override suspend fun setActiveDevice(id: UUID) { rows.replaceAll { key, row -> row.copy(isActive = key == id) } }
     override suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt) {
         val row = checkNotNull(fetchDevice(radioId)); rows[row.id] = row.copy(lastContactSync = timestamp)
     }

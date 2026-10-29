@@ -107,6 +107,60 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun aChangedIdentityWithoutAGhostStillRebuildsAfterTheSamePartitionWritesFinish() = runTest {
+        withIdentityNode(seedGhost = false) { h, node, _, effectiveId ->
+            val handoff = CompletableDeferred<Unit>()
+            try {
+                val work = backgroundScope.async {
+                    node.nodeConfigService.importConfig(config, sections, node.token.radioId, handoff)
+                }
+                h.eventually("same-partition import") { work.isCompleted }
+                work.await()
+                assertSame(node, h.sessions.current)
+                assertNotNull(store.fetchContact(effectiveId, contactKey))
+                handoff.complete(Unit)
+                h.eventually("same-partition new identity", virtualBudgetMillis = 10_000) {
+                    h.sessions.current !== node && h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                }
+                assertEquals(effectiveId, assertNotNull(h.sessions.current).token.radioId)
+                assertEquals(newKey, assertNotNull(h.manager.connectedDevice).publicKey)
+                assertEquals(2, h.sessions.created)
+                assertEquals(1, h.sessions.outstanding)
+            } finally { handoff.complete(Unit) }
+        }
+    }
+
+    @Test fun aConfirmedKeyWriteWithAnUnresolvedSelfInfoReplyRecoversOnTheCorrectPartition() = runTest {
+        withIdentityNode { h, node, radio, effectiveId ->
+            val original = radio.respond
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.APP_START.rawValue && radio.publicKey == newKey) emptyList() else original(packet)
+            }
+            val handoff = CompletableDeferred<Unit>()
+            val progress = mutableListOf<ImportProgress>()
+            try {
+                val work = backgroundScope.async {
+                    runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId, handoff) { progress += it } }
+                }
+                h.eventually("confirmed identity progress") { progress.any { it.step == ImportStep.PrivateKey } }
+                assertSame(node, h.sessions.current)
+                h.eventually("post-write query failure", virtualBudgetMillis = 30_000, virtualStepMillis = 100) { work.isCompleted }
+                assertTrue(work.await().isFailure)
+                assertEquals(listOf(ImportStep.PrivateKey), progress.map { it.step })
+                assertSame(node, h.sessions.current, "Even error recovery waits for the captured import consumer")
+                assertNull(store.fetchContact(effectiveId, contactKey))
+                handoff.complete(Unit)
+                h.eventually("confirmed identity recovery", virtualBudgetMillis = 10_000) {
+                    h.sessions.current?.token?.radioId == effectiveId && h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                }
+                assertEquals(newKey, assertNotNull(h.manager.connectedDevice).publicKey)
+                assertTrue(node.isTornDown)
+                assertEquals(2, h.sessions.created)
+                assertEquals(1, h.sessions.outstanding)
+            } finally { handoff.complete(Unit) }
+        }
+    }
+
     @Test fun failureBeforeTheNormalIdentityCallbackStillReconcilesTheCommittedKey() = runTest {
         withIdentityNode { h, node, radio, effectiveId ->
             val original = radio.respond
@@ -208,6 +262,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
     }
 
     private suspend fun TestScope.withIdentityNode(
+        seedGhost: Boolean = true,
         block: suspend TestScope.(ContainerHarness, RadioSessionContainer, FirmwareRadio, RadioId) -> Unit,
     ) {
         var activeKey = key(7)
@@ -244,8 +299,8 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             h.assertReady()
             val node = assertNotNull(h.sessions.current)
             val ghost = deviceOf().copy(publicKey = newKey, connectionMethods = SnapshotList.of(ConnectionMethod.WiFi("192.0.2.1", 5000u)))
-            store.saveDevice(ghost)
-            block(h, node, h.links.radios.single(), ghost.radioId)
+            if (seedGhost) store.saveDevice(ghost)
+            block(h, node, h.links.radios.single(), if (seedGhost) ghost.radioId else node.token.radioId)
         } finally { h.container.close() }
     }
 }

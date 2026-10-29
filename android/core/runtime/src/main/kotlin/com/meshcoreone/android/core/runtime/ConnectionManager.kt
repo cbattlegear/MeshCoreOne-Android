@@ -505,8 +505,16 @@ class ConnectionManager(
         requireCurrent(owner)
         synchronized(lock) { platformValue = detected }
         val deviceId = (owner.target as? ConnectionTarget.Bluetooth)?.deviceId ?: DeviceIdentity.deriveUUID(info.publicKey)
-        val existing = devices.fetchDevice(deviceId)
+        var existing = devices.fetchDevice(deviceId)
         requireCurrent(owner)
+        if (existing != null && existing.publicKey != info.publicKey) {
+            val recoveredPartition = devices.reconcileGhostIdentity(deviceId, info.publicKey)
+            requireCurrent(owner)
+            if (recoveredPartition != null) {
+                existing = devices.fetchDevice(deviceId) ?: throw ConnectionError.DeviceNotFound()
+                requireCurrent(owner)
+            }
+        }
         val byKey = if (existing == null) devices.fetchDevice(info.publicKey) else null
         requireCurrent(owner)
         val prior = existing ?: byKey
@@ -535,6 +543,11 @@ class ConnectionManager(
                 cleanChannelSync = { synchronized(lock) { if (isCurrent(owner)) cleanSync = radioId to clock.instant } },
                 channelSyncAttempted = { synchronized(lock) { if (isCurrent(owner)) attemptedSync = radioId to clock.instant } },
                 reconcileIdentity = { handoff -> reconcileIdentity(token, handoff) },
+                recoverIdentity = { handoff ->
+                    val current = synchronized(lock) { active?.takeIf { it.token == token } }
+                    if (current != null) scheduleIdentityRebuild(current, handoff)
+                    else staleIdentity(token)
+                },
             ),
             transportType = link.type,
         ), ownership)
@@ -965,20 +978,29 @@ class ConnectionManager(
             }
         }
         if (!isCurrent(owner)) return radioId
-        if (radioId != null) {
+        if (radioId == null && before.publicKey != info.publicKey) {
+            requireCurrent(owner)
+            devices.saveDevice(before.copy(publicKey = info.publicKey))
+            requireCurrent(owner)
+        }
+        if (radioId != null || before.publicKey != info.publicKey) {
             val refreshed = devices.fetchDevice(before.id) ?: throw ConnectionError.DeviceNotFound()
             requireCurrent(owner)
             synchronized(lock) { deviceValue = refreshed; owner.device = refreshed }
             lastConnection.persist(refreshed.id, refreshed.radioId, refreshed.nodeName)
-            // A graph's radio partition is immutable: rebuild rather than retag its pending sends.
-            dispatch(owner, "identity.rebuild") {
-                importHandoff?.await()
-                if (!isCurrent(owner)) return@dispatch
-                disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
-                connect(owner.target, true, true)
-            }
+            scheduleIdentityRebuild(owner, importHandoff)
         }
         return radioId
+    }
+
+    private fun scheduleIdentityRebuild(owner: RadioGeneration, importHandoff: kotlinx.coroutines.Deferred<Unit>?) {
+        // A graph's identity and radio partition are immutable; rebuild only after its import consumer is done.
+        dispatch(owner, "identity.rebuild") {
+            importHandoff?.await()
+            if (!isCurrent(owner)) return@dispatch
+            disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
+            connect(owner.target, true, true)
+        }
     }
 
     suspend fun clearPersistedConnection(deviceId: UUID) {

@@ -286,6 +286,7 @@ class RadioSessionContainer private constructor(
         scope.launch { notificationService.setup() }
         // The cycle-forced upward call into the connection manager: an identity import re-resolves the radio id.
         nodeConfigService.setOnPostIdentityImport { handoff -> inputs.callbacks.reconcileIdentity(handoff) }
+        nodeConfigService.setOnIdentityRecovery { handoff -> inputs.callbacks.recoverIdentity(handoff) }
     }
 
     override val batteryServices: BatteryServices = object : BatteryServices {

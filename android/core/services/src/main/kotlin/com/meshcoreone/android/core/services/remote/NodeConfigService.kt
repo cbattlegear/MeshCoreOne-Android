@@ -47,6 +47,7 @@ class NodeConfigService(
 
     private val lock = Any()
     private var onPostIdentityImport: (suspend (Deferred<Unit>) -> RadioId?)? = null
+    private var onIdentityRecovery: (suspend (Deferred<Unit>) -> Unit)? = null
 
     /**
      * Wires a late-bound callback that fires after a private-key import succeeds. Its non-null
@@ -55,6 +56,10 @@ class NodeConfigService(
      */
     fun setOnPostIdentityImport(callback: (suspend (Deferred<Unit>) -> RadioId?)?) {
         synchronized(lock) { onPostIdentityImport = callback }
+    }
+
+    fun setOnIdentityRecovery(callback: (suspend (Deferred<Unit>) -> Unit)?) {
+        synchronized(lock) { onIdentityRecovery = callback }
     }
 
     /** Whether a sync coordinator was injected at construction. */
@@ -130,10 +135,12 @@ class NodeConfigService(
         val plan = buildImportPlan(config, sections)
         val coordinator = syncCoordinator
         val callback = synchronized(lock) { onPostIdentityImport }
+        val recovery = synchronized(lock) { onIdentityRecovery }
         val beforeIdentity = if (callback != null && plan.importPrivateKey != null) {
             session.currentSelfInfo?.publicKey ?: settingsService.getSelfInfo().publicKey
         } else null
         var attemptedIdentityWrite = false
+        val committedIdentity = CompletableDeferred<Unit>()
         var importedIdentity = false
         var attemptedReconciliation = false
         var importFailure: Throwable? = null
@@ -143,13 +150,20 @@ class NodeConfigService(
         }
         val writers = makeWriters(::reconcile).copy(importPrivateKey = {
             attemptedIdentityWrite = true
-            settingsService.importPrivateKey(it)
+            settingsService.importPrivateKey(it) {
+                if (committedIdentity.complete(Unit)) {
+                    onProgress?.invoke(ImportProgress(step = ImportStep.PrivateKey, current = 1, total = stepCount(plan)))
+                }
+            }
             importedIdentity = true
         })
         try {
             executeConfigImport(
                 plan = plan, sections = sections, radioId = radioId,
-                writers = writers, logger = logger, onProgress = onProgress,
+                writers = writers, logger = logger,
+                onProgress = { progress ->
+                    if (progress.step != ImportStep.PrivateKey || !committedIdentity.isCompleted) onProgress?.invoke(progress)
+                },
                 notifyContactsChanged = { coordinator?.notifyContactsChanged() },
             )
         } catch (failure: Throwable) {
@@ -161,7 +175,20 @@ class NodeConfigService(
                     withContext(NonCancellable) {
                         // A cancelled caller can leave a written exchange draining its confirmation.
                         // The serialized read waits for that exchange before deciding whether identity changed.
-                        if (importedIdentity || settingsService.getSelfInfo().publicKey != beforeIdentity) reconcile()
+                        if (importedIdentity) {
+                            reconcile()
+                        } else {
+                            val info = try {
+                                settingsService.getSelfInfo()
+                            } catch (failure: Exception) {
+                                if (committedIdentity.isCompleted) {
+                                    logger.error("Confirmed identity import lost its self-info reply; requesting connection recovery")
+                                }
+                                recovery?.invoke(identityHandoff)
+                                throw failure
+                            }
+                            if (info.publicKey != beforeIdentity) reconcile()
+                        }
                     }
                 } catch (failure: Throwable) {
                     val original = importFailure

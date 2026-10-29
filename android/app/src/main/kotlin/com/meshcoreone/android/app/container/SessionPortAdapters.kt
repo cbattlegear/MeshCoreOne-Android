@@ -113,6 +113,7 @@ internal class NodeConfigSettingsAdapter(private val resolve: () -> SettingsServ
     override suspend fun queryDevice() = settings.queryDevice()
     override suspend fun exportPrivateKey() = settings.exportPrivateKey()
     override suspend fun importPrivateKey(key: Bytes) = settings.importPrivateKey(key)
+    override suspend fun importPrivateKey(key: Bytes, onCommitted: () -> Unit) = settings.importPrivateKey(key, onCommitted)
     override suspend fun setNodeName(name: String) = settings.setNodeName(name)
     override suspend fun setLocation(latitude: Double, longitude: Double) = settings.setLocation(latitude, longitude)
     override suspend fun setRadioParams(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte) =

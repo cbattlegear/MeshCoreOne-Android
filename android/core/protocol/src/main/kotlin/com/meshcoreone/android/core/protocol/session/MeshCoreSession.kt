@@ -139,7 +139,9 @@ class MeshCoreSession(
             if (it is MeshEvent.Disabled) MeshCoreException.FeatureDisabled() else deviceError(it)
         }) { (it as? MeshEvent.PrivateKey)?.key }
     }
-    override suspend fun importPrivateKey(key: Bytes) {
+    override suspend fun importPrivateKey(key: Bytes) = importPrivateKey(key) {}
+
+    override suspend fun importPrivateKey(key: Bytes, onCommitted: () -> Unit) {
         if (key.size != PacketBuilder.PRIVATE_KEY_SIZE) throw MeshCoreException.InvalidInput("Full 64-byte expanded private key required for importPrivateKey")
         core.exchange {
             match(PacketBuilder.importPrivateKey(key), "ok", acceptsErrors = true) {
@@ -150,6 +152,7 @@ class MeshCoreSession(
                     else -> ResponseDisposition.Ignore
                 }
             }
+            onCommitted()
             query(PacketBuilder.appStart(core.configuration.clientIdentifier), "selfInfo", cleanup = true) { (it as? MeshEvent.SelfInfo)?.info }
         }
     }

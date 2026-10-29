@@ -285,6 +285,7 @@ class RadioSessionContainer private constructor(
         env.notificationStrings?.let(notificationService::setStringProvider)
         scope.launch { notificationService.setup() }
         // The cycle-forced upward call into the connection manager: an identity import re-resolves the radio id.
+        nodeConfigService.setOnIdentityImportStarted { handoff -> inputs.callbacks.beginIdentityImport(handoff) }
         nodeConfigService.setOnPostIdentityImport { handoff -> inputs.callbacks.reconcileIdentity(handoff) }
         nodeConfigService.setOnIdentityRecovery { handoff -> inputs.callbacks.recoverIdentity(handoff) }
     }
@@ -443,6 +444,8 @@ class RadioSessionContainer private constructor(
             // Stop the monitors before clearing handlers so the event tasks that read them are cancelled first.
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }
             nodeConfigService.setOnPostIdentityImport(null)
+            nodeConfigService.setOnIdentityImportStarted(null)
+            nodeConfigService.setOnIdentityRecovery(null)
             step(LifecycleStage.STOP_SERVICES) { messagePollingService.clearMessageHandlers() }
             step(LifecycleStage.STOP_SERVICES) { syncCoordinator.cancelDiscoveryEventMonitoring() }
             // Finishing every stream ends each consumer's collection, releasing the service references they hold.

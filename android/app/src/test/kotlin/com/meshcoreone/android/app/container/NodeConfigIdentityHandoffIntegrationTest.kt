@@ -134,6 +134,14 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
     }
 
     @Test fun aConfirmedKeyWriteWithAnUnresolvedSelfInfoReplyRecoversOnTheCorrectPartition() = runTest {
+        assertFailedReadbackHandoff(supersedeWithDisconnect = false)
+    }
+
+    @Test fun userDisconnectAfterTheConfirmedKeyLosesItsReplyPreventsDeferredRecovery() = runTest {
+        assertFailedReadbackHandoff(supersedeWithDisconnect = true)
+    }
+
+    private suspend fun TestScope.assertFailedReadbackHandoff(supersedeWithDisconnect: Boolean) {
         withIdentityNode { h, node, radio, effectiveId ->
             val original = radio.respond
             radio.respond = { packet ->
@@ -150,9 +158,21 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                 h.eventually("post-write query failure", virtualBudgetMillis = 30_000, virtualStepMillis = 100) { work.isCompleted }
                 assertTrue(work.await().isFailure)
                 assertEquals(listOf(ImportStep.PrivateKey), progress.map { it.step })
-                assertSame(node, h.sessions.current, "Even error recovery waits for the captured import consumer")
+                h.eventually("the uncorrelated session is quarantined") { node.isTornDown }
+                assertEquals(1, h.sessions.created, "Quarantine must not replace the captured graph before handoff")
+                assertTrue(h.manager.shouldDeferOpportunisticReconnect)
+                h.manager.checkBLEConnectionHealth()
+                h.settle()
+                assertEquals(1, h.sessions.created, "Health recovery must respect the import consumer")
                 assertNull(store.fetchContact(effectiveId, contactKey))
+                if (supersedeWithDisconnect) h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
                 handoff.complete(Unit)
+                if (supersedeWithDisconnect) {
+                    h.settle()
+                    assertEquals(1, h.sessions.created)
+                    assertFalse(h.manager.connectionIntent.wantsConnection)
+                    return@withIdentityNode
+                }
                 h.eventually("confirmed identity recovery", virtualBudgetMillis = 10_000) {
                     h.sessions.current?.token?.radioId == effectiveId && h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
                 }

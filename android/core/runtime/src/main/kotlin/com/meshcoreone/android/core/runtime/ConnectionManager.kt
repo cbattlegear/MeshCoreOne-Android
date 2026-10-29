@@ -85,6 +85,7 @@ class ConnectionManager(
         var restorationRoute = false
         var lossHandled = false
         var correlationAccounting: Deferred<Unit>? = null
+        var identityHandoff: Deferred<Unit>? = null
         val registrationReady = CompletableDeferred<Unit>()
     }
 
@@ -143,7 +144,12 @@ class ConnectionManager(
     val consecutiveRebuildFailures: Int get() = synchronized(lock) { rebuildFailures }
     val isReconnectionWatchdogRunning: Boolean get() = synchronized(lock) { watchdog?.isActive == true }
     val reconnectionWatchdogGeneration: Long get() = synchronized(lock) { watchdogGeneration }
-    val shouldDeferOpportunisticReconnect: Boolean get() = synchronized(lock) { pairing || pairingFlow }
+    val shouldDeferOpportunisticReconnect: Boolean get() = synchronized(lock) {
+        pairing || pairingFlow || identityImportPending
+    }
+    private val identityImportPending: Boolean get() = synchronized(lock) {
+        (active ?: retained)?.identityHandoff?.isCompleted == false
+    }
     val activeConnectionAttemptDeviceId: UUID?
         get() = synchronized(lock) { (pendingTarget as? ConnectionTarget.Bluetooth)?.deviceId ?: rebuildDevice }
             ?: reconnectionCoordinator.reconnectingDeviceId
@@ -549,9 +555,18 @@ class ConnectionManager(
             RuntimeServiceCallbacks(
                 cleanChannelSync = { synchronized(lock) { if (isCurrent(owner)) cleanSync = radioId to clock.instant } },
                 channelSyncAttempted = { synchronized(lock) { if (isCurrent(owner)) attemptedSync = radioId to clock.instant } },
+                beginIdentityImport = { handoff ->
+                    synchronized(lock) {
+                        requireCurrent(owner)
+                        check(owner.identityHandoff?.isCompleted != false || owner.identityHandoff === handoff) {
+                            "An identity import already owns this connection"
+                        }
+                        owner.identityHandoff = handoff
+                    }
+                },
                 reconcileIdentity = { handoff -> reconcileIdentity(token, handoff) },
                 recoverIdentity = { handoff ->
-                    val current = synchronized(lock) { active?.takeIf { it.token == token } }
+                    val current = synchronized(lock) { (active ?: retained)?.takeIf { it.token == token && ownsIdentityRecovery(it) } }
                     if (current != null) scheduleIdentityRebuild(current, handoff)
                     else staleIdentity(token)
                 },
@@ -676,7 +691,7 @@ class ConnectionManager(
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         val before = snapshot.value
         val (cleanup, expectedRevision) = synchronized(lock) {
-            if (expectedOwner != null && !isCurrent(expectedOwner)) return null
+            if (expectedOwner != null && !ownsIdentityRecovery(expectedOwner)) return null
             revision = Math.incrementExact(revision)
             val expectedRevision = revision
             val work = pending
@@ -927,7 +942,8 @@ class ConnectionManager(
         reporter.report(RuntimeDiagnostic.Failure("health.reconnect", failure))
 
     suspend fun checkWiFiConnectionHealth() {
-        if (synchronized(lock) { wifiReconnect?.isActive == true } || currentTransportType() == TransportType.BLUETOOTH) return
+        if (identityImportPending || synchronized(lock) { wifiReconnect?.isActive == true } ||
+            currentTransportType() == TransportType.BLUETOOTH) return
         val expectedRevision = synchronized(lock) { revision }
         val owner = synchronized(lock) { active }
         if (owner?.link?.type == TransportType.WIFI && connectionState.isOperational && !owner.link!!.transport.isConnected()) {
@@ -1019,11 +1035,24 @@ class ConnectionManager(
 
     private fun scheduleIdentityRebuild(owner: RadioGeneration, importHandoff: kotlinx.coroutines.Deferred<Unit>?) {
         // A graph's identity and radio partition are immutable; rebuild only after its import consumer is done.
-        dispatch(owner, "identity.rebuild") {
-            importHandoff?.await()
-            val stopped = disconnectAtRevision(RuntimeDisconnectReason.WIFI_RECONNECT_PREP, owner) ?: return@dispatch
-            connectAttempt(owner.target, forceFullSync = true, forceReconnect = true, expectedRevision = stopped.second)
+        processScope.launch {
+            owner.registrationReady.await()
+            try {
+                importHandoff?.await()
+                val stopped = disconnectAtRevision(RuntimeDisconnectReason.WIFI_RECONNECT_PREP, owner) ?: return@launch
+                connectAttempt(owner.target, forceFullSync = true, forceReconnect = true, expectedRevision = stopped.second)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                reporter.report(RuntimeDiagnostic.Failure("identity.rebuild", failure))
+                if (ownsIdentityRecovery(owner)) reportIssue(failure, LifecycleStage.CONNECT)
+            }
         }
+    }
+
+    private fun ownsIdentityRecovery(owner: RadioGeneration): Boolean = synchronized(lock) {
+        !closed && revision == owner.revision && connectionIntent.wantsConnection &&
+            (active === owner || active == null && retained === owner)
     }
 
     suspend fun clearPersistedConnection(deviceId: UUID) {
@@ -1368,7 +1397,7 @@ class ConnectionManager(
     }
 
     private fun startWiFiReconnection(target: ConnectionTarget) {
-        if (!connectionIntent.wantsConnection) return
+        if (!connectionIntent.wantsConnection || identityImportPending) return
         val task = synchronized(lock) {
             if (wifiReconnect?.isActive == true) return
             val previous = lastWiFiReconnect

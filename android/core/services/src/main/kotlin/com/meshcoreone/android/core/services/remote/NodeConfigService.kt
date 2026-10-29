@@ -25,7 +25,7 @@ import kotlinx.coroutines.withContext
  * Exports device configuration to [MeshCoreNodeConfig] and imports it back, handling section
  * filtering, other-params merging, and safe import ordering (Swift `actor NodeConfigService`).
  *
- * The only mutable state is the late-bound post-identity callback, confined behind [lock]. Like the
+ * The late-bound runtime callbacks are confined behind [lock]. Like the
  * Swift actor (which is reentrant across `await`), concurrent export/import calls are not serialized
  * against each other; each call reads fresh device state.
  */
@@ -48,6 +48,7 @@ class NodeConfigService(
     private val lock = Any()
     private var onPostIdentityImport: (suspend (Deferred<Unit>) -> RadioId?)? = null
     private var onIdentityRecovery: (suspend (Deferred<Unit>) -> Unit)? = null
+    private var onIdentityImportStarted: (suspend (Deferred<Unit>) -> Unit)? = null
 
     /**
      * Wires a late-bound callback that fires after a private-key import succeeds. Its non-null
@@ -60,6 +61,10 @@ class NodeConfigService(
 
     fun setOnIdentityRecovery(callback: (suspend (Deferred<Unit>) -> Unit)?) {
         synchronized(lock) { onIdentityRecovery = callback }
+    }
+
+    fun setOnIdentityImportStarted(callback: (suspend (Deferred<Unit>) -> Unit)?) {
+        synchronized(lock) { onIdentityImportStarted = callback }
     }
 
     /** Whether a sync coordinator was injected at construction. */
@@ -136,6 +141,7 @@ class NodeConfigService(
         val coordinator = syncCoordinator
         val callback = synchronized(lock) { onPostIdentityImport }
         val recovery = synchronized(lock) { onIdentityRecovery }
+        val started = synchronized(lock) { onIdentityImportStarted }
         val beforeIdentity = if (callback != null && plan.importPrivateKey != null) {
             session.currentSelfInfo?.publicKey ?: settingsService.getSelfInfo().publicKey
         } else null
@@ -160,6 +166,7 @@ class NodeConfigService(
             }
         }
         val writers = makeWriters(::reconcile).copy(importPrivateKey = {
+            started?.invoke(identityHandoff)
             attemptedIdentityWrite = true
             settingsService.importPrivateKey(it) {
                 if (committedIdentity.complete(Unit)) {

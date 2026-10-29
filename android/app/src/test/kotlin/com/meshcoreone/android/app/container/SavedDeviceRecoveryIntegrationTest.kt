@@ -164,6 +164,56 @@ class SavedDeviceRecoveryIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun teardownFailurePreventsAssociationRemovalDemotionAndPickerAdvancement() = runTest {
+        assertIncompleteTeardownStopsRepair(throws = true)
+    }
+
+    @Test fun silentlyRetainedPhysicalLinkPreventsAssociationRemovalDemotionAndPickerAdvancement() = runTest {
+        assertIncompleteTeardownStopsRepair(throws = false)
+    }
+
+    private suspend fun TestScope.assertIncompleteTeardownStopsRepair(throws: Boolean) {
+        val h = ContainerHarness(this, store)
+        var radio: FirmwareRadio? = null
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val device = assertNotNull(h.manager.connectedDevice)
+            radio = h.links.radios.single()
+            if (throws) radio.disconnectFailure = IllegalStateException("transport teardown failed")
+            else radio.retainConnectionOnDisconnect = true
+            h.pairing.registered[device.id] = "Saved radio"
+            h.container.foreground.activityStarted()
+            var pickerCalls = 0
+            h.pairing.discovery = {
+                pickerCalls++
+                throw com.meshcoreone.android.core.connectivity.pairing.DevicePairingError.Cancelled()
+            }
+            h.appState.handleAuthenticationFailure(device.id, isAppActive = true)
+            assertNotNull(h.appState.removeFailedPairingAndRetry()).join()
+            assertTrue(h.appState.connectionUI.showingConnectionFailedAlert)
+            assertFalse(h.appState.connectionUI.shouldShowPickerOnForeground)
+            assertEquals(0, pickerCalls)
+            assertEquals(0, h.pairing.removeCalls)
+            assertTrue(device.id in h.pairing.registered)
+            assertEquals(device.connectionMethods, assertNotNull(store.fetchDevice(device.id)).connectionMethods)
+            assertTrue(radio.connected)
+            h.appState.handleAuthenticationFailure(device.id, isAppActive = true)
+            assertNotNull(h.appState.removeFailedPairingAndRetry()).join()
+            assertTrue(h.appState.connectionUI.showingConnectionFailedAlert)
+            assertEquals(0, h.pairing.removeCalls)
+            assertEquals(0, pickerCalls)
+        } finally {
+            radio?.let {
+                it.disconnectFailure = null
+                it.retainConnectionOnDisconnect = false
+                it.disconnect()
+            }
+            h.container.close()
+        }
+    }
+
     private fun TestScope.pairing(h: ContainerHarness) =
         AppOnboardingPairingPort(AppStateOnboardingHost(h.container), backgroundScope, scanFallback = null)
 

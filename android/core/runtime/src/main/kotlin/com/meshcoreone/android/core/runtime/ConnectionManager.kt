@@ -804,11 +804,21 @@ class ConnectionManager(
         }
     }
 
-    override suspend fun disconnectTransport() {
+    override suspend fun disconnectTransport() = disconnectTransport(requireComplete = false)
+
+    suspend fun disconnectTransport(requireComplete: Boolean) {
         val owner = synchronized(lock) { retained ?: active } ?: return
         val report = closeGeneration(owner, true)
         synchronized(lock) { if (retained === owner) retained = null; if (active === owner) active = null }
-        if (!report.isComplete) reporter.report(RuntimeDiagnostic.Teardown(report))
+        if (!report.isComplete) {
+            reporter.report(RuntimeDiagnostic.Teardown(report))
+            if (requireComplete) {
+                synchronized(lock) { if (retained == null && active == null) retained = owner }
+                val failure = report.issues.first().cause
+                report.issues.drop(1).forEach { if (it.cause !== failure) failure.addSuppressed(it.cause) }
+                throw failure
+            }
+        }
     }
 
     override suspend fun handleReconnectionFailure() {

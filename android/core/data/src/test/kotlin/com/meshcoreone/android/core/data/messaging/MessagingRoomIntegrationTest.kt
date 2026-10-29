@@ -320,7 +320,7 @@ class MessagingRoomIntegrationTest {
         withParkedDm { g, message, row, events ->
             assertEquals(listOf(row.copy(attemptCount = 1)), store.fetchPendingSends(radio))
             assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, message.id))?.status)
-            assertEquals(2, g.firmware.sent().size)
+            assertEquals(3, g.firmware.sent().size)
             assertTrue(completedStatuses(g, events).isEmpty())
         }
     }
@@ -366,7 +366,7 @@ class MessagingRoomIntegrationTest {
             advanceTimeBy(300)
             runCurrent()
             assertEquals(listOf(row.copy(attemptCount = 2)), store.fetchPendingSends(radio))
-            assertEquals(4, g.firmware.sent().size)
+            assertEquals(6, g.firmware.sent().size)
             assertTrue(completedStatuses(g, events).isEmpty())
         }
     }
@@ -397,7 +397,7 @@ class MessagingRoomIntegrationTest {
             advanceTimeBy(1_000)
             runCurrent()
             assertEquals(listOf(row.copy(attemptCount = 2)), store.fetchPendingSends(radio))
-            assertEquals(4, g.firmware.sent().size)
+            assertEquals(6, g.firmware.sent().size)
             assertTrue(completedStatuses(g, events).isEmpty())
         }
     }

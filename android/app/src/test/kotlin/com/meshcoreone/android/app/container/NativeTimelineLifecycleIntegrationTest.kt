@@ -9,16 +9,19 @@ import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.TestScope
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -66,7 +69,7 @@ class NativeTimelineLifecycleIntegrationTest : RoomProcessTest() {
             assertEquals(listOf(first.id, second.id), reopened.state.value.messages.map { it.id })
             assertEquals("Preserved draft", reopened.state.value.draft)
             assertEquals(second.id, reopened.state.value.rows.filterIsInstance<TimelineRow.UnreadDivider>().single().beforeMessageId)
-            assertEquals(0, assertNotNull(store.fetchContact(EntityKey(radio, peer.id))).unreadCount)
+            assertEquals(0L, assertNotNull(store.fetchContact(EntityKey(radio, peer.id))).unreadCount)
 
             val changed = second.copy(text = "Updated after reopen")
             store.saveMessage(changed)
@@ -118,6 +121,98 @@ class NativeTimelineLifecycleIntegrationTest : RoomProcessTest() {
             assertEquals(0, graph.liveJobCount)
         } finally {
             screenScope.cancel()
+            h.container.close()
+        }
+    }
+
+    @Test fun actualDmPollingWhileAClosedOwnerSurvivesReopensWithTheNewTail() = runTest {
+        assertClosedOwnerArrival(direct = true)
+    }
+
+    @Test fun actualChannelPollingWhileAClosedOwnerSurvivesReopensWithTheNewTail() = runTest {
+        assertClosedOwnerArrival(direct = false)
+    }
+
+    private suspend fun TestScope.assertClosedOwnerArrival(direct: Boolean) {
+        val h = ContainerHarness(this, store)
+        val closedScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val reopenedScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val peerKey = key(3)
+        val secret = Bytes(ByteArray(16) { (it + 1).toByte() })
+        h.links.configureRadio = { radio ->
+            radio.knownContacts += contactFrame(peerKey, "Alice")
+            radio.respond = { command ->
+                if (command[0] == 0x1f.toUByte() && command[1] == 0.toUByte()) {
+                    listOf(Bytes.of(0x12, 0) + Bytes.utf8("Test").paddedOrTruncated(32) + secret)
+                } else null
+            }
+        }
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val graph = assertNotNull(h.sessions.current)
+            graph.channelService.syncChannels(graph.token.radioId, 1u, usePipelinedRead = false)
+            val peer = assertNotNull(store.fetchContact(graph.token.radioId, peerKey))
+            val channel = assertNotNull(store.fetchChannel(graph.token.radioId, 0u))
+            val conversation = if (direct) TimelineConversation.Direct(peer) else TimelineConversation.Channel(channel)
+            val closed = ChatViewModel(conversation, h.container.chatsFeature.timeline(conversation), closedScope)
+            h.settle()
+            val baseline = h.appState.messageEventStream.subscriberCount
+            closed.start()
+            closed.open()
+            h.settle()
+            assertEquals(baseline + 1, h.appState.messageEventStream.subscriberCount)
+            assertTrue(closed.state.value.messages.isEmpty())
+            closedScope.cancel()
+            h.settle()
+            assertEquals(baseline, h.appState.messageEventStream.subscriberCount)
+
+            val stamp = EPOCH.epochSecond.toUInt()
+            val frame = if (direct) {
+                Bytes.of(0x10, 20, 0, 0) + peerKey.prefix(6) + Bytes.of(0, 0) +
+                    le32(stamp.toLong()) + Bytes.utf8("Fresh tail")
+            } else {
+                Bytes.of(0x11, 20, 0, 0, 0, 0, 0) + le32(stamp.toLong()) + Bytes.utf8("Alice: Fresh tail")
+            }
+            val frames = ConcurrentLinkedQueue(listOf(frame))
+            val radio = h.links.radios.single()
+            val prior = radio.respond
+            radio.respond = { command ->
+                if (command[0] == 0x0a.toUByte()) listOf(frames.poll() ?: Bytes.of(0x0a)) else prior(command)
+            }
+            try {
+                assertEquals(1L, graph.messagePollingService.pollAllMessages())
+            } finally { radio.respond = prior }
+            h.settle()
+            assertTrue(closed.state.value.messages.isEmpty(), "A cancelled screen owner cannot keep consuming arrivals")
+            assertEquals(baseline, h.appState.messageEventStream.subscriberCount)
+            val current = if (direct) {
+                TimelineConversation.Direct(assertNotNull(store.fetchContact(EntityKey(graph.token.radioId, peer.id))))
+            } else {
+                TimelineConversation.Channel(assertNotNull(store.fetchChannel(graph.token.radioId, 0u)))
+            }
+            assertEquals(1L, current.unreadCount)
+            val reopened = ChatViewModel(current, h.container.chatsFeature.timeline(current), reopenedScope)
+            reopened.start()
+            reopened.open()
+            h.settle()
+            val message = reopened.state.value.messages.single()
+            assertEquals("Fresh tail", message.text)
+            assertEquals(graph.token.radioId, message.radioId)
+            assertEquals(stamp, message.timestamp)
+            assertEquals(message.id, reopened.state.value.rows.filterIsInstance<TimelineRow.UnreadDivider>().single().beforeMessageId)
+            if (!direct) assertEquals("Alice", message.senderNodeName)
+            assertEquals(1, h.sessions.created)
+            assertSame(graph, h.sessions.current)
+            assertEquals(1, radio.readers)
+            assertTrue(graph.messagePollingService.isAutoFetching)
+            reopenedScope.cancel()
+            h.settle()
+            assertEquals(baseline, h.appState.messageEventStream.subscriberCount)
+        } finally {
+            closedScope.cancel()
+            reopenedScope.cancel()
             h.container.close()
         }
     }

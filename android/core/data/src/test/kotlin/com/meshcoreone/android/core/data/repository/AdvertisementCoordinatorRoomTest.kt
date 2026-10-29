@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.event.EventFilter
 import com.meshcoreone.android.core.protocol.event.MeshEvent
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.protocol.model.ContactFlags
 import com.meshcoreone.android.core.protocol.model.MeshContact
 import com.meshcoreone.android.core.protocol.session.AdvertisingSessionOps
 import com.meshcoreone.android.core.protocol.session.SessionEventStreaming
@@ -590,6 +591,79 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         }
     }
 
+    @OriginalCase("AdvertisementServiceTests::materializeContactForPendingAdvert creates contact for unique pending key()")
+    @Test fun uniquePendingAdvertMaterializesAnActualContactAndRemainsEligibleForDeltaSync() = runTest(scheduler) {
+        withAdvert {
+            val seed = unknown(0x8D, "DebounceNode")
+            stubContact(seed.contact.publicKey, "DebounceNode")
+            foreground = true
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertNull(saved(seed.contact))
+            val contact = assertNotNull(service.materializeContactForPendingAdvert(seed.contact.publicKey.prefix(6), RADIO_A))
+            assertEquals(seed.contact.copy(id = contact.id, lastHeardTimestamp = AT.epochSecond.toUInt()), contact)
+            assertEquals(contact, store.fetchContactByPrefix(RADIO_A, seed.contact.publicKey.prefix(6)))
+            assertEquals(listOf(seed.contact.publicKey), requestedContacts())
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.ContactUpdated), events)
+            var calls = 0
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            runCurrent()
+            assertEquals(1, calls, "Materialization must not consume the pending delta key")
+            assertEquals(contact, saved(contact))
+            assertEquals(contact.name, store.fetchDiscoveredNodes(RADIO_A).single().name)
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::materializeContactForPendingAdvert returns nil without pending match()")
+    @Test fun materializationWithoutAPendingMatchDoesNotQueryTheRadioOrInventRoomRows() = runTest(scheduler) {
+        withAdvert {
+            val seed = unknown(0x8E, "NoPending")
+            stubContact(seed.contact.publicKey, "NoPending")
+            assertNull(service.materializeContactForPendingAdvert(seed.contact.publicKey.prefix(6), RADIO_A))
+            assertTrue(requestedContacts().isEmpty())
+            assertNull(saved(seed.contact))
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(events.isEmpty())
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::materializeContactForPendingAdvert returns nil on multi-match prefix()")
+    @Test fun ambiguousPendingPrefixesCannotMaterializeEitherActualRoomContact() = runTest(scheduler) {
+        withAdvert {
+            val first = Bytes(ByteArray(32) { if (it == 0) 0xAB.toByte() else (0x8F + it).toByte() })
+            val second = Bytes(ByteArray(32) { if (it == 0) 0xAB.toByte() else (0x90 + it).toByte() })
+            assertNotEquals(first, second)
+            send(MeshEvent.Advertisement(first))
+            send(MeshEvent.Advertisement(second))
+            assertNull(service.materializeContactForPendingAdvert(Bytes.of(0xAB), RADIO_A))
+            assertTrue(requestedContacts().isEmpty())
+            assertTrue(store.fetchContacts(RADIO_A).isEmpty())
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(events.isEmpty())
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::materializeContactForPendingAdvert still works while backgrounded()")
+    @Test fun backgroundMaterializationCommitsTheContactWithoutInvokingDeltaSync() = runTest(scheduler) {
+        withAdvert {
+            val seed = unknown(0xB5, "DebounceNode")
+            stubContact(seed.contact.publicKey, "DebounceNode")
+            var calls = 0
+            service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            val contact = assertNotNull(service.materializeContactForPendingAdvert(seed.contact.publicKey.prefix(6), RADIO_A))
+            assertEquals(seed.contact.copy(id = contact.id, lastHeardTimestamp = AT.epochSecond.toUInt()), contact)
+            assertEquals(contact, store.fetchContactByPrefix(RADIO_A, seed.contact.publicKey.prefix(6)))
+            assertEquals(listOf(seed.contact.publicKey), requestedContacts())
+            assertEquals(0, calls)
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.ContactUpdated), events)
+            foreground = true
+            service.handleReturnToForeground()
+            runCurrent()
+            assertEquals(1, calls)
+            assertEquals(contact, saved(contact))
+        }
+    }
+
     private suspend fun TestScope.withAdvert(
         debounce: Duration = Duration.ZERO,
         minInterval: Duration = Duration.ZERO,
@@ -638,6 +712,8 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
     private class Source : AdvertisingSessionOps, SessionEventStreaming {
         private val broadcaster = EventBroadcaster<MeshEvent>()
         val handled = mutableListOf<MeshEvent>()
+        val contacts = mutableMapOf<Bytes, MeshContact>()
+        val requestedContacts = mutableListOf<Bytes>()
         override val connectionState: Flow<ConnectionState> = flowOf(ConnectionState.Connected)
         override fun events(): Flow<MeshEvent> = events(EventFilter { true })
         override fun events(filter: EventFilter): Flow<MeshEvent> {
@@ -654,7 +730,10 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         override suspend fun sendAdvertisement(flood: Boolean): Nothing = unexpected()
         override suspend fun setName(name: String): Nothing = unexpected()
         override suspend fun setCoordinates(latitude: Double, longitude: Double): Nothing = unexpected()
-        override suspend fun getContact(publicKey: Bytes): MeshContact? = unexpected()
+        override suspend fun getContact(publicKey: Bytes): MeshContact? {
+            requestedContacts += publicKey
+            return contacts.getValue(publicKey)
+        }
         private fun unexpected(): Nothing = error("Deletion coordination must not issue radio commands")
     }
 
@@ -712,6 +791,12 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         suspend fun unknown(byte: Int, name: String): Seed = seed(byte, name).also {
             store.deleteContacts(RADIO_A, SnapshotSet(listOf(it.contact.publicKey)))
         }
+        fun stubContact(key: Bytes, name: String) {
+            source.contacts[key] = MeshContact(key.hexString, key, ContactType.CHAT, ContactFlags(0u),
+                0u, Bytes.EMPTY, name, Instant.ofEpochSecond(1_700_000_000),
+                0.0, 0.0, Instant.ofEpochSecond(1_700_000_100))
+        }
+        fun requestedContacts() = source.requestedContacts.toList()
         fun send(event: MeshEvent, handled: Boolean = true) {
             val before = source.handled.size
             source.send(event)

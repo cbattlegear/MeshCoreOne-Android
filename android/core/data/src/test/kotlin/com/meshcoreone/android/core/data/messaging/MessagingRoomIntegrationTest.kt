@@ -300,7 +300,7 @@ class MessagingRoomIntegrationTest {
             assertEquals(second, store.fetchMessage(EntityKey(radio, second.id)))
             assertEquals(foreignMessage, store.fetchMessage(EntityKey(other, first.id)))
             assertEquals(listOf(foreignRow), store.fetchPendingSends(other))
-            assertEquals(listOf(MessageStatusEvent.Failed(first.id)), observed)
+            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(first.id)), observed)
             assertEquals(channel, store.fetchChannel(radio, 0u))
             val report = g.queue.shutdown()
             assertFalse(report.isComplete)

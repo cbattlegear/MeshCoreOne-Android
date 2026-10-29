@@ -1,6 +1,7 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/ChatSendQueueServiceAttemptCountTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/ChatSendQueueServiceTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageServiceSendDMBookkeepingTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/MessageServiceACKTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // Native adaptation: WP-208 actual Room/process-store and real-session consumers on simulated SDK31, not HIL.
 package com.meshcoreone.android.core.data.messaging
 
@@ -19,6 +20,7 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.ByteWriter
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.event.ContactMessage
 import com.meshcoreone.android.core.protocol.model.CommandCode
@@ -28,8 +30,11 @@ import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import com.meshcoreone.android.core.protocol.transport.mock.MockTransport
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
+import com.meshcoreone.android.core.services.messaging.ChatSendQueueConfig
 import com.meshcoreone.android.core.services.messaging.MessageService
+import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.messaging.MessagePollingService
+import com.meshcoreone.android.core.services.messaging.PoolBackoffConfig
 import java.security.MessageDigest
 import java.time.Clock
 import java.time.Instant
@@ -125,6 +130,8 @@ class MessagingRoomIntegrationTest {
         config: com.meshcoreone.android.core.services.messaging.MessageServiceConfig =
             com.meshcoreone.android.core.services.messaging.MessageServiceConfig(),
         sessionTimeout: Double = 2.0,
+        channelQuery: MessagingChannelQuery = MessagingChannelQuery { null },
+        queueConfig: ChatSendQueueConfig = ChatSendQueueConfig(),
     ) {
         val scope = CoroutineScope(SupervisorJob(process.coroutineContext[Job]) + StandardTestDispatcher(scheduler))
         val token = SessionToken(ProcessEpoch(UUID.fromString("CCCCCCCC-1111-2222-3333-444444444444")), Generation(number), radio)
@@ -134,8 +141,9 @@ class MessagingRoomIntegrationTest {
         val session = MeshCoreSession(firmware, SessionConfiguration(defaultTimeout = sessionTimeout), clock, scope.coroutineContext)
         val service = MessageService(token, self, session, persistence, signals, scope, config, clock,
             reporter = MessagingIssueReporter { diagnostics += it })
-        val queue = ChatSendQueueService(token, persistence, service, MessagingChannelQuery { null },
-            OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, scope, clock = clock)
+        val queue = ChatSendQueueService(token, persistence, service, channelQuery,
+            OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, scope, queueConfig, clock,
+            reporter = MessagingIssueReporter { diagnostics += it })
         init { generations += this }
         suspend fun start() { session.start() }
         suspend fun stop() { queue.shutdown(); service.close(); session.stop(); scope.cancel() }
@@ -223,6 +231,310 @@ class MessagingRoomIntegrationTest {
         assertTrue(store.fetchPendingSends(radio).isEmpty()); assertEquals(listOf(foreign), store.fetchPendingSends(other))
         assertEquals(foreignMessage, store.fetchMessage(EntityKey(other, foreignMessage.id)))
         g.stop()
+    }
+
+    @OriginalCase("ChatSendQueueServiceTests::Channel fetchChannel failure counter is per-envelope and does not cascade()")
+    @Test fun channelQueryFailureCapRetiresOnlyItsEnvelopeAndPreservesTheNextActualRoomRow() = runTest(scheduler) {
+        seed()
+        val channel = ChannelDTO(UUID.randomUUID(), radio, 0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
+        store.saveChannel(channel)
+        val queryFailure = MeshCoreException.Timeout()
+        val g = RadioGeneration(29,
+            config = MessageServiceConfig(poolBackoff = PoolBackoffConfig(attemptCap = 2, baseDelay = 0.01)),
+            channelQuery = MessagingChannelQuery {
+                delay(1_900)
+                throw queryFailure
+            },
+            queueConfig = ChatSendQueueConfig(maxConsecutiveFetchChannelFailures = 2),
+        )
+        g.start()
+        g.firmware.error = 2u
+        val first = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
+        val second = g.service.createPendingChannelMessage("Second message", 0u, radio)
+        val firstRow = PendingSendDTO.fromEnvelope(
+            ChannelMessageEnvelope(first.id, 0u, true, first.text, first.timestamp, "Test Radio"), radio,
+        ).copy(sequence = 1, attemptCount = 7)
+        val secondRow = PendingSendDTO.fromEnvelope(
+            ChannelMessageEnvelope(second.id, 0u, false, second.text, second.timestamp, "Test Radio"), radio,
+        ).copy(sequence = 2, attemptCount = 2)
+        store.upsertPendingSend(firstRow)
+        store.upsertPendingSend(secondRow)
+        val foreignMessage = first.copy(radioId = other)
+        val foreignRow = firstRow.copy(radioId = other)
+        store.saveMessage(foreignMessage)
+        store.upsertPendingSend(foreignRow)
+        val status = g.service.statusEvents()
+        val observed = mutableListOf<MessageStatusEvent>()
+        val listener = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            status.events.collect { observed += it.event }
+        }
+        try {
+            g.queue.hydrate()
+            runCurrent()
+            g.signals.set(DeviceConnectionState.READY)
+            runCurrent()
+            val deadline = scheduler.currentTime + 30_000
+            while (g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                    .none { it.operation == "park.${first.id}" } && scheduler.currentTime < deadline) {
+                advanceTimeBy(50)
+                runCurrent()
+            }
+            assertEquals(listOf(firstRow.copy(attemptCount = 8), secondRow), store.fetchPendingSends(radio))
+            assertEquals(first, store.fetchMessage(EntityKey(radio, first.id)))
+            g.queue.transportDidOpen()
+            runCurrent()
+            while (store.hasPendingSend(EntityKey(radio, first.id)) && scheduler.currentTime < deadline) {
+                advanceTimeBy(50)
+                runCurrent()
+            }
+            assertFalse(store.hasPendingSend(EntityKey(radio, first.id)))
+            assertEquals(first.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, first.id)))
+            advanceTimeBy(3_000)
+            runCurrent()
+            val queries = g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                .filter { it.operation.startsWith("channelQuery.") }
+            assertEquals(2, queries.count { it.operation == "channelQuery.${first.id}" })
+            assertEquals(1, queries.count { it.operation == "channelQuery.${second.id}" })
+            assertTrue(queries.all { it.cause === queryFailure })
+            assertEquals(listOf(secondRow.copy(attemptCount = 3)), store.fetchPendingSends(radio))
+            assertEquals(second, store.fetchMessage(EntityKey(radio, second.id)))
+            assertEquals(foreignMessage, store.fetchMessage(EntityKey(other, first.id)))
+            assertEquals(listOf(foreignRow), store.fetchPendingSends(other))
+            assertEquals(listOf(MessageStatusEvent.Failed(first.id)), observed)
+            assertEquals(channel, store.fetchChannel(radio, 0u))
+            val report = g.queue.shutdown()
+            assertFalse(report.isComplete)
+            assertSame(queryFailure, report.issues.single().cause)
+        } finally {
+            listener.cancelAndJoin()
+            status.close()
+            g.stop()
+        }
+    }
+
+    @OriginalCase("MessageServiceACKTests::checkExpiredAcks marks expired ACK as failed()")
+    @Test fun expiredAcceptedAckCommitsFailureAndPublishesItOnceThroughTheActualRoomService() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(30)
+        g.start()
+        val message = g.acceptedWithoutAck("Test message", Bytes.of(1, 2, 3, 4))
+        val events = g.service.statusEvents()
+        wallOffsetMillis = 60_000
+        g.service.checkExpiredAcks()
+        g.service.checkExpiredAcks()
+        assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.Failed(message.id)), completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::ACK within grace window reconciles .sent → .delivered via the in-memory pending entry()")
+    @Test fun acceptedAckInsideTheOriginalGraceWindowReconcilesItsRealSentRow() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(31, config = MessageServiceConfig(ackGiveUpWindow = 45.0))
+        g.start()
+        g.firmware.suggestedTimeout = 25_000u
+        val code = Bytes.of(0xDE, 0xAD, 0xBE, 0xEF)
+        val message = g.acceptedWithoutAck("Test message", code)
+        val events = g.service.statusEvents()
+        g.service.startEventMonitoring()
+        wallOffsetMillis = 31_000
+        g.service.checkExpiredAcks()
+        assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(1, g.service.pendingAckCount)
+        g.firmware.pushAck(code, 99u)
+        runCurrent()
+        assertEquals(message.copy(status = MessageStatus.DELIVERED, roundTripTime = 99u),
+            store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 99u)),
+            completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::checkExpiredAcks fails a DM after max(ackGiveUpWindow, per-attempt timeout); the window is the floor()")
+    @Test fun realAcceptedAckExpiryRetainsTheOriginalTwentySecondWindowFloor() = runTest(scheduler) {
+        exerciseAckWindow(timeout = 5.0, liveAge = 15, expiredAge = 25)
+    }
+
+    @OriginalCase("MessageServiceACKTests::checkExpiredAcks honors a per-attempt timeout longer than the give-up window (slow preset)()")
+    @Test fun realAcceptedAckExpiryRetainsTheOriginalSixtySecondSlowPresetTimeout() = runTest(scheduler) {
+        exerciseAckWindow(timeout = 60.0, liveAge = 30, expiredAge = 70)
+    }
+
+    private suspend fun exerciseAckWindow(timeout: Double, liveAge: Long, expiredAge: Long) {
+        seed()
+        val g = RadioGeneration(32, config = MessageServiceConfig(minTimeout = timeout, ackGiveUpWindow = 20.0))
+        g.start()
+        val live = g.acceptedWithoutAck("Test message", Bytes.of(1, 2, 3, 4))
+        wallOffsetMillis = -(expiredAge - liveAge) * 1_000
+        val expired = g.acceptedWithoutAck("Test message", Bytes.of(5, 6, 7, 8))
+        val foreign = expired.copy(radioId = other)
+        store.saveMessage(foreign)
+        val events = g.service.statusEvents()
+        wallOffsetMillis = liveAge * 1_000
+        g.service.checkExpiredAcks()
+        assertEquals(live, store.fetchMessage(EntityKey(radio, live.id)))
+        assertEquals(expired.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, expired.id)))
+        assertEquals(foreign, store.fetchMessage(EntityKey(other, foreign.id)))
+        assertEquals(1, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.Failed(expired.id)), completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::checkExpiredAcks does not broadcast failure when DB stays delivered()")
+    @Test fun realDeliveredRowSurvivesExpiryWithoutAFalseFailureEvent() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(33)
+        g.start()
+        val message = g.acceptedWithoutAck("Test message", Bytes.of(0xCE, 0xEC, 0xAC, 0xCE))
+        val delivered = message.copy(status = MessageStatus.DELIVERED)
+        store.saveMessage(delivered)
+        val events = g.service.statusEvents()
+        wallOffsetMillis = 60_000
+        g.service.checkExpiredAcks()
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertTrue(completedStatuses(g, events).isEmpty())
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::failAllPendingMessages fails all non-delivered and broadcasts .failed()")
+    @Test fun failAllCommitsBothAcceptedRoomFailuresAndPublishesEachExactlyOnce() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(34)
+        g.start()
+        val first = g.acceptedWithoutAck("first", Bytes.of(1, 2, 3, 4))
+        val second = g.acceptedWithoutAck("second", Bytes.of(5, 6, 7, 8))
+        val events = g.service.statusEvents()
+        g.service.failAllPendingMessages()
+        g.service.failAllPendingMessages()
+        assertEquals(first.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, first.id)))
+        assertEquals(second.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, second.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.Failed(first.id), MessageStatusEvent.Failed(second.id)),
+            completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::failAllPendingMessages does not downgrade or notify on a delivered DB row()")
+    @Test fun failAllLeavesTheActualDeliveredRowIntactAndRetiresOnlyItsTracking() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(35)
+        g.start()
+        val message = g.acceptedWithoutAck("Test message", Bytes.of(0xFA, 0x11, 0x77, 0x33))
+        val delivered = message.copy(status = MessageStatus.DELIVERED)
+        store.saveMessage(delivered)
+        val events = g.service.statusEvents()
+        g.service.failAllPendingMessages()
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertTrue(completedStatuses(g, events).isEmpty())
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::stopAndFailAllPending stops checking and fails all pending()")
+    @Test fun stopAndFailStopsTheRealTimerAndCommitsItsAcceptedRoomFailure() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(36)
+        g.start()
+        val message = g.acceptedWithoutAck("Test message", Bytes.of(1, 2, 3, 4))
+        val events = g.service.statusEvents()
+        g.service.startAckExpiryChecking()
+        assertTrue(g.service.isAckExpiryCheckingActive)
+        g.service.stopAndFailAllPending()
+        assertFalse(g.service.isAckExpiryCheckingActive)
+        assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.Failed(message.id)), completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::handleAcknowledgement uses firmware tripTime when provided()")
+    @Test fun actualAckListenerKeepsTheOriginalFirmwareTripTimeInsteadOfWallElapsedTime() = runTest(scheduler) {
+        exerciseAckTripTime(Bytes.of(0xEF, 0xBE, 0xAD, 0xDE), age = 10, tripTime = 250u)
+    }
+
+    @OriginalCase("MessageServiceACKTests::handleAcknowledgement leaves roundTripTime nil when firmware does not supply tripTime()")
+    @Test fun actualAckListenerPreservesAnAbsentFirmwareTripTime() = runTest(scheduler) {
+        exerciseAckTripTime(Bytes.of(0xBE, 0xBA, 0xFE, 0xCA), age = 2, tripTime = null)
+    }
+
+    private suspend fun exerciseAckTripTime(code: Bytes, age: Long, tripTime: UInt?) {
+        seed()
+        val g = RadioGeneration(37)
+        g.start()
+        val message = g.acceptedWithoutAck("Test message", code)
+        val events = g.service.statusEvents()
+        g.service.startEventMonitoring()
+        wallOffsetMillis = age * 1_000
+        g.firmware.pushAck(code, tripTime)
+        scheduler.runCurrent()
+        assertEquals(message.copy(status = MessageStatus.DELIVERED, roundTripTime = tripTime),
+            store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(base.plusSeconds(age), store.fetchContact(EntityKey(radio, contact.id))?.lastMessageDate)
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, tripTime)),
+            completedStatuses(g, events))
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::late ACK landing in the checker's await-gap cannot flip a just-failed row to .delivered()")
+    @Test fun actualLateAckCannotResurrectTheFailedRoomRowWhileItsTrackingStillExists() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(38)
+        g.start()
+        val code = Bytes.of(0x9A, 0xBC, 0xDE, 0xF0)
+        val message = g.acceptedWithoutAck("Test message", code)
+        val events = g.service.statusEvents()
+        g.service.startEventMonitoring()
+        assertTrue(store.updateMessageStatusUnlessDelivered(EntityKey(radio, message.id), MessageStatus.FAILED))
+        assertEquals(1, g.service.pendingAckCount)
+        g.firmware.pushAck(code, 200u)
+        runCurrent()
+        assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertTrue(completedStatuses(g, events).isEmpty())
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceACKTests::late ACK after the row is already .failed with no live entry stays .failed()")
+    @Test fun actualUnmatchedLateAckCannotResurrectTheOriginalFailedRoomRow() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(39)
+        g.start()
+        val message = MessageDTO(radioId = radio, contactID = contact.id, text = "Test message", timestamp = 42u,
+            status = MessageStatus.FAILED, ackCode = 0xABCD_EF01u)
+        store.saveMessage(message)
+        val events = g.service.statusEvents()
+        g.service.startEventMonitoring()
+        g.firmware.pushAck(Bytes.of(0x01, 0xEF, 0xCD, 0xAB), 300u)
+        runCurrent()
+        assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(false, g.diagnostics.filterIsInstance<MessagingDiagnostic.UnmatchedAcknowledgement>().single().orphanSentRow)
+        assertTrue(completedStatuses(g, events).isEmpty())
+        g.stop()
+    }
+
+    private suspend fun RadioGeneration.acceptedWithoutAck(text: String, code: Bytes): MessageDTO {
+        firmware.acknowledge = false
+        firmware.acceptedAck = code
+        val message = service.sendDirectMessage(text, contact)
+        assertEquals(MessageStatus.SENT, message.status)
+        assertEquals(code.readUInt32LE(0), message.ackCode)
+        assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+        return message
+    }
+
+    private suspend fun completedStatuses(
+        g: RadioGeneration, subscription: SessionEventSubscription<MessageStatusEvent>,
+    ): List<MessageStatusEvent> {
+        g.service.finishStatusEvents()
+        val events = subscription.events.toList()
+        assertTrue(events.all { it.token == g.token })
+        subscription.close()
+        return events.map { it.event }
     }
 
     @OriginalCase("PersistenceStoreTests::hasOutgoingSentDM flags a stuck .sent DM by ackCode and ignores other rows()")
@@ -872,6 +1184,11 @@ class MessagingRoomIntegrationTest {
                         .append(ack).appendUInt32LE(suggestedTimeout).toBytes())
                     if (acknowledge && !ackBeforeAcceptance) pushAck(ack)
                 }
+                CommandCode.SEND_CHANNEL_MESSAGE -> {
+                    error?.let { mock.simulateError(it); return }
+                    mock.simulateReceive(ByteWriter().appendUInt8(ResponseCode.MESSAGE_SENT.rawValue)
+                        .appendUInt8(0u).append(Bytes(ByteArray(4))).appendUInt32LE(suggestedTimeout).toBytes())
+                }
                 CommandCode.GET_CONTACT_BY_KEY -> mock.simulateError(2u)
                 CommandCode.RESET_PATH -> mock.simulateOK()
                 CommandCode.GET_MESSAGE -> {
@@ -882,8 +1199,10 @@ class MessagingRoomIntegrationTest {
                 else -> throw AssertionError("Unexpected raw Room-test command")
             }
         }
-        suspend fun pushAck(ack: Bytes) {
-            mock.simulateReceive(ByteWriter().appendUInt8(ResponseCode.ACK.rawValue).append(ack).appendUInt32LE(123u).toBytes())
+        suspend fun pushAck(ack: Bytes, tripTime: UInt? = 123u) {
+            val packet = ByteWriter().appendUInt8(ResponseCode.ACK.rawValue).append(ack)
+            if (tripTime != null) packet.appendUInt32LE(tripTime)
+            mock.simulateReceive(packet.toBytes())
         }
         suspend fun pushPacket(packet: Bytes) { mock.simulateReceive(packet) }
     }

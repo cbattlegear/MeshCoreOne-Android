@@ -603,6 +603,7 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             assertEquals(seed.contact.copy(id = contact.id, lastHeardTimestamp = AT.epochSecond.toUInt()), contact)
             assertEquals(contact, store.fetchContactByPrefix(RADIO_A, seed.contact.publicKey.prefix(6)))
             assertEquals(listOf(seed.contact.publicKey), requestedContacts())
+            runCurrent()
             assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.ContactUpdated), events)
             var calls = 0
             service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
@@ -655,6 +656,7 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             assertEquals(contact, store.fetchContactByPrefix(RADIO_A, seed.contact.publicKey.prefix(6)))
             assertEquals(listOf(seed.contact.publicKey), requestedContacts())
             assertEquals(0, calls)
+            runCurrent()
             assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.ContactUpdated), events)
             foreground = true
             service.handleReturnToForeground()
@@ -663,6 +665,95 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             assertEquals(contact, saved(contact))
         }
     }
+
+    @OriginalCase("AdvertisementServiceTests::adopting orphaned DMs emits conversationsChanged()")
+    @Test fun realOrphanAdoptionCreatesTheConversationAndItsConsumerInvalidation() = runTest(scheduler) {
+        withAdvert { assertAdoption(0x8E, "AdoptedDM", "orphan needs conversation signal", 1_700_000_500u) }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::adopting orphaned DMs emits orphanDirectMessagesAdopted with the contact()")
+    @Test fun realOrphanAdoptionHandsTheCommittedContactToTheNotificationConsumer() = runTest(scheduler) {
+        withAdvert { assertAdoption(0x9E, "AdoptedDM", "orphan awaiting notification", 1_700_000_600u) }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::snapshot fetch failure still adopts orphaned DMs for drained keys()")
+    @Test fun aFailedPreRoundSnapshotCannotPreventActualRoomOrphanAdoption() = runTest(scheduler) {
+        withAdvert {
+            rejectSnapshot()
+            assertAdoption(0x8C, "LateNode", "orphan before delta", 1_700_000_400u)
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+            expectedErrors = 1
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::snapshot fetch failure does not invent new-contact notifications()")
+    @Test fun aFailedPreRoundSnapshotDoesNotAnnounceAKnownRoomContactAsNew() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0x8B, "Known")
+            rejectSnapshot()
+            foreground = true
+            service.setDeltaSyncHandler { AdvertContactSyncOutcome.SYNCED }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertEquals(seed.contact.copy(lastHeardTimestamp = AT.epochSecond.toUInt()), saved(seed.contact))
+            assertEquals("Known", store.fetchDiscoveredNodes(RADIO_A).single().name)
+            assertTrue(events.any { it == AdvertisementEvent.ContactUpdated })
+            assertTrue(events.none { it is AdvertisementEvent.NewContactDiscovered })
+            expectedErrors = 1
+        }
+    }
+
+    @OriginalCase("AdvertisementServiceTests::delta round with no adoption does not emit conversationsChanged()")
+    @Test fun aSuccessfulActualRoomRoundWithoutOrphansDoesNotInventConversationChanges() = runTest(scheduler) {
+        withAdvert {
+            val seed = seed(0x8F, "NoOrphans")
+            foreground = true
+            service.setDeltaSyncHandler { AdvertContactSyncOutcome.SYNCED }
+            send(MeshEvent.Advertisement(seed.contact.publicKey))
+            assertNotNull(saved(seed.contact))
+            assertEquals("NoOrphans", store.fetchDiscoveredNodes(RADIO_A).single().name)
+            assertTrue(events.any { it == AdvertisementEvent.ContactUpdated })
+            assertTrue(events.none { it == AdvertisementEvent.ConversationsChanged })
+            assertTrue(events.none { it is AdvertisementEvent.OrphanDirectMessagesAdopted })
+            assertTrue(store.fetchConversations(RADIO_A).isEmpty())
+        }
+    }
+
+    private suspend fun Rig.assertAdoption(byte: Int, name: String, text: String, timestamp: UInt) {
+        val seed = unknown(byte, name)
+        val orphan = MessageDTO(radioId = RADIO_A, text = text, timestamp = timestamp, createdAt = AT,
+            direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED,
+            senderKeyPrefix = seed.contact.publicKey.prefix(6))
+        val foreign = orphan.copy(radioId = RADIO_B)
+        store.saveMessage(orphan)
+        store.saveMessage(foreign)
+        assertTrue(store.fetchConversations(RADIO_A).isEmpty())
+        foreground = true
+        var calls = 0
+        service.setDeltaSyncHandler {
+            calls++
+            store.saveContact(RADIO_A, contactFrame(seed.contact.publicKey, name))
+            AdvertContactSyncOutcome.SYNCED
+        }
+        send(MeshEvent.Advertisement(seed.contact.publicKey))
+        assertEquals(1, calls)
+        val contact = assertNotNull(store.fetchContact(RADIO_A, seed.contact.publicKey))
+        assertEquals(orphan.copy(contactID = contact.id,
+            deduplicationKey = DeduplicationKey.contentBased(contact.id, null, null, timestamp, text)),
+            store.fetchMessage(EntityKey(RADIO_A, orphan.id)))
+        assertEquals(foreign, store.fetchMessage(EntityKey(RADIO_B, foreign.id)))
+        assertEquals(1L, contact.unreadCount)
+        assertEquals(orphan.date, contact.lastMessageDate)
+        assertEquals(listOf(contact), store.fetchConversations(RADIO_A).toList())
+        assertEquals(1, events.count { it == AdvertisementEvent.ConversationsChanged })
+        assertEquals(listOf(contact.id),
+            events.filterIsInstance<AdvertisementEvent.OrphanDirectMessagesAdopted>().single().contactIDs.toList())
+        assertTrue(events.any { it == AdvertisementEvent.ContactUpdated })
+        assertEquals(name, store.fetchDiscoveredNodes(RADIO_A).single().name)
+    }
+
+    private fun contactFrame(key: Bytes, name: String) = ContactFrame(
+        key, ContactType.CHAT, 0u, 0u, Bytes.EMPTY, name, 1_700_000_000u, 0.0, 0.0, 1_700_000_100u,
+    )
 
     private suspend fun TestScope.withAdvert(
         debounce: Duration = Duration.ZERO,
@@ -698,6 +789,11 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
     private class InterceptedStore(private val actual: PersistenceStoreProtocol) : PersistenceStoreProtocol by actual {
         var deletion: Hold? = null
         var deleteCalls = 0
+        var snapshotFailure: PersistenceStoreException? = null
+        override suspend fun fetchContactPublicKeys(radioId: RadioId): SnapshotSet<Bytes> {
+            snapshotFailure?.let { throw it }
+            return actual.fetchContactPublicKeys(radioId)
+        }
         override suspend fun deleteContacts(
             radioId: RadioId, publicKeys: SnapshotSet<Bytes>, skippingPublicKeys: () -> SnapshotSet<Bytes>,
         ): SnapshotList<UUID> {
@@ -775,8 +871,7 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         }
         suspend fun seed(byte: Int, name: String, history: String? = null): Seed {
             val key = Bytes(ByteArray(32) { (byte + it).toByte() })
-            val frame = ContactFrame(key, ContactType.CHAT, 0u, 0u, Bytes.EMPTY, name,
-                1_700_000_000u, 0.0, 0.0, 1_700_000_100u)
+            val frame = contactFrame(key, name)
             val result = store.saveContact(RADIO_A, frame)
             val contact = assertNotNull(store.fetchContact(EntityKey(RADIO_A, result.id)))
             val foreign = contact.copy(radioId = RADIO_B)
@@ -797,6 +892,9 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
                 0.0, 0.0, Instant.ofEpochSecond(1_700_000_100))
         }
         fun requestedContacts() = source.requestedContacts.toList()
+        fun rejectSnapshot() {
+            intercepted.snapshotFailure = PersistenceStoreException(PersistenceStoreError.FetchFailed("controlled pre-round snapshot"))
+        }
         fun send(event: MeshEvent, handled: Boolean = true) {
             val before = source.handled.size
             source.send(event)

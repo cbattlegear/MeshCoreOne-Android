@@ -305,8 +305,8 @@ class MessagingRoomIntegrationTest {
             assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(first.id)), observed)
             assertEquals(channel, store.fetchChannel(radio, 0u))
             val report = g.queue.shutdown()
-            assertFalse(report.isComplete)
-            assertSame(queryFailure, report.issues.single().cause)
+            assertTrue(report.isComplete, report.issues.toString())
+            assertEquals(listOf(secondRow.copy(attemptCount = 3)), store.fetchPendingSends(radio))
         } finally {
             listener.cancelAndJoin()
             status.close()
@@ -629,7 +629,7 @@ class MessagingRoomIntegrationTest {
         val expected = message.copy(timestamp = base.epochSecond.toUInt(), status = MessageStatus.SENT,
             heardRepeats = 0, sendCount = 2)
         assertEquals(base.epochSecond.toUInt(), stamp)
-        assertEquals(listOf(expected), seen)
+        assertEquals(listOf<MessageDTO?>(expected), seen)
         assertEquals(expected, store.fetchMessage(EntityKey(radio, message.id)))
         assertEquals(1, g.firmware.channelSent().size)
         events.close()
@@ -725,6 +725,51 @@ class MessagingRoomIntegrationTest {
     @OriginalCase("MessageServiceSendTests::checkExpiredAcks respects a slow-preset per-attempt timeout that exceeds a tiny give-up window()")
     @Test fun actualSlowAttemptSurvivesItsCheckerBeyondTheTinyGiveUpWindow() = runTest(scheduler) {
         exerciseInFlightChecker(grace = 1.0, ageMillis = 2_000)
+    }
+
+    @OriginalCase("MessageServiceSendTests::failMessageAndRethrow does not downgrade a delivered DB row()")
+    @Test fun aRawSendFailureCannotDowngradeTheAlreadyDeliveredRoomRow() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(61)
+        g.start()
+        val cause = MeshTransportError.SendFailed("controlled drop after delivery commit")
+        g.firmware.beforeSend = { data ->
+            if (data[0] == CommandCode.SEND_MESSAGE.rawValue) throw cause
+        }
+        val events = g.service.statusEvents()
+        var delivered: MessageDTO? = null
+        assertSame(cause, assertFailsWith<MeshTransportError.SendFailed> {
+            g.service.sendMessageWithRetry("delivered before failure", contact, onMessageCreated = {
+                delivered = it.copy(status = MessageStatus.DELIVERED, ackCode = 0x3322_11DDu)
+                store.saveMessage(assertNotNull(delivered))
+            })
+        })
+        val expected = assertNotNull(delivered)
+        assertEquals(expected, store.fetchMessage(EntityKey(radio, expected.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertTrue(completedStatuses(g, events).isEmpty())
+        g.stop()
+    }
+
+    @OriginalCase("MessageServiceSendTests::finalizeSend exhaustion does not downgrade a delivered DB row()")
+    @Test fun publicRetryExhaustionCannotDowngradeTheAlreadyDeliveredRoomRow() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(62, config = MessageServiceConfig(maxAttempts = 2, floodAfter = 5, minTimeout = 0.0))
+        g.start()
+        g.firmware.acknowledge = false
+        g.firmware.acceptedAck = Bytes.of(0xFE, 0xED, 0xFA, 0xCE)
+        val events = g.service.statusEvents()
+        var delivered: MessageDTO? = null
+        val result = g.service.sendMessageWithRetry("delivered before exhaustion", contact, onMessageCreated = {
+            delivered = it.copy(status = MessageStatus.DELIVERED, ackCode = 0xCEFA_EDFEu)
+            store.saveMessage(assertNotNull(delivered))
+        })
+        assertEquals(assertNotNull(delivered), result)
+        assertEquals(result, store.fetchMessage(EntityKey(radio, result.id)))
+        assertEquals(1, g.service.pendingAckCount)
+        assertEquals(2, g.firmware.sent().size)
+        assertEquals(listOf(MessageStatusEvent.Retrying(result.id, 0, 1)), completedStatuses(g, events))
+        g.stop()
     }
 
     private suspend fun TestScope.exerciseInFlightChecker(grace: Double, ageMillis: Long) {

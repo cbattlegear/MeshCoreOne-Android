@@ -30,6 +30,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.LaunchedEffect
@@ -76,12 +77,14 @@ fun AppearanceScreen(controller: AppearanceController, modifier: Modifier = Modi
             Column(Modifier.selectableGroup()) {
                 Text(stringResource(S.appearanceSchemeHeader), style = MaterialTheme.typography.titleSmall)
                 appearanceSchemeChoices.forEach { choice ->
-                    Row(
-                        Modifier.fillMaxWidth().heightIn(min = SCHEME_ROW_MINIMUM_HEIGHT_DP.dp).selectable(choice == state.colorScheme, role = Role.RadioButton) { holder.selectColorScheme(choice) },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = choice == state.colorScheme, onClick = null)
-                        Text(stringResource(choice.labelResource), Modifier.padding(start = 8.dp))
+                    key(choice.id) {
+                        Row(
+                            Modifier.fillMaxWidth().heightIn(min = SCHEME_ROW_MINIMUM_HEIGHT_DP.dp).selectable(choice == state.colorScheme, role = Role.RadioButton) { holder.selectColorScheme(choice) },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = choice == state.colorScheme, onClick = null)
+                            Text(stringResource(choice.labelResource), Modifier.padding(start = 8.dp))
+                        }
                     }
                 }
                 Text(

@@ -22,6 +22,11 @@ class ThemePolicyTest {
     @Test fun preferenceCases() {
         assertEquals(listOf(AppColorSchemePreference.SYSTEM, AppColorSchemePreference.LIGHT, AppColorSchemePreference.DARK),
             AppColorSchemePreference.entries)
+        assertEquals(listOf("system", "light", "dark"), AppColorSchemePreference.entries.map { it.id })
+        for (preference in AppColorSchemePreference.entries) {
+            assertEquals(preference.rawValue, preference.id)
+            assertEquals(preference, AppColorSchemePreference.fromRawValue(preference.id))
+        }
         assertEquals(AppColorSchemePreference.DARK, AppColorSchemePreference.fromRawValue("dark"))
         assertNull(AppColorSchemePreference.fromRawValue("auto"))
     }

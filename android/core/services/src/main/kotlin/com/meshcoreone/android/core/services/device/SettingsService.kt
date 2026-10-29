@@ -243,6 +243,8 @@ class SettingsService(
 
     suspend fun exportPrivateKey(): Bytes = operation { configuration { exportPrivateKey() } }
     suspend fun importPrivateKey(key: Bytes) = operation { configuration { importPrivateKey(key) } }
+    suspend fun importPrivateKey(key: Bytes, onCommitted: () -> Unit) =
+        operation { configuration { importPrivateKey(key, onCommitted) } }
     suspend fun sign(data: Bytes): Bytes = operation { configuration { sign(data) } }
 
     suspend fun setNodeNameVerified(name: String): SelfInfo = operation {

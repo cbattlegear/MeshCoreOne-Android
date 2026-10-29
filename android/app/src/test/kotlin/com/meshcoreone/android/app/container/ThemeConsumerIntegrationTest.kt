@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -250,7 +251,9 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
                 compose.onNodeWithText(label).performClick()
                 compose.waitUntil(10_000) {
                     testScheduler.runCurrent()
-                    (service.state.value as? ThemeServiceState.Ready)?.selection?.colorSchemePreference == preference
+                    (service.state.value as? ThemeServiceState.Ready)?.selection?.colorSchemePreference == preference &&
+                        controller.selection.value.colorScheme == preference &&
+                        compose.onNodeWithText(label).fetchSemanticsNode().config[SemanticsProperties.Selected]
                 }
                 compose.onNodeWithText(label).assertIsSelected()
                 assertEquals(preference.id, storage.preferences.get(AppearanceStorageKey.appColorSchemePreference))

@@ -215,6 +215,7 @@ class RadioSessionContainer private constructor(
 
     // region Sync graph
 
+    private val syncAdvertisement = SyncAdvertisementAdapter(advertisementService)
     private val retryServices = SyncRetryServices(syncCoordinator, buildSyncDependencies(), SyncRemoteNodeAdapter(remoteNodeService))
     private val resyncHost = SessionResyncHost(
         inputs.connection.signals, env.runtimeState, env.resyncFailure,
@@ -228,7 +229,7 @@ class RadioSessionContainer private constructor(
         messagePollingService = messagePollingService,
         notificationService = SyncNotificationsAdapter(notificationService),
         reactionService = SyncReactionAdapter(reactionService),
-        advertisementService = SyncAdvertisementAdapter(advertisementService),
+        advertisementService = syncAdvertisement,
         rxLogService = SyncRxLogAdapter(rxLogService),
         heardRepeatsService = SyncHeardRepeatsAdapter(heardRepeatsService),
         roomServerService = SyncRoomServerAdapter(roomServerService),
@@ -248,6 +249,7 @@ class RadioSessionContainer private constructor(
 
     private val monitoringLock = Mutex()
     private var monitoring = Monitoring.STOPPED
+    private var identityIngestionQuiesced = false
     private var teardown: CompletableDeferred<TeardownReport>? = null
 
     private val isClosed: Boolean get() = synchronized(lock) { closed }
@@ -285,7 +287,35 @@ class RadioSessionContainer private constructor(
         env.notificationStrings?.let(notificationService::setStringProvider)
         scope.launch { notificationService.setup() }
         // The cycle-forced upward call into the connection manager: an identity import re-resolves the radio id.
-        nodeConfigService.setOnPostIdentityImport { inputs.callbacks.reconcileIdentity() }
+        nodeConfigService.setOnIdentityImportStarted { handoff ->
+            inputs.callbacks.beginIdentityImport(handoff)
+            synchronized(lock) { identityIngestionQuiesced = true }
+            try {
+                messagePollingService.pauseAutoFetch()
+                messagePollingService.pollAllMessages()
+                stopEventMonitoring(keepAcknowledgements = true)
+            } catch (failure: Throwable) {
+                synchronized(lock) { identityIngestionQuiesced = false }
+                try {
+                    if (!isClosed) withContext(NonCancellable) {
+                        stopEventMonitoring(keepAcknowledgements = true)
+                        messagePollingService.resumeAutoFetch()
+                        ensureListeners()
+                    }
+                } catch (resumeFailure: Throwable) {
+                    if (resumeFailure !== failure) failure.addSuppressed(resumeFailure)
+                }
+                throw failure
+            }
+        }
+        nodeConfigService.setOnIdentityImportFinished { unchanged ->
+            if (unchanged && !isClosed) {
+                synchronized(lock) { identityIngestionQuiesced = false }
+                ensureListeners()
+            }
+        }
+        nodeConfigService.setOnPostIdentityImport { handoff -> inputs.callbacks.reconcileIdentity(handoff) }
+        nodeConfigService.setOnIdentityRecovery { handoff -> inputs.callbacks.recoverIdentity(handoff) }
     }
 
     override val batteryServices: BatteryServices = object : BatteryServices {
@@ -327,8 +357,9 @@ class RadioSessionContainer private constructor(
         enableAutoFetch: Boolean = true,
         enableAdvertisementMonitoring: Boolean = true,
     ): Unit = monitoringLock.withLock {
-        if (synchronized(lock) { closed || monitoring != Monitoring.STOPPED }) return@withLock
+        if (synchronized(lock) { closed || identityIngestionQuiesced || monitoring != Monitoring.STOPPED }) return@withLock
         heardRepeatsService.configure(radio)
+        syncAdvertisement.restoreDeltaSyncHandler()
         if (enableAdvertisementMonitoring) advertisementService.startEventMonitoring(radio)
         rxLogService.startEventMonitoring(radio)
         messageService.startEventMonitoring()
@@ -357,7 +388,7 @@ class RadioSessionContainer private constructor(
     }
 
     /** Stops every monitor. In-flight DMs are not failed: the radio re-emits the delivery confirmation on return. */
-    suspend fun stopEventMonitoring(): Unit = monitoringLock.withLock {
+    suspend fun stopEventMonitoring(keepAcknowledgements: Boolean = false): Unit = monitoringLock.withLock {
         if (synchronized(lock) { monitoring != Monitoring.ACTIVE }) return@withLock
         advertisementService.stopEventMonitoring()
         rxLogService.stopEventMonitoring()
@@ -368,8 +399,10 @@ class RadioSessionContainer private constructor(
         } catch (failure: Exception) {
             logger.log(Level.WARNING, "RX log flush on stop failed: ${failure.message}")
         }
-        messageService.stopEventMonitoring()
-        messageService.stopAckExpiryChecking()
+        if (!keepAcknowledgements) {
+            messageService.stopEventMonitoring()
+            messageService.stopAckExpiryChecking()
+        }
         messagePollingService.stopMessageEventMonitoring()
         remoteNodeService.stopEventMonitoring()
         debugLogBuffer.shutdown()
@@ -411,9 +444,14 @@ class RadioSessionContainer private constructor(
         syncCoordinator.onDisconnected(SyncNotificationsAdapter(notificationService))
     }
 
-    /** Restarts listeners after a health check found them stopped (idempotent while active). */
+    /** Reconciles the monitor group and polling independently, without replacing healthy listeners. */
     override suspend fun ensureListeners() {
-        if (!isEventMonitoringActive && !isClosed) startEventMonitoring(radioId)
+        startEventMonitoring(radioId)
+        monitoringLock.withLock {
+            if (!isClosed && !synchronized(lock) { identityIngestionQuiesced } && !messagePollingService.isAutoFetching) {
+                messagePollingService.startAutoFetch(radioId)
+            }
+        }
     }
 
     override suspend fun tearDown(): TeardownReport {
@@ -437,6 +475,10 @@ class RadioSessionContainer private constructor(
             // Stop the monitors before clearing handlers so the event tasks that read them are cancelled first.
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }
             nodeConfigService.setOnPostIdentityImport(null)
+            nodeConfigService.setOnIdentityImportStarted(null)
+            nodeConfigService.setOnIdentityImportFinished(null)
+            nodeConfigService.setOnIdentityRecovery(null)
+            syncAdvertisement.setDeltaSyncHandler(null)
             step(LifecycleStage.STOP_SERVICES) { messagePollingService.clearMessageHandlers() }
             step(LifecycleStage.STOP_SERVICES) { syncCoordinator.cancelDiscoveryEventMonitoring() }
             // Finishing every stream ends each consumer's collection, releasing the service references they hold.

@@ -229,10 +229,10 @@ class PairingCoordinator(
         // Bond clear first: Android bond verification lives on the live link generation, which the
         // transport teardown below discards (the source cleared a process-wide state machine last).
         connection.clearPersistedConnection(deviceId)
-        bestEffort("removeFailedPairing.transport") { connection.disconnectTransport() }
-        bestEffort("removeFailedPairing.registry") { pairing.removeDevice(deviceId) }
-        bestEffort("removeFailedPairing.demote") { devices.demoteDeviceToGhost(deviceId) }
-        endpoints?.let { store -> bestEffort("removeFailedPairing.endpoint") { store.forget(deviceId) } }
+        connection.disconnectTransport()
+        pairing.removeDevice(deviceId)
+        devices.demoteDeviceToGhost(deviceId)
+        endpoints?.forget(deviceId)
     }
 
     /** Forgets the connected device; `deleteData` hard-deletes, otherwise the row is ghosted. */

@@ -174,30 +174,35 @@ class NodeConfigStateHolder(
         didProgress = false
         importing.value = state.copy(confirmation = false, applying = true, progress = null, error = null)
         applyJob = scope.launch {
-            val connection: NodeConfigSession
+            var connection: NodeConfigSession? = null
             try {
-                connection = requireNotNull(captured)
-                connection.requireCurrent()
-                connection.apply(config, state.sections) { progress ->
-                    didProgress = true
-                    importing.value = importing.value.copy(progress = progress)
+                val current: NodeConfigSession
+                try {
+                    current = requireNotNull(captured).also { connection = it }
+                    current.requireCurrent()
+                    current.apply(config, state.sections) { progress ->
+                        didProgress = true
+                        importing.value = importing.value.copy(progress = progress)
+                    }
+                    current.requireCurrent()
+                } catch (cancelled: CancellationException) {
+                    importing.value = importing.value.copy(applying = false, complete = false, error = messages.cancelled(didProgress))
+                    throw cancelled
+                } catch (failure: Exception) {
+                    importing.value = importing.value.copy(applying = false, error = messages.failed(failure, didProgress))
+                    return@launch
                 }
-                connection.requireCurrent()
-            } catch (cancelled: CancellationException) {
-                importing.value = importing.value.copy(applying = false, complete = false, error = messages.cancelled(didProgress))
-                throw cancelled
-            } catch (failure: Exception) {
-                importing.value = importing.value.copy(applying = false, error = messages.failed(failure, didProgress))
-                return@launch
-            }
 
-            // The destructive apply has committed; refresh is best-effort like the source workflow.
-            try {
-                connection.refresh()
-            } catch (_: CancellationException) {
-            } catch (_: Exception) {
+                // The destructive apply has committed; refresh is best-effort like the source workflow.
+                try {
+                    current.refresh()
+                } catch (_: CancellationException) {
+                } catch (_: Exception) {
+                }
+                importing.value = importing.value.copy(applying = false, complete = true)
+            } finally {
+                connection?.finishImport()
             }
-            importing.value = importing.value.copy(applying = false, complete = true)
             try {
                 sleep(1500)
             } catch (_: CancellationException) {

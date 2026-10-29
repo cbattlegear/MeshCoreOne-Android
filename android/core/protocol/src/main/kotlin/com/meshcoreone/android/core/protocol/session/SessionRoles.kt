@@ -108,6 +108,10 @@ interface ConfigurationSessionOps {
     suspend fun setCustomVar(key: String, value: String)
     suspend fun exportPrivateKey(): Bytes
     suspend fun importPrivateKey(key: Bytes)
+    suspend fun importPrivateKey(key: Bytes, onCommitted: () -> Unit) {
+        importPrivateKey(key)
+        onCommitted()
+    }
     suspend fun sign(data: Bytes, chunkSize: Long = 120, timeout: Double? = null): Bytes
 }
 

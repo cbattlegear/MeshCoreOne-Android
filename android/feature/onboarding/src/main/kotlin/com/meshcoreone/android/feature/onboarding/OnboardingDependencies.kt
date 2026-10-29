@@ -50,7 +50,12 @@ sealed interface OnboardingConnectOutcome {
     /** A pairing flow is already running, or the system chooser has no host yet; nothing happened. */
     data object Ignored : OnboardingConnectOutcome
     /** `retryDeviceId` non-null means the device is held by another app and "Retry connection" applies. */
-    data class Failed(val message: UiText, val retryDeviceId: UUID? = null) : OnboardingConnectOutcome
+    data class Failed(
+        val message: UiText,
+        val retryDeviceId: UUID? = null,
+        /** The app-wide typed recovery dialog owns presentation and its device-changing actions. */
+        val presentedByConnectionUi: Boolean = false,
+    ) : OnboardingConnectOutcome
 }
 
 data class OnboardingScanDiscovery(val id: UUID, val name: String?, val tier: RSSITuning.SignalTier)

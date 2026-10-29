@@ -11,7 +11,9 @@ import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.onboarding.OnboardingConnectOutcome
 import java.util.UUID
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -71,16 +73,18 @@ class SavedDeviceRecoveryIntegrationTest : RoomProcessTest() {
 
     @Test fun cancelledSavedRetryDoesNotPresentFailureOrDeleteTheDevice() = runTest {
         withSavedDevice { h, id ->
-            h.links.configureRadio = { it.connectFailure = CancellationException("cancelled retry") }
-            try {
-                pairing(h).retryConnection(id)
-                error("Cancellation must propagate")
-            } catch (_: CancellationException) {
-                assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
-                assertNull(h.appState.connectionUI.failedPairingDeviceId)
-                assertNotNull(store.fetchDevice(id))
-                assertEquals(0, h.pairing.removeCalls)
+            h.links.configureRadio = { it.connectGate = CompletableDeferred() }
+            val retry = backgroundScope.async { pairing(h).retryConnection(id) }
+            h.eventually("saved retry reaches its suspended transport", virtualBudgetMillis = 0) {
+                h.links.radios.last().connectGate != null &&
+                    h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.CONNECTING
             }
+            retry.cancelAndJoin()
+            assertTrue(retry.isCancelled)
+            assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+            assertNull(h.appState.connectionUI.failedPairingDeviceId)
+            assertNotNull(store.fetchDevice(id))
+            assertEquals(0, h.pairing.removeCalls)
         }
     }
 

@@ -282,7 +282,9 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                         channels[packet[1]] = Bytes.of(0x12) + packet.slice(1, packet.size)
                         listOf(Bytes.of(0))
                     }
-                    CommandCode.GET_CHANNEL.rawValue -> channels[packet[1]]?.let { listOf(it) }
+                    CommandCode.GET_CHANNEL.rawValue -> listOf(
+                        channels[packet[1]] ?: (Bytes.of(0x12, packet[1].toInt()) + Bytes(ByteArray(48))),
+                    )
                     CommandCode.UPDATE_CONTACT.rawValue -> {
                         val frame = Bytes.of(3) + packet.slice(1, 144) + le32(999)
                         radio.knownContacts += frame

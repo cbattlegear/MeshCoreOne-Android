@@ -41,10 +41,12 @@ class NativeTimelineLifecycleIntegrationTest : RoomProcessTest() {
         try {
             val conversation = TimelineConversation.Direct(peer)
             val vm = ChatViewModel(conversation, h.container.chatsFeature.timeline(conversation), firstScope)
+            h.settle()
             val baseline = h.appState.messageEventStream.subscriberCount
             vm.start()
             vm.open()
             h.settle()
+            assertEquals(baseline + 1, h.appState.messageEventStream.subscriberCount)
             assertEquals(listOf(first.id), vm.state.value.messages.map { it.id })
             vm.updateDraft("Preserved draft")
             firstScope.cancel()

@@ -11,7 +11,6 @@ import androidx.compose.ui.test.performClick
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as S
-import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
@@ -57,7 +56,10 @@ class AppConnectionStatusTest : RoomProcessTest() {
             testScheduler.runCurrent()
             compose.onNodeWithText(text(S.commonStatusReady)).assertIsDisplayed()
 
-            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.links.links.last().callbacks!!.onDisconnected(IllegalStateException("link lost"))
+            h.eventually("unexpected connection loss reaches the mounted state", virtualBudgetMillis = 0) {
+                h.manager.connectionState == DeviceConnectionState.DISCONNECTED && h.sessions.current == null
+            }
             testScheduler.runCurrent()
             testScheduler.advanceTimeBy(1001)
             testScheduler.runCurrent()

@@ -37,8 +37,19 @@ class SavedDeviceRecoveryRoutingTest {
         val scan = DeviceScanCoordinator(scope, pairing, FakeDemo(), FakePermissions()) {}
         scan.retryConnection(device)
         pairing.outcome = OnboardingConnectOutcome.Failed(UiText.Verbatim("generic"))
-        scan.retryConnection(device)
+        scan.retryConnection(UUID.randomUUID())
         assertNull(scan.state.value.otherAppDeviceId)
         assertEquals(UiText.Verbatim("generic"), scan.state.value.failure)
+    }
+
+    @Test fun genericFailureOnTheSameExplicitRetryKeepsItsKnownOtherAppTarget() {
+        val device = UUID.randomUUID()
+        val pairing = FakePairing(OnboardingConnectOutcome.Failed(UiText.Verbatim("other app"), device))
+        val scan = DeviceScanCoordinator(scope, pairing, FakeDemo(), FakePermissions()) {}
+        scan.retryConnection(device)
+        pairing.outcome = OnboardingConnectOutcome.Failed(UiText.Verbatim("still unavailable"))
+        scan.retryConnection(device)
+        assertEquals(device, scan.state.value.otherAppDeviceId)
+        assertEquals(UiText.Verbatim("still unavailable"), scan.state.value.failure)
     }
 }

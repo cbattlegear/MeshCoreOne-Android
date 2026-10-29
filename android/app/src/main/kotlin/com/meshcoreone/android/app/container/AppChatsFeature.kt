@@ -50,6 +50,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     )
     private val floodScopeMutex = Mutex()
     private var lastPushedScope: PushedFloodScope? = null
+    private val channelHistoryChanges = MutableSharedFlow<RadioId>(replay = 1)
     private val store get() = container.processStore
     private val scope get() = container.uiScope
     private val app get() = container.appState
@@ -240,8 +241,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override suspend fun reactions(messageId: UUID) = store.fetchReactions(EntityKey(radio, messageId))
         override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
             store.saveBlockedChannelSender(BlockedChannelSenderDTO(name = senderName, radioId = radioId))
-            store.deleteChannelMessages(senderName, radioId)
             container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
+            store.deleteChannelMessages(senderName, radioId)
+            channelHistoryChanges.emit(radioId)
             app.refreshConversations()
         }
         override suspend fun blockContacts(contactIds: Set<UUID>) {
@@ -426,40 +428,44 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 is TimelineConversation.Channel -> enqueueChannel(radio, message.id, isResend = true)
             }
         }
-        override val events: Flow<TimelineEvent> get() = this@AppChatsFeature.events().transform { event ->
-            val ids = when (event) {
-                is MessageEvent.DirectMessageReceived -> listOf(event.message.id)
-                is MessageEvent.ChannelMessageReceived -> listOf(event.message.id)
-                is MessageEvent.MessageStatusResolved -> listOf(event.messageID)
-                is MessageEvent.MessageResent -> listOf(event.messageID)
-                is MessageEvent.MessageFailed -> listOf(event.messageID)
-                is MessageEvent.MessageRetrying -> listOf(event.messageID)
-                is MessageEvent.HeardRepeatRecorded -> listOf(event.messageID)
-                is MessageEvent.ReactionReceived -> listOf(event.messageID)
-                is MessageEvent.MessagesRegionUpdated -> event.messageIDs
-                is MessageEvent.RoutingChanged -> emptyList()
-                is MessageEvent.RoomMessageReceived, is MessageEvent.RoomMessageStatusUpdated,
-                is MessageEvent.RoomMessageFailed -> emptyList()
-            }
-            for (id in ids) {
-                val message = store.fetchMessage(EntityKey(radio, id)) ?: continue
-                val belongs = when (conversation) {
-                    is TimelineConversation.Direct -> message.contactID == conversation.contact.id
-                    is TimelineConversation.Channel -> message.channelIndex == conversation.channel.index
+        override val events: Flow<TimelineEvent> get() = merge(
+            channelHistoryChanges.filter { conversation is TimelineConversation.Channel && it == radio }
+                .map { TimelineEvent.HistoryChanged(conversation.id) },
+            this@AppChatsFeature.events().transform { event ->
+                val ids = when (event) {
+                    is MessageEvent.DirectMessageReceived -> listOf(event.message.id)
+                    is MessageEvent.ChannelMessageReceived -> listOf(event.message.id)
+                    is MessageEvent.MessageStatusResolved -> listOf(event.messageID)
+                    is MessageEvent.MessageResent -> listOf(event.messageID)
+                    is MessageEvent.MessageFailed -> listOf(event.messageID)
+                    is MessageEvent.MessageRetrying -> listOf(event.messageID)
+                    is MessageEvent.HeardRepeatRecorded -> listOf(event.messageID)
+                    is MessageEvent.ReactionReceived -> listOf(event.messageID)
+                    is MessageEvent.MessagesRegionUpdated -> event.messageIDs
+                    is MessageEvent.RoutingChanged -> emptyList()
+                    is MessageEvent.RoomMessageReceived, is MessageEvent.RoomMessageStatusUpdated,
+                    is MessageEvent.RoomMessageFailed -> emptyList()
                 }
-                if (belongs) {
-                    if (event is MessageEvent.MessageFailed && !message.failureSeen) {
-                        markFailedSendSeenIfVisible(message)
-                        app.refreshConversations()
+                for (id in ids) {
+                    val message = store.fetchMessage(EntityKey(radio, id)) ?: continue
+                    val belongs = when (conversation) {
+                        is TimelineConversation.Direct -> message.contactID == conversation.contact.id
+                        is TimelineConversation.Channel -> message.channelIndex == conversation.channel.index
                     }
-                    emit(when (event) {
-                        is MessageEvent.DirectMessageReceived, is MessageEvent.ChannelMessageReceived ->
-                            TimelineEvent.MessageReceived(conversation.id, message)
-                        else -> TimelineEvent.MessageChanged(conversation.id, message.id)
-                    })
+                    if (belongs) {
+                        if (event is MessageEvent.MessageFailed && !message.failureSeen) {
+                            markFailedSendSeenIfVisible(message)
+                            app.refreshConversations()
+                        }
+                        emit(when (event) {
+                            is MessageEvent.DirectMessageReceived, is MessageEvent.ChannelMessageReceived ->
+                                TimelineEvent.MessageReceived(conversation.id, message)
+                            else -> TimelineEvent.MessageChanged(conversation.id, message.id)
+                        })
+                    }
                 }
-            }
-        }
+            },
+        )
         override val diagnostics = TimelineDiagnostics { operation, failure -> report(operation, failure) }
     }
 

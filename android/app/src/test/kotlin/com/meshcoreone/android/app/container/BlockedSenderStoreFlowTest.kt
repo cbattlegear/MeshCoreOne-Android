@@ -4,6 +4,8 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.feature.chats.actions.MessageActionsFailure
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
@@ -113,6 +115,34 @@ class BlockedSenderStoreFlowTest : RoomProcessTest() {
                 assertEquals(listOf("Spammer"), store.fetchBlockedChannelSenders(radio).map { it.name })
             } finally {
                 db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_block_delete")
+            }
+        } finally { h.container.close() }
+    }
+
+    @Test fun committedBlockUpdatesTheLiveIngestionFilterEvenWhenHistoricalDeletionFails() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.eventually("ready blocked-sender graph") { h.manager.connectionState == DeviceConnectionState.READY }
+            val currentRadio = assertNotNull(h.appState.currentRadioId)
+            val coordinator = assertNotNull(h.sessions.current).syncCoordinator
+            val spam = channel("Spammer").copy(radioId = currentRadio)
+            store.saveMessage(spam)
+            assertFalse(coordinator.isBlockedSender("Spammer"))
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_live_block_delete AFTER DELETE ON messages " +
+                    "BEGIN SELECT RAISE(FAIL, 'controlled live block deletion failure'); END",
+            )
+            try {
+                assertFailsWith<PersistenceStoreException> {
+                    h.container.chatsFeature.actions(currentRadio).blockChannelSender(currentRadio, "Spammer")
+                }
+                assertEquals(listOf("Spammer"), store.fetchBlockedChannelSenders(currentRadio).map { it.name })
+                assertTrue(coordinator.isBlockedSender("Spammer"))
+                assertFalse(coordinator.isBlockedSender("Legit"))
+                assertEquals(spam, store.fetchMessage(EntityKey(currentRadio, spam.id)))
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_live_block_delete")
             }
         } finally { h.container.close() }
     }

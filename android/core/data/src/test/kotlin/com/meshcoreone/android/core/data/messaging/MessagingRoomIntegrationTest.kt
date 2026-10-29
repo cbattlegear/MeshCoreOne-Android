@@ -273,6 +273,55 @@ class MessagingRoomIntegrationTest {
         }
     }
 
+    @Test fun recoveredUnmatchedAckReadClearsOnlyItsDiagnosticFailureAndAllowsCompleteTeardown() = runTest(scheduler) {
+        seed()
+        val cause = PersistenceStoreException(PersistenceStoreError.FetchFailed("controlled ACK diagnostic read"))
+        var fail = true
+        val actual = store
+        val persistence = object : PersistenceStoreProtocol by actual {
+            override suspend fun hasOutgoingSentDM(radioId: RadioId, ackCode: UInt): Boolean {
+                if (fail) throw cause
+                return actual.hasOutgoingSentDM(radioId, ackCode)
+            }
+        }
+        val g = RadioGeneration(41, persistence)
+        g.start()
+        g.service.startEventMonitoring()
+        val ack = Bytes.fromHex("0DF0FECA")
+        g.firmware.pushAck(ack)
+        runCurrent()
+        assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+            .any { it.operation == "unmatchedAckDiagnostic" && it.cause === cause })
+        assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.UnmatchedAcknowledgement>().isEmpty())
+        fail = false
+        g.firmware.pushAck(ack)
+        runCurrent()
+        assertEquals(false, g.diagnostics.filterIsInstance<MessagingDiagnostic.UnmatchedAcknowledgement>().single().orphanSentRow)
+        assertEquals(0, g.service.pendingAckCount)
+        assertTrue(g.service.close().isComplete)
+        assertTrue(store.fetchMessages(EntityKey(radio, contact.id)).isEmpty())
+        g.stop()
+    }
+
+    @Test fun unrecoveredUnmatchedAckReadRemainsAnExplicitTeardownFailure() = runTest(scheduler) {
+        seed()
+        val cause = PersistenceStoreException(PersistenceStoreError.FetchFailed("persistent ACK diagnostic read"))
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun hasOutgoingSentDM(radioId: RadioId, ackCode: UInt): Boolean = throw cause
+        }
+        val g = RadioGeneration(42, persistence)
+        g.start()
+        g.service.startEventMonitoring()
+        g.firmware.pushAck(Bytes.fromHex("0DF0FECA"))
+        runCurrent()
+        assertEquals(0, g.service.pendingAckCount)
+        val report = g.service.close()
+        assertFalse(report.isComplete)
+        assertSame(cause, report.issues.single().cause)
+        assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.UnmatchedAcknowledgement>().isEmpty())
+        g.stop()
+    }
+
     @Test fun actualBackupConsumerBackfillsOnlyNilIncomingKeysAndUsesOutgoingUUIDIdentity() = runTest(scheduler) {
         seed()
         val incoming = MessageDTO(radioId = radio, contactID = contact.id, text = "e\u0301", timestamp = UInt.MAX_VALUE,

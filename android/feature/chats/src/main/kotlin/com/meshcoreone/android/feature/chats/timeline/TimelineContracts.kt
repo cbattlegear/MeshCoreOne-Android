@@ -56,6 +56,8 @@ interface TimelineDraftStore {
 sealed interface TimelineEvent {
     val conversationId: ChatConversationID
 
+    data class HistoryChanged(override val conversationId: ChatConversationID) : TimelineEvent
+
     data class MessageReceived(
         override val conversationId: ChatConversationID,
         val message: MessageDTO,

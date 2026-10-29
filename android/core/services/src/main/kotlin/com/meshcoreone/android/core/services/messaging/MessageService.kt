@@ -209,9 +209,11 @@ class MessageService(
             }
         }
         if (tracking == null) {
-            val orphanSentRow = dataStore.hasOutgoingSentDM(token.radioId, code.ackCodeUInt32)
-            ownership.check("unmatchedAcknowledgement.read")
-            ownership.reporter.report(MessagingDiagnostic.UnmatchedAcknowledgement(token, orphanSentRow))
+            bookkeeping("unmatchedAckDiagnostic") {
+                val orphanSentRow = dataStore.hasOutgoingSentDM(token.radioId, code.ackCodeUInt32)
+                ownership.check("unmatchedAcknowledgement.read")
+                ownership.reporter.report(MessagingDiagnostic.UnmatchedAcknowledgement(token, orphanSentRow))
+            }
             return
         }
         reconcileAcknowledgement(tracking.messageID)

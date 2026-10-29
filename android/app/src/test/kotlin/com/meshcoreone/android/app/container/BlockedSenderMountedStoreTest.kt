@@ -5,6 +5,12 @@ package com.meshcoreone.android.app.container
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.core.contracts.domain.EntityKey
@@ -15,6 +21,9 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.feature.chats.actions.MessageActionsFailure
 import com.meshcoreone.android.feature.chats.actions.MessageActionsRoute
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
+import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
+import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
+import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineRoute
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
@@ -41,13 +50,20 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         status = MessageStatus.DELIVERED, senderNodeName = "Spammer",
     )
 
-    private fun mount(holder: MessageActionsStateHolder): ActivityController<ComponentActivity> {
+    private fun mount(holder: MessageActionsStateHolder, timeline: ChatViewModel? = null): ActivityController<ComponentActivity> {
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
         host.get().setContent {
             MeshCoreTheme(motionScale = 0f) {
-                MessageActionsRoute(message, holder, null, null, emptyList(), {})
+                if (timeline == null) {
+                    MessageActionsRoute(message, holder, null, null, emptyList(), {})
+                } else {
+                    Column(Modifier.fillMaxSize()) {
+                        ChatTimelineRoute(timeline, Modifier.weight(1f).testTag("blocked-sender-timeline"))
+                        MessageActionsRoute(message, holder, null, null, emptyList(), {}, Modifier.height(400.dp))
+                    }
+                }
             }
         }
         return host
@@ -58,20 +74,31 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val holder = MessageActionsStateHolder(harness.container.chatsFeature.actions(radio), scope)
         val foreign = message.copy(radioId = RadioId(UUID(0, 2)))
-        val kept = message.copy(id = UUID.randomUUID(), senderNodeName = "Legit")
+        val kept = message.copy(id = UUID.randomUUID(), senderNodeName = "Legit", text = "Kept history")
         for (row in listOf(message, foreign, kept)) store.saveMessage(row)
-        val host = mount(holder)
+        val channel = ChannelDTO(radioId = radio, index = 0u, name = "Test channel")
+        store.saveChannel(channel)
+        val conversation = TimelineConversation.Channel(channel)
+        val timeline = ChatViewModel(conversation, harness.container.chatsFeature.timeline(conversation), scope)
+        val host = mount(holder, timeline)
         try {
+            compose.waitUntil(5_000) { timeline.state.value.hasLoadedOnce }
+            val loadedSpam = hasText(message.text) and hasAnyAncestor(hasTestTag("blocked-sender-timeline"))
+            compose.onNode(loadedSpam).assertExists()
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsBlockSenderCancel)).performClick()
             compose.waitForIdle()
             assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
             assertTrue(store.fetchBlockedChannelSenders(radio).isEmpty())
+            compose.onNode(loadedSpam).assertExists()
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
             compose.waitUntil(5_000) { holder.state.value.blockedSender == "Spammer" }
+            compose.waitUntil(5_000) { timeline.state.value.messages.none { it.id == message.id } }
+            compose.onNode(loadedSpam).assertDoesNotExist()
+            compose.onNode(hasText(kept.text) and hasAnyAncestor(hasTestTag("blocked-sender-timeline"))).assertExists()
             assertNull(holder.state.value.failure)
             assertNull(store.fetchMessage(EntityKey(radio, message.id)))
             assertEquals(kept, store.fetchMessage(EntityKey(radio, kept.id)))

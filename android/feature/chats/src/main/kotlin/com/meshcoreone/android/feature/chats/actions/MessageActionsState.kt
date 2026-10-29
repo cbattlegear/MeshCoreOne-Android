@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 interface MessageActionsDataSource {
     suspend fun contacts(radioId: RadioId): List<ContactDTO>
@@ -67,15 +69,19 @@ class MessageActionsStateHolder(
     val state: StateFlow<MessageActionsState> = mutableState.asStateFlow()
     private var reactionJob: Job? = null
     private var reactionRequest = 0L
+    private var detailsJob: Job? = null
+    private var contactsRadioId: RadioId? = null
+    private val blockContactsLoad = Mutex()
 
     fun loadDetails(message: MessageDTO) {
         if (!MessageActionAvailability.forMessage(message).showsPathDetail) return
-        scope.launch {
+        detailsJob = scope.launch {
             mutableState.value = mutableState.value.copy(isLoadingDetails = true, failure = null)
             try {
                 val contacts = dataSource.contacts(message.radioId)
                 val discovered = dataSource.discoveredNodes(message.radioId)
                 val repeats = dataSource.repeats(message.id)
+                contactsRadioId = message.radioId
                 mutableState.value = mutableState.value.copy(
                     isLoadingDetails = false,
                     repeats = repeats,
@@ -146,13 +152,18 @@ class MessageActionsStateHolder(
     fun loadBlockContacts(radioId: RadioId) {
         scope.launch {
             try {
-                val contacts = dataSource.contacts(radioId)
-                mutableState.value = mutableState.value.copy(
-                    directory = mutableState.value.directory.copy(
-                        contacts = contacts,
-                        repeaters = contacts.filter { it.isRepeater },
-                    ),
-                )
+                detailsJob?.join()
+                blockContactsLoad.withLock {
+                    if (contactsRadioId == radioId) return@withLock
+                    val contacts = dataSource.contacts(radioId)
+                    contactsRadioId = radioId
+                    mutableState.value = mutableState.value.copy(
+                        directory = mutableState.value.directory.copy(
+                            contacts = contacts,
+                            repeaters = contacts.filter { it.isRepeater },
+                        ),
+                    )
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {

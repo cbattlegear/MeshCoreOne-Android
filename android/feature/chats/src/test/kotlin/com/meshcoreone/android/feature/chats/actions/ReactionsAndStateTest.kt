@@ -1,5 +1,6 @@
 // PortedFrom: MC1Tests/Views/Chats/Components/ReactionDetailsSelectionTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Tests/Views/Chats/ChatViewModelReactionIndexingTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-202 On-demand block-directory reads reuse the screen's completed or in-flight path load.
 package com.meshcoreone.android.feature.chats.actions
 
 import com.meshcoreone.android.core.model.ContactDTO
@@ -13,6 +14,7 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +28,51 @@ import kotlinx.coroutines.yield
 import org.junit.Test
 
 class ReactionsAndStateTest {
+    @Test
+    fun `block confirmation shares an in-flight path directory without changing loaded state`() = runBlocking {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u)
+        val pending = CompletableDeferred<List<ContactDTO>>()
+        source.contactRead = { pending.await() }
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        holder.loadDetails(target)
+        holder.loadBlockContacts(target.radioId)
+        assertEquals(1, source.contactReads)
+        assertTrue(holder.state.value.isLoadingDetails)
+        val contacts = listOf(contact(0xAA, name = "RemoteNode"))
+        pending.complete(contacts)
+        yield()
+        assertEquals(1, source.contactReads)
+        assertSame(contacts, holder.state.value.directory.contacts)
+        val loaded = holder.state.value
+        holder.loadBlockContacts(target.radioId)
+        yield()
+        assertSame(loaded, holder.state.value)
+        assertEquals(1, source.contactReads)
+    }
+
+    @Test
+    fun `no-path messages defer and coalesce block directory reads until confirmation`() = runBlocking {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null)
+        val pending = CompletableDeferred<List<ContactDTO>>()
+        source.contactRead = { pending.await() }
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        holder.loadDetails(target)
+        assertEquals(0, source.contactReads)
+        holder.loadBlockContacts(target.radioId)
+        holder.loadBlockContacts(target.radioId)
+        assertEquals(1, source.contactReads)
+        val contacts = listOf(contact(0xAA, name = "RemoteNode"))
+        pending.complete(contacts)
+        yield()
+        assertSame(contacts, holder.state.value.directory.contacts)
+        val loaded = holder.state.value
+        holder.loadBlockContacts(target.radioId)
+        assertSame(loaded, holder.state.value)
+        assertEquals(1, source.contactReads)
+    }
+
     @Test
     fun `pending empty failure retry and cancellation remain distinct`() = runBlocking {
         val source = FakeActionsSource()
@@ -189,6 +236,8 @@ private class FakeActionsSource : MessageActionsDataSource {
     var repeats: List<MessageRepeatDTO> = emptyList()
     var reactions: List<ReactionDTO> = emptyList()
     var reactionRead: (suspend (UUID) -> List<ReactionDTO>)? = null
+    var contactRead: (suspend () -> List<ContactDTO>)? = null
+    var contactReads = 0
     var failure: Exception? = null
     var blockedSender: String? = null
     var blockedContacts: Set<UUID> = emptySet()
@@ -199,8 +248,9 @@ private class FakeActionsSource : MessageActionsDataSource {
     }
 
     override suspend fun contacts(radioId: RadioId): List<ContactDTO> {
+        contactReads++
         fail()
-        return contacts
+        return contactRead?.invoke() ?: contacts
     }
 
     override suspend fun discoveredNodes(radioId: RadioId): List<DiscoveredNodeDTO> {

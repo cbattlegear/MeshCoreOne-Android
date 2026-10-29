@@ -117,6 +117,7 @@ internal class ContainerHarness(
     offlineMaps: com.meshcoreone.android.core.maps.OfflineMapController? = null,
     advertLocation: AppAdvertLocation = defaultAdvertLocation(),
     persistenceOverride: com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol = store,
+    themeService: com.meshcoreone.android.core.designsystem.ThemeService? = null,
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -161,6 +162,7 @@ internal class ContainerHarness(
             chatContent = chatContent,
             offlineMaps = offlineMaps,
             advertLocation = advertLocation,
+            themeService = themeService,
         ),
     )
     val manager get() = container.connectionManager

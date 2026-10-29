@@ -21,6 +21,8 @@ enum class ThemeId(val rawValue: String) {
 enum class AppColorSchemePreference(val rawValue: String, val colorScheme: ColorScheme?) {
     SYSTEM("system", null), LIGHT("light", ColorScheme.LIGHT), DARK("dark", ColorScheme.DARK);
 
+    val id: String get() = rawValue
+
     companion object {
         fun fromRawValue(raw: String): AppColorSchemePreference? = entries.firstOrNull { it.rawValue == raw }
     }

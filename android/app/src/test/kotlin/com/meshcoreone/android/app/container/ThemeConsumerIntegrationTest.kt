@@ -45,10 +45,14 @@ import com.meshcoreone.android.core.designsystem.ThemeServiceState
 import com.meshcoreone.android.core.designsystem.WCAGContrast
 import com.meshcoreone.android.core.designsystem.labelResource
 import com.meshcoreone.android.core.designsystem.toThemeColor
+import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.PersistenceKeys
+import com.meshcoreone.android.core.model.canonicalString
+import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
 import com.meshcoreone.android.feature.chats.composer.ui.MessageBody
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
 import com.meshcoreone.android.feature.chats.timeline.TimelineRow
@@ -64,6 +68,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.TestScope
@@ -147,10 +153,11 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
             var incomingBackground = Color.Unspecified
             var outgoingBackground = Color.Unspecified
             var retained = 0
+            var contentInitializations = 0
             compose.runOnUiThread {
                 host.get().setContent {
                     ThemeServiceHost(service) {
-                        val remembered = remember { mutableIntStateOf(91) }
+                        val remembered = remember { mutableIntStateOf(++contentInitializations) }
                         val current = LocalMeshTheme.current
                         val incoming = MaterialTheme.colorScheme.surfaceVariant
                         val outgoing = MaterialTheme.colorScheme.primaryContainer
@@ -184,7 +191,8 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
                 compose.waitForIdle()
                 assertEquals(id, assertNotNull(tokens).frame.theme.id)
                 if (id == ThemeId.EMBER) assertEquals(ColorScheme.DARK, assertNotNull(tokens).frame.colorScheme)
-                assertEquals(91, retained)
+                assertEquals(1, retained)
+                assertEquals(1, contentInitializations)
                 val incoming = layout("incoming")
                 val outgoing = layout("outgoing")
                 assertNotEquals(originalIncoming, colors(incoming))
@@ -203,9 +211,23 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
 
     @Test fun restoreDoesNotReportSuccessWhenTheProcessThemeRefreshFails() = runTest {
         withThemeProcess { h, _, service ->
+            h.preferences.values[PersistenceKeys.LAST_CONNECTED_DEVICE_ID] =
+                RuntimePreferenceValue.Text(UUID(0, 301).canonicalString())
+            h.container.connectionPort.refreshLastConnection()
+            val registry = assertNotNull(h.appState.ensureChatCoordinatorRegistry())
+            val conversation = ChatConversationID.channel(RadioId(UUID(0, 301)), 0u)
+            val original = registry.coordinator(conversation)
+            val versions = Triple(h.appState.contactsVersion.value, h.appState.conversationsVersion.value, h.appState.servicesVersion.value)
             service.close()
             val failure = assertFailsWith<ThemeServiceFailure> { h.appState.notifyDataRestored() }
             assertEquals(ThemeProblem.OwnerClosed, failure.problem)
+            assertEquals(versions.first + 1, h.appState.contactsVersion.value)
+            assertEquals(versions.second + 1, h.appState.conversationsVersion.value)
+            assertEquals(versions.third + 1, h.appState.servicesVersion.value)
+            assertSame(registry, h.appState.chatCoordinatorRegistry)
+            assertNull(registry.existingCoordinator(conversation))
+            assertNotSame(original, registry.coordinator(conversation))
+            assertNull(h.sessions.current)
         }
     }
 

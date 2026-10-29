@@ -360,11 +360,14 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     suspend fun notifyDataRestored() {
         contactsVersionFlow.update { it + 1 }
         conversationsVersionFlow.update { it + 1 }
-        loadPersistedRegionSelection()
-        themeService?.refreshFromPreferences()
-        // Restore is refused while connected, so this cannot race a live session. The registry stays so later opens mint fresh coordinators.
-        chatCoordinatorRegistry?.clear()
-        bumpServicesVersion()
+        try {
+            loadPersistedRegionSelection()
+            themeService?.refreshFromPreferences()
+        } finally {
+            // Backup rows are committed even if refreshing preferences fails or is cancelled.
+            chatCoordinatorRegistry?.clear()
+            bumpServicesVersion()
+        }
     }
 
     /** Drops per-slot drafts, cached coordinators and the selected route when a channel slot changes occupant. */

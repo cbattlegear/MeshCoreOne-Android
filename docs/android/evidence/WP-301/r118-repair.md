@@ -29,6 +29,14 @@ propagate; asynchronous preference observation is retained, not used as a
 substitute for the explicit restore boundary. No radio service owns the theme
 service and no second instance is constructed.
 
+Automated review identified that a failed refresh must not skip invalidation
+after backup rows have committed. Cache clearing and the services-version bump
+now run in `finally`, preserving failure/cancellation propagation. The failure
+regression checks all observer counters and a fresh coordinator after invalidation.
+Each remembered-content initialization receives a distinct sentinel, so recreation
+cannot masquerade as retained state. Rendered-color assertions compare base/link
+colors, not link-listener identity.
+
 The source `AppColorSchemePreference.id == rawValue` contract is now an explicit
 native property. The mounted settings picker keys each scheme by that string;
 DataStore continues to serialize `system`, `light`, `dark`, never enum ordinals

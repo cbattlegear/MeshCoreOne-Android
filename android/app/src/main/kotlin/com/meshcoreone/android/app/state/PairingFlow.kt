@@ -237,6 +237,7 @@ class PairingFlow(
     /** Removes a device that failed pairing (wrong PIN) and retries automatically. */
     fun removeFailedPairingAndRetry(): Job? {
         val deviceId = ui.failedPairingDeviceId ?: return null
+        ui.clearPairingFailure()
         return scope.launch {
             try {
                 connection.removeFailedPairing(deviceId)

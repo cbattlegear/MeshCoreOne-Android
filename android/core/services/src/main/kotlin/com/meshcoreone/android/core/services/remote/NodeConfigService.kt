@@ -130,14 +130,19 @@ class NodeConfigService(
         val plan = buildImportPlan(config, sections)
         val coordinator = syncCoordinator
         val callback = synchronized(lock) { onPostIdentityImport }
+        val beforeIdentity = if (callback != null && plan.importPrivateKey != null) {
+            session.currentSelfInfo?.publicKey ?: settingsService.getSelfInfo().publicKey
+        } else null
+        var attemptedIdentityWrite = false
         var importedIdentity = false
         var attemptedReconciliation = false
         var importFailure: Throwable? = null
         suspend fun reconcile(): RadioId? {
             attemptedReconciliation = true
-            return callback?.invoke(identityHandoff)
+            return withContext(NonCancellable) { callback?.invoke(identityHandoff) }
         }
         val writers = makeWriters(::reconcile).copy(importPrivateKey = {
+            attemptedIdentityWrite = true
             settingsService.importPrivateKey(it)
             importedIdentity = true
         })
@@ -151,10 +156,13 @@ class NodeConfigService(
             importFailure = failure
             throw failure
         } finally {
-            if (importedIdentity && !attemptedReconciliation) {
+            if (attemptedIdentityWrite && !attemptedReconciliation && callback != null) {
                 try {
-                    // A confirmed private-key write is irreversible even when the next step is cancelled.
-                    withContext(NonCancellable) { reconcile() }
+                    withContext(NonCancellable) {
+                        // A cancelled caller can leave a written exchange draining its confirmation.
+                        // The serialized read waits for that exchange before deciding whether identity changed.
+                        if (importedIdentity || settingsService.getSelfInfo().publicKey != beforeIdentity) reconcile()
+                    }
                 } catch (failure: Throwable) {
                     val original = importFailure
                     if (original == null) throw failure

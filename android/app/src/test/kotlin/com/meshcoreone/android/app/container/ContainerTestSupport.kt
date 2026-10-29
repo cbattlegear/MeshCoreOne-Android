@@ -177,7 +177,7 @@ internal class FirmwareRadio(var publicKey: Bytes, private val nodeName: String 
         else -> throw AssertionError("Unexpected command ${data.hexString}")
     }
 
-    private fun selfPacket(): Bytes =
+    fun selfPacket(): Bytes =
         Bytes.of(5, 1, 22, 22) + publicKey + le32(0) + le32(0) + Bytes.of(0, 0, 2, 0) +
             le32(915_000) + le32(250_000) + Bytes.of(10, 5) + Bytes.utf8(nodeName)
 

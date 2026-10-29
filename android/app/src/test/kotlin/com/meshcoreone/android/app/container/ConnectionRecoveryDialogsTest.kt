@@ -84,6 +84,19 @@ class ConnectionRecoveryDialogsTest {
         assertTrue(port.calls.none { it.startsWith("removeFailed:") })
     }
 
+    @Test fun synchronousConfirmedRemovalFailureStaysVisibleAfterTheClickReturns() {
+        compose.runOnIdle {
+            port.removeFailure = IllegalStateException("Removal failed immediately")
+            state.handleAuthenticationFailure(id, isAppActive = true)
+        }
+        compose.onNodeWithText(text(S.alertConnectionFailedRemoveAndRetry)).performClick()
+        compose.onNodeWithText("Removal failed immediately").assertIsDisplayed()
+        compose.onNodeWithText(text(S.alertConnectionFailedRemoveAndRetry)).assertDoesNotExist()
+        assertTrue(state.connectionUI.showingConnectionFailedAlert)
+        assertEquals(1, port.calls.count { it == "removeFailed:$id" })
+        assertFalse(state.connectionUI.shouldShowPickerOnForeground)
+    }
+
     @Test fun genericFailureDoesNotInheritTheDestructivePairingActions() {
         compose.runOnIdle {
             state.handleAuthenticationFailure(id, isAppActive = true)

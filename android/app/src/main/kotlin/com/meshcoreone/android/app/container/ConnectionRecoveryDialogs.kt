@@ -37,7 +37,6 @@ fun AppConnectionRecoveryDialogs(app: AppState) {
         },
         onRemoveAndRetry = {
             app.removeFailedPairingAndRetry()
-            app.connectionUI.clearPairingFailure()
         },
     )
 }

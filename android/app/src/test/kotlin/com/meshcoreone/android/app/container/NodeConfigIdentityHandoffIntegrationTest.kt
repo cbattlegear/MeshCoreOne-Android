@@ -127,6 +127,35 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun cancellationWhileTheWrittenIdentityExchangeDrainsStillReconcilesItsChangedKey() = runTest {
+        withIdentityNode { h, node, radio, effectiveId ->
+            val original = radio.respond
+            var heldSelfInfo = false
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.APP_START.rawValue && radio.publicKey == newKey && !heldSelfInfo) {
+                    heldSelfInfo = true
+                    emptyList()
+                } else original(packet)
+            }
+            val work = backgroundScope.async {
+                node.nodeConfigService.importConfig(config, sections, node.token.radioId)
+            }
+            h.eventually("written identity waiting for self info") { heldSelfInfo }
+            work.cancel()
+            testScheduler.runCurrent()
+            assertSame(node, h.sessions.current)
+            radio.push(radio.selfPacket())
+            h.eventually("cancelled import cleanup") { work.isCompleted }
+            assertTrue(work.isCancelled)
+            assertNull(store.fetchContact(effectiveId, contactKey))
+            h.eventually("drained identity handoff", virtualBudgetMillis = 10_000) {
+                h.sessions.current?.token?.radioId == effectiveId
+            }
+            assertTrue(node.isTornDown)
+            assertEquals(2, h.sessions.created)
+        }
+    }
+
     @Test fun aReleasedOldImportCannotDisconnectOrReconnectAReplacementGeneration() = runTest {
         withIdentityNode { h, node, _, _ ->
             val handoff = CompletableDeferred<Unit>()

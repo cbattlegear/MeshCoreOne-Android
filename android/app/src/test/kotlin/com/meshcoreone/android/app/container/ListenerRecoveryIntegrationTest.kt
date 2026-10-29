@@ -12,6 +12,24 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class ListenerRecoveryIntegrationTest : RoomProcessTest() {
+    @OriginalCase("ConnectionManagerBLEHealthTests::returns early when BLE is connected and app stack is healthy()")
+    @Test
+    fun healthyProductionStackReturnsWithoutReconstructionOrDuplicateSubscriptions() = runTest {
+        withConnectedGraph { harness, graph ->
+            val subscribers = graph.syncCoordinator.dataEventBroadcaster.subscriberCount
+            val jobs = harness.appState.activeSessionJobCount
+            harness.manager.checkBLEConnectionHealth()
+            harness.settle()
+            harness.assertReady()
+            assertSame(graph, harness.sessions.current)
+            assertEquals(1, harness.sessions.created)
+            assertEquals(subscribers, graph.syncCoordinator.dataEventBroadcaster.subscriberCount)
+            assertEquals(jobs, harness.appState.activeSessionJobCount)
+            assertTrue(graph.isEventMonitoringActive)
+            assertTrue(graph.messagePollingService.isAutoFetching)
+        }
+    }
+
     @Test
     fun stoppedPollerRecoversWithoutReplacingHealthyGraphOrCollectors() = runTest {
         withConnectedGraph { harness, graph ->

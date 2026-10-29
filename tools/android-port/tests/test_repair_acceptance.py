@@ -543,6 +543,28 @@ class RepairExecutionTests(unittest.TestCase):
                 ), self.assertRaises(PortError):
                     validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
 
+    def test_shared_compiler_inputs_neither_taint_lineage_nor_supply_foreign_parents(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        shared = "android/accessibility-tests/src/shared/kotlin/Shared.kt"
+        for whole in (False, True):
+            for local_parent in (False, True):
+                sources = {
+                    TEST: b"package sample\nimport org.junit.Rule\nclass MapTest : Parent() { "
+                          b"@get:Rule val rule = example; @Test fun keepsListReachable() {} }",
+                    shared: b"package sample\nopen class Parent {}",
+                }
+                if local_parent:
+                    sources[base] = b"package sample\nopen class Parent {}"
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                with self.subTest(whole=whole, local_parent=local_parent), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ):
+                    if local_parent:
+                        validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                    else:
+                        with self.assertRaises(PortError):
+                            validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
     def test_known_superclass_cannot_hide_inherited_tests_from_complete_coverage(self):
         base = TEST.replace("MapTest.kt", "Parent.kt")
         sources = {

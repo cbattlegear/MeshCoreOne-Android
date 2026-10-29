@@ -1262,7 +1262,11 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                     return data.decode("utf-8")
                 except UnicodeError as error:
                     raise PortError("Kotlin superclass source is not UTF-8") from error
-            lineages[module] = _KotlinJUnitLineage(candidate_tree, compiled_sources[module], read_source)
+            sources = {
+                source: blob for source, blob in compiled_sources[module].items()
+                if source.startswith("android/" + module + "/")
+            }
+            lineages[module] = _KotlinJUnitLineage(candidate_tree, sources, read_source)
         return lineages[module].resolve
 
     for coverage in scope["coverage"]:

@@ -157,6 +157,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertFalse(current.isTornDown)
             assertTrue(current.messagePollingService.isAutoFetching)
             assertFalse(h.manager.shouldDeferOpportunisticReconnect)
+            assertPathUpdateRefreshesTheRealContact(h, current, h.links.radios.last(), contactKey)
         }
     }
 
@@ -176,7 +177,30 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertEquals(1, h.sessions.created)
             assertTrue(node.messagePollingService.isAutoFetching)
             assertFalse(h.manager.shouldDeferOpportunisticReconnect)
+            assertPathUpdateRefreshesTheRealContact(h, node, radio, contactKey)
         }
+    }
+
+    private suspend fun TestScope.assertPathUpdateRefreshesTheRealContact(
+        h: ContainerHarness, node: RadioSessionContainer, radio: FirmwareRadio, peerKey: Bytes,
+    ) {
+        h.container.foreground.activityStarted()
+        radio.knownContacts.clear()
+        radio.knownContacts += contactFrame(peerKey, "After identity import", lastModified = 1001)
+        val requests = radio.sent.count { it[0] == CommandCode.GET_CONTACTS.rawValue }
+        radio.push(Bytes.of(0x81) + peerKey)
+        h.eventually("resumed advert handler requests a real contact delta", virtualBudgetMillis = 10_000) {
+            radio.sent.count { it[0] == CommandCode.GET_CONTACTS.rawValue } > requests
+        }
+        val refreshed = backgroundScope.async {
+            while (store.fetchContact(node.token.radioId, peerKey)?.name != "After identity import") {
+                kotlinx.coroutines.delay(1)
+            }
+        }
+        h.eventually("advert delta persists the updated contact", virtualBudgetMillis = 10_000) { refreshed.isCompleted }
+        refreshed.await()
+        assertEquals("After identity import", assertNotNull(store.fetchContact(node.token.radioId, peerKey)).name)
+        assertSame(node, h.sessions.current)
     }
 
     @Test fun cancellingAfterThePrivateKeyWriteReconcilesAndReleasesThePartialImport() = runTest {

@@ -176,9 +176,14 @@ internal class SyncNotificationsAdapter(private val notifications: NotificationS
 // region Sync ports
 
 internal class SyncAdvertisementAdapter(private val adverts: AdvertisementService) : SyncAdvertisementServicing {
+    @Volatile private var deltaSyncHandler: (suspend (Boolean) -> SyncAdvertContactSyncOutcome)? = null
     override suspend fun setSyncingContacts(isSyncing: Boolean) = adverts.setSyncingContacts(isSyncing)
     override suspend fun setDeltaSyncHandler(handler: (suspend (fullRefetch: Boolean) -> SyncAdvertContactSyncOutcome)?) {
-        adverts.setDeltaSyncHandler(handler?.let { forward ->
+        deltaSyncHandler = handler
+        restoreDeltaSyncHandler()
+    }
+    fun restoreDeltaSyncHandler() {
+        adverts.setDeltaSyncHandler(deltaSyncHandler?.let { forward ->
             { fullRefetch -> forward(fullRefetch).toAdvertOutcome() }
         })
     }

@@ -215,6 +215,7 @@ class RadioSessionContainer private constructor(
 
     // region Sync graph
 
+    private val syncAdvertisement = SyncAdvertisementAdapter(advertisementService)
     private val retryServices = SyncRetryServices(syncCoordinator, buildSyncDependencies(), SyncRemoteNodeAdapter(remoteNodeService))
     private val resyncHost = SessionResyncHost(
         inputs.connection.signals, env.runtimeState, env.resyncFailure,
@@ -228,7 +229,7 @@ class RadioSessionContainer private constructor(
         messagePollingService = messagePollingService,
         notificationService = SyncNotificationsAdapter(notificationService),
         reactionService = SyncReactionAdapter(reactionService),
-        advertisementService = SyncAdvertisementAdapter(advertisementService),
+        advertisementService = syncAdvertisement,
         rxLogService = SyncRxLogAdapter(rxLogService),
         heardRepeatsService = SyncHeardRepeatsAdapter(heardRepeatsService),
         roomServerService = SyncRoomServerAdapter(roomServerService),
@@ -357,6 +358,7 @@ class RadioSessionContainer private constructor(
     ): Unit = monitoringLock.withLock {
         if (synchronized(lock) { closed || identityIngestionQuiesced || monitoring != Monitoring.STOPPED }) return@withLock
         heardRepeatsService.configure(radio)
+        syncAdvertisement.restoreDeltaSyncHandler()
         if (enableAdvertisementMonitoring) advertisementService.startEventMonitoring(radio)
         rxLogService.startEventMonitoring(radio)
         messageService.startEventMonitoring()
@@ -473,6 +475,7 @@ class RadioSessionContainer private constructor(
             nodeConfigService.setOnIdentityImportStarted(null)
             nodeConfigService.setOnIdentityImportFinished(null)
             nodeConfigService.setOnIdentityRecovery(null)
+            syncAdvertisement.setDeltaSyncHandler(null)
             step(LifecycleStage.STOP_SERVICES) { messagePollingService.clearMessageHandlers() }
             step(LifecycleStage.STOP_SERVICES) { syncCoordinator.cancelDiscoveryEventMonitoring() }
             // Finishing every stream ends each consumer's collection, releasing the service references they hold.

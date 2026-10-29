@@ -2,6 +2,8 @@
 package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.database.toEntity
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.model.*
 import java.util.UUID
 import kotlin.test.*
@@ -94,6 +96,37 @@ class PendingSendPersistenceTest : RepositoryTest() {
         store.deletePendingSendsForMessage(entity(id = id))
         assertEquals(listOf(unrelated), store.fetchPendingSends(RADIO_A))
         assertEquals(id, store.fetchPendingSends(RADIO_B).single().messageID)
+    }
+
+    @Test fun failedMessagePendingDeletionRollsBackEveryMatchingRowAndLeavesRetryableForeignRows() = runTest {
+        val messageID = UUID.randomUUID()
+        val first = pending(messageID = messageID, sequence = 1)
+        val second = pending(messageID = messageID, sequence = 2).copy(attemptCount = 3)
+        val foreign = first.copy(radioId = RADIO_B, attemptCount = 2, isResend = true)
+        val unrelated = pending(sequence = 3)
+        for (row in listOf(first, second, foreign, unrelated)) store.upsertPendingSend(row)
+        val expected = listOf(first, second, unrelated)
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_pending_delete AFTER DELETE ON pending_sends " +
+                "BEGIN SELECT RAISE(FAIL, 'controlled pending deletion failure'); END",
+        )
+        try {
+            val failure = assertFailsWith<PersistenceStoreException> {
+                store.deletePendingSendsForMessage(entity(id = messageID))
+            }
+            assertIs<PersistenceStoreError.SaveFailed>(failure.error)
+            assertSame(failure, issues.single())
+            assertEquals(expected, store.fetchPendingSends(RADIO_A))
+            assertEquals(expected.map { it.toEntity() }, db.pendingSends().forRadio(RADIO_A.value))
+            assertEquals(listOf(foreign), store.fetchPendingSends(RADIO_B))
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_pending_delete")
+        }
+        store.deletePendingSendsForMessage(entity(id = messageID))
+        assertEquals(listOf(unrelated), store.fetchPendingSends(RADIO_A))
+        assertEquals(listOf(foreign), store.fetchPendingSends(RADIO_B))
+        store.deletePendingSendsForMessage(entity(id = messageID))
+        assertEquals(listOf(foreign), store.fetchPendingSends(RADIO_B))
     }
 
     @Test @OriginalCase("PendingSendPersistenceTests::deletePendingSendsForMessage is a no-op when no rows match()")

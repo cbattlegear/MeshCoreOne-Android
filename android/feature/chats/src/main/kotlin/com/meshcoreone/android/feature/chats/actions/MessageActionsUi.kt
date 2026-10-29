@@ -56,6 +56,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -187,6 +189,22 @@ fun MessageActionsContent(
                 }
                 MessageMetadata(message, arrivals.size)
                 if (availability.canBlockSender) {
+                    if (state.failure == MessageActionsFailure.BlockFailed) {
+                        Text(
+                            AppLocalizableStrings.errorPersistenceSaveFailed(
+                                LocalResources.current,
+                                stringResource(AppChatsStrings.chatsMessageActionBlockSender),
+                            ),
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                        TextButton(
+                            onClick = { showBlockConfirmation = true },
+                            modifier = Modifier.sharedTouchTarget(),
+                        ) {
+                            Text(stringResource(AppLocalizableStrings.commonTryAgain))
+                        }
+                    }
                     TextButton(
                         onClick = { showBlockConfirmation = true },
                         modifier = Modifier.sharedTouchTarget(),

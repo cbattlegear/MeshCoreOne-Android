@@ -88,8 +88,9 @@ class SourceConnectionManagerTest {
                 connect(newHandle)
                 assertEquals(originalRadio, manager.connectedDevice!!.radioId)
                 assertEquals(listOf("queued before reconnect"), assertNotNull(pendingSends[manager.connectedDevice!!.radioId]).toList())
-                assertEquals(listOf("id", "key", "save", "id", "key", "save", "delete"), devices.calls)
+                assertEquals(listOf("id", "key", "save", "active", "id", "id", "key", "save", "active", "id", "delete"), devices.calls)
                 assertEquals(1, devices.rows.size)
+                assertTrue(devices.rows.values.single().isActive)
                 assertEquals(originalRadio, services.last().token.radioId)
             }
         },

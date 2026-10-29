@@ -267,6 +267,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             stalePreferences = dependencies.stalePreferences,
             clock = dependencies.runtimeClock,
             closeChatRoute = { closeSelectedChatRoute() },
+            themeService = dependencies.themeService,
         ),
     )
 

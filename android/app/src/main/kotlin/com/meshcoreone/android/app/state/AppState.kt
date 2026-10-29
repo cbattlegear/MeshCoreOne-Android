@@ -89,6 +89,7 @@ class AppStateDependencies(
      * that clears only the chats route (WP-302 owns it), so the default pops the top chat of the Chats stack.
      */
     val closeChatRoute: () -> Unit = {},
+    val themeService: com.meshcoreone.android.core.designsystem.ThemeService? = null,
 )
 
 /**
@@ -104,6 +105,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     val batteryMonitor: BatteryMonitor = deps.batteryMonitor
     val navigation: NavigationCoordinator = deps.navigation
     val draftStore: DraftStore = deps.draftStore
+    val themeService get() = deps.themeService
     val messageEventStream: MessageEventStream = deps.messageEventStream
     val messageEventDispatcher = MessageEventDispatcher(this, messageEventStream, scope)
 
@@ -358,10 +360,14 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     suspend fun notifyDataRestored() {
         contactsVersionFlow.update { it + 1 }
         conversationsVersionFlow.update { it + 1 }
-        loadPersistedRegionSelection()
-        // Restore is refused while connected, so this cannot race a live session. The registry stays so later opens mint fresh coordinators.
-        chatCoordinatorRegistry?.clear()
-        bumpServicesVersion()
+        try {
+            loadPersistedRegionSelection()
+            themeService?.refreshFromPreferences()
+        } finally {
+            // Backup rows are committed even if refreshing preferences fails or is cancelled.
+            chatCoordinatorRegistry?.clear()
+            bumpServicesVersion()
+        }
     }
 
     /** Drops per-slot drafts, cached coordinators and the selected route when a channel slot changes occupant. */

@@ -859,7 +859,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     if stack:
         raise PortError("Unbalanced Kotlin scope in hosted test source")
 
-    inherited_bodies, companion_bodies = set(), {}
+    inherited_bodies, companion_bodies, header_bodies = set(), {}, []
     inherited_scope, unresolved_scope = False, False
     for start, value in enumerate(tokens):
         if value not in ("class", "interface", "object") or (
@@ -873,6 +873,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                 if current == ":":
                     inherited = True
                 if current == "{":
+                    if value == "class":
+                        header_bodies.append((start, index))
                     if inherited:
                         inherited_bodies.add(index)
                     if value == "object" and start and tokens[start - 1] == "companion":
@@ -881,6 +883,10 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                 if current in ("}", ";", "=", "class", "object", "interface",
                                "fun", "val", "var", "typealias"):
                     break
+            # Constructor/default expressions may compare values; their angles are not header delimiters.
+            if current in ("<", ">") and any(item in ("(", "[", "{") for item in nesting):
+                index += 1
+                continue
             if current in ("(", "[", "<", "{"):
                 nesting.append(current)
             elif current in (")", "]", ">", "}") and not (
@@ -904,6 +910,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     def non_tests_at(position):
         scope = scopes[position]
         visible = [scope[:depth] for depth in range(len(scope) + 1)]
+        visible += [scopes[start] + (body,) for start, body in header_bodies
+                    if start < position < body]
         # Companion members are visible in their containing class as well.
         visible += [parent + (body,) for parent in tuple(visible)
                     for body in companion_bodies.get(parent, ())]

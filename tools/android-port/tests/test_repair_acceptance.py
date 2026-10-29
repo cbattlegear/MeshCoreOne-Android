@@ -587,6 +587,10 @@ class RepairExecutionTests(unittest.TestCase):
             "private class Harness : Comparable<() -> Unit> { "
             "override fun compareTo(other: () -> Unit) = 0 }",
             "private class Harness(val build: () -> Unit) {}",
+            "private class Harness(val ready: Boolean = 1 < 2) : AutoCloseable { "
+            "override fun close() {} }",
+            "private class Harness(val ready: Boolean = 2 > 1) : AutoCloseable { "
+            "override fun close() {} }",
             "private class Harness { annotation class Before; annotation class After }",
             "private class Harness : Parent() { annotation class Before }",
             "private class Harness { companion object { annotation class Before } }",
@@ -624,6 +628,27 @@ class RepairExecutionTests(unittest.TestCase):
             }
         """
         self.assertEqual(_kotlin_junit_methods(source), {"actual": "test"})
+        self.assertEqual(_kotlin_junit_methods(
+            "import org.junit.Rule\nclass T(@get:Rule val rule: Int = 0) { @Test fun actual() {} }",
+        ), {"actual": "test"})
+        for body in (
+            "annotation class Rule",
+            "companion object { annotation class Rule }",
+            "companion object Named { annotation class Rule }",
+        ):
+            for reject_inherited in (False, True):
+                with self.subTest(body=body, reject_inherited=reject_inherited), \
+                        self.assertRaisesRegex(PortError, "use-site"):
+                    _kotlin_junit_methods(
+                        "import org.junit.Rule\nclass T(@get:Rule val rule: Int = 0) { "
+                        + body + "; @Test fun actual() {} }",
+                        reject_inherited=reject_inherited,
+                    )
+        with self.assertRaisesRegex(PortError, "use-site"):
+            _kotlin_junit_methods(
+                "import org.junit.Rule\nclass T(@get:Rule val rule: Int = 0) : Parent() { "
+                "@Test fun actual() {} }"
+            )
         with self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
             _kotlin_junit_methods(source, reject_inherited=True)
         for companion in (

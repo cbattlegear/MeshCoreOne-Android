@@ -28,6 +28,8 @@ class AppConnectionStatusTest : RoomProcessTest() {
         var radioSetupRequests = 0
         fun text(resource: Int) = activity.get().getString(resource)
         try {
+            h.container.start().join()
+            h.settle()
             activity.get().setContent { MeshCoreTheme { AppConnectionStatus(h.container) { radioSetupRequests++ } } }
             val ui = h.appState.connectionUI
             compose.onNodeWithText(text(S.commonStatusReady)).assertDoesNotExist()
@@ -60,6 +62,7 @@ class AppConnectionStatusTest : RoomProcessTest() {
             h.eventually("unexpected connection loss reaches the mounted state", virtualBudgetMillis = 0) {
                 h.manager.connectionState == DeviceConnectionState.DISCONNECTED && h.sessions.current == null
             }
+            compose.runOnIdle { ui.showReadyToastBriefly() }
             testScheduler.runCurrent()
             testScheduler.advanceTimeBy(1001)
             testScheduler.runCurrent()

@@ -128,6 +128,42 @@ class SavedDeviceRecoveryIntegrationTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun confirmedCompanionRemovalStartsTheActualPickerWithoutAnotherForegroundEdge() = runTest {
+        withSavedDevice { h, id ->
+            h.pairing.registered[id] = "Saved radio"
+            h.container.foreground.activityStarted()
+            var pickerCalls = 0
+            h.pairing.discovery = {
+                pickerCalls++
+                throw com.meshcoreone.android.core.connectivity.pairing.DevicePairingError.Cancelled()
+            }
+            h.appState.handleAuthenticationFailure(id, isAppActive = true)
+            assertNotNull(h.appState.removeFailedPairingAndRetry()).join()
+            assertEquals(1, pickerCalls)
+            assertFalse(h.appState.connectionUI.shouldShowPickerOnForeground)
+            assertFalse(id in h.pairing.registered)
+        }
+    }
+
+    @Test fun backgroundCompanionRemovalDefersTheActualPickerUntilForeground() = runTest {
+        withSavedDevice { h, id ->
+            h.pairing.registered[id] = "Saved radio"
+            var pickerCalls = 0
+            h.pairing.discovery = {
+                pickerCalls++
+                throw com.meshcoreone.android.core.connectivity.pairing.DevicePairingError.Cancelled()
+            }
+            h.appState.handleAuthenticationFailure(id, isAppActive = true)
+            assertNotNull(h.appState.removeFailedPairingAndRetry()).join()
+            assertEquals(0, pickerCalls)
+            assertTrue(h.appState.connectionUI.shouldShowPickerOnForeground)
+            h.container.foreground.activityStarted()
+            h.appState.handleBecameActive()
+            h.eventually("deferred companion picker") { pickerCalls == 1 }
+            assertFalse(h.appState.connectionUI.shouldShowPickerOnForeground)
+        }
+    }
+
     private fun TestScope.pairing(h: ContainerHarness) =
         AppOnboardingPairingPort(AppStateOnboardingHost(h.container), backgroundScope, scanFallback = null)
 

@@ -120,6 +120,7 @@ internal class ContainerHarness(
     themeService: com.meshcoreone.android.core.designsystem.ThemeService? = null,
     observeBleLink: Boolean = false,
     regionStore: com.meshcoreone.android.app.state.RegionSelectionStore? = null,
+    preferencesOverride: ProcessConnectionPreferences? = null,
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -136,7 +137,7 @@ internal class ContainerHarness(
         AppContainerDependencies(
             store = persistenceOverride,
             passwords = MemoryVault(),
-            connectionPreferences = preferences,
+            connectionPreferences = preferencesOverride ?: preferences,
             connectivity = newConnectivity(pairing, onForeground = { foregroundCalls += it }, currentLink = {
                 links.links.lastOrNull()?.takeIf {
                     observeBleLink && it.target is ConnectionTarget.Bluetooth && it.radio.connected && it.live != null

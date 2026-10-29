@@ -12,6 +12,9 @@ import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
+import com.meshcoreone.android.core.runtime.RuntimePreferenceSnapshot
+import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
 import com.meshcoreone.android.core.services.remote.ImportProgress
 import com.meshcoreone.android.core.services.remote.ImportStep
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
@@ -261,14 +264,119 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun newerUserDisconnectDuringIdentityTeardownPreventsTheOldReconnect() = runTest {
+        supersedeIdentityTeardown(connectReplacement = false)
+    }
+
+    @Test fun newerConnectionDuringIdentityTeardownCannotBeOverriddenByTheOldReconnect() = runTest {
+        supersedeIdentityTeardown(connectReplacement = true)
+    }
+
+    private suspend fun TestScope.supersedeIdentityTeardown(connectReplacement: Boolean) {
+        withIdentityNode { h, node, radio, _ ->
+            val handoff = CompletableDeferred<Unit>()
+            val teardown = CompletableDeferred<Unit>()
+            try {
+                val work = backgroundScope.async {
+                    node.nodeConfigService.importConfig(config, sections, node.token.radioId, handoff)
+                }
+                h.eventually("import before held teardown") { work.isCompleted }
+                work.await()
+                radio.disconnectGate = teardown
+                handoff.complete(Unit)
+                h.eventually("identity teardown holds the transport", virtualBudgetMillis = 0) { radio.disconnecting }
+                val replacement = h.target()
+                val newer = backgroundScope.async {
+                    if (connectReplacement) h.manager.connect(replacement)
+                    else h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+                }
+                h.eventually("newer request is admitted before teardown completes", virtualBudgetMillis = 0) {
+                    if (connectReplacement) h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.CONNECTING
+                    else h.manager.connectionIntent == com.meshcoreone.android.core.contracts.domain.ConnectionIntent.UserDisconnected
+                }
+                teardown.complete(Unit)
+                h.eventually("newer request finishes", virtualBudgetMillis = 10_000) { newer.isCompleted }
+                newer.await()
+                h.settle()
+                if (connectReplacement) {
+                    h.assertReady()
+                    assertEquals(replacement.deviceId, h.manager.connectedDevice?.id)
+                    assertEquals(2, h.sessions.created)
+                    assertEquals(1, h.sessions.outstanding)
+                } else {
+                    assertEquals(com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED, h.manager.connectionState)
+                    assertNull(h.sessions.current)
+                    assertEquals(1, h.sessions.created)
+                }
+            } finally {
+                teardown.complete(Unit)
+                handoff.complete(Unit)
+            }
+        }
+    }
+
+    @Test fun failedIdentityPreferencePersistenceStillQueuesRecoveryAfterTheConsumerHandoff() = runTest {
+        val memory = MemoryConnectionPreferences()
+        var failNextWrite = false
+        val preferences = object : ProcessConnectionPreferences by memory {
+            override suspend fun update(transform: (MutableMap<String, RuntimePreferenceValue>) -> Unit): RuntimePreferenceSnapshot {
+                if (failNextWrite) {
+                    failNextWrite = false
+                    throw IllegalStateException("identity preference persistence failed")
+                }
+                return memory.update(transform)
+            }
+        }
+        withIdentityNode(preferencesOverride = preferences) { h, node, _, effectiveId ->
+            val handoff = CompletableDeferred<Unit>()
+            try {
+                failNextWrite = true
+                val work = backgroundScope.async {
+                    runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId, handoff) }
+                }
+                h.eventually("identity persistence failure") { work.isCompleted }
+                assertEquals("identity preference persistence failed", work.await().exceptionOrNull()?.message)
+                assertSame(node, h.sessions.current)
+                assertEquals(effectiveId, assertNotNull(store.fetchDevice(assertNotNull(h.manager.connectedDevice).id)).radioId)
+                handoff.complete(Unit)
+                h.eventually("recovery after failed identity persistence", virtualBudgetMillis = 10_000) {
+                    h.sessions.current?.token?.radioId == effectiveId && h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                }
+                assertTrue(node.isTornDown)
+                assertEquals(2, h.sessions.created)
+                assertEquals(1, h.sessions.outstanding)
+            } finally { handoff.complete(Unit) }
+        }
+    }
+
+    @Test fun aSavedMatchingPublicKeyStillReconcilesItsGhostBeforeConstructingTheGraph() = runTest {
+        withIdentityNode { h, node, _, effectiveId ->
+            val device = assertNotNull(h.manager.connectedDevice)
+            val keyWrite = backgroundScope.async {
+                node.settingsService.importPrivateKey(Bytes.fromHex(assertNotNull(config.privateKey)))
+            }
+            h.eventually("direct key write is confirmed") { keyWrite.isCompleted }
+            keyWrite.await()
+            store.saveDevice(device.copy(publicKey = newKey))
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.manager.connect(h.target(device.id))
+            h.settle()
+            h.assertReady()
+            assertEquals(effectiveId, assertNotNull(h.sessions.current).token.radioId)
+            assertEquals(newKey, assertNotNull(h.manager.connectedDevice).publicKey)
+            assertEquals(2, h.sessions.created)
+        }
+    }
+
     private suspend fun TestScope.withIdentityNode(
         seedGhost: Boolean = true,
+        preferencesOverride: ProcessConnectionPreferences? = null,
         block: suspend TestScope.(ContainerHarness, RadioSessionContainer, FirmwareRadio, RadioId) -> Unit,
     ) {
         var activeKey = key(7)
         val savedContacts = mutableListOf<Bytes>()
         val channels = mutableMapOf<UByte, Bytes>()
-        val h = ContainerHarness(this, store, identity = { activeKey })
+        val h = ContainerHarness(this, store, identity = { activeKey }, preferencesOverride = preferencesOverride)
         h.links.configureRadio = { radio ->
             radio.knownContacts += savedContacts
             radio.respond = { packet ->

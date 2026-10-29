@@ -84,6 +84,7 @@ class AppStateDependencies(
     val now: () -> Instant = Instant::now,
     val chatEnvInputsFactory: (ChatConversationType?, ChatEnvSnapshot) -> EnvInputs = { _, _ -> EnvInputs.DEFAULT },
     val onFreshPairingCompleted: () -> Unit = {},
+    val isAppForeground: () -> Boolean = { false },
     /**
      * Closes the selected chat route when its channel slot changes occupant. [NavigationCoordinator] has no seam
      * that clears only the chats route (WP-302 owns it), so the default pops the top chat of the Chats stack.
@@ -167,6 +168,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         wireServices = { wireServicesIfConnected() },
         disconnect = { reason -> disconnect(reason) },
         onFreshPairingCompleted = deps.onFreshPairingCompleted,
+        isAppForeground = deps.isAppForeground,
     )
 
     val isConfirmingSystemPairingSetup: Boolean get() = pairing.isConfirmingSystemPairingSetup

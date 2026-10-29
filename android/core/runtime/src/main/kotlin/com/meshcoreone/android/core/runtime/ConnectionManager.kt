@@ -234,8 +234,14 @@ class ConnectionManager(
         connectAttempt(target, forceFullSync, forceReconnect)
     }
 
-    private suspend fun connectAttempt(target: ConnectionTarget, forceFullSync: Boolean, forceReconnect: Boolean) {
+    private suspend fun connectAttempt(
+        target: ConnectionTarget,
+        forceFullSync: Boolean,
+        forceReconnect: Boolean,
+        expectedRevision: Long? = null,
+    ) {
         currentCoroutineContext().ensureActive()
+        synchronized(lock) { if (expectedRevision != null && revision != expectedRevision) return }
         val initiatingJob = currentCoroutineContext()[Job]
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         requireOpen()
@@ -259,6 +265,7 @@ class ConnectionManager(
         }
         if (connectedDevice?.id == deviceId && connectionState.isOperational) return
         val submission = synchronized(lock) {
+            if (expectedRevision != null && revision != expectedRevision) return
             val duplicate = pending
             if (duplicate != null && !duplicate.isCompleted && !duplicate.isCancelled && pendingTarget == normalized) {
                 return@synchronized Submission(duplicate, null, revision, false, null)
@@ -507,7 +514,7 @@ class ConnectionManager(
         val deviceId = (owner.target as? ConnectionTarget.Bluetooth)?.deviceId ?: DeviceIdentity.deriveUUID(info.publicKey)
         var existing = devices.fetchDevice(deviceId)
         requireCurrent(owner)
-        if (existing != null && existing.publicKey != info.publicKey) {
+        if (existing != null) {
             val recoveredPartition = devices.reconcileGhostIdentity(deviceId, info.publicKey)
             requireCurrent(owner)
             if (recoveredPartition != null) {
@@ -659,10 +666,17 @@ class ConnectionManager(
         }
     }
 
-    suspend fun disconnect(reason: RuntimeDisconnectReason = RuntimeDisconnectReason.USER_INITIATED): TeardownReport {
+    suspend fun disconnect(reason: RuntimeDisconnectReason = RuntimeDisconnectReason.USER_INITIATED): TeardownReport =
+        checkNotNull(disconnectAtRevision(reason)).first
+
+    private suspend fun disconnectAtRevision(
+        reason: RuntimeDisconnectReason,
+        expectedOwner: RadioGeneration? = null,
+    ): Pair<TeardownReport, Long>? {
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         val before = snapshot.value
         val (cleanup, expectedRevision) = synchronized(lock) {
+            if (expectedOwner != null && !isCurrent(expectedOwner)) return null
             revision = Math.incrementExact(revision)
             val expectedRevision = revision
             val work = pending
@@ -704,7 +718,7 @@ class ConnectionManager(
                 "initialState=${before.state.name.lowercase()}, finalState=disconnected, intent=${intentSummary()}",
         )
         if (!report.isComplete) reporter.report(RuntimeDiagnostic.Teardown(report))
-        return report
+        return report to expectedRevision
     }
 
     override fun setConnectionState(state: DeviceConnectionState) {
@@ -997,9 +1011,8 @@ class ConnectionManager(
         // A graph's identity and radio partition are immutable; rebuild only after its import consumer is done.
         dispatch(owner, "identity.rebuild") {
             importHandoff?.await()
-            if (!isCurrent(owner)) return@dispatch
-            disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
-            connect(owner.target, true, true)
+            val stopped = disconnectAtRevision(RuntimeDisconnectReason.WIFI_RECONNECT_PREP, owner) ?: return@dispatch
+            connectAttempt(owner.target, forceFullSync = true, forceReconnect = true, expectedRevision = stopped.second)
         }
     }
 

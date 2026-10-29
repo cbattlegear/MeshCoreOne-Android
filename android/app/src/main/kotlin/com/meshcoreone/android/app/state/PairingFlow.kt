@@ -40,6 +40,7 @@ class PairingFlow(
     /** Runs after a fresh pairing connects (Swift appends the onboarding region step). */
     private val onFreshPairingCompleted: () -> Unit = {},
     private val freshPairingForegroundRetryDelay: Duration = 400.milliseconds,
+    private val isAppForeground: () -> Boolean = { false },
 ) {
     @Volatile var isConfirmingSystemPairingSetup: Boolean = false
         private set
@@ -242,12 +243,12 @@ class PairingFlow(
             try {
                 connection.removeFailedPairing(deviceId)
                 ui.failedPairingDeviceId = null
-                if (connection.hasSystemPairingRegistry) {
+                if (connection.hasSystemPairingRegistry && !isAppForeground()) {
                     // Removing the association can bounce the scene; wait for the next activation.
                     ui.shouldShowPickerOnForeground = true
                 } else {
-                    // No registry confirmation, so activation will not re-fire.
-                    startDeviceScan()
+                    // Companion disassociation does not leave a foreground host or trigger activation.
+                    startDeviceScan().join()
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled

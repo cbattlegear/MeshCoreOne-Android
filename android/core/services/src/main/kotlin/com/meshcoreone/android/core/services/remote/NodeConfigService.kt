@@ -146,7 +146,18 @@ class NodeConfigService(
         var importFailure: Throwable? = null
         suspend fun reconcile(): RadioId? {
             attemptedReconciliation = true
-            return withContext(NonCancellable) { callback?.invoke(identityHandoff) }
+            return withContext(NonCancellable) {
+                try {
+                    callback?.invoke(identityHandoff)
+                } catch (failure: Throwable) {
+                    try {
+                        recovery?.invoke(identityHandoff)
+                    } catch (recoveryFailure: Throwable) {
+                        if (recoveryFailure !== failure) failure.addSuppressed(recoveryFailure)
+                    }
+                    throw failure
+                }
+            }
         }
         val writers = makeWriters(::reconcile).copy(importPrivateKey = {
             attemptedIdentityWrite = true

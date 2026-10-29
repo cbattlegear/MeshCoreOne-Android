@@ -108,6 +108,9 @@ internal class FirmwareRadio(var publicKey: Bytes, private val nodeName: String 
     val sent = mutableListOf<Bytes>()
     var connects = 0
     var closes = 0
+    var disconnecting = false
+        private set
+    var disconnectGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     var readers = 0
     var connectFailure: Exception? = null
     var firmwareVersion: UByte = 9u
@@ -137,7 +140,14 @@ internal class FirmwareRadio(var publicKey: Bytes, private val nodeName: String 
     }
 
     override suspend fun disconnect() {
-        if (connected) { connected = false; closes++; inbound.close() }
+        if (connected) {
+            disconnecting = true
+            disconnectGate?.await()
+            connected = false
+            closes++
+            inbound.close()
+            disconnecting = false
+        }
     }
 
     override suspend fun isConnected(): Boolean = connected

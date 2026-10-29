@@ -18,6 +18,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.meshcoreone.android.app.container.AppContainer
+import com.meshcoreone.android.app.container.AppConnectionRecoveryDialogs
+import com.meshcoreone.android.app.container.AppConnectionStatus
 import com.meshcoreone.android.app.container.createToolsFeatureDependencies
 import com.meshcoreone.android.app.container.createToolsDiagnosticsDependencies
 import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
@@ -149,8 +151,20 @@ open class MainActivity : ComponentActivity() {
                             lineOfSight = answer.container?.lineOfSight,
                             chats = answer.container?.chatsFeature,
                             settings = answer.container?.settingsFeature,
+                            connectionStatus = {
+                                answer.container?.let { container ->
+                                    AppConnectionStatus(container) {
+                                        host.navigation.navigate(
+                                            com.meshcoreone.android.core.contracts.FeatureRoute(
+                                                com.meshcoreone.android.core.contracts.FeatureId.ONBOARDING,
+                                            ),
+                                        )
+                                    }
+                                }
+                            },
                         )
                     }
+                    answer.container?.let { AppConnectionRecoveryDialogs(it.appState) }
                 }
             }
             val themeService = resolved?.container?.themeService

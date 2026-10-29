@@ -534,7 +534,7 @@ class ConnectionManager(
             RuntimeServiceCallbacks(
                 cleanChannelSync = { synchronized(lock) { if (isCurrent(owner)) cleanSync = radioId to clock.instant } },
                 channelSyncAttempted = { synchronized(lock) { if (isCurrent(owner)) attemptedSync = radioId to clock.instant } },
-                reconcileIdentity = { reconcileIdentity(token) },
+                reconcileIdentity = { handoff -> reconcileIdentity(token, handoff) },
             ),
             transportType = link.type,
         ), ownership)
@@ -950,7 +950,10 @@ class ConnectionManager(
         if (connectionState.isOperational) resetPreserveBudgetAfterDeviceSwitch()
     }
 
-    suspend fun reconcileIdentity(expected: SessionToken): RadioId? {
+    suspend fun reconcileIdentity(
+        expected: SessionToken,
+        importHandoff: kotlinx.coroutines.Deferred<Unit>? = null,
+    ): RadioId? {
         val owner = synchronized(lock) { active?.takeIf { it.token == expected } } ?: return staleIdentity(expected)
         val before = owner.device ?: throw ConnectionError.NotConnected()
         val info = owner.session?.currentSelfInfo ?: throw ConnectionError.InitializationFailed("No self info")
@@ -968,7 +971,12 @@ class ConnectionManager(
             synchronized(lock) { deviceValue = refreshed; owner.device = refreshed }
             lastConnection.persist(refreshed.id, refreshed.radioId, refreshed.nodeName)
             // A graph's radio partition is immutable: rebuild rather than retag its pending sends.
-            dispatch(owner, "identity.rebuild") { disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP); connect(owner.target, true, true) }
+            dispatch(owner, "identity.rebuild") {
+                importHandoff?.await()
+                if (!isCurrent(owner)) return@dispatch
+                disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
+                connect(owner.target, true, true)
+            }
         }
         return radioId
     }

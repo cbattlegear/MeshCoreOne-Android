@@ -101,9 +101,10 @@ internal fun syntheticAddress(id: UUID): String {
  * commands with an empty mesh (no contacts, channels all unconfigured, no queued messages). Tests inspect
  * [sent] and hook [respond] to add behavior.
  */
-internal class FirmwareRadio(private val publicKey: Bytes, private val nodeName: String = "TestNode") : MeshTransport {
+internal class FirmwareRadio(var publicKey: Bytes, private val nodeName: String = "TestNode") : MeshTransport {
     private var inbound = Channel<Bytes>(Channel.UNLIMITED)
-    private var connected = false
+    var connected = false
+        private set
     val sent = mutableListOf<Bytes>()
     var connects = 0
     var closes = 0
@@ -287,9 +288,10 @@ internal class FixedNotificationPreferences : NotificationPreferencesPort {
 
 internal fun newConnectivity(
     pairing: HarnessPairingService = HarnessPairingService(),
+    currentLink: () -> com.meshcoreone.android.core.connectivity.ble.BleLinkSnapshot? = { null },
     onForeground: (Boolean) -> Unit = {},
 ): ConnectivityPlatform = ConnectivityPlatform(
-    pairing, BleLinkInspector(NoSystemLinks, { null }) { BluetoothAvailability.Ready }, SyntheticEndpoints(),
+    pairing, BleLinkInspector(NoSystemLinks, currentLink) { BluetoothAvailability.Ready }, SyntheticEndpoints(),
     SystemLinkAdopter { false }, onForegroundChanged = onForeground,
 )
 

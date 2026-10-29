@@ -1,0 +1,117 @@
+// PortedFrom: MC1Tests/AppState/SavedDeviceConnectFailureRoutingTests.swift@db14559b39d32322b06477c6ae676112f583db50
+package com.meshcoreone.android.app.container
+
+import com.meshcoreone.android.app.container.onboarding.AppOnboardingPairingPort
+import com.meshcoreone.android.app.container.onboarding.AppStateOnboardingHost
+import com.meshcoreone.android.app.state.PairingFailureKind
+import com.meshcoreone.android.core.ble.BleError
+import com.meshcoreone.android.core.ble.BleTransportException
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
+import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.ui.UiText
+import com.meshcoreone.android.feature.onboarding.OnboardingConnectOutcome
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
+import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class SavedDeviceRecoveryIntegrationTest : RoomProcessTest() {
+    @Test fun actualSavedRetryRoutesAuthenticationToTheAppRecoveryDialog() = runTest {
+        withSavedDevice { h, id ->
+            h.links.configureRadio = { it.connectFailure = BleTransportException(BleError.AuthenticationFailed) }
+            val outcome = assertIs<OnboardingConnectOutcome.Failed>(pairing(h).retryConnection(id))
+            val ui = h.appState.connectionUI.state.value
+            assertTrue(outcome.presentedByConnectionUi)
+            assertNull(outcome.retryDeviceId)
+            assertTrue(ui.showingConnectionFailedAlert)
+            assertEquals(id, ui.failedPairingDeviceId)
+            assertEquals(PairingFailureKind.AUTHENTICATION, ui.pairingFailureKind)
+            assertEquals(0, h.pairing.removeCalls)
+            assertNotNull(store.fetchDevice(id))
+            assertEquals(0, h.sessions.outstanding)
+        }
+    }
+
+    @Test fun actualGenericRetryClearsStalePairingFieldsAndHasNoDestructiveRecovery() = runTest {
+        withSavedDevice { h, id ->
+            h.appState.handleAuthenticationFailure(id, isAppActive = true)
+            h.links.configureRadio = { it.connectFailure = IllegalStateException("link down") }
+            val outcome = assertIs<OnboardingConnectOutcome.Failed>(pairing(h).retryConnection(id))
+            assertFalse(outcome.presentedByConnectionUi)
+            assertNull(outcome.retryDeviceId)
+            val ui = h.appState.connectionUI.state.value
+            assertNull(ui.failedPairingDeviceId)
+            assertNull(ui.pairingFailureKind)
+            assertNull(ui.connectionFailedTitle)
+            assertFalse(ui.showingConnectionFailedAlert)
+            assertEquals(0, h.pairing.removeCalls)
+            assertNotNull(store.fetchDevice(id))
+        }
+    }
+
+    @Test fun actualOtherAppFailureKeepsItsDistinctRetryWarning() = runTest {
+        withSavedDevice { h, id ->
+            h.links.configureRadio = { it.connectFailure = BleTransportException(BleError.DeviceConnectedToOtherApp) }
+            val outcome = assertIs<OnboardingConnectOutcome.Failed>(pairing(h).retryConnection(id))
+            assertEquals(id, outcome.retryDeviceId)
+            assertEquals(UiText.Resource(AppLocalizableStrings.alertCouldNotConnectOtherAppMessage), outcome.message)
+            assertFalse(outcome.presentedByConnectionUi)
+            assertNull(h.appState.connectionUI.failedPairingDeviceId)
+            assertNull(h.appState.connectionUI.pairingFailureKind)
+            assertEquals(0, h.pairing.removeCalls)
+        }
+    }
+
+    @Test fun cancelledSavedRetryDoesNotPresentFailureOrDeleteTheDevice() = runTest {
+        withSavedDevice { h, id ->
+            h.links.configureRadio = { it.connectFailure = CancellationException("cancelled retry") }
+            try {
+                pairing(h).retryConnection(id)
+                error("Cancellation must propagate")
+            } catch (_: CancellationException) {
+                assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+                assertNull(h.appState.connectionUI.failedPairingDeviceId)
+                assertNotNull(store.fetchDevice(id))
+                assertEquals(0, h.pairing.removeCalls)
+            }
+        }
+    }
+
+    @Test fun confirmedRemovalFailureIsPresentedWithoutPretendingThatRepairSucceeded() = runTest {
+        withSavedDevice { h, id ->
+            h.pairing.registered[id] = "Saved radio"
+            h.pairing.removeFailure = IllegalStateException("association removal failed")
+            h.appState.handleAuthenticationFailure(id, isAppActive = true)
+            assertNotNull(h.appState.removeFailedPairingAndRetry()).join()
+            assertTrue(h.appState.connectionUI.showingConnectionFailedAlert)
+            assertEquals(UiText.Verbatim("association removal failed"), h.appState.connectionUI.connectionFailedMessage)
+            assertTrue(id in h.pairing.registered)
+            assertFalse(h.appState.connectionUI.shouldShowPickerOnForeground)
+        }
+    }
+
+    private fun TestScope.pairing(h: ContainerHarness) =
+        AppOnboardingPairingPort(AppStateOnboardingHost(h.container), backgroundScope, scanFallback = null)
+
+    private suspend fun TestScope.withSavedDevice(block: suspend TestScope.(ContainerHarness, UUID) -> Unit) {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val id = assertNotNull(h.manager.connectedDevice).id
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.settle()
+            block(h, id)
+        } finally {
+            h.container.close()
+        }
+    }
+}

@@ -58,6 +58,7 @@ object OnboardingConnectMapping {
         )
         ui.showingConnectionFailedAlert -> OnboardingConnectOutcome.Failed(
             ui.connectionFailedMessage ?: UiText.Resource(AppLocalizableStrings.errorBleDeviceConnectedToOtherApp),
+            presentedByConnectionUi = ui.failedPairingDeviceId != null,
         )
         completed && state.isConnected -> OnboardingConnectOutcome.Connected
         else -> OnboardingConnectOutcome.Cancelled
@@ -90,7 +91,7 @@ class AppOnboardingPairingPort(
         host.consumeFailure()
         val outcome = host.startPairing()
         registered.value = host.registeredAccessoryCount
-        if (outcome is OnboardingConnectOutcome.Failed) host.consumeFailure()
+        if (outcome is OnboardingConnectOutcome.Failed && !outcome.presentedByConnectionUi) host.consumeFailure()
         return outcome
     }
 
@@ -102,7 +103,14 @@ class AppOnboardingPairingPort(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            OnboardingConnectMapping.afterFailure(failure, deviceId)
+            val ui = host.ui.value
+            val outcome = if (ui.showingConnectionFailedAlert || ui.otherAppWarningDeviceId != null) {
+                OnboardingConnectMapping.afterPairing(host.currentState, ui, completed = false)
+            } else {
+                OnboardingConnectMapping.afterFailure(failure, deviceId)
+            }
+            if (outcome is OnboardingConnectOutcome.Failed && !outcome.presentedByConnectionUi) host.consumeFailure()
+            outcome
         }
     }
 

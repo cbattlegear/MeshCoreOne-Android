@@ -238,14 +238,20 @@ class PairingFlow(
     fun removeFailedPairingAndRetry(): Job? {
         val deviceId = ui.failedPairingDeviceId ?: return null
         return scope.launch {
-            connection.removeFailedPairing(deviceId)
-            ui.failedPairingDeviceId = null
-            if (connection.hasSystemPairingRegistry) {
-                // Removing the association can bounce the scene; wait for the next activation.
-                ui.shouldShowPickerOnForeground = true
-            } else {
-                // No registry confirmation, so activation will not re-fire.
-                startDeviceScan()
+            try {
+                connection.removeFailedPairing(deviceId)
+                ui.failedPairingDeviceId = null
+                if (connection.hasSystemPairingRegistry) {
+                    // Removing the association can bounce the scene; wait for the next activation.
+                    ui.shouldShowPickerOnForeground = true
+                } else {
+                    // No registry confirmation, so activation will not re-fire.
+                    startDeviceScan()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                ui.presentConnectionFailure(ConnectionUiState.userFacingMessage(failure))
             }
         }
     }

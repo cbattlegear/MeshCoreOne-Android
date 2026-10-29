@@ -71,7 +71,7 @@ sealed interface RuntimeSyncResult {
 data class RuntimeServiceCallbacks(
     val cleanChannelSync: suspend () -> Unit,
     val channelSyncAttempted: suspend () -> Unit,
-    val reconcileIdentity: suspend () -> RadioId?,
+    val reconcileIdentity: suspend (kotlinx.coroutines.Deferred<Unit>) -> RadioId?,
 )
 
 data class RuntimeServiceInputs(

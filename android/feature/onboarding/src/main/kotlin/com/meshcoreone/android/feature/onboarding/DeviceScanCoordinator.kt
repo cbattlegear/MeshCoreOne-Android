@@ -114,8 +114,8 @@ class DeviceScanCoordinator(
                 mutable.update { it.copy(localBusy = false) }
             is OnboardingConnectOutcome.Failed -> mutable.update {
                 it.copy(
-                    localBusy = false, failure = outcome.message,
-                    otherAppDeviceId = outcome.retryDeviceId ?: it.otherAppDeviceId,
+                    localBusy = false, failure = outcome.message.takeUnless { outcome.presentedByConnectionUi },
+                    otherAppDeviceId = outcome.retryDeviceId,
                     failureTick = it.failureTick + 1,
                 )
             }

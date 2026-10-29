@@ -285,7 +285,7 @@ class RadioSessionContainer private constructor(
         env.notificationStrings?.let(notificationService::setStringProvider)
         scope.launch { notificationService.setup() }
         // The cycle-forced upward call into the connection manager: an identity import re-resolves the radio id.
-        nodeConfigService.setOnPostIdentityImport { inputs.callbacks.reconcileIdentity() }
+        nodeConfigService.setOnPostIdentityImport { handoff -> inputs.callbacks.reconcileIdentity(handoff) }
     }
 
     override val batteryServices: BatteryServices = object : BatteryServices {
@@ -411,9 +411,14 @@ class RadioSessionContainer private constructor(
         syncCoordinator.onDisconnected(SyncNotificationsAdapter(notificationService))
     }
 
-    /** Restarts listeners after a health check found them stopped (idempotent while active). */
+    /** Reconciles the monitor group and polling independently, without replacing healthy listeners. */
     override suspend fun ensureListeners() {
-        if (!isEventMonitoringActive && !isClosed) startEventMonitoring(radioId)
+        startEventMonitoring(radioId)
+        monitoringLock.withLock {
+            if (!isClosed && !messagePollingService.isAutoFetching) {
+                messagePollingService.startAutoFetch(radioId)
+            }
+        }
     }
 
     override suspend fun tearDown(): TeardownReport {

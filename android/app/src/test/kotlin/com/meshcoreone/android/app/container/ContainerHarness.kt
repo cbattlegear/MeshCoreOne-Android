@@ -118,6 +118,8 @@ internal class ContainerHarness(
     advertLocation: AppAdvertLocation = defaultAdvertLocation(),
     persistenceOverride: com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol = store,
     themeService: com.meshcoreone.android.core.designsystem.ThemeService? = null,
+    observeBleLink: Boolean = false,
+    regionStore: com.meshcoreone.android.app.state.RegionSelectionStore? = null,
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -135,7 +137,22 @@ internal class ContainerHarness(
             store = persistenceOverride,
             passwords = MemoryVault(),
             connectionPreferences = preferences,
-            connectivity = newConnectivity(pairing) { foregroundCalls += it },
+            connectivity = newConnectivity(pairing, onForeground = { foregroundCalls += it }, currentLink = {
+                links.links.lastOrNull()?.takeIf {
+                    observeBleLink && it.target is ConnectionTarget.Bluetooth && it.radio.connected && it.live != null
+                }?.let { link ->
+                    com.meshcoreone.android.core.connectivity.ble.BleLinkSnapshot(
+                        (link.target as ConnectionTarget.Bluetooth).deviceId,
+                        com.meshcoreone.android.core.ble.BleLinkDiagnostics(
+                            availability = com.meshcoreone.android.core.ble.BluetoothAvailability.Ready,
+                            phase = com.meshcoreone.android.core.ble.BlePhase.Connected,
+                            generation = 1L, handle = null, bond = null, actualMtu = null, maximumCommandBytes = null,
+                            firmwareVerified = true, writeWithoutResponse = false, pipelinedReads = false,
+                            rejectedCallbacks = 0L, lastRejectedCallback = null, issue = null,
+                        ),
+                    )
+                }
+            }),
             linkProbe = NoSystemLinks,
             scans = newScans(),
             linkFactory = links,
@@ -163,6 +180,7 @@ internal class ContainerHarness(
             offlineMaps = offlineMaps,
             advertLocation = advertLocation,
             themeService = themeService,
+            regionStore = regionStore,
         ),
     )
     val manager get() = container.connectionManager

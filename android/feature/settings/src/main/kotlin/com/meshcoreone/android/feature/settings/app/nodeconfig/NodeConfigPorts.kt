@@ -14,6 +14,8 @@ interface NodeConfigSession {
     suspend fun preview(config: MeshCoreNodeConfig, sections: ConfigSections): Boolean
     suspend fun apply(config: MeshCoreNodeConfig, sections: ConfigSections, progress: (NodeConfigProgress) -> Unit)
     suspend fun refresh()
+    /** Always called after apply/refresh, including failure or cancellation, to release an intentional identity handoff. */
+    fun finishImport() = Unit
 }
 
 data class NodeConfigProgress(val current: Int, val total: Int, val description: String)

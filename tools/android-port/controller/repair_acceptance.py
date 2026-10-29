@@ -735,12 +735,15 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             tokens.append(match[0])
             index = match.end()
 
-    for index, value in enumerate(tokens):
-        if value == "@" and (
+    grouped_annotations = any(
+        value == "@" and (
             index + 1 < len(tokens) and tokens[index + 1] == "["
             or index + 3 < len(tokens) and tokens[index + 2:index + 4] == [":", "["]
-        ):
-            raise PortError("Grouped Kotlin annotations are not supported in hosted test sources")
+        )
+        for index, value in enumerate(tokens)
+    )
+    if grouped_annotations and source_declarations is None:
+        raise PortError("Grouped Kotlin annotations are not supported in hosted test sources")
 
     class_bodies = {}
     if declaring_classes is not None or source_declarations is not None or inheritance is not None:
@@ -862,13 +865,14 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
 
     inherited_bodies, inherited_companions, companion_bodies, header_bodies = set(), set(), {}, []
     inherited_header_annotations = set()
-    inherited_scope, unresolved_scope = False, False
+    inherited_scope, unresolved_scope, bodyless_inheritance = False, False, False
     for start, value in enumerate(tokens):
         if value not in ("class", "interface", "object") or (
             start and tokens[start - 1] in (".", ":")
         ):
             continue
         index, nesting, inherited, header_annotations = start + 1, [], False, []
+        declaration_body = None
         delegated = False
         while index < len(tokens):
             current = tokens[index]
@@ -911,6 +915,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     delegated = False
                     continue
                 if current == "{":
+                    declaration_body = index
                     if value == "class":
                         header_bodies.append((start, index))
                     if inherited:
@@ -936,6 +941,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             index += 1
         unresolved_scope |= bool(nesting)
         inherited_scope |= inherited
+        bodyless_inheritance |= inherited and declaration_body is None
         if inherited:
             inherited_header_annotations.update(header_annotations)
         if inherited and value == "object" and start and tokens[start - 1] == "companion":
@@ -952,14 +958,14 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             "package": package, "imports": imports,
             "parents": _kotlin_parent_names(tokens[start + 2:body]),
             "members": members,
-            "uncertain": unresolved_scope or body in inherited_companions,
+            "uncertain": unresolved_scope or grouped_annotations or body in inherited_companions,
         }
     if source_declarations is not None:
         source_declarations.update(declarations)
         return {}
     if reject_inherited and (inherited_scope or unresolved_scope):
         if (
-            inheritance is None or unresolved_scope or not inherited_bodies
+            inheritance is None or unresolved_scope or bodyless_inheritance or not inherited_bodies
             or any(body not in declarations for body in inherited_bodies)
             or inherited_header_annotations
         ):

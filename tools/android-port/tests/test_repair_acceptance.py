@@ -512,6 +512,51 @@ class RepairExecutionTests(unittest.TestCase):
                 self.assertRaisesRegex(PortError, "complete inherited Kotlin JUnit declarations"):
             validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
 
+    def test_bodyless_inherited_sibling_cannot_hide_complete_suite(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        for header in ("ExtraTestBase()", "ExtraTestBase(), Other by object : Other {}"):
+            for body in ("", " {}"):
+                sources = {
+                    TEST: (
+                        "package sample\nimport org.junit.Rule\n"
+                        "class MapTest : Parent() { @get:Rule val rule = example; "
+                        "@Test fun keepsListReachable() {} }\nclass HiddenInheritedSuite : " + header + body
+                    ).encode(),
+                    base: b"package sample\nopen class Parent {}\n"
+                          b"open class ExtraTestBase { @Test fun inheritedCase() {} }",
+                }
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=True)
+                with self.subTest(header=header, body=body), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
+                    validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_grouped_annotations_only_block_selected_sources_or_resolved_ancestors(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        unrelated = TEST.replace("MapTest.kt", "Unrelated.kt")
+        grouped = b'@file:[Suppress("unused")]\n'
+        for whole in (False, True):
+            sources = {
+                TEST: b"package sample\nimport org.junit.Rule\nimport org.junit.Before\n"
+                      b"class MapTest : Parent() { @get:Rule val rule = example; @Before fun setup() {} "
+                      b"@Test fun keepsListReachable() {} }",
+                base: b"package sample\nopen class Parent {}",
+                unrelated: b"package other\nclass Unrelated {}",
+            }
+            for location in (None, unrelated, base, TEST):
+                variant = dict(sources)
+                if location:
+                    variant[location] = grouped + variant[location]
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(variant, whole=whole)
+                with self.subTest(whole=whole, location=location), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ):
+                    if location in (None, unrelated):
+                        validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                    else:
+                        with self.assertRaises(PortError):
+                            validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
     def test_exact_wp202_changed_suites_use_real_acceptance_with_source_only_doubles(self):
         from controller.repair_acceptance import _KotlinJUnitLineage, _kotlin_junit_methods
 

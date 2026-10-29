@@ -51,89 +51,89 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
             assertEquals(store.fetchChannels(RADIO_A), channels, "Cache consumers must observe already committed rows")
             snapshots += channels.toList()
         }
+    }
 
-        private class Writes : ChannelSessionOps by Session(emptyList()) {
-            val sent = mutableListOf<ChannelInfo>()
-            override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
-                sent += ChannelInfo(index, name, secret)
-            }
+    private class Writes : ChannelSessionOps by Session(emptyList()) {
+        val sent = mutableListOf<ChannelInfo>()
+        override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
+            sent += ChannelInfo(index, name, secret)
         }
+    }
 
-        @OriginalCase("ChannelServiceTests::clearChannel deletes the row and its messages, then fires the slot handler()")
-        @Test fun clearCommitsTheActualSlotAndHistoryDeletionBeforeTheOccupantCallback() = runTest {
-            val channel = ChannelDTO(radioId = RADIO_A, index = 5u, name = "Old", secret = secret(0x11))
-            val history = message(contactID = null, channelIndex = 5u, text = "old")
-            val foreign = channel.copy(radioId = RADIO_B)
-            val foreignHistory = history.copy(radioId = RADIO_B)
-            store.saveChannel(channel)
-            store.saveChannel(foreign)
-            store.saveMessage(history)
-            store.saveMessage(foreignHistory)
-            val session = Writes()
-            val cache = Cache()
-            val callbacks = mutableListOf<Set<UByte>>()
-            val service = ChannelService(session, store, cache, noDelay)
-            service.setSlotOccupantChangedHandler { radio, indices ->
-                assertEquals(RADIO_A, radio)
-                assertNull(store.fetchChannel(RADIO_A, 5u))
-                assertTrue(store.fetchMessages(RADIO_A, 5u).isEmpty())
-                callbacks += indices.toSet()
-            }
-            service.clearChannel(RADIO_A, 5u)
-            assertEquals(listOf(setOf<UByte>(5u)), callbacks)
-            assertEquals(listOf(ChannelInfo(5u, "", secret(0))), session.sent)
-            assertEquals(foreign, store.fetchChannel(RADIO_B, 5u))
-            assertEquals(foreignHistory, store.fetchMessage(entity(RADIO_B, history.id)))
-            assertEquals(listOf(emptyList<ChannelDTO>()), cache.snapshots)
+    @OriginalCase("ChannelServiceTests::clearChannel deletes the row and its messages, then fires the slot handler()")
+    @Test fun clearCommitsTheActualSlotAndHistoryDeletionBeforeTheOccupantCallback() = runTest {
+        val channel = ChannelDTO(radioId = RADIO_A, index = 5u, name = "Old", secret = secret(0x11))
+        val history = message(contactID = null, channelIndex = 5u, text = "old")
+        val foreign = channel.copy(radioId = RADIO_B)
+        val foreignHistory = history.copy(radioId = RADIO_B)
+        store.saveChannel(channel)
+        store.saveChannel(foreign)
+        store.saveMessage(history)
+        store.saveMessage(foreignHistory)
+        val session = Writes()
+        val cache = Cache()
+        val callbacks = mutableListOf<Set<UByte>>()
+        val service = ChannelService(session, store, cache, noDelay)
+        service.setSlotOccupantChangedHandler { radio, indices ->
+            assertEquals(RADIO_A, radio)
+            assertNull(store.fetchChannel(RADIO_A, 5u))
+            assertTrue(store.fetchMessages(RADIO_A, 5u).isEmpty())
+            callbacks += indices.toSet()
         }
+        service.clearChannel(RADIO_A, 5u)
+        assertEquals(listOf(setOf<UByte>(5u)), callbacks)
+        assertEquals(listOf(ChannelInfo(5u, "", secret(0))), session.sent)
+        assertEquals(foreign, store.fetchChannel(RADIO_B, 5u))
+        assertEquals(foreignHistory, store.fetchMessage(entity(RADIO_B, history.id)))
+        assertEquals(listOf(emptyList<ChannelDTO>()), cache.snapshots)
+    }
 
-        @OriginalCase("ChannelServiceTests::setChannel fires the slot handler on a new secret and not on a same-secret rename or first insert()")
-        @Test fun actualFirstInsertAndRenameStaySilentButAChangedSecretPublishesTheCommittedReplacement() = runTest {
-            val session = Writes()
-            val cache = Cache()
-            val callbacks = mutableListOf<Set<UByte>>()
-            val service = ChannelService(session, store, cache, noDelay)
-            service.setSlotOccupantChangedHandler { radio, indices ->
-                assertEquals(RADIO_A, radio)
-                assertEquals("Replaced", store.fetchChannel(RADIO_A, 5u)?.name)
-                assertEquals(session.sent.last().secret, store.fetchChannel(RADIO_A, 5u)?.secret)
-                callbacks += indices.toSet()
-            }
-            service.setChannel(RADIO_A, 5u, "First", "one")
-            val first = assertNotNull(store.fetchChannel(RADIO_A, 5u))
-            service.setChannel(RADIO_A, 5u, "Renamed", "one")
-            assertEquals(first.copy(name = "Renamed"), store.fetchChannel(RADIO_A, 5u))
-            assertTrue(callbacks.isEmpty())
-            service.setChannel(RADIO_A, 5u, "Replaced", "two")
-            assertNotEquals(first.secret, store.fetchChannel(RADIO_A, 5u)?.secret)
-            assertEquals(listOf(setOf<UByte>(5u)), callbacks)
-            assertEquals(listOf("First", "Renamed", "Replaced"), session.sent.map { it.name })
-            assertEquals(3, cache.snapshots.size)
+    @OriginalCase("ChannelServiceTests::setChannel fires the slot handler on a new secret and not on a same-secret rename or first insert()")
+    @Test fun actualFirstInsertAndRenameStaySilentButAChangedSecretPublishesTheCommittedReplacement() = runTest {
+        val session = Writes()
+        val cache = Cache()
+        val callbacks = mutableListOf<Set<UByte>>()
+        val service = ChannelService(session, store, cache, noDelay)
+        service.setSlotOccupantChangedHandler { radio, indices ->
+            assertEquals(RADIO_A, radio)
+            assertEquals("Replaced", store.fetchChannel(RADIO_A, 5u)?.name)
+            assertEquals(session.sent.last().secret, store.fetchChannel(RADIO_A, 5u)?.secret)
+            callbacks += indices.toSet()
         }
+        service.setChannel(RADIO_A, 5u, "First", "one")
+        val first = assertNotNull(store.fetchChannel(RADIO_A, 5u))
+        service.setChannel(RADIO_A, 5u, "Renamed", "one")
+        assertEquals(first.copy(name = "Renamed"), store.fetchChannel(RADIO_A, 5u))
+        assertTrue(callbacks.isEmpty())
+        service.setChannel(RADIO_A, 5u, "Replaced", "two")
+        assertNotEquals(first.secret, store.fetchChannel(RADIO_A, 5u)?.secret)
+        assertEquals(listOf(setOf<UByte>(5u)), callbacks)
+        assertEquals(listOf("First", "Renamed", "Replaced"), session.sent.map { it.name })
+        assertEquals(3, cache.snapshots.size)
+    }
 
-        @OriginalCase("ChannelServiceTests::syncChannels fires the slot handler for vacated and secret-changed slots, not first sightings()")
-        @Test fun actualSyncPublishesOnlyTheVacatedAndChangedOccupantsAfterTheirBatchCommits() = runTest {
-            val old = listOf(info(1, "One", 0x11), info(2, "Two", 0x22))
-            old.forEach { store.saveChannel(RADIO_A, it) }
-            val foreign = ChannelDTO(radioId = RADIO_B, index = 2u, name = "Two", secret = secret(0x22))
-            store.saveChannel(foreign)
-            val session = Session(listOf(info(1, "OneB", 0x99), info(3, "First", 0x33)))
-            val cache = Cache()
-            val service = ChannelService(session, store, cache, noDelay)
-            val callbacks = mutableListOf<Set<UByte>>()
-            service.setSlotOccupantChangedHandler { radio, indices ->
-                assertEquals(RADIO_A, radio)
-                assertEquals(listOf(info(1, "OneB", 0x99), info(3, "First", 0x33)),
-                    store.fetchChannels(RADIO_A).map { ChannelInfo(it.index, it.name, it.secret) })
-                callbacks += indices.toSet()
-            }
-            val result = service.syncChannels(RADIO_A, 4u, false)
-            assertEquals(2L, result.channelsSynced)
-            assertTrue(result.errors.isEmpty())
-            assertEquals(listOf(setOf<UByte>(1u, 2u)), callbacks)
-            assertEquals(foreign, store.fetchChannel(RADIO_B, 2u))
-            assertEquals(1, cache.snapshots.size)
+    @OriginalCase("ChannelServiceTests::syncChannels fires the slot handler for vacated and secret-changed slots, not first sightings()")
+    @Test fun actualSyncPublishesOnlyTheVacatedAndChangedOccupantsAfterTheirBatchCommits() = runTest {
+        val old = listOf(info(1, "One", 0x11), info(2, "Two", 0x22))
+        old.forEach { store.saveChannel(RADIO_A, it) }
+        val foreign = ChannelDTO(radioId = RADIO_B, index = 2u, name = "Two", secret = secret(0x22))
+        store.saveChannel(foreign)
+        val session = Session(listOf(info(1, "OneB", 0x99), info(3, "First", 0x33)))
+        val cache = Cache()
+        val service = ChannelService(session, store, cache, noDelay)
+        val callbacks = mutableListOf<Set<UByte>>()
+        service.setSlotOccupantChangedHandler { radio, indices ->
+            assertEquals(RADIO_A, radio)
+            assertEquals(listOf(info(1, "OneB", 0x99), info(3, "First", 0x33)),
+                store.fetchChannels(RADIO_A).map { ChannelInfo(it.index, it.name, it.secret) })
+            callbacks += indices.toSet()
         }
+        val result = service.syncChannels(RADIO_A, 4u, false)
+        assertEquals(2L, result.channelsSynced)
+        assertTrue(result.errors.isEmpty())
+        assertEquals(listOf(setOf<UByte>(1u, 2u)), callbacks)
+        assertEquals(foreign, store.fetchChannel(RADIO_B, 2u))
+        assertEquals(1, cache.snapshots.size)
     }
 
     private val noDelay = object : ChannelServiceClock {

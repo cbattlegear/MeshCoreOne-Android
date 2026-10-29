@@ -591,6 +591,7 @@ class RepairExecutionTests(unittest.TestCase):
             "override fun close() {} }",
             "private class Harness(val ready: Boolean = 2 > 1) : AutoCloseable { "
             "override fun close() {} }",
+            "private class Harness : Parent(), Marker by object : Marker {} {}",
             "private class Harness { annotation class Before; annotation class After }",
             "private class Harness : Parent() { annotation class Before }",
             "private class Harness { companion object { annotation class Before } }",
@@ -677,11 +678,20 @@ class RepairExecutionTests(unittest.TestCase):
             "class T { companion object Named { annotation class Before }; @Before fun setup() {} }",
             "class T { companion object : Parent(); @Before fun setup() {} }",
             "class T { companion object : Parent() {}; @Before fun setup() {} }",
+            "class Fixture : Parent(), Marker by object : Marker {} { @Before fun setup() {} } "
+            "class T { @Test fun actual() {} }",
+            "class Fixture : Parent(), Marker by object : Marker { "
+            "val nested = object : Other {} } { @Before fun setup() {} } "
+            "class T { @Test fun actual() {} }",
         ):
             with self.subTest(body=body), self.assertRaisesRegex(
                 PortError, "Ambiguous Kotlin function annotation",
             ):
                 _kotlin_junit_methods("import org.junit.Before\n" + body)
+            with self.subTest(body=body, declaring_classes=True), self.assertRaisesRegex(
+                PortError, "Ambiguous Kotlin function annotation",
+            ):
+                _kotlin_junit_methods("import org.junit.Before\n" + body, {})
         with self.assertRaisesRegex(PortError, "Ambiguous Kotlin function annotation"):
             _kotlin_junit_methods(
                 "import org.junit.Before as Setup\n"

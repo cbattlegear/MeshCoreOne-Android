@@ -868,6 +868,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         ):
             continue
         index, nesting, inherited, header_annotations = start + 1, [], False, []
+        delegated = False
         while index < len(tokens):
             current = tokens[index]
             if current == "@" and nesting:
@@ -875,6 +876,37 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             if not nesting:
                 if current == ":":
                     inherited = True
+                if current == "by":
+                    delegated = True
+                if current == "object" and delegated:
+                    cursor, depth = index + 1, []
+                    while cursor < len(tokens):
+                        item = tokens[cursor]
+                        if item == "{" and not depth:
+                            break
+                        if item in ("(", "["):
+                            depth.append(item)
+                        elif item in (")", "]"):
+                            if not depth or depth.pop() != {")": "(", "]": "["}[item]:
+                                break
+                        elif item in (";", "}") and not depth:
+                            break
+                        cursor += 1
+                    if cursor >= len(tokens) or tokens[cursor] != "{":
+                        unresolved_scope = True
+                        break
+                    body = cursor
+                    cursor += 1
+                    while cursor < len(tokens) and not (
+                        tokens[cursor] == "}" and scopes[cursor] == scopes[body] + (body,)
+                    ):
+                        cursor += 1
+                    if cursor == len(tokens):
+                        unresolved_scope = True
+                        break
+                    index = cursor + 1
+                    delegated = False
+                    continue
                 if current == "{":
                     if value == "class":
                         header_bodies.append((start, index))

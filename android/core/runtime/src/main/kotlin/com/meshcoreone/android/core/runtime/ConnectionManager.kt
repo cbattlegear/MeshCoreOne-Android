@@ -546,6 +546,11 @@ class ConnectionManager(
         requireCurrent(owner)
         devices.saveDevice(device)
         requireCurrent(owner)
+        devices.setActiveDevice(device.id)
+        requireCurrent(owner)
+        val activatedDevice = devices.fetchDevice(device.id) ?: throw ConnectionError.DeviceNotFound()
+        requireCurrent(owner)
+        synchronized(lock) { requireCurrent(owner); owner.device = activatedDevice }
         if (byKey != null && byKey.id != deviceId) {
             // Swift: `try? deleteDevice` for the orphaned backup-import row.
             bestEffort({ "deleteOrphanDevice" }, Unit) { devices.deleteDevice(byKey.id) }
@@ -565,7 +570,7 @@ class ConnectionManager(
         requireCurrent(owner)
         synchronized(lock) {
             requireCurrent(owner)
-            deviceValue = device
+            deviceValue = activatedDevice
             repeatRanges = ranges
             publishLocked(DeviceConnectionState.CONNECTED, ConnectionState.Connected, token, null)
         }

@@ -240,7 +240,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override suspend fun reactions(messageId: UUID) = store.fetchReactions(EntityKey(radio, messageId))
         override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
             store.saveBlockedChannelSender(BlockedChannelSenderDTO(name = senderName, radioId = radioId))
+            store.deleteChannelMessages(senderName, radioId)
             container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
+            app.refreshConversations()
         }
         override suspend fun blockContacts(contactIds: Set<UUID>) {
             for (id in contactIds) {

@@ -42,6 +42,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
@@ -129,8 +130,10 @@ class MessagingRoomIntegrationTest {
         val token = SessionToken(ProcessEpoch(UUID.fromString("CCCCCCCC-1111-2222-3333-444444444444")), Generation(number), radio)
         val signals = RoomSignals(token)
         val firmware = RoomFirmware()
+        val diagnostics = mutableListOf<MessagingDiagnostic>()
         val session = MeshCoreSession(firmware, SessionConfiguration(defaultTimeout = sessionTimeout), clock, scope.coroutineContext)
-        val service = MessageService(token, self, session, persistence, signals, scope, config, clock)
+        val service = MessageService(token, self, session, persistence, signals, scope, config, clock,
+            reporter = MessagingIssueReporter { diagnostics += it })
         val queue = ChatSendQueueService(token, persistence, service, MessagingChannelQuery { null },
             OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, scope, clock = clock)
         init { generations += this }
@@ -202,17 +205,72 @@ class MessagingRoomIntegrationTest {
     @Test fun actualHydrationDrainsOneRadioInFIFOOrderAndLeavesTheOtherPartitionUntouched() = runTest(scheduler) {
         seed(); store.saveDevice(DeviceDTO(radioId = other, publicKey = target, nodeName = "Other"))
         val g = RadioGeneration(4); g.start()
+        val messageIds = mutableListOf<UUID>()
         for ((sequence, text) in listOf(3L to "three", 1L to "one", 2L to "two")) {
             val m = MessageDTO(radioId = radio, contactID = contact.id, text = text, timestamp = 100u)
+            messageIds += m.id
             store.saveMessage(m); store.upsertPendingSend(PendingSendDTO.fromEnvelope(
                 DirectMessageEnvelope(m.id, contact.id), radio).copy(sequence = sequence))
         }
-        val foreign = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(UUID.randomUUID(), contact.id), other).copy(sequence = 1)
+        val foreignMessage = MessageDTO(id = messageIds.first(), radioId = other, contactID = contact.id,
+            text = "same UUID on another radio", timestamp = 100u, status = MessageStatus.RETRYING)
+        store.saveMessage(foreignMessage)
+        val foreign = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(foreignMessage.id, contact.id, true), other)
+            .copy(sequence = 1, attemptCount = 2)
         store.upsertPendingSend(foreign)
         g.signals.set(DeviceConnectionState.READY); g.queue.hydrate(); runCurrent(); g.queue.awaitDrainCompletion()
         assertEquals(listOf("one", "two", "three"), g.firmware.sent().map { it.slice(13, it.size).toByteArray().toString(Charsets.UTF_8) })
         assertTrue(store.fetchPendingSends(radio).isEmpty()); assertEquals(listOf(foreign), store.fetchPendingSends(other))
+        assertEquals(foreignMessage, store.fetchMessage(EntityKey(other, foreignMessage.id)))
         g.stop()
+    }
+
+    @OriginalCase("PersistenceStoreTests::hasOutgoingSentDM flags a stuck .sent DM by ackCode and ignores other rows()")
+    @Test fun unmatchedAckListenerReportsOnlyOutgoingSentDirectRowsWithoutInventingDelivery() = runTest(scheduler) {
+        seed()
+        val ack = Bytes.fromHex("0DF0FECA")
+        val sent = MessageDTO(radioId = radio, contactID = contact.id, text = "orphan sent",
+            timestamp = 100u, direction = MessageDirection.OUTGOING, status = MessageStatus.SENT,
+            ackCode = 0xCAFE_F00Du)
+        val g = RadioGeneration(40)
+        g.start()
+        g.service.startEventMonitoring()
+        val subscription = g.service.statusEvents()
+        val events = mutableListOf<MessageStatusEvent>()
+        val collecting = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect { events += it.event }
+        }
+        try {
+            val excluded = listOf(
+                sent.copy(radioId = other),
+                sent.copy(id = UUID.randomUUID(), status = MessageStatus.DELIVERED),
+                sent.copy(id = UUID.randomUUID(), status = MessageStatus.FAILED),
+                sent.copy(id = UUID.randomUUID(), status = MessageStatus.RETRYING),
+                sent.copy(id = UUID.randomUUID(), status = MessageStatus.PENDING),
+                sent.copy(id = UUID.randomUUID(), direction = MessageDirection.INCOMING),
+                sent.copy(id = UUID.randomUUID(), contactID = null, channelIndex = 1u),
+                sent.copy(id = UUID.randomUUID(), ackCode = 1u),
+            )
+            for (row in excluded) store.saveMessage(row)
+            g.firmware.pushAck(ack)
+            runCurrent()
+            assertEquals(false, g.diagnostics.filterIsInstance<MessagingDiagnostic.UnmatchedAcknowledgement>()
+                .single().orphanSentRow)
+            store.saveMessage(sent)
+            g.firmware.pushAck(ack)
+            runCurrent()
+            assertEquals(listOf(false, true),
+                g.diagnostics.filterIsInstance<MessagingDiagnostic.UnmatchedAcknowledgement>().map { it.orphanSentRow })
+            assertEquals(sent, store.fetchMessage(EntityKey(radio, sent.id)))
+            for (row in excluded) assertEquals(row, store.fetchMessage(EntityKey(row.radioId, row.id)))
+            assertTrue(events.isEmpty())
+            assertEquals(0, g.service.pendingAckCount)
+            assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.UnmatchedAcknowledgement>().all { it.token == g.token })
+        } finally {
+            subscription.close()
+            collecting.cancelAndJoin()
+            g.stop()
+        }
     }
 
     @Test fun actualBackupConsumerBackfillsOnlyNilIncomingKeysAndUsesOutgoingUUIDIdentity() = runTest(scheduler) {

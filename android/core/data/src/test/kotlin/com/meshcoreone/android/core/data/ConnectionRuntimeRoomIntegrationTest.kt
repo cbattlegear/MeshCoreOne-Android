@@ -5,6 +5,7 @@ package com.meshcoreone.android.core.data.runtime
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.data.repository.RepositoryTest
+import com.meshcoreone.android.core.data.repository.OriginalCase
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
@@ -27,6 +28,32 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectionRuntimeRoomIntegrationTest : RepositoryTest() {
+    @OriginalCase("PersistenceStoreTests::Set active device()")
+    @Test fun connectingThroughTheProductionRuntimeExclusivelyActivatesTheSavedRadio() = runTest(scheduler) {
+        val first = DeviceDTO(radioId = RadioId(UUID.randomUUID()), publicKey = Bytes(ByteArray(32) { 0x11 }),
+            nodeName = "Previously active", isActive = true, lastConnected = AT.minusSeconds(100))
+        val second = DeviceDTO(radioId = RadioId(UUID.randomUUID()), publicKey = Bytes(ByteArray(32) { 0x22 }),
+            nodeName = "Other saved radio", isActive = true, lastConnected = AT.minusSeconds(200))
+        store.saveDevice(first)
+        store.saveDevice(second)
+        assertEquals(2, store.fetchDevices().count { it.isActive })
+        val h = Harness(this)
+        try {
+            h.manager.connect(h.target)
+            val connected = assertNotNull(h.manager.connectedDevice)
+            assertEquals(listOf(connected.id), store.fetchDevices().filter { it.isActive }.map { it.id })
+            assertEquals(connected, store.fetchActiveDevice())
+            assertEquals(first.lastConnected, store.fetchDevice(first.id)?.lastConnected)
+            assertEquals(second.lastConnected, store.fetchDevice(second.id)?.lastConnected)
+            h.manager.disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
+            h.manager.connect(h.target.copy(deviceId = UUID.randomUUID()))
+            val successor = assertNotNull(h.manager.connectedDevice)
+            assertEquals(listOf(successor.id), store.fetchDevices().filter { it.isActive }.map { it.id })
+            assertEquals(successor, store.fetchActiveDevice())
+        } finally { h.manager.close() }
+        assertEquals(3, store.fetchDevices().size)
+    }
+
     @Test
     fun changedEndpointPreservesRestoredPartitionAndRealContactMessagePendingTriple() = runTest(scheduler) {
         val h = Harness(this)

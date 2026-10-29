@@ -575,6 +575,152 @@ class RepairExecutionTests(unittest.TestCase):
             with self.subTest(source=source), self.assertRaisesRegex(PortError, "use-site"):
                 _kotlin_junit_methods(source)
 
+    def test_lifecycle_resolution_ignores_unrelated_inheriting_fixtures(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        helpers = (
+            "",
+            "private class Harness : AutoCloseable { override fun close() {} }",
+            "private object Harness : AutoCloseable { override fun close() {} }",
+            "private val harness = object : AutoCloseable { override fun close() {} }",
+            "private class Harness<T : Any>(val value: T) : Parent<T>() {}",
+            "private class Harness : Comparable<() -> Unit> { "
+            "override fun compareTo(other: () -> Unit) = 0 }",
+            "private class Harness(val build: () -> Unit) {}",
+            "private class Harness(val ready: Boolean = 1 < 2) : AutoCloseable { "
+            "override fun close() {} }",
+            "private class Harness(val ready: Boolean = 2 > 1) : AutoCloseable { "
+            "override fun close() {} }",
+            "private class Harness : Parent(), Marker by object : Marker {} {}",
+            "private class Harness { annotation class Before; annotation class After }",
+            "private class Harness : Parent() { annotation class Before }",
+            "private class Harness { companion object { annotation class Before } }",
+        )
+        for helper in helpers:
+            for placement in ("nested-before", "nested-after", "sibling-before", "sibling-after"):
+                declaration = "@Before fun setup() {} @After fun teardown() {} @Test fun actual() {}"
+                if placement == "nested-before":
+                    body = "class T { " + helper + declaration + " }"
+                elif placement == "nested-after":
+                    body = "class T { " + declaration + helper + " }"
+                elif placement == "sibling-before":
+                    body = helper + "\nclass T { " + declaration + " }"
+                else:
+                    body = "class T { " + declaration + " }\n" + helper
+                classes = {}
+                with self.subTest(helper=helper, placement=placement):
+                    self.assertEqual(_kotlin_junit_methods(
+                        "package sample\nimport org.junit.Before\nimport org.junit.After\n" + body,
+                        classes,
+                    ), {"actual": "test"})
+                    self.assertEqual(classes, {"actual": "sample.T"})
+
+    def test_lifecycle_alias_and_rule_getter_use_their_own_scope(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = """
+            import org.junit.Before as Setup
+            import org.junit.Rule
+            class T {
+                private class Harness : Parent() { annotation class Setup; annotation class Rule }
+                @Setup fun setup() {}
+                @get:Rule val rule = example
+                @Test fun actual() {}
+            }
+        """
+        self.assertEqual(_kotlin_junit_methods(source), {"actual": "test"})
+        self.assertEqual(_kotlin_junit_methods(
+            "import org.junit.Rule\nclass T(@get:Rule val rule: Int = 0) { @Test fun actual() {} }",
+        ), {"actual": "test"})
+        for body in (
+            "annotation class Rule",
+            "companion object { annotation class Rule }",
+            "companion object Named { annotation class Rule }",
+        ):
+            for reject_inherited in (False, True):
+                with self.subTest(body=body, reject_inherited=reject_inherited), \
+                        self.assertRaisesRegex(PortError, "use-site"):
+                    _kotlin_junit_methods(
+                        "import org.junit.Rule\nclass T(@get:Rule val rule: Int = 0) { "
+                        + body + "; @Test fun actual() {} }",
+                        reject_inherited=reject_inherited,
+                    )
+        for body in ("", " { @Test fun actual() {} }"):
+            with self.subTest(body=body), self.assertRaisesRegex(PortError, "use-site"):
+                _kotlin_junit_methods(
+                    "import org.junit.Rule\nclass T(@get:Rule val rule: Int = 0) : Parent()" + body,
+                )
+        with self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
+            _kotlin_junit_methods(source, reject_inherited=True)
+        for companion in (
+            "companion object { annotation class Rule }",
+            "companion object : Parent()",
+        ):
+            with self.subTest(companion=companion), self.assertRaisesRegex(PortError, "use-site"):
+                _kotlin_junit_methods(
+                    "import org.junit.Rule\nclass T { " + companion + "; @get:Rule val rule = example }"
+                )
+
+    def test_enclosing_inheritance_and_lexical_lifecycle_shadowing_still_fail_closed(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        for body in (
+            "class T : Parent() { @Before fun setup() {} @Test fun actual() {} }",
+            "class T : Parent<() -> Unit>() { @Before fun setup() {} }",
+            "class Outer : Parent() { class T { @Before fun setup() {} } }",
+            "class T { annotation class Before; @Before fun setup() {} }",
+            "class Outer { annotation class Before; class T { @Before fun setup() {} } }",
+            "annotation class Before\nclass T { @Before fun setup() {} }",
+            "class T { fun helper() { class Before; @Before fun setup() {} } }",
+            "class T { class Harness : Parent() { @Before fun setup() {} } }",
+            "class T { val harness = object : Parent() { @Before fun setup() {} } }",
+            "class T { companion object { annotation class Before }; @Before fun setup() {} }",
+            "class T { companion object Named { annotation class Before }; @Before fun setup() {} }",
+            "class T { companion object : Parent(); @Before fun setup() {} }",
+            "class T { companion object : Parent() {}; @Before fun setup() {} }",
+            "class Fixture : Parent(), Marker by object : Marker {} { @Before fun setup() {} } "
+            "class T { @Test fun actual() {} }",
+            "class Fixture : Parent(), Marker by object : Marker { "
+            "val nested = object : Other {} } { @Before fun setup() {} } "
+            "class T { @Test fun actual() {} }",
+        ):
+            with self.subTest(body=body), self.assertRaisesRegex(
+                PortError, "Ambiguous Kotlin function annotation",
+            ):
+                _kotlin_junit_methods("import org.junit.Before\n" + body)
+            with self.subTest(body=body, declaring_classes=True), self.assertRaisesRegex(
+                PortError, "Ambiguous Kotlin function annotation",
+            ):
+                _kotlin_junit_methods("import org.junit.Before\n" + body, {})
+        with self.assertRaisesRegex(PortError, "Ambiguous Kotlin function annotation"):
+            _kotlin_junit_methods(
+                "import org.junit.Before as Setup\n"
+                "class T { class Setup; @Setup fun setup() {} }"
+            )
+        for classes in (None, {}):
+            with self.subTest(classes=classes), self.assertRaisesRegex(PortError, "delegate header scope"):
+                _kotlin_junit_methods(
+                    "import org.junit.Before\nclass Fixture : Parent(), Marker by object : Marker "
+                    "by object : Marker {} {} { @Before fun setup() {} } "
+                    "class T { @Test fun actual() {} }",
+                    classes,
+                )
+
+    def test_actual_room_suite_lifecycle_does_not_invent_test_methods(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = REPO / "android" / "core" / "data" / "src" / "test" / "kotlin" / "com" / \
+            "meshcoreone" / "android" / "core" / "data" / "messaging" / "MessagingRoomIntegrationTest.kt"
+        classes = {}
+        methods = _kotlin_junit_methods(source.read_text(encoding="utf-8"), classes)
+        self.assertEqual(methods["twoRadioGenerationsDoNotCloseTheProcessStoreOrDuplicateMonitors"], "test")
+        self.assertNotIn("open", methods)
+        self.assertNotIn("close", methods)
+        self.assertEqual(set(classes), set(methods))
+        self.assertEqual(set(classes.values()), {
+            "com.meshcoreone.android.core.data.messaging.MessagingRoomIntegrationTest",
+        })
+
     def test_full_scaffold_reads_actual_protocol_counts_and_inventory(self):
         from controller.ci import TASKS
         count = {"discovered": 3, "run": 3, "passed": 3, "failed": 0, "errors": 0, "skipped": 0}

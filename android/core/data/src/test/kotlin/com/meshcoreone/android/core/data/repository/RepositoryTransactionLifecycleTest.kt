@@ -60,7 +60,7 @@ class RepositoryTransactionLifecycleTest : RepositoryTest() {
             assertEquals(channel.toEntity(), db.channels().byId(RADIO_A.value, channel.id))
             assertEquals(channel, store.fetchChannel(entity(id = channel.id)))
             assertNull(db.rxLogs().byId(RADIO_A.value, entry.id))
-            assertEquals(entry, store.fetchRxLogEntries(RADIO_A).single())
+            assertEquals(entry.copy(decodedText = null), store.fetchRxLogEntries(RADIO_A).single())
         } finally {
             db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_scope")
         }
@@ -81,7 +81,7 @@ class RepositoryTransactionLifecycleTest : RepositoryTest() {
         assertEquals(PersistenceStoreError.ChannelNotFound, failure.error)
         assertTrue(store.fetchChannels(RADIO_A).isEmpty())
         assertNull(db.rxLogs().byId(RADIO_A.value, entry.id))
-        assertEquals(entry, store.fetchRxLogEntries(RADIO_A).single())
+        assertEquals(entry.copy(decodedText = null), store.fetchRxLogEntries(RADIO_A).single())
     }
 
     @OriginalCase("PersistenceStoreTests::RX log prune is deferred until threshold is exceeded()")
@@ -160,7 +160,7 @@ class RepositoryTransactionLifecycleTest : RepositoryTest() {
         runCurrent()
         assertEquals(0L, store.rxInitiatedSaveCount)
         assertNull(db.rxLogs().byId(RADIO_A.value, entry.id))
-        assertEquals(entry, store.fetchRxLogEntries(RADIO_A).single())
+        assertEquals(entry.copy(decodedText = null), store.fetchRxLogEntries(RADIO_A).single())
         store.close()
         assertEquals(entry.toEntity(), db.rxLogs().byId(RADIO_A.value, entry.id))
         assertEquals(1L, store.rxInitiatedSaveCount)

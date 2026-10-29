@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.data.backup.AppBackupCodec
 import com.meshcoreone.android.core.data.backup.AppBackupEnvelope
 import com.meshcoreone.android.core.data.backup.AppBackupService
 import com.meshcoreone.android.core.data.backup.BackupModelKind
+import com.meshcoreone.android.core.data.backup.BackupDeflater
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -17,7 +18,6 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.util.UUID
-import java.util.zip.DeflaterOutputStream
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.*
@@ -35,7 +35,10 @@ class LegacyImportLifecycleTest : RepositoryTest() {
             if (value is JsonArray) JsonArray(value.map { transform(key, it.jsonObject) }) else value
         })
         val compressed = ByteArrayOutputStream()
-        DeflaterOutputStream(compressed).use { it.write(changed.toString().toByteArray(Charsets.UTF_8)) }
+        BackupDeflater(compressed, checkCancellation = {}).use {
+            it.write(changed.toString().toByteArray(Charsets.UTF_8))
+            it.finish()
+        }
         return codec.parseBackup(Bytes(compressed.toByteArray()))
     }
 

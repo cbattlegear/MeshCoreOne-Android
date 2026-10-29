@@ -50,7 +50,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     )
     private val floodScopeMutex = Mutex()
     private var lastPushedScope: PushedFloodScope? = null
-    private val channelHistoryChanges = MutableSharedFlow<RadioId>(replay = 1)
     private val store get() = container.processStore
     private val scope get() = container.uiScope
     private val app get() = container.appState
@@ -196,7 +195,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val connectionState get() = this@AppChatsFeature.connectionState
         override val currentRadioId = MutableStateFlow(radio)
         override val reloadRequests get() = changes
-        override val messageEvents: Flow<ChatListEvent> get() = events().map(::listEvent)
+        override val messageEvents: Flow<ChatListEvent> get() = events().mapNotNull(::listEvent)
         override val clock: Clock = Clock.systemUTC()
         override val diagnostics = ChatListDiagnostics { operation, failure -> report(operation, failure) }
         override fun conversationServices(): ChatConversationServices? {
@@ -243,7 +242,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             store.saveBlockedChannelSender(BlockedChannelSenderDTO(name = senderName, radioId = radioId))
             container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
             store.deleteChannelMessages(senderName, radioId)
-            channelHistoryChanges.emit(radioId)
+            app.messageEventStream.send(MessageEvent.ChannelHistoryDeleted(radioId))
             app.refreshConversations()
         }
         override suspend fun blockContacts(contactIds: Set<UUID>) {
@@ -428,44 +427,46 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 is TimelineConversation.Channel -> enqueueChannel(radio, message.id, isResend = true)
             }
         }
-        override val events: Flow<TimelineEvent> get() = merge(
-            channelHistoryChanges.filter { conversation is TimelineConversation.Channel && it == radio }
-                .map { TimelineEvent.HistoryChanged(conversation.id) },
-            this@AppChatsFeature.events().transform<MessageEvent, TimelineEvent> { event ->
-                val ids = when (event) {
-                    is MessageEvent.DirectMessageReceived -> listOf(event.message.id)
-                    is MessageEvent.ChannelMessageReceived -> listOf(event.message.id)
-                    is MessageEvent.MessageStatusResolved -> listOf(event.messageID)
-                    is MessageEvent.MessageResent -> listOf(event.messageID)
-                    is MessageEvent.MessageFailed -> listOf(event.messageID)
-                    is MessageEvent.MessageRetrying -> listOf(event.messageID)
-                    is MessageEvent.HeardRepeatRecorded -> listOf(event.messageID)
-                    is MessageEvent.ReactionReceived -> listOf(event.messageID)
-                    is MessageEvent.MessagesRegionUpdated -> event.messageIDs
-                    is MessageEvent.RoutingChanged -> emptyList()
-                    is MessageEvent.RoomMessageReceived, is MessageEvent.RoomMessageStatusUpdated,
-                    is MessageEvent.RoomMessageFailed -> emptyList()
-                }
-                for (id in ids) {
-                    val message = store.fetchMessage(EntityKey(radio, id)) ?: continue
-                    val belongs = when (conversation) {
-                        is TimelineConversation.Direct -> message.contactID == conversation.contact.id
-                        is TimelineConversation.Channel -> message.channelIndex == conversation.channel.index
+        override val events: Flow<TimelineEvent> get() = this@AppChatsFeature.events().transform<MessageEvent, TimelineEvent> { event ->
+            val ids = when (event) {
+                is MessageEvent.DirectMessageReceived -> listOf(event.message.id)
+                is MessageEvent.ChannelMessageReceived -> listOf(event.message.id)
+                is MessageEvent.ChannelHistoryDeleted -> {
+                    if (conversation is TimelineConversation.Channel && event.radioId == radio) {
+                        emit(TimelineEvent.HistoryChanged(conversation.id))
                     }
-                    if (belongs) {
-                        if (event is MessageEvent.MessageFailed && !message.failureSeen) {
-                            markFailedSendSeenIfVisible(message)
-                            app.refreshConversations()
-                        }
-                        emit(when (event) {
-                            is MessageEvent.DirectMessageReceived, is MessageEvent.ChannelMessageReceived ->
-                                TimelineEvent.MessageReceived(conversation.id, message)
-                            else -> TimelineEvent.MessageChanged(conversation.id, message.id)
-                        })
-                    }
+                    emptyList()
                 }
-            },
-        )
+                is MessageEvent.MessageStatusResolved -> listOf(event.messageID)
+                is MessageEvent.MessageResent -> listOf(event.messageID)
+                is MessageEvent.MessageFailed -> listOf(event.messageID)
+                is MessageEvent.MessageRetrying -> listOf(event.messageID)
+                is MessageEvent.HeardRepeatRecorded -> listOf(event.messageID)
+                is MessageEvent.ReactionReceived -> listOf(event.messageID)
+                is MessageEvent.MessagesRegionUpdated -> event.messageIDs
+                is MessageEvent.RoutingChanged -> emptyList()
+                is MessageEvent.RoomMessageReceived, is MessageEvent.RoomMessageStatusUpdated,
+                is MessageEvent.RoomMessageFailed -> emptyList()
+            }
+            for (id in ids) {
+                val message = store.fetchMessage(EntityKey(radio, id)) ?: continue
+                val belongs = when (conversation) {
+                    is TimelineConversation.Direct -> message.contactID == conversation.contact.id
+                    is TimelineConversation.Channel -> message.channelIndex == conversation.channel.index
+                }
+                if (belongs) {
+                    if (event is MessageEvent.MessageFailed && !message.failureSeen) {
+                        markFailedSendSeenIfVisible(message)
+                        app.refreshConversations()
+                    }
+                    emit(when (event) {
+                        is MessageEvent.DirectMessageReceived, is MessageEvent.ChannelMessageReceived ->
+                            TimelineEvent.MessageReceived(conversation.id, message)
+                        else -> TimelineEvent.MessageChanged(conversation.id, message.id)
+                    })
+                }
+            }
+        }
         override val diagnostics = TimelineDiagnostics { operation, failure -> report(operation, failure) }
     }
 
@@ -628,7 +629,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     }
 }
 
-private fun listEvent(event: MessageEvent): ChatListEvent = when (event) {
+private fun listEvent(event: MessageEvent): ChatListEvent? = when (event) {
+    is MessageEvent.ChannelHistoryDeleted -> null
     is MessageEvent.DirectMessageReceived -> ChatListEvent.DIRECT_MESSAGE_RECEIVED
     is MessageEvent.ChannelMessageReceived -> ChatListEvent.CHANNEL_MESSAGE_RECEIVED
     is MessageEvent.RoomMessageReceived -> ChatListEvent.ROOM_MESSAGE_RECEIVED

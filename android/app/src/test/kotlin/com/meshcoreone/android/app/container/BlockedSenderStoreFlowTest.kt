@@ -7,12 +7,18 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.model.*
+import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.feature.chats.actions.MessageActionsFailure
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
+import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
+import com.meshcoreone.android.feature.chats.timeline.TimelineEvent
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -93,6 +99,25 @@ class BlockedSenderStoreFlowTest : RoomProcessTest() {
             runCurrent()
             assertEquals("Ghost", holder.state.value.blockedSender)
             assertEquals(kept, store.fetchMessage(EntityKey(radio, kept.id)))
+        } finally { h.container.close() }
+    }
+
+    @Test fun historyDeletionRegistersImmediatelyAndInvalidatesOnlyTheMatchingRadio() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            val conversation = TimelineConversation.Channel(ChannelDTO(radioId = radio, index = 0u, name = "Test"))
+            val stream = h.appState.messageEventStream
+            val before = stream.subscriberCount
+            val next = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+                h.container.chatsFeature.timeline(conversation).events.first()
+            }
+            assertEquals(before + 1, stream.subscriberCount)
+            stream.send(MessageEvent.ChannelHistoryDeleted(other))
+            runCurrent()
+            assertFalse(next.isCompleted)
+            h.container.chatsFeature.actions(radio).blockChannelSender(radio, "Spammer")
+            assertEquals(TimelineEvent.HistoryChanged(conversation.id), next.await())
+            assertEquals(before, stream.subscriberCount)
         } finally { h.container.close() }
     }
 

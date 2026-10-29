@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.*
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.actions.MessageActionsFailure
 import com.meshcoreone.android.feature.chats.actions.MessageActionsRoute
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
@@ -117,14 +118,21 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val holder = MessageActionsStateHolder(harness.container.chatsFeature.actions(radio), scope)
         store.saveMessage(message)
+        val selected = ContactDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 0x44 }), name = "Spammer",
+            typeRawValue = 1u, lastHeardTimestamp = 0u)
+        val foreign = selected.copy(radioId = RadioId(UUID(0, 2)))
+        store.saveContact(selected)
+        store.saveContact(foreign)
         db.openHelper.writableDatabase.execSQL(
             "CREATE TRIGGER reject_mounted_block AFTER DELETE ON messages " +
                 "BEGIN SELECT RAISE(FAIL, 'controlled mounted deletion failure'); END",
         )
         val host = mount(holder)
         try {
+            compose.waitUntil(5_000) { holder.state.value.directory.contacts.any { it.id == selected.id } }
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsMessageActionBlockSender))
                 .performScrollTo().performClick()
+            compose.onNode(isToggleable()).assertIsOff().performClick().assertIsOn()
             compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsBlockSenderBlockAnyway)).performClick()
             compose.waitUntil(5_000) { holder.state.value.failure == MessageActionsFailure.BlockFailed }
             val error = AppLocalizableStrings.errorPersistenceSaveFailed(
@@ -132,6 +140,8 @@ class BlockedSenderMountedStoreTest : RoomProcessTest() {
             )
             compose.onNodeWithText(error).performScrollTo().assertIsDisplayed()
             assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+            assertEquals(selected.copy(isBlocked = true), store.fetchContact(EntityKey(radio, selected.id)))
+            assertEquals(foreign, store.fetchContact(EntityKey(foreign.radioId, foreign.id)))
             assertNull(holder.state.value.blockedSender)
             db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_mounted_block")
             compose.onNodeWithText(host.get().getString(AppLocalizableStrings.commonTryAgain))

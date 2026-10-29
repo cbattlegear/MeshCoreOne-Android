@@ -7,7 +7,9 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.model.*
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.app.state.MessageEvent
+import com.meshcoreone.android.feature.chats.actions.BlockedSenderHistoryDeletionException
 import com.meshcoreone.android.feature.chats.actions.MessageActionsFailure
 import com.meshcoreone.android.feature.chats.actions.MessageActionsStateHolder
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
@@ -33,6 +35,11 @@ class BlockedSenderStoreFlowTest : RoomProcessTest() {
         radioId = radio, channelIndex = index, text = "message from $sender", timestamp = 1_700_000_000u,
         createdAt = at, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED,
         senderNodeName = sender,
+    )
+
+    private fun contact(seed: Int) = ContactDTO(
+        UUID.randomUUID(), radio, Bytes(ByteArray(32) { seed.toByte() }), "Selected $seed", typeRawValue = 1u,
+        lastHeardTimestamp = 0u,
     )
 
     // SourceCase: BlockedSenderMessageDeletionTests::Deletes all channel messages from a named sender()
@@ -128,21 +135,74 @@ class BlockedSenderStoreFlowTest : RoomProcessTest() {
         try {
             val spam = channel("Spammer")
             store.saveMessage(spam)
+            val selected = contact(1)
+            val unselected = contact(2)
+            val foreign = selected.copy(radioId = other)
+            for (row in listOf(selected, unselected, foreign)) store.saveContact(row)
             db.openHelper.writableDatabase.execSQL(
                 "CREATE TRIGGER reject_block_delete AFTER DELETE ON messages " +
                     "BEGIN SELECT RAISE(FAIL, 'controlled block deletion failure'); END",
             )
             try {
                 val holder = MessageActionsStateHolder(h.container.chatsFeature.actions(radio), backgroundScope)
-                holder.blockSender(spam, emptySet())
+                holder.blockSender(spam, setOf(selected.id))
                 runCurrent()
                 assertEquals(MessageActionsFailure.BlockFailed, holder.state.value.failure)
                 assertNull(holder.state.value.blockedSender)
                 assertEquals(spam, store.fetchMessage(EntityKey(radio, spam.id)))
                 assertEquals(listOf("Spammer"), store.fetchBlockedChannelSenders(radio).map { it.name })
+                assertEquals(selected.copy(isBlocked = true), store.fetchContact(EntityKey(radio, selected.id)))
+                assertEquals(unselected, store.fetchContact(EntityKey(radio, unselected.id)))
+                assertEquals(foreign, store.fetchContact(EntityKey(other, foreign.id)))
             } finally {
                 db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_block_delete")
             }
+        } finally { h.container.close() }
+    }
+
+    @Test fun failedSenderBlockDoesNotBlockSelectedContactsOrDeleteHistory() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            val spam = channel("Spammer")
+            val selected = contact(1)
+            store.saveMessage(spam)
+            store.saveContact(selected)
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_sender_block AFTER INSERT ON blocked_channel_senders " +
+                    "BEGIN SELECT RAISE(FAIL, 'controlled sender block failure'); END",
+            )
+            try {
+                val holder = MessageActionsStateHolder(h.container.chatsFeature.actions(radio), backgroundScope)
+                holder.blockSender(spam, setOf(selected.id))
+                runCurrent()
+                assertEquals(MessageActionsFailure.BlockFailed, holder.state.value.failure)
+                assertNull(holder.state.value.blockedSender)
+                assertTrue(store.fetchBlockedChannelSenders(radio).isEmpty())
+                assertEquals(selected, store.fetchContact(EntityKey(radio, selected.id)))
+                assertEquals(spam, store.fetchMessage(EntityKey(radio, spam.id)))
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_sender_block")
+            }
+        } finally { h.container.close() }
+    }
+
+    @Test fun aMissingSelectedContactDoesNotPreventBlockingTheRemainingRealContacts() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            val spam = channel("Spammer")
+            val selected = contact(1)
+            val foreign = selected.copy(radioId = other)
+            store.saveMessage(spam)
+            store.saveContact(selected)
+            store.saveContact(foreign)
+            val holder = MessageActionsStateHolder(h.container.chatsFeature.actions(radio), backgroundScope)
+            holder.blockSender(spam, linkedSetOf(UUID.randomUUID(), selected.id))
+            runCurrent()
+            assertEquals(MessageActionsFailure.BlockFailed, holder.state.value.failure)
+            assertNull(holder.state.value.blockedSender)
+            assertEquals(selected.copy(isBlocked = true), store.fetchContact(EntityKey(radio, selected.id)))
+            assertEquals(foreign, store.fetchContact(EntityKey(other, foreign.id)))
+            assertNull(store.fetchMessage(EntityKey(radio, spam.id)))
         } finally { h.container.close() }
     }
 
@@ -161,9 +221,10 @@ class BlockedSenderStoreFlowTest : RoomProcessTest() {
                     "BEGIN SELECT RAISE(FAIL, 'controlled live block deletion failure'); END",
             )
             try {
-                assertFailsWith<PersistenceStoreException> {
+                val failure = assertFailsWith<BlockedSenderHistoryDeletionException> {
                     h.container.chatsFeature.actions(currentRadio).blockChannelSender(currentRadio, "Spammer")
                 }
+                assertIs<PersistenceStoreException>(failure.cause)
                 assertEquals(listOf("Spammer"), store.fetchBlockedChannelSenders(currentRadio).map { it.name })
                 assertTrue(coordinator.isBlockedSender("Spammer"))
                 assertFalse(coordinator.isBlockedSender("Legit"))

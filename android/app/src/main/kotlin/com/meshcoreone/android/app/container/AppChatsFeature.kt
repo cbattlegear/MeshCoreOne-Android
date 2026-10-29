@@ -21,6 +21,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.feature.chats.composer.*
+import com.meshcoreone.android.feature.chats.actions.BlockedSenderHistoryDeletionException
 import com.meshcoreone.android.feature.chats.list.*
 import com.meshcoreone.android.feature.chats.timeline.*
 import com.meshcoreone.android.feature.chats.rooms.*
@@ -241,18 +242,30 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
             store.saveBlockedChannelSender(BlockedChannelSenderDTO(name = senderName, radioId = radioId))
             container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
-            store.deleteChannelMessages(senderName, radioId)
+            try {
+                store.deleteChannelMessages(senderName, radioId)
+            } catch (failure: PersistenceStoreException) {
+                throw BlockedSenderHistoryDeletionException(failure)
+            }
             app.messageEventStream.send(MessageEvent.ChannelHistoryDeleted(radioId))
             app.refreshConversations()
         }
         override suspend fun blockContacts(contactIds: Set<UUID>) {
+            var firstFailure: Exception? = null
             for (id in contactIds) {
-                val contact = store.fetchContact(EntityKey(radio, id))
-                    ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
-                store.saveContact(contact.copy(isBlocked = true))
+                try {
+                    val contact = store.fetchContact(EntityKey(radio, id))
+                        ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
+                    store.saveContact(contact.copy(isBlocked = true))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    if (firstFailure == null) firstFailure = failure
+                }
             }
             container.sessions.current?.takeIf { it.token.radioId == radio }?.syncCoordinator?.refreshBlockedContactsCache(radio, store)
             app.bumpContactsVersion()
+            firstFailure?.let { throw it }
         }
         override suspend fun setMuted(contactId: UUID, muted: Boolean) {
             store.setContactMuted(EntityKey(radio, contactId), muted)

@@ -25,6 +25,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import org.junit.jupiter.api.TestFactory
@@ -150,6 +151,174 @@ class RuntimeSimulatorTest {
                 }
             }
         },
+        nativeCase("activation restoration cannot override a newer disconnect or in-flight connection") {
+            for (phase in listOf("reset", "intent", "last", "platform")) {
+                for (action in listOf("disconnect", "wifi", "bluetooth")) {
+                    val delegate = TestPreferences()
+                    val entered = CompletableDeferred<Unit>()
+                    val release = CompletableDeferred<Unit>()
+                    val physicalEntered = CompletableDeferred<Unit>()
+                    val physicalRelease = CompletableDeferred<Unit>()
+                    var readsUntilGate = when (phase) { "intent" -> 1; "last" -> 2; else -> 0 }
+                    var armed = false
+                    val preferences = object : ProcessConnectionPreferences by delegate {
+                        override suspend fun read(): RuntimePreferenceSnapshot {
+                            val snapshot = delegate.read()
+                            if (armed && readsUntilGate > 0 && --readsUntilGate == 0) {
+                                entered.complete(Unit)
+                                release.await()
+                            }
+                            return snapshot
+                        }
+                    }
+                    val fixture = SimulatorFixture(this, preferences)
+                    try {
+                        fixture.devices.saveDevice(fixture.device)
+                        fixture.last.persist(fixture.id, RadioId(fixture.id), "Simulator")
+                        if (phase == "reset") {
+                            fixture.beforeReset = { entered.complete(Unit); release.await() }
+                        }
+                        if (phase == "platform") {
+                            fixture.platform.onActivate = { entered.complete(Unit); release.await() }
+                        }
+                        fixture.configurePhysicalRadio = { radio ->
+                            radio.beforeConnect = { physicalEntered.complete(Unit); physicalRelease.await() }
+                        }
+                        armed = true
+                        val activation = backgroundScope.async { fixture.manager.activate() }
+                        runCurrent()
+                        assertTrue(entered.isCompleted, "$phase activation gate was not reached")
+
+                        val connection = if (action == "disconnect") {
+                            fixture.manager.disconnect()
+                            null
+                        } else {
+                            val target = if (action == "wifi") ConnectionTarget.WiFi("127.0.0.1", 5000u)
+                                else fixture.platform.target
+                            backgroundScope.async { fixture.manager.connect(target) }.also {
+                                runCurrent()
+                                assertTrue(physicalEntered.isCompleted, "$phase $action connection did not start")
+                                assertEquals(DeviceConnectionState.CONNECTING, fixture.manager.connectionState)
+                            }
+                        }
+
+                        release.complete(Unit)
+                        runCurrent()
+                        activation.await()
+                        assertEquals(1, fixture.platform.activationCount)
+                        assertTrue(fixture.links.isEmpty(), "$phase $action must not restore the simulator")
+                        assertFalse(fixture.manager.isSimulatorConnection)
+                        if (connection == null) {
+                            assertEquals(DeviceConnectionState.DISCONNECTED, fixture.manager.connectionState)
+                            assertEquals(ConnectionIntent.UserDisconnected, fixture.manager.connectionIntent)
+                            assertEquals(ConnectionIntent.UserDisconnected, fixture.last.restoredIntent())
+                        } else {
+                            assertFalse(connection.isCancelled, "$phase $action must retain its connection")
+                            assertEquals(DeviceConnectionState.CONNECTING, fixture.manager.connectionState)
+                            physicalRelease.complete(Unit)
+                            runCurrent()
+                            connection.await()
+                            assertEquals(DeviceConnectionState.READY, fixture.manager.connectionState)
+                            assertEquals(1, fixture.physicalLinks.size)
+                            assertTrue(fixture.manager.connectionIntent.wantsConnection)
+                        }
+                        fixture.manager.activate()
+                        assertEquals(1, fixture.platform.activationCount)
+                    } finally {
+                        release.complete(Unit)
+                        physicalRelease.complete(Unit)
+                        fixture.manager.close()
+                    }
+                }
+            }
+        },
+        nativeCase("activation preserves a physical connection already in progress or ready") {
+            for (action in listOf("wifi", "bluetooth")) {
+                for (ready in listOf(false, true)) {
+                    val entered = CompletableDeferred<Unit>()
+                    val release = CompletableDeferred<Unit>()
+                    val fixture = SimulatorFixture(this)
+                    try {
+                        fixture.devices.saveDevice(fixture.device)
+                        fixture.last.persist(fixture.id, RadioId(fixture.id), "Simulator")
+                        fixture.configurePhysicalRadio = { radio ->
+                            radio.beforeConnect = { entered.complete(Unit); release.await() }
+                        }
+                        val target = if (action == "wifi") ConnectionTarget.WiFi("127.0.0.1", 5000u)
+                            else fixture.platform.target
+                        val connection = backgroundScope.async { fixture.manager.connect(target) }
+                        runCurrent()
+                        assertTrue(entered.isCompleted)
+                        if (ready) {
+                            release.complete(Unit)
+                            runCurrent()
+                            connection.await()
+                            assertEquals(DeviceConnectionState.READY, fixture.manager.connectionState)
+                        }
+
+                        fixture.manager.activate()
+                        assertEquals(1, fixture.platform.activationCount)
+                        assertTrue(fixture.manager.connectionIntent.wantsConnection)
+                        assertTrue(fixture.links.isEmpty())
+                        assertFalse(fixture.manager.isSimulatorConnection)
+                        assertFalse(connection.isCancelled)
+                        if (!ready) {
+                            assertEquals(DeviceConnectionState.CONNECTING, fixture.manager.connectionState)
+                            release.complete(Unit)
+                            runCurrent()
+                            connection.await()
+                        }
+                        assertEquals(DeviceConnectionState.READY, fixture.manager.connectionState)
+                        assertEquals(1, fixture.physicalLinks.size)
+                    } finally {
+                        release.complete(Unit)
+                        fixture.manager.close()
+                    }
+                }
+            }
+        },
+        nativeCase("cancelled activation propagates and can restore the simulator on retry") {
+            for (phase in listOf("read", "platform")) {
+                val delegate = TestPreferences()
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                var blockRead = phase == "read"
+                val preferences = object : ProcessConnectionPreferences by delegate {
+                    override suspend fun read(): RuntimePreferenceSnapshot {
+                        val snapshot = delegate.read()
+                        if (blockRead) {
+                            blockRead = false
+                            entered.complete(Unit)
+                            release.await()
+                        }
+                        return snapshot
+                    }
+                }
+                val fixture = SimulatorFixture(this, preferences)
+                try {
+                    fixture.devices.saveDevice(fixture.device)
+                    fixture.last.persist(fixture.id, RadioId(fixture.id), "Simulator")
+                    if (phase == "platform") {
+                        fixture.platform.onActivate = { entered.complete(Unit); release.await() }
+                    }
+                    val activation = backgroundScope.async { fixture.manager.activate() }
+                    runCurrent()
+                    assertTrue(entered.isCompleted)
+                    activation.cancelAndJoin()
+                    assertTrue(activation.isCancelled)
+                    assertTrue(fixture.links.isEmpty())
+                    release.complete(Unit)
+                    fixture.manager.activate()
+                    assertEquals(DeviceConnectionState.READY, fixture.manager.connectionState)
+                    assertTrue(fixture.manager.isSimulatorConnection)
+                    assertEquals(1, fixture.links.size)
+                    assertEquals(if (phase == "read") 1 else 2, fixture.platform.activationCount)
+                } finally {
+                    release.complete(Unit)
+                    fixture.manager.close()
+                }
+            }
+        },
     )
 }
 
@@ -164,11 +333,13 @@ private class SimulatorFixture(test: TestScope, preferences: ProcessConnectionPr
     val physicalLinks = mutableListOf<TestLink>()
     val services = mutableListOf<TestServices>()
     val order = mutableListOf<String>()
+    var beforeReset: suspend () -> Unit = {}
+    var configurePhysicalRadio: (TestRadio) -> Unit = {}
     var device = DeviceDTO(id = id, radioId = RadioId(id), publicKey = publicKey, nodeName = "Simulator")
     val manager = ConnectionManager(
         devices,
         object : RoomPersisting by rejectingRole(RoomPersisting::class.java) {
-            override suspend fun resetAllRemoteNodeSessionConnections() = Unit
+            override suspend fun resetAllRemoteNodeSessionConnections() = beforeReset()
         },
         rejectingRole(ContactPersisting::class.java),
         object : ProcessRuntimeMaintenance {
@@ -183,10 +354,13 @@ private class SimulatorFixture(test: TestScope, preferences: ProcessConnectionPr
                     connectedDevice = { device },
                     seed = { order += "seed"; devices.saveDevice(device) },
                 ).also { links += it }
-                is ConnectionTarget.WiFi -> TestLink(
-                    TestRadio().also { it.key = Bytes(ByteArray(32) { 0x41 }) }, TransportType.WIFI,
+                is ConnectionTarget.WiFi, is ConnectionTarget.Bluetooth -> TestLink(
+                    TestRadio().also {
+                        it.key = Bytes(ByteArray(32) { 0x41 })
+                        configurePhysicalRadio(it)
+                    },
+                    if (target is ConnectionTarget.WiFi) TransportType.WIFI else TransportType.BLUETOOTH,
                 ).also { physicalLinks += it }
-                is ConnectionTarget.Bluetooth -> error("Unexpected Bluetooth link")
             }
         },
         RuntimeServiceFactory { inputs, ownership ->

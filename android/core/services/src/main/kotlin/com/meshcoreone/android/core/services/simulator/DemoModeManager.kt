@@ -22,12 +22,7 @@ data class DemoModeState(val isUnlocked: Boolean, val isEnabled: Boolean)
  */
 class DemoModeManager(private val defaults: DemoModeDefaults) {
     private val writes = Mutex()
-    private val mutableState = MutableStateFlow(
-        DemoModeState(
-            isUnlocked = defaults.bool(IS_DEMO_MODE_UNLOCKED_KEY),
-            isEnabled = defaults.bool(IS_DEMO_MODE_ENABLED_KEY),
-        ),
-    )
+    private val mutableState = MutableStateFlow(readState())
 
     /** Current flags, for observers (the Swift `@Observable` surface). */
     val state: StateFlow<DemoModeState> = mutableState.asStateFlow()
@@ -39,13 +34,13 @@ class DemoModeManager(private val defaults: DemoModeDefaults) {
     suspend fun setUnlocked(value: Boolean) = writes.withLock {
         defaults.set(value, IS_DEMO_MODE_UNLOCKED_KEY)
         currentCoroutineContext().ensureActive()
-        mutableState.value = mutableState.value.copy(isUnlocked = value)
+        mutableState.value = readState()
     }
 
     suspend fun setEnabled(value: Boolean) = writes.withLock {
         defaults.set(value, IS_DEMO_MODE_ENABLED_KEY)
         currentCoroutineContext().ensureActive()
-        mutableState.value = mutableState.value.copy(isEnabled = value)
+        mutableState.value = readState()
     }
 
     /**
@@ -58,6 +53,11 @@ class DemoModeManager(private val defaults: DemoModeDefaults) {
         mutableState.value = DemoModeState(isUnlocked = true, isEnabled = true)
         logger.info("Demo mode unlocked and enabled")
     }
+
+    private fun readState() = DemoModeState(
+        isUnlocked = defaults.bool(IS_DEMO_MODE_UNLOCKED_KEY),
+        isEnabled = defaults.bool(IS_DEMO_MODE_ENABLED_KEY),
+    )
 
     companion object {
         /** `AppStorageKey.isDemoModeUnlocked.rawValue`. */

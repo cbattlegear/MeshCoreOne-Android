@@ -181,47 +181,65 @@ class ConnectionManager(
     suspend fun activate() = activation.withLock {
         if (activated) return@withLock
         requireOpen()
+        val (restorationRevision, mayRestore) = synchronized(lock) {
+            revision to (values.value.state == DeviceConnectionState.DISCONNECTED && pending?.isActive != true)
+        }
         // Native v1 already has stable IDs and sort dates: do not run Apple's destructive backfills.
         rooms.resetAllRemoteNodeSessionConnections()
-        setIntent(lastConnection.restoredIntent())
-        val last = lastConnection.read()
-        val id = last.deviceId
+        val restored = mayRestore && setIntentIfCurrent(lastConnection.restoredIntent(), restorationRevision)
+        val id = if (restored) lastConnection.read().deviceId else null
         val device = id?.let { devices.fetchDevice(it) }
         val wifi = device?.connectionMethods?.filterIsInstance<ConnectionMethod.WiFi>()?.firstOrNull()
         val simulator = id != null && id == simulatorDeviceId
         var target: ConnectionTarget? = null
-        if (connectionIntent != ConnectionIntent.UserDisconnected && id != null) {
-            setIntent(ConnectionIntent.WantsConnection())
+        if (connectionIntent != ConnectionIntent.UserDisconnected && id != null &&
+            setIntentIfCurrent(ConnectionIntent.WantsConnection(), restorationRevision)
+        ) {
             if (wifi == null && !simulator) {
                 target = platform.targetForDevice(id)
-                if (target != null) ensureRestorationRoute(target, synchronized(lock) { revision })
+                if (target != null) {
+                    try { ensureRestorationRoute(target, restorationRevision) }
+                    catch (cancelled: CancellationException) {
+                        currentCoroutineContext().ensureActive()
+                        if (isRevisionCurrent(restorationRevision)) throw cancelled
+                    }
+                }
             }
         }
+        requireOpen()
         try { platform.activate() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { reportIssue(failure, LifecycleStage.CONNECT) }
         activated = true
+        if (!isRevisionCurrent(restorationRevision)) return@withLock
         if (connectionIntent == ConnectionIntent.UserDisconnected) return@withLock
         if (id == null || connectionState.isOperational) return@withLock
         if (simulator) {
-            try { connect(ConnectionTarget.Simulator) }
+            try { connectAttempt(ConnectionTarget.Simulator, false, false, restorationRevision) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { reporter.report(RuntimeDiagnostic.Failure("activate.simulator", failure)) }
             return@withLock
         }
         if (wifi != null) {
-            try { connect(ConnectionTarget.WiFi(wifi.host, wifi.port)); return@withLock }
+            try { connectAttempt(ConnectionTarget.WiFi(wifi.host, wifi.port), false, false, restorationRevision); return@withLock }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { reporter.report(RuntimeDiagnostic.Failure("activate.wifi", failure)) }
         }
+        val routeRevision = if (wifi == null) restorationRevision else synchronized(lock) { revision }
         if (target == null) target = platform.targetForDevice(id)
+        if (!isRevisionCurrent(routeRevision)) return@withLock
         if (target == null) {
             reportIssue(ConnectionError.DeviceNotFound(), LifecycleStage.CONNECT)
             return@withLock
         }
         val resolvedTarget = target
         try {
-            val route = ensureRestorationRoute(resolvedTarget, synchronized(lock) { revision })
+            val route = try { ensureRestorationRoute(resolvedTarget, routeRevision) }
+            catch (cancelled: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                if (!isRevisionCurrent(routeRevision)) return@withLock
+                throw cancelled
+            }
             val state = platform.state(resolvedTarget)
             if (!isRelevant(route)) return@withLock
             if (state.autoReconnecting || state.connected) {
@@ -1625,6 +1643,7 @@ class ConnectionManager(
     private fun requireRevision(expected: Long) {
         synchronized(lock) { if (closed || revision != expected) throw CancellationException("Superseded connection request") }
     }
+    private fun isRevisionCurrent(expected: Long): Boolean = synchronized(lock) { !closed && revision == expected }
     private fun wantsCurrent(expected: Long): Boolean = synchronized(lock) {
         !closed && revision == expected && connectionIntent.wantsConnection
     }
@@ -1632,10 +1651,19 @@ class ConnectionManager(
     private fun currentTransportType(): TransportType? = synchronized(lock) { (active ?: retained)?.link?.type }
     private suspend fun setIntent(intent: ConnectionIntent) {
         val expected = synchronized(lock) { revision }
-        lastConnection.persistIntent(intent) { synchronized(lock) { revision == expected && !closed } }
-        synchronized(lock) {
-            requireRevision(expected)
-            publishLocked(intent = intent)
+        if (!setIntentIfCurrent(intent, expected)) throw CancellationException("Superseded connection request")
+    }
+    private suspend fun setIntentIfCurrent(intent: ConnectionIntent, expected: Long): Boolean {
+        currentCoroutineContext().ensureActive()
+        if (!isRevisionCurrent(expected)) return false
+        lastConnection.persistIntent(intent) { isRevisionCurrent(expected) }
+        currentCoroutineContext().ensureActive()
+        return synchronized(lock) {
+            if (closed || revision != expected) false
+            else {
+                publishLocked(intent = intent)
+                true
+            }
         }
     }
     private fun intentSummary(): String = when (val intent = connectionIntent) {

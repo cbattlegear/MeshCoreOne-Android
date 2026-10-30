@@ -24,6 +24,7 @@ import com.meshcoreone.android.core.runtime.ConnectionPlatform
 import com.meshcoreone.android.core.runtime.LastConnection
 import com.meshcoreone.android.core.runtime.LastConnectionStore
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.services.simulator.MockDataProvider
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -105,7 +106,8 @@ class ConnectionManagerAppPort(
         manager.connect(ConnectionTarget.WiFi(host, port), forceFullSync, forceReconnect = false)
 
     override suspend fun connect(deviceId: UUID, forceReconnect: Boolean) {
-        val target = platform.targetForDevice(deviceId) ?: throw ConnectionError.DeviceNotFound()
+        val target = if (deviceId == MockDataProvider.simulatorDeviceID) ConnectionTarget.Simulator
+            else platform.targetForDevice(deviceId) ?: throw ConnectionError.DeviceNotFound()
         manager.connect(target, forceFullSync = false, forceReconnect = forceReconnect)
     }
 

@@ -57,7 +57,7 @@ internal fun AppMessageContent(
             var manualImage by remember { mutableStateOf(false) }
             var retry by remember { mutableIntStateOf(0) }
             var fullscreen by remember { mutableStateOf(false) }
-            val inline = entry.isImage
+            val inline = bundledImage || entry.isImage
             val holder = remember(content, message.radioId, message.id, message.text, url, message.isChannelMessage,
                 preferences[AppStorageKey.linkPreviewsEnabled],
                 preferences[AppStorageKey.linkPreviewsAutoResolveDM], preferences[AppStorageKey.linkPreviewsAutoResolveChannels]) {

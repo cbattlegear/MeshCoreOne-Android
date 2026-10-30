@@ -27,6 +27,12 @@ import com.meshcoreone.android.app.container.onboarding.OnboardingPlatform
 import com.meshcoreone.android.app.container.onboarding.WriteBehindOnboardingFlags
 import com.meshcoreone.android.app.content.DataStoreLinkPreviewPreferencesSource
 import com.meshcoreone.android.app.navigation.AppMessageContent
+import com.meshcoreone.android.core.connectivity.ConnectivityDiagnostics
+import com.meshcoreone.android.core.connectivity.SystemConnectivityClock
+import com.meshcoreone.android.core.connectivity.pairing.DevicePairingDelegate
+import com.meshcoreone.android.core.connectivity.pairing.DevicePairingService
+import com.meshcoreone.android.core.connectivity.pairing.PairingCoordinator
+import com.meshcoreone.android.core.contracts.domain.DevicePersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.datastore.AppStorageKey
@@ -37,10 +43,14 @@ import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.maps.MapSnapshotRenderer
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
 import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.model.ConnectionMethod
+import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.RouteType
 import com.meshcoreone.android.core.protocol.model.ContactType
@@ -63,6 +73,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
@@ -72,6 +83,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -102,6 +115,9 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
 
     @Test fun mountedOnboardingConnectsAndTheRealStoreRetainsEverySeedFamily() = runTest {
         val fixture = fixture(this)
+        val subscription = fixture.harness.manager.subscribeTransitions()
+        val transitions = java.util.Collections.synchronizedList(mutableListOf(subscription.initial))
+        val recorder = backgroundScope.launch { subscription.transitions.collect { transitions += it } }
         var firstClosed = false
         try {
             host.get().setContent { MeshCoreTheme(motionScale = 0f) { OnboardingFlow(fixture.onboarding, {}) } }
@@ -127,7 +143,12 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             }
 
             val harness = fixture.harness
-            assertEquals(DeviceConnectionState.READY, harness.manager.connectionState)
+            assertEquals(
+                DeviceConnectionState.READY, harness.manager.connectionState,
+                "transitions=$transitions; diagnostics=${harness.diagnostics}; " +
+                    "created=${harness.lifecycle.created.size}; tornDown=${harness.lifecycle.tornDown.size}; " +
+                    "preferences=${harness.preferences.values}",
+            )
             assertTrue(harness.manager.isSimulatorConnection)
             assertEquals(MockDataProvider.simulatorDeviceID, harness.manager.connectedDevice?.id)
             assertEquals(MockDataProvider.simulatorDeviceID, store.fetchActiveDevice()?.id)
@@ -200,6 +221,8 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
                 restored.container.close()
             }
         } finally {
+            recorder.cancel()
+            subscription.close()
             fixture.close(closeHarness = !firstClosed)
         }
     }
@@ -257,6 +280,84 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             assertEquals(OnboardingConnectOutcome.Connected, fixture.onboarding.demo.connectDemo())
             assertSeedFamilies()
             assertTrue(fixture.harness.links.radios.isEmpty())
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test fun savedDeviceReconnectUsesSimulatorButPhysicalIdsStillUseBluetooth() = runTest {
+        val fixture = fixture(this)
+        try {
+            assertEquals(OnboardingConnectOutcome.Connected, fixture.onboarding.demo.connectDemo())
+            val harness = fixture.harness
+            val port = harness.container.connectionPort
+            port.refreshLastConnection()
+            val saved = assertNotNull(port.lastConnectedDeviceId)
+            assertEquals(MockDataProvider.simulatorDeviceID, saved)
+
+            for (forceReconnect in listOf(false, true)) {
+                port.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+                port.connect(saved, forceReconnect)
+                assertEquals(DeviceConnectionState.READY, harness.manager.connectionState)
+                assertTrue(harness.manager.isSimulatorConnection)
+                assertEquals(saved, harness.manager.connectedDevice?.id)
+                assertTrue(harness.links.radios.isEmpty())
+            }
+
+            val physical = harness.target()
+            port.connect(physical.deviceId, forceReconnect = false)
+            assertEquals(DeviceConnectionState.READY, harness.manager.connectionState)
+            assertFalse(harness.manager.isSimulatorConnection)
+            assertEquals(physical.deviceId, harness.manager.connectedDevice?.id)
+            assertEquals(TransportType.BLUETOOTH, harness.links.links.single().type)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test fun removingAPhysicalAssociationDemotesItWithoutDisconnectingTheSimulator() = runTest {
+        val fixture = fixture(this)
+        try {
+            assertEquals(OnboardingConnectOutcome.Connected, fixture.onboarding.demo.connectDemo())
+            val harness = fixture.harness
+            val physicalId = UUID.randomUUID()
+            val physical = DeviceDTO(
+                id = physicalId,
+                radioId = RadioId(UUID.randomUUID()),
+                publicKey = Bytes(ByteArray(32) { 0x41 }),
+                nodeName = "Physical radio",
+                connectionMethods = SnapshotList(listOf(ConnectionMethod.Bluetooth(physicalId))),
+            )
+            store.saveDevice(physical)
+            val completed = CompletableDeferred<Throwable?>()
+            val devices = object : DevicePersisting by store {
+                override suspend fun demoteDeviceToGhost(id: UUID) {
+                    store.demoteDeviceToGhost(id)
+                    completed.complete(null)
+                }
+            }
+            val pairing = object : DevicePairingService by harness.pairing {
+                override var delegate: DevicePairingDelegate? = null
+                override fun isDeviceConnectable(id: UUID) = id != physicalId
+            }
+            PairingCoordinator(
+                RuntimePairingPort(harness.manager, RuntimePlatformAdapter(newConnectivity(harness.pairing))),
+                pairing, devices, NoSystemLinks, {}, SystemConnectivityClock(), backgroundScope,
+                ConnectivityDiagnostics { _, failure -> if (failure != null) completed.complete(failure) },
+            )
+            assertNotNull(pairing.delegate).devicePairingDidRemoveDevice(pairing, physicalId)
+            harness.eventually("physical association removal") { completed.isCompleted }
+            assertNull(completed.await(), "association removal must reach ghost demotion")
+            assertNull(store.fetchDevice(physicalId))
+            val ghost = assertNotNull(store.fetchDevice(physical.radioId))
+            assertNotEquals(physicalId, ghost.id)
+            assertFalse(ghost.isActive)
+            assertTrue(ghost.connectionMethods.isEmpty())
+            assertEquals(DeviceConnectionState.READY, harness.manager.connectionState)
+            assertTrue(harness.manager.isSimulatorConnection)
+            assertEquals(MockDataProvider.simulatorDeviceID, store.fetchActiveDevice()?.id)
+            harness.container.connectionPort.refreshLastConnection()
+            assertEquals(MockDataProvider.simulatorDeviceID, harness.container.connectionPort.lastConnectedDeviceId)
         } finally {
             fixture.close()
         }

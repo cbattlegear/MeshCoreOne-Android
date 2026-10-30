@@ -45,6 +45,6 @@ class SimulatorRuntimeLink(
     override suspend fun setSessionLive(token: SessionToken?) = Unit
     override suspend fun recordBondVerification(deviceId: UUID, at: Instant) =
         error("Simulator has no Bluetooth bond")
-    override suspend fun clearBondVerification(deviceId: UUID) = error("Simulator has no Bluetooth bond")
+    override suspend fun clearBondVerification(deviceId: UUID) = Unit
     override suspend fun mayRefreshBond(deviceId: UUID): Boolean = false
 }

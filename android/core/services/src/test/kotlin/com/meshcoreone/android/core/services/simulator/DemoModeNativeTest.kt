@@ -138,6 +138,32 @@ class DemoModeNativeTest {
                 assertEquals(DemoModeState(true, true), manager.state.value)
             }
         },
+        native("individual setters refresh both committed flags after a cancelled unlock") {
+            for (changeUnlocked in listOf(false, true)) {
+                SimulatorTestSupport.blocking {
+                    val backing = InMemoryDemoModeDefaults()
+                    val defaults = object : DemoModeDefaults {
+                        var cancelAfterCommit = true
+                        override fun bool(forKey: String) = backing.bool(forKey)
+                        override suspend fun setAll(values: Map<String, Boolean>) {
+                            backing.setAll(values)
+                            if (cancelAfterCommit) kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!.cancel()
+                        }
+                    }
+                    val manager = DemoModeManager(defaults)
+                    val first = async { manager.unlock() }
+                    assertFailsWith<kotlinx.coroutines.CancellationException> { first.await() }
+                    assertEquals(DemoModeState(false, false), manager.state.value)
+                    assertEquals(DemoModeState(true, true), DemoModeManager(backing).state.value)
+
+                    defaults.cancelAfterCommit = false
+                    if (changeUnlocked) manager.setUnlocked(false) else manager.setEnabled(false)
+                    val expected = if (changeUnlocked) DemoModeState(false, true) else DemoModeState(true, false)
+                    assertEquals(expected, manager.state.value)
+                    assertEquals(expected, DemoModeManager(backing).state.value)
+                }
+            }
+        },
         native("concurrent changes wait for the prior durable commit") {
             SimulatorTestSupport.blocking {
                 val entered = CompletableDeferred<Unit>()

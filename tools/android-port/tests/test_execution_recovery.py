@@ -194,7 +194,10 @@ class ExecutionRecoveryTests(unittest.TestCase):
             return
         selected_repo = self.root / "selected-repository"
         selected_repo.mkdir()
-        with patch.object(recovery, "launcher_alive", return_value=False), \
+        with patch.dict(os.environ, {
+            "ANDROID_PORT_LEDGER": str(self.ledger.path),
+            "WSLENV": "EXISTING/p:ANDROID_PORT_LEDGER/p",
+        }), patch.object(recovery, "launcher_alive", return_value=False), \
                 patch.object(recovery.subprocess, "check_output",
                              side_effect=lambda command, **kwargs: "/mnt/c/" + Path(command[-1]).name), \
                 patch.object(recovery.subprocess, "run",
@@ -204,64 +207,237 @@ class ExecutionRecoveryTests(unittest.TestCase):
                 self.ledger, self.receipt, cancel=True, distribution="Fixture-Distro", repo=selected_repo
             )
         command = transport.call_args.args[0]
-        self.assertEqual(command[:4], ["wsl.exe", "--distribution", "Fixture-Distro", "--"])
+        self.assertEqual(command[:4], ["wsl.exe", "--distribution", "Fixture-Distro", "--exec"])
         request = json.loads(transport.call_args.kwargs["input"])
         self.assertEqual(request["receipt"], self.receipt)
-        self.assertEqual(request["admission"], "/mnt/c/admission.json")
         self.assertEqual(request["repository"], "/mnt/c/" + selected_repo.name)
-        self.assertEqual(request["windows_launcher_pid"], self.receipt["payload"]["pid"])
+        self.assertEqual(set(request), {"receipt", "repository"})
+        self.assertEqual(transport.call_args.kwargs["env"]["ANDROID_PORT_LEDGER"], str(self.ledger.path))
+        self.assertEqual(transport.call_args.kwargs["env"]["WSLENV"], "EXISTING/p:ANDROID_PORT_LEDGER")
         self.assertEqual(self.ledger.hard_lock_records(), [self.receipt])
         self.assertEqual(self.audit_rows(), [])
 
-    def test_linux_handoff_requires_trusted_source_and_exited_windows_launcher(self):
+    def test_cancellation_authority_rejects_forged_receipt_before_liveness(self):
+        forged = copy.deepcopy(self.receipt)
+        forged["payload"]["pid"] -= 1
+        with patch.object(recovery, "launcher_alive", return_value=False) as launcher, \
+                self.assertRaisesRegex(PortError, "canonical execution ownership"):
+            recovery.authorize_cancellation(self.ledger, forged)
+        launcher.assert_not_called()
+        with patch.object(recovery, "launcher_alive", return_value=True), \
+                self.assertRaisesRegex(PortError, "active"):
+            recovery.authorize_cancellation(self.ledger, self.receipt)
+        self.assertEqual(self.ledger.hard_lock_records(), [self.receipt])
+        self.assertEqual(self.audit_rows(), [])
+
+    def test_windows_authority_checks_canonical_receipt_and_source(self):
         request = {
-            "receipt": self.receipt, "admission": str(self.admission),
-            "repository": str(self.root), "windows_launcher_pid": self.receipt["payload"]["pid"],
+            "receipt": self.receipt, "repository": str(self.root),
+            "script": str(Path(recovery.__file__).resolve()),
         }
-        with patch.object(recovery, "validate_trusted_source", side_effect=PortError("candidate source")), \
-                patch.object(recovery, "windows_launcher_alive") as launcher, \
+        for forged in (False, True):
+            submitted = copy.deepcopy(request)
+            if forged:
+                submitted["receipt"]["payload"]["pid"] -= 1
+            with patch.object(recovery.sys, "platform", "win32"), \
+                    patch.object(recovery, "trusted_context", return_value=self.ledger) as trusted, \
+                    patch.object(recovery, "launcher_alive", return_value=False), \
+                    patch("sys.stdin", io.StringIO(json.dumps(submitted))), \
+                    patch.object(recovery.sys, "argv", ["execution_recovery.py", "--windows-authorize"]), \
+                    contextlib.redirect_stdout(io.StringIO()) as output, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(recovery.main(), int(forged))
+            trusted.assert_called_once_with(self.root)
+            if forged:
+                self.assertEqual(output.getvalue(), "")
+            else:
+                self.assertEqual(json.loads(output.getvalue()), {
+                    "receipt_sha256": recovery.receipt_key(self.receipt),
+                    "repository": self.ledger.repository,
+                })
+
+    def test_linux_handoff_requires_independent_windows_authority(self):
+        request = {
+            "receipt": self.receipt, "repository": str(self.root),
+        }
+        forged = copy.deepcopy(request)
+        forged["receipt"]["payload"]["pid"] -= 1
+        for submitted, reason in ((request, "unreviewed source"), (forged, "canonical ownership")):
+            with patch.object(recovery, "authorize_windows_handoff", side_effect=PortError(reason)), \
+                    patch.object(recovery, "cancel_supervisor") as cancel, \
+                    patch("sys.stdin", io.StringIO(json.dumps(submitted))), \
+                    patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(recovery.main(), 1)
+            cancel.assert_not_called()
+
+        old_forgery = {**forged, "windows_launcher_pid": forged["receipt"]["payload"]["pid"]}
+        with patch.object(recovery, "authorize_windows_handoff") as authority, \
                 patch.object(recovery, "cancel_supervisor") as cancel, \
-                patch("sys.stdin", io.StringIO(json.dumps(request))), \
+                patch("sys.stdin", io.StringIO(json.dumps(old_forgery))), \
                 patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]), \
                 contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(recovery.main(), 1)
-        launcher.assert_not_called()
+        authority.assert_not_called()
         cancel.assert_not_called()
 
-        wrong_pid = {**request, "windows_launcher_pid": 1234}
-        with patch.object(recovery, "validate_trusted_source") as trusted, \
-                patch.object(recovery, "windows_launcher_alive") as launcher, \
-                patch.object(recovery, "cancel_supervisor") as cancel, \
-                patch("sys.stdin", io.StringIO(json.dumps(wrong_pid))), \
-                patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]), \
-                contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(recovery.main(), 1)
-        trusted.assert_not_called()
-        launcher.assert_not_called()
-        cancel.assert_not_called()
-
-        with patch.object(
-            recovery, "validate_trusted_source", return_value="fixture/repository"
-        ), \
-                patch.object(recovery, "windows_launcher_alive", return_value=True), \
-                patch.object(recovery, "cancel_supervisor") as cancel, \
-                patch("sys.stdin", io.StringIO(json.dumps(request))), \
-                patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]), \
-                contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(recovery.main(), 1)
-        cancel.assert_not_called()
-
-        with patch.object(
-            recovery, "validate_trusted_source", return_value="fixture/repository"
-        ), \
+        with patch.object(recovery, "authorize_windows_handoff") as authority, \
+                patch.object(recovery, "validate_trusted_source", side_effect=AssertionError("no guest Git")), \
                 patch.object(recovery, "trusted_context", side_effect=AssertionError("guest must not open a ledger")), \
                 patch("controller.ledger.Ledger", side_effect=AssertionError("guest must not construct a ledger")), \
-                patch.object(recovery, "windows_launcher_alive", return_value=False), \
+                patch.object(recovery.subprocess, "check_output", return_value=str(self.admission)), \
                 patch.object(recovery, "cancel_supervisor") as cancel, \
                 patch("sys.stdin", io.StringIO(json.dumps(request))):
             with patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]):
                 self.assertEqual(recovery.main(), 0)
-        cancel.assert_called_once()
+        authority.assert_called_once_with(self.receipt, self.root)
+        cancel.assert_called_once_with(self.admission, self.receipt, recovery.advisory_source())
+
+    def test_windows_bridge_binds_response_and_uses_native_source(self):
+        response = {
+            "receipt_sha256": recovery.receipt_key(self.receipt), "repository": self.ledger.repository,
+        }
+        with patch.object(recovery.subprocess, "check_output",
+                          side_effect=[r"C:\fixture repo", r"C:\fixture repo\recovery.py"]), \
+                patch.object(recovery.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    [], 0, stdout=json.dumps(response)
+                )) as run:
+            recovery.authorize_windows_handoff(self.receipt, self.root)
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command"])
+        self.assertIn("Get-Command python.exe", command[4])
+        self.assertIn("--windows-authorize", command[4])
+        self.assertEqual(json.loads(run.call_args.kwargs["input"]), {
+            "receipt": self.receipt, "repository": r"C:\fixture repo",
+            "script": r"C:\fixture repo\recovery.py",
+        })
+        for output in ("{}", "{", json.dumps({**response, "receipt_sha256": "0" * 64})):
+            with patch.object(recovery.subprocess, "check_output", return_value=r"C:\fixture"), \
+                    patch.object(recovery.subprocess, "run", return_value=subprocess.CompletedProcess(
+                        [], 0, stdout=output
+                    )), self.assertRaises(PortError):
+                recovery.authorize_windows_handoff(self.receipt, self.root)
+        with patch.object(recovery.subprocess, "check_output", return_value=r"C:\fixture"), \
+                patch.object(recovery.subprocess, "run", side_effect=subprocess.CalledProcessError(
+                    1, ["fixture"], stderr="BLOCKED: canonical owner changed"
+                )), self.assertRaisesRegex(PortError, "canonical owner changed"):
+            recovery.authorize_windows_handoff(self.receipt, self.root)
+
+    def test_windows_native_authority_supports_linked_worktree(self):
+        if os.name != "nt":
+            with patch.object(recovery.sys, "argv", ["execution_recovery.py", "--windows-authorize"]), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(recovery.main(), 1)
+            return
+        source = self.root / "source"
+        controller = source / "tools/android-port/controller"
+        local = source / "tools/android-port/local"
+        controller.mkdir(parents=True)
+        local.mkdir()
+        actual = Path(recovery.__file__).resolve().parents[1]
+        for path in (actual / "controller").glob("*.py"):
+            shutil.copyfile(path, controller / path.name)
+        for name in ("reserve.py", "check.py", "advisory.py"):
+            shutil.copyfile(actual / "local" / name, local / name)
+        policy = source / "docs/android/automation-policy.json"
+        policy.parent.mkdir(parents=True)
+        policy.write_text(json.dumps({"repository": self.ledger.repository}), encoding="utf-8")
+
+        def git(*arguments):
+            return subprocess.check_output(["git", "-C", str(source), *arguments], stderr=subprocess.STDOUT)
+
+        git("init", "--quiet")
+        git("config", "user.name", "Recovery fixture")
+        git("config", "user.email", "fixture@example.invalid")
+        git("add", ".")
+        git("commit", "--quiet", "-m", "Trusted recovery fixture")
+        git("update-ref", "refs/remotes/origin/main", "HEAD")
+        git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        linked = self.root / "Windows linked worktree \u00e9"
+        git("worktree", "add", "--quiet", "--detach", str(linked), "HEAD")
+        self.assertTrue((linked / ".git").is_file())
+        request = {
+            "receipt": self.receipt, "repository": str(linked),
+            "script": str(Path(recovery.__file__).resolve()),
+        }
+        environment = {**os.environ, "ANDROID_PORT_LEDGER": str(self.ledger.path)}
+        for forged in (False, True):
+            submitted = copy.deepcopy(request)
+            if forged:
+                submitted["receipt"]["payload"]["pid"] -= 1
+            result = subprocess.run(
+                [sys.executable, "-X", "utf8", request["script"], "--windows-authorize"],
+                input=json.dumps(submitted), text=True, capture_output=True, env=environment,
+            )
+            self.assertEqual(result.returncode, int(forged), result.stderr)
+            if not forged:
+                self.assertEqual(json.loads(result.stdout)["receipt_sha256"],
+                                 recovery.receipt_key(self.receipt))
+        with patch.dict(os.environ, {"ANDROID_PORT_LEDGER": str(self.ledger.path)}):
+            for forged in (False, True):
+                submitted = copy.deepcopy(self.receipt)
+                if forged:
+                    submitted["payload"]["pid"] -= 1
+                with patch.object(recovery.subprocess, "check_output",
+                                  side_effect=[str(linked), request["script"]]):
+                    if forged:
+                        with self.assertRaisesRegex(PortError, "canonical execution ownership"):
+                            recovery.authorize_windows_handoff(submitted, linked)
+                    else:
+                        recovery.authorize_windows_handoff(submitted, linked)
+
+    def test_process_disappearance_is_a_process_lookup_failure(self):
+        with patch.object(Path, "read_text", side_effect=FileNotFoundError), \
+                self.assertRaises(ProcessLookupError):
+            recovery.process_stat(123)
+
+    def test_cancellation_retries_vanished_pin_freeze_and_final_snapshots(self):
+        self.proof()
+        for vanish_at in (1, 2, 3):
+            reads = 0
+
+            def stat(pid):
+                nonlocal reads
+                if pid == 102:
+                    reads += 1
+                    if reads == vanish_at:
+                        raise ProcessLookupError("fixture exit race")
+                return {"state": "T", "parent": 101 if pid == 102 else 1, "start": pid}
+
+            with self.subTest(vanish_at=vanish_at), \
+                    patch.object(recovery.sys, "platform", "linux"), \
+                    patch.object(recovery.os, "pidfd_open", side_effect=lambda pid: pid + 100, create=True), \
+                    patch.object(recovery.os, "close"), \
+                    patch.object(recovery.signal, "pidfd_send_signal", create=True) as send, \
+                    patch.object(recovery.signal, "SIGSTOP", 19, create=True), \
+                    patch.object(recovery.signal, "SIGCONT", 18, create=True), \
+                    patch.object(recovery.signal, "SIGKILL", 9, create=True), \
+                    patch.object(recovery, "supervisor_pid", return_value=101), \
+                    patch.object(recovery, "owned_pids", return_value={102}), \
+                    patch.object(recovery, "owned_by", return_value=True), \
+                    patch.object(recovery, "process_stat", side_effect=stat), \
+                    patch.object(recovery.select, "select", side_effect=lambda fds, _w, _e, timeout:
+                                 (fds if timeout else [], [], [])):
+                recovery.cancel_supervisor(self.admission, self.receipt, Path("fixture"))
+            self.assertIn(((202, 9), {}), [(call.args, call.kwargs) for call in send.call_args_list])
+
+    def test_exited_supervisor_still_requires_its_real_completion(self):
+        for completed in (False, True):
+            if completed:
+                self.proof()
+            with self.subTest(completed=completed), \
+                    patch.object(recovery.sys, "platform", "linux"), \
+                    patch.object(recovery.os, "pidfd_open", side_effect=ProcessLookupError, create=True), \
+                    patch.object(recovery.signal, "pidfd_send_signal", create=True) as send, \
+                    patch.object(recovery, "supervisor_pid", return_value=101), \
+                    patch.object(recovery.time, "monotonic", side_effect=[0, recovery.RECOVERY_SECONDS + 1]):
+                if completed:
+                    recovery.cancel_supervisor(self.admission, self.receipt, Path("fixture"))
+                else:
+                    with self.assertRaisesRegex(PortError, "did not emit cleanup proof"):
+                        recovery.cancel_supervisor(self.admission, self.receipt, Path("fixture"))
+            send.assert_not_called()
+        self.assertEqual(self.ledger.hard_lock_records(), [self.receipt])
 
     def test_selected_repository_is_passed_to_owner_recovery(self):
         selected_repo = self.root / "selected-repository"
@@ -366,6 +542,10 @@ class SupervisorRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(PortError, "actual supported Linux"):
                 recovery.cancel_supervisor(Path("missing"), {}, Path("missing"))
             return
+        self.assertTrue(
+            hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"),
+            "The Linux test interpreter must expose both pidfd APIs; cancellation was not exercised",
+        )
         with tempfile.TemporaryDirectory(prefix="owned-recovery-") as directory:
             root = Path(directory).resolve()
             control = root / "control"

@@ -179,9 +179,17 @@ On native Linux omit `--distribution`. Windows requires the original distributio
 explicitly and keeps all SQLite actions on Windows; the guest receives only the
 invocation handoff. The handoff carries the selected `--repo` root even when the
 operator launched the command from another working directory. The Linux entry
-validates reviewed default-base source and policy without constructing or opening
-a ledger, then asks Windows whether the receipt-bound originating launcher PID is
-still alive. Missing WSL-to-Windows liveness tooling fails closed. The tool
+calls back to native Windows Python through `powershell.exe`. Windows verifies
+reviewed default-base source/policy with native Git, compares the entire submitted
+receipt with canonical ownership, and checks the original launcher's liveness and
+admission. The response is bound to the exact receipt digest and repository; submitted
+PIDs are not independent authority. Native Git supports Windows-created linked
+worktrees without asking Linux Git to interpret their Windows `.git` paths.
+The guest never constructs or opens a ledger. An existing `ANDROID_PORT_LEDGER`
+is carried unchanged through `WSLENV`, without path-translation flags for that
+variable; unrelated entries are preserved. Windows interop needs `wslpath`,
+`powershell.exe`, native Git and `python.exe` on the Windows command path.
+Missing or failed Windows authorization retains ownership. The tool
 verifies the admission, trusted retained supervisor bytes,
 exact command arguments, same OS principal and actual open admission inode. It
 supports both snapshot supervisors and the existing direct trusted adapter
@@ -192,6 +200,11 @@ them and emit its own completion. Unknown/ambiguous supervision, lost control in
 unbounded descendants or missing completion retain ownership. It never writes a
 replacement cleanup proof, signals a name-based process group, kills the supervisor
 to manufacture success, or adopts an unrelated execution.
+Both `os.pidfd_open` and `signal.pidfd_send_signal` must be exposed by the actual
+Linux interpreter; matching the Python version alone is insufficient. Normal exits
+during pin, freeze and final identity snapshots are retried within the bounded
+deadline, without weakening ancestry/pidfd checks. An exited supervisor still
+requires its genuine completion before ownership can be removed.
 
 Taking ownership means finishing the abandoned invocation and launching a **new**
 check, not renaming or inheriting live work. The combined command recovers only the

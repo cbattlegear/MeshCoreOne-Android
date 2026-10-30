@@ -150,7 +150,10 @@ def admission_binding(admission, receipt):
 
 
 def process_stat(pid):
-    values = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    try:
+        values = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    except FileNotFoundError as error:
+        raise ProcessLookupError(f"Process {pid} exited during recovery") from error
     return {"state": values[0], "parent": int(values[1]), "start": int(values[19])}
 
 
@@ -230,12 +233,19 @@ def supervisor_pid(admission, receipt, trusted_advisory):
 
 def cancel_supervisor(admission, receipt, trusted_advisory):
     """Cancel only pidfd-pinned descendants; leave the real subreaper alive to emit its proof."""
-    if not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"):
+    if (
+        not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open")
+        or not hasattr(signal, "pidfd_send_signal")
+    ):
         raise PortError("Owned cancellation requires the actual supported Linux pidfd host")
     root = supervisor_pid(admission, receipt, trusted_advisory)
     descriptors, stopped = {}, set()
-    root_fd = os.pidfd_open(root)
     deadline = time.monotonic() + RECOVERY_SECONDS
+    try:
+        root_fd = os.pidfd_open(root)
+    except ProcessLookupError:
+        wait_cleanup(admission, deadline)
+        return
 
     def pin(pid):
         descriptor = os.pidfd_open(pid)
@@ -264,32 +274,44 @@ def cancel_supervisor(admission, receipt, trusted_advisory):
         while True:
             children = owned_pids(root)
             if not children:
-                raise PortError("Supervisor has no bound work to cancel; await genuine completion")
+                break
             for pid in children:
                 if pid not in descriptors:
                     try:
                         descriptor = pin(pid)
-                        signal.pidfd_send_signal(descriptor, signal.SIGSTOP)
                         stopped.add(pid)
+                        signal.pidfd_send_signal(descriptor, signal.SIGSTOP)
                     except ProcessLookupError:
                         continue
-            frozen = all(process_stat(pid)["state"] in ("T", "t", "Z")
-                         for pid in owned_pids(root))
+            try:
+                frozen = all(process_stat(pid)["state"] in ("T", "t", "Z")
+                             for pid in owned_pids(root))
+            except ProcessLookupError:
+                frozen = False
             if frozen and owned_pids(root) <= set(descriptors):
                 break
             if time.monotonic() >= deadline:
                 raise PortError("Owned descendants could not be bounded; ownership retained")
             time.sleep(0.01)
         for pid, (descriptor, start) in descriptors.items():
-            try:
-                if process_stat(pid)["start"] != start or not owned_by(pid, root):
-                    raise PortError("Descendant identity changed; ownership retained")
-                signal.pidfd_send_signal(descriptor, signal.SIGKILL)
-            except ProcessLookupError:
-                continue
+            while True:
+                try:
+                    if process_stat(pid)["start"] != start or not owned_by(pid, root):
+                        raise PortError("Descendant identity changed; ownership retained")
+                    signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                    break
+                except ProcessLookupError:
+                    if select.select([descriptor], [], [], 0)[0]:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise PortError("Descendant snapshot remained unstable; ownership retained")
+                    time.sleep(0.01)
         for descriptor, _ in descriptors.values():
             if not select.select([descriptor], [], [], max(0, deadline - time.monotonic()))[0]:
                 raise PortError("Owned process termination unproven; ownership retained")
+    except ProcessLookupError:
+        if not select.select([root_fd], [], [], 0)[0]:
+            raise PortError("Supervisor snapshot remained unstable; ownership retained")
     finally:
         for pid in stopped:
             try:
@@ -303,6 +325,10 @@ def cancel_supervisor(admission, receipt, trusted_advisory):
         for descriptor, _ in descriptors.values():
             os.close(descriptor)
         os.close(root_fd)
+    wait_cleanup(admission, deadline)
+
+
+def wait_cleanup(admission, deadline):
     # Only the existing supervisor writes cleanup.json, including the real failed/cancelled status.
     while not (admission.parent / "cleanup.json").is_file():
         if time.monotonic() >= deadline:
@@ -327,16 +353,14 @@ def cancel_owned(receipt, distribution=None, *, repo=None):
         return
     if not distribution:
         raise PortError("Windows recovery requires the explicit original WSL distribution")
-    prefix = ["wsl.exe", "--distribution", distribution, "--"]
+    prefix = ["wsl.exe", "--distribution", distribution, "--exec"]
 
     def linux_path(path):
         return subprocess.check_output([*prefix, "wslpath", "-u", str(path)], text=True).strip()
 
     request = {
         "receipt": receipt,
-        "admission": linux_path(admission),
         "repository": linux_path((repo or Path.cwd()).resolve()),
-        "windows_launcher_pid": receipt["payload"]["pid"],
     }
     command = [
         *prefix, "bash", "-c",
@@ -344,28 +368,66 @@ def cancel_owned(receipt, distribution=None, *, repo=None):
         'exec "${ANDROID_LOCAL_PYTHON:-$work/venv312/bin/python}" "$1" --linux-cancel',
         "--", linux_path(Path(__file__).resolve()),
     ]
-    subprocess.run(command, input=json.dumps(request), text=True, check=True, timeout=RECOVERY_SECONDS + 15)
+    environment = os.environ.copy()
+    if environment.get("ANDROID_PORT_LEDGER"):
+        entries = [entry for entry in environment.get("WSLENV", "").split(":")
+                   if entry and entry.split("/", 1)[0].upper() != "ANDROID_PORT_LEDGER"]
+        environment["WSLENV"] = ":".join([*entries, "ANDROID_PORT_LEDGER"])
+    subprocess.run(
+        command, input=json.dumps(request), text=True, check=True,
+        timeout=RECOVERY_SECONDS + 30, env=environment,
+    )
 
 
-def windows_launcher_alive(pid):
-    if type(pid) is not int or pid <= 0:
-        raise PortError("Windows recovery handoff requires the actual positive launcher PID")
+def authorize_cancellation(ledger, receipt):
+    receipt_key(receipt)
+    if ledger.repository != receipt["repository"] or receipt not in ledger.hard_lock_records():
+        raise PortError("Cancellation receipt differs from canonical execution ownership")
+    if launcher_alive(receipt["payload"]["pid"]):
+        raise PortError("Original launcher may still be active; recovery refuses live ownership")
+    admission_binding(Path(receipt["payload"]["completion"]).with_name("admission.json"), receipt)
+
+
+def authorize_windows_handoff(receipt, repo):
+    def windows_path(path):
+        return subprocess.check_output(
+            ["wslpath", "-w", str(path)], text=True, encoding="utf-8"
+        ).strip()
+
+    request = {
+        "receipt": receipt, "repository": windows_path(repo),
+        "script": windows_path(Path(__file__).resolve()),
+    }
     command = (
-        "& { param([int]$processId) "
-        "try { Get-Process -Id $processId -ErrorAction Stop | Out-Null; exit 0 } "
-        "catch [Microsoft.PowerShell.Commands.ProcessCommandException] { exit 3 } "
-        "catch { exit 4 } }"
+        "$ErrorActionPreference = 'Stop'; "
+        "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); "
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+        "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+        "$json = [Console]::In.ReadToEnd(); "
+        "$request = ConvertFrom-Json -InputObject $json; "
+        "$python = Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1; "
+        "$json | & $python.Source -X utf8 $request.script --windows-authorize; "
+        "exit $LASTEXITCODE"
     )
     try:
         result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command, str(pid)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            input=json.dumps(request), text=True, encoding="utf-8",
+            capture_output=True, check=True, timeout=15,
         )
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or "").strip() or f"exit {error.returncode}"
+        raise PortError(f"Windows ownership/source verification failed: {detail}") from error
     except (OSError, subprocess.SubprocessError) as error:
-        raise PortError("Cannot verify the original Windows launcher from the WSL guest") from error
-    if result.returncode not in (0, 3):
-        raise PortError("Windows launcher liveness check failed; ownership retained")
-    return result.returncode == 0
+        raise PortError(f"Cannot invoke Windows ownership/source verification: {error}") from error
+    try:
+        response = json.loads(result.stdout)
+    except ValueError as error:
+        raise PortError("Malformed Windows ownership authorization response") from error
+    if response != {
+        "receipt_sha256": receipt_key(receipt), "repository": receipt["repository"],
+    }:
+        raise PortError("Windows authorization differs from this exact recovery invocation")
 
 
 def recover(ledger, receipt, *, cancel=False, distribution=None, repo=None):
@@ -422,8 +484,6 @@ def validate_trusted_source(repo):
             raise PortError(f"Recovery requires reviewed default-base source: {relative}")
     sys.path.insert(0, str(repo / "tools/android-port/local"))
     import reserve
-    from controller.ledger import Ledger
-
     current_revision, policy = reserve.trusted_default_policy(repo)
     if current_revision != revision:
         raise PortError("Trusted recovery default-base authority changed during validation")
@@ -440,25 +500,43 @@ def trusted_context(repo):
 
 
 def main(argv=None):
+    if argv is None and sys.argv[1:] == ["--windows-authorize"]:
+        try:
+            if sys.platform != "win32":
+                raise PortError("Canonical Windows ownership must be verified on Windows")
+            request = json.load(sys.stdin)
+            if (
+                not isinstance(request, dict) or set(request) != {"receipt", "repository", "script"}
+                or not isinstance(request["repository"], str)
+                or not isinstance(request["script"], str)
+                or Path(request["script"]).resolve() != Path(__file__).resolve()
+            ):
+                raise PortError("Malformed Windows ownership verification request")
+            ledger = trusted_context(Path(request["repository"]))
+            authorize_cancellation(ledger, request["receipt"])
+            print(json.dumps({
+                "receipt_sha256": receipt_key(request["receipt"]), "repository": ledger.repository,
+            }))
+            return 0
+        except (PortError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as error:
+            print(f"BLOCKED: {error}", file=sys.stderr)
+            return 1
     if argv is None and sys.argv[1:] == ["--linux-cancel"]:
         # A Windows-ledger handoff never opens or substitutes a Linux database.
         try:
             request = json.load(sys.stdin)
             if (
                 not isinstance(request, dict)
-                or set(request) != {"receipt", "admission", "repository", "windows_launcher_pid"}
-                or not isinstance(request["receipt"], dict)
-                or not isinstance(request["admission"], str)
+                or set(request) != {"receipt", "repository"}
                 or not isinstance(request["repository"], str)
-                or type(request["windows_launcher_pid"]) is not int
-                or request["windows_launcher_pid"] != request["receipt"].get("payload", {}).get("pid")
             ):
                 raise PortError("Malformed or wrong-invocation Windows-to-Linux recovery handoff")
             receipt_key(request["receipt"])
-            validate_trusted_source(Path(request["repository"]))
-            if windows_launcher_alive(request["windows_launcher_pid"]):
-                raise PortError("Original Windows launcher is still active; recovery refused")
-            admission = Path(request["admission"])
+            authorize_windows_handoff(request["receipt"], Path(request["repository"]))
+            admission = Path(subprocess.check_output([
+                "wslpath", "-u",
+                str(PureWindowsPath(request["receipt"]["payload"]["completion"]).with_name("admission.json")),
+            ], text=True, encoding="utf-8").strip())
             cancel_supervisor(admission, request["receipt"], advisory_source())
             return 0
         except (PortError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as error:

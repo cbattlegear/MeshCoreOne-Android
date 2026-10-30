@@ -177,10 +177,12 @@ python .\tools\android-port\controller\execution_recovery.py recover --owner loc
 
 On native Linux omit `--distribution`. Windows requires the original distribution
 explicitly and keeps all SQLite actions on Windows; the guest receives only the
-invocation handoff. Before signalling, the Linux entry independently verifies
-reviewed default-base controller source and asks Windows whether the exact
-originating launcher PID is still alive. Missing WSL-to-Windows liveness tooling
-fails closed. The tool verifies the admission, trusted retained supervisor bytes,
+invocation handoff. The handoff carries the selected `--repo` root even when the
+operator launched the command from another working directory. The Linux entry
+validates reviewed default-base source and policy without constructing or opening
+a ledger, then asks Windows whether the receipt-bound originating launcher PID is
+still alive. Missing WSL-to-Windows liveness tooling fails closed. The tool
+verifies the admission, trusted retained supervisor bytes,
 exact command arguments, same OS principal and actual open admission inode. It
 supports both snapshot supervisors and the existing direct trusted adapter
 supervisor path.

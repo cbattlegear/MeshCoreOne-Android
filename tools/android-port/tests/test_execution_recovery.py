@@ -192,19 +192,23 @@ class ExecutionRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(PortError, "entire original"):
                 recovery.receipt_key({})
             return
+        selected_repo = self.root / "selected-repository"
+        selected_repo.mkdir()
         with patch.object(recovery, "launcher_alive", return_value=False), \
                 patch.object(recovery.subprocess, "check_output",
                              side_effect=lambda command, **kwargs: "/mnt/c/" + Path(command[-1]).name), \
                 patch.object(recovery.subprocess, "run",
                              side_effect=subprocess.CalledProcessError(1, ["test-wsl"])) as transport, \
                 self.assertRaises(subprocess.CalledProcessError):
-            recovery.recover(self.ledger, self.receipt, cancel=True, distribution="Fixture-Distro")
+            recovery.recover(
+                self.ledger, self.receipt, cancel=True, distribution="Fixture-Distro", repo=selected_repo
+            )
         command = transport.call_args.args[0]
         self.assertEqual(command[:4], ["wsl.exe", "--distribution", "Fixture-Distro", "--"])
         request = json.loads(transport.call_args.kwargs["input"])
         self.assertEqual(request["receipt"], self.receipt)
         self.assertEqual(request["admission"], "/mnt/c/admission.json")
-        self.assertEqual(request["repository"], "/mnt/c/" + Path.cwd().name)
+        self.assertEqual(request["repository"], "/mnt/c/" + selected_repo.name)
         self.assertEqual(request["windows_launcher_pid"], self.receipt["payload"]["pid"])
         self.assertEqual(self.ledger.hard_lock_records(), [self.receipt])
         self.assertEqual(self.audit_rows(), [])
@@ -214,7 +218,7 @@ class ExecutionRecoveryTests(unittest.TestCase):
             "receipt": self.receipt, "admission": str(self.admission),
             "repository": str(self.root), "windows_launcher_pid": self.receipt["payload"]["pid"],
         }
-        with patch.object(recovery, "trusted_context", side_effect=PortError("candidate source")), \
+        with patch.object(recovery, "validate_trusted_source", side_effect=PortError("candidate source")), \
                 patch.object(recovery, "windows_launcher_alive") as launcher, \
                 patch.object(recovery, "cancel_supervisor") as cancel, \
                 patch("sys.stdin", io.StringIO(json.dumps(request))), \
@@ -225,7 +229,7 @@ class ExecutionRecoveryTests(unittest.TestCase):
         cancel.assert_not_called()
 
         wrong_pid = {**request, "windows_launcher_pid": 1234}
-        with patch.object(recovery, "trusted_context") as trusted, \
+        with patch.object(recovery, "validate_trusted_source") as trusted, \
                 patch.object(recovery, "windows_launcher_alive") as launcher, \
                 patch.object(recovery, "cancel_supervisor") as cancel, \
                 patch("sys.stdin", io.StringIO(json.dumps(wrong_pid))), \
@@ -236,7 +240,9 @@ class ExecutionRecoveryTests(unittest.TestCase):
         launcher.assert_not_called()
         cancel.assert_not_called()
 
-        with patch.object(recovery, "trusted_context", return_value=self.ledger), \
+        with patch.object(
+            recovery, "validate_trusted_source", return_value="fixture/repository"
+        ), \
                 patch.object(recovery, "windows_launcher_alive", return_value=True), \
                 patch.object(recovery, "cancel_supervisor") as cancel, \
                 patch("sys.stdin", io.StringIO(json.dumps(request))), \
@@ -245,13 +251,29 @@ class ExecutionRecoveryTests(unittest.TestCase):
             self.assertEqual(recovery.main(), 1)
         cancel.assert_not_called()
 
-        with patch.object(recovery, "trusted_context", return_value=self.ledger), \
+        with patch.object(
+            recovery, "validate_trusted_source", return_value="fixture/repository"
+        ), \
+                patch.object(recovery, "trusted_context", side_effect=AssertionError("guest must not open a ledger")), \
+                patch("controller.ledger.Ledger", side_effect=AssertionError("guest must not construct a ledger")), \
                 patch.object(recovery, "windows_launcher_alive", return_value=False), \
                 patch.object(recovery, "cancel_supervisor") as cancel, \
                 patch("sys.stdin", io.StringIO(json.dumps(request))):
             with patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]):
                 self.assertEqual(recovery.main(), 0)
         cancel.assert_called_once()
+
+    def test_selected_repository_is_passed_to_owner_recovery(self):
+        selected_repo = self.root / "selected-repository"
+        selected_repo.mkdir()
+        with patch.object(recovery, "trusted_context", return_value=self.ledger), \
+                patch.object(recovery, "recover_owner", return_value={"recovered": True}) as recover_owner, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(recovery.main([
+                "--repo", str(selected_repo), "recover", "--owner", self.receipt["owner"],
+                "--cancel-owned", "--distribution", "Fixture-Distro",
+            ]), 0)
+        self.assertEqual(recover_owner.call_args.kwargs["repo"], selected_repo.resolve())
 
     def test_windows_receipt_is_valid_in_linux_handoff_without_opening_windows_database(self):
         receipt = copy.deepcopy(self.receipt)

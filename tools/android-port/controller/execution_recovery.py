@@ -316,7 +316,7 @@ def advisory_source():
     return source if source.is_file() else root / "advisory.py"
 
 
-def cancel_owned(receipt, distribution=None):
+def cancel_owned(receipt, distribution=None, *, repo=None):
     receipt_key(receipt)
     if launcher_alive(receipt["payload"]["pid"]):
         raise PortError("Original launcher may still be active; recovery refuses live ownership")
@@ -335,7 +335,7 @@ def cancel_owned(receipt, distribution=None):
     request = {
         "receipt": receipt,
         "admission": linux_path(admission),
-        "repository": linux_path(Path.cwd()),
+        "repository": linux_path((repo or Path.cwd()).resolve()),
         "windows_launcher_pid": receipt["payload"]["pid"],
     }
     command = [
@@ -368,24 +368,24 @@ def windows_launcher_alive(pid):
     return result.returncode == 0
 
 
-def recover(ledger, receipt, *, cancel=False, distribution=None):
+def recover(ledger, receipt, *, cancel=False, distribution=None, repo=None):
     receipt_key(receipt)
     # Borrow the exact receipt without relabelling it or releasing an outer context.
     if receipt not in ledger.hard_lock_records():
         return ledger.recover_execution(receipt)  # Only an exact prior audit permits idempotent replay.
     if cancel and not Path(receipt["payload"]["completion"]).exists():
-        cancel_owned(receipt, distribution)
+        cancel_owned(receipt, distribution, repo=repo)
     return ledger.recover_execution(receipt)
 
 
-def recover_owner(ledger, owner, *, cancel=False, distribution=None):
+def recover_owner(ledger, owner, *, cancel=False, distribution=None, repo=None):
     if not isinstance(owner, str) or re.fullmatch(r"local-check:[0-9a-f]{32}", owner) is None:
         raise PortError("Recovery requires the exact local-check invocation owner from status")
     receipts = [row for row in ledger.hard_lock_records() if row["owner"] == owner]
     if len(receipts) > 1:
         raise PortError("Ambiguous execution ownership; select an exact receipt rather than unrelated resources")
     if receipts:
-        return recover(ledger, receipts[0], cancel=cancel, distribution=distribution)
+        return recover(ledger, receipts[0], cancel=cancel, distribution=distribution, repo=repo)
     with ledger.transaction() as connection:
         audits = [dict(row) for row in connection.execute(
             "SELECT * FROM execution_recoveries WHERE repository=?",
@@ -396,8 +396,8 @@ def recover_owner(ledger, owner, *, cancel=False, distribution=None):
     raise PortError("Owner is not held and has no unique recovery audit; cleanup is not established")
 
 
-def trusted_context(repo):
-    """Recovery must be reviewed default-base code, even when the installed runtime is stale."""
+def validate_trusted_source(repo):
+    """Validate reviewed default-base source and policy without opening the execution ledger."""
     repo = repo.resolve()
 
     def git(*args):
@@ -428,6 +428,14 @@ def trusted_context(repo):
     if current_revision != revision:
         raise PortError("Trusted recovery default-base authority changed during validation")
     repository = reserve.repository_identity(policy, "Trusted default-base policy")
+    return repository
+
+
+def trusted_context(repo):
+    repo = repo.resolve()
+    repository = validate_trusted_source(repo)
+    import reserve
+    from controller.ledger import Ledger
     return Ledger(reserve.shared_ledger(repo), repository)
 
 
@@ -447,7 +455,7 @@ def main(argv=None):
             ):
                 raise PortError("Malformed or wrong-invocation Windows-to-Linux recovery handoff")
             receipt_key(request["receipt"])
-            trusted_context(Path(request["repository"]))
+            validate_trusted_source(Path(request["repository"]))
             if windows_launcher_alive(request["windows_launcher_pid"]):
                 raise PortError("Original Windows launcher is still active; recovery refused")
             admission = Path(request["admission"])
@@ -482,7 +490,8 @@ def main(argv=None):
                 or args.parallel_jvm and not args.affected_base
             ):
                 raise PortError("Check requires immutable candidate/base and the existing JVM lane contract")
-        ledger = trusted_context(args.repo)
+        repo = args.repo.resolve()
+        ledger = trusted_context(repo)
         if args.command == "status":
             rows = ledger.hard_lock_records()
             if args.resource:
@@ -504,11 +513,13 @@ def main(argv=None):
         if args.cancel_owned and not (args.receipt or args.owner):
             raise PortError("Cancellation requires the exact invocation owner or receipt")
         if args.owner:
-            result = recover_owner(ledger, args.owner, cancel=args.cancel_owned, distribution=args.distribution)
+            result = recover_owner(
+                ledger, args.owner, cancel=args.cancel_owned, distribution=args.distribution, repo=repo
+            )
             print(json.dumps(result, indent=2))
         elif args.receipt:
             result = recover(ledger, regular_json(args.receipt.absolute()),
-                             cancel=args.cancel_owned, distribution=args.distribution)
+                             cancel=args.cancel_owned, distribution=args.distribution, repo=repo)
             print(json.dumps(result, indent=2))
         if args.command == "recover":
             return 0

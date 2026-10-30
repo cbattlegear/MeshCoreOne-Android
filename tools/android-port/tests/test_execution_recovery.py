@@ -192,14 +192,22 @@ class ExecutionRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(PortError, "entire original"):
                 recovery.receipt_key({})
             return
-        selected_repo = self.root / "selected-repository"
+        selected_repo = self.root / "Windows linked worktree \u00e9"
         selected_repo.mkdir()
-        with patch.dict(os.environ, {
+        native_run = subprocess.run
+
+        def convert(command, **kwargs):
+            output = ("/mnt/c/" + Path(command[-1]).name).encode("utf-8")
+            return native_run(
+                [sys.executable, "-c", f"import sys; sys.stdout.buffer.write({output!r})"],
+                stdout=subprocess.PIPE, check=True, **kwargs,
+            ).stdout
+
+        with patch("locale.getencoding", return_value="cp1252"), patch.dict(os.environ, {
             "ANDROID_PORT_LEDGER": str(self.ledger.path),
             "WSLENV": "EXISTING/p:ANDROID_PORT_LEDGER/p",
         }), patch.object(recovery, "launcher_alive", return_value=False), \
-                patch.object(recovery.subprocess, "check_output",
-                             side_effect=lambda command, **kwargs: "/mnt/c/" + Path(command[-1]).name), \
+                patch.object(recovery.subprocess, "check_output", side_effect=convert), \
                 patch.object(recovery.subprocess, "run",
                              side_effect=subprocess.CalledProcessError(1, ["test-wsl"])) as transport, \
                 self.assertRaises(subprocess.CalledProcessError):
@@ -323,12 +331,7 @@ class ExecutionRecoveryTests(unittest.TestCase):
                 )), self.assertRaisesRegex(PortError, "canonical owner changed"):
             recovery.authorize_windows_handoff(self.receipt, self.root)
 
-    def test_windows_native_authority_supports_linked_worktree(self):
-        if os.name != "nt":
-            with patch.object(recovery.sys, "argv", ["execution_recovery.py", "--windows-authorize"]), \
-                    contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(recovery.main(), 1)
-            return
+    def trusted_checkout(self):
         source = self.root / "source"
         controller = source / "tools/android-port/controller"
         local = source / "tools/android-port/local"
@@ -355,6 +358,15 @@ class ExecutionRecoveryTests(unittest.TestCase):
         git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
         linked = self.root / "Windows linked worktree \u00e9"
         git("worktree", "add", "--quiet", "--detach", str(linked), "HEAD")
+        return linked
+
+    def test_windows_native_authority_supports_linked_worktree(self):
+        if os.name != "nt":
+            with patch.object(recovery.sys, "argv", ["execution_recovery.py", "--windows-authorize"]), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(recovery.main(), 1)
+            return
+        linked = self.trusted_checkout()
         self.assertTrue((linked / ".git").is_file())
         request = {
             "receipt": self.receipt, "repository": str(linked),
@@ -385,6 +397,41 @@ class ExecutionRecoveryTests(unittest.TestCase):
                             recovery.authorize_windows_handoff(submitted, linked)
                     else:
                         recovery.authorize_windows_handoff(submitted, linked)
+
+    def test_selected_checkout_sources_are_verified_before_delegation(self):
+        linked = self.trusted_checkout()
+        self.assertEqual(recovery.validate_trusted_source(linked), self.ledger.repository)
+        native_run = subprocess.run
+
+        def git_only(command, *args, **kwargs):
+            self.assertEqual(command[0], "git", "Unreviewed source must never reach the launcher")
+            return native_run(command, *args, **kwargs)
+
+        for relative, action in (
+            ("controller/ledger.py", "modify"),
+            ("controller/foreign.py", "add"),
+            ("controller/model.py", "delete"),
+            ("local/advisory.py", "modify"),
+        ):
+            target = linked / "tools/android-port" / relative
+            original = target.read_bytes() if target.exists() else None
+            try:
+                if action == "delete":
+                    target.unlink()
+                else:
+                    target.write_bytes((original or b"") + b"\nraise RuntimeError('unreviewed fixture')\n")
+                with self.subTest(relative=relative), \
+                        patch.object(recovery.subprocess, "run", side_effect=git_only) as delegate, \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(recovery.main([
+                        "--repo", str(linked), "check", "--commit", "d" * 40,
+                    ]), 1)
+                self.assertTrue(delegate.called)
+            finally:
+                if original is None:
+                    target.unlink()
+                else:
+                    target.write_bytes(original)
 
     def test_process_disappearance_is_a_process_lookup_failure(self):
         with patch.object(Path, "read_text", side_effect=FileNotFoundError), \
@@ -437,6 +484,22 @@ class ExecutionRecoveryTests(unittest.TestCase):
                     with self.assertRaisesRegex(PortError, "did not emit cleanup proof"):
                         recovery.cancel_supervisor(self.admission, self.receipt, Path("fixture"))
             send.assert_not_called()
+        self.assertEqual(self.ledger.hard_lock_records(), [self.receipt])
+
+    def test_reused_supervisor_pid_is_never_resumed_without_authentication(self):
+        for replacement in (102, PortError("No unique live invocation-bound supervisor")):
+            with self.subTest(replacement=replacement), \
+                    patch.object(recovery.sys, "platform", "linux"), \
+                    patch.object(recovery.os, "pidfd_open", return_value=201, create=True), \
+                    patch.object(recovery.os, "close") as close, \
+                    patch.object(recovery.signal, "pidfd_send_signal", create=True) as send, \
+                    patch.object(recovery, "supervisor_pid", side_effect=[101, replacement]), \
+                    patch.object(recovery, "process_stat", return_value={
+                        "state": "T", "parent": 1, "start": 99,
+                    }), self.assertRaises(PortError):
+                recovery.cancel_supervisor(self.admission, self.receipt, Path("fixture"))
+            send.assert_not_called()
+            close.assert_called_once_with(201)
         self.assertEqual(self.ledger.hard_lock_records(), [self.receipt])
 
     def test_selected_repository_is_passed_to_owner_recovery(self):

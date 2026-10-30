@@ -240,6 +240,7 @@ def cancel_supervisor(admission, receipt, trusted_advisory):
         raise PortError("Owned cancellation requires the actual supported Linux pidfd host")
     root = supervisor_pid(admission, receipt, trusted_advisory)
     descriptors, stopped = {}, set()
+    resume_root = False
     deadline = time.monotonic() + RECOVERY_SECONDS
     try:
         root_fd = os.pidfd_open(root)
@@ -264,6 +265,8 @@ def cancel_supervisor(admission, receipt, trusted_advisory):
         # Pin before revalidating the live authority; never signal a recycled numeric PID.
         if supervisor_pid(admission, receipt, trusted_advisory) != root:
             raise PortError("Supervisor identity changed during recovery")
+        # Record the obligation before stopping, so an interruption cannot strand the verified root.
+        resume_root = True
         signal.pidfd_send_signal(root_fd, signal.SIGSTOP)
         while process_stat(root)["state"] not in ("T", "t"):
             if time.monotonic() >= deadline:
@@ -318,10 +321,11 @@ def cancel_supervisor(admission, receipt, trusted_advisory):
                 signal.pidfd_send_signal(descriptors[pid][0], signal.SIGCONT)
             except ProcessLookupError:
                 pass
-        try:
-            signal.pidfd_send_signal(root_fd, signal.SIGCONT)
-        except ProcessLookupError:
-            pass
+        if resume_root:
+            try:
+                signal.pidfd_send_signal(root_fd, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
         for descriptor, _ in descriptors.values():
             os.close(descriptor)
         os.close(root_fd)
@@ -356,7 +360,9 @@ def cancel_owned(receipt, distribution=None, *, repo=None):
     prefix = ["wsl.exe", "--distribution", distribution, "--exec"]
 
     def linux_path(path):
-        return subprocess.check_output([*prefix, "wslpath", "-u", str(path)], text=True).strip()
+        return subprocess.check_output(
+            [*prefix, "wslpath", "-u", str(path)], text=True, encoding="utf-8"
+        ).strip()
 
     request = {
         "receipt": receipt,
@@ -469,19 +475,29 @@ def validate_trusted_source(repo):
     if not reference.startswith("refs/remotes/origin/"):
         raise PortError("Missing trusted origin default-base authority")
     revision = git("rev-parse", reference + "^{commit}").decode().strip()
-    files = [*Path(__file__).parent.glob("*.py"), repo / "tools/android-port/local/reserve.py",
-             repo / "tools/android-port/local/check.py"]
-    files.append(advisory_source())
-    for path in files:
-        if path.parent == Path(__file__).parent:
-            relative = "tools/android-port/controller/" + path.name
-        elif path == advisory_source():
-            relative = "tools/android-port/local/advisory.py"
-        else:
-            relative = path.relative_to(repo).as_posix()
+    names = {
+        name for name in git(
+            "ls-tree", "--name-only", revision + ":tools/android-port/controller"
+        ).decode("utf-8").splitlines() if name.endswith(".py")
+    }
+    controllers = {Path(__file__).parent.resolve(), repo / "tools/android-port/controller"}
+    if "execution_recovery.py" not in names or any(
+        {path.name for path in directory.glob("*.py")} != names for directory in controllers
+    ):
+        raise PortError("Recovery requires reviewed default-base controller sources in both checkouts")
+    files = {
+        "tools/android-port/controller/" + name: {directory / name for directory in controllers}
+        for name in sorted(names)
+    }
+    for name in ("reserve.py", "check.py", "advisory.py"):
+        relative = "tools/android-port/local/" + name
+        files[relative] = {repo / relative}
+    files["tools/android-port/local/advisory.py"].add(advisory_source())
+    for relative, paths in files.items():
         expected = git("show", revision + ":" + relative)
-        if path.read_bytes().replace(b"\r\n", b"\n") != expected.replace(b"\r\n", b"\n"):
-            raise PortError(f"Recovery requires reviewed default-base source: {relative}")
+        for path in paths:
+            if path.read_bytes().replace(b"\r\n", b"\n") != expected.replace(b"\r\n", b"\n"):
+                raise PortError(f"Recovery requires reviewed default-base source: {relative}")
     sys.path.insert(0, str(repo / "tools/android-port/local"))
     import reserve
     current_revision, policy = reserve.trusted_default_policy(repo)

@@ -183,8 +183,11 @@ calls back to native Windows Python through `powershell.exe`. Windows verifies
 reviewed default-base source/policy with native Git, compares the entire submitted
 receipt with canonical ownership, and checks the original launcher's liveness and
 admission. The response is bound to the exact receipt digest and repository; submitted
-PIDs are not independent authority. Native Git supports Windows-created linked
+PIDs are not independent authority. Controller source membership and bytes are
+validated in both the executing and selected checkouts, along with the selected
+launcher/reservation/supervisor sources, before delegation. Native Git supports Windows-created linked
 worktrees without asking Linux Git to interpret their Windows `.git` paths.
+WSL path output is decoded explicitly as UTF-8, independent of the Windows locale.
 The guest never constructs or opens a ledger. An existing `ANDROID_PORT_LEDGER`
 is carried unchanged through `WSLENV`, without path-translation flags for that
 variable; unrelated entries are preserved. Windows interop needs `wslpath`,
@@ -205,6 +208,8 @@ Linux interpreter; matching the Python version alone is insufficient. Normal exi
 during pin, freeze and final identity snapshots are retried within the bounded
 deadline, without weakening ancestry/pidfd checks. An exited supervisor still
 requires its genuine completion before ownership can be removed.
+A root rejected during reauthentication is never resumed: only an authenticated
+root that this recovery attempts to stop acquires a resume obligation.
 
 Taking ownership means finishing the abandoned invocation and launching a **new**
 check, not renaming or inheriting live work. The combined command recovers only the

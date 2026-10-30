@@ -2,7 +2,7 @@
   "wp": "WP-218",
   "issue": 397,
   "pinned_source": "db14559b39d32322b06477c6ae676112f583db50",
-  "status": "the three findings in the latest automated review have focused source/test repairs; new exact-head hosted validation and approval review are pending",
+  "status": "findings from the latest Copilot review have focused code and regression-test repairs; the newest exact-head CI and approval review are pending",
   "concerns": {
     "DATA-22": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
@@ -14,7 +14,7 @@
     },
     "DATA-24": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
-      "case": "AppChatContent mounts a real two-frame GIF; after trimMemory the production shareMountedImage action still submits the mounted image's original bytes without refetch"
+      "case": "AppChatContent produces a real two-frame GIF, the actual AppMessageContent Compose consumer mounts it, and after trimMemory the displayed image remains mounted while shareMountedImage submits the original encoded bytes without refetch"
     },
     "DATA-25": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/ImageHeaderDecoderTest.kt",
@@ -37,8 +37,8 @@
       "case": "legitimate-domain decisions use the bundled malware-domain snapshot; loaded and refreshed domains plus queried hosts are normalized case-insensitively; successful network refreshes publish a policy revision so mounted cached images are rechecked"
     },
     "DATA-30": {
-      "evidence": "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtraction.kt; #403",
-      "case": "explicit schemes are normalized and stop at adjacent angle-bracketed links; bare and www domains use HTTPS; punctuation and unmatched delimiters are bounded; interior apostrophes survive in explicit, bare-domain and opaque URI spans while trailing quote punctuation is trimmed; quoted email local parts including escaped characters and Unicode-adjacent partial ASCII hosts are excluded; non-HTTP URIs, URL-like email local parts and nested candidates are suppressed without discarding outer query URLs; punycode TLDs are complete, malware hosts are checked case-insensitively, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
+      "evidence": "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtraction.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt; #403",
+      "case": "explicit schemes are normalized and stop at adjacent angle-bracketed links; bare and www domains use HTTPS; punctuation and unmatched delimiters are bounded; interior apostrophes survive in explicit, bare-domain and opaque URI spans while trailing quote punctuation is trimmed; quoted email local parts including escaped characters and Unicode-adjacent partial ASCII hosts are excluded; arbitrary hierarchical and opaque non-HTTP URIs, URL-like email local parts and nested candidates are suppressed without discarding outer query URLs; punycode TLDs are complete, malware hosts are checked case-insensitively, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
     },
     "DATA-31": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt",
@@ -58,13 +58,15 @@
     "mounted_image_lifecycle": "Keep the Compose-mounted image keyed to content and URL rather than the global media-resolution counter, preserving the original decoded handle and share bytes across unrelated rebuilds.",
     "malware_refresh": "Publish an observable revision after replacing the malware list; mounted images are hidden until rechecked and each blocked image entry routes through the localized malware warning, including non-first URLs. A Robolectric Compose regression covers a blocked second image.",
     "timeline_miss_cache": "Bound negative persisted-lookup memory by both 10,000 entries and an estimated 4 MiB while retaining cache writes as miss invalidations.",
-    "url_apostrophes": "Allow apostrophes within explicit, bare-domain and URI candidate spans while retaining the existing trailing-quote trimming policy."
+    "url_apostrophes": "Allow apostrophes within explicit, bare-domain and URI candidate spans while retaining the existing trailing-quote trimming policy.",
+    "unsupported_uri_prefetch": "Treat arbitrary opaque URI schemes as candidate blockers so embedded domains do not create web prefetch work; an adjacent explicit HTTP(S) URL after a prose label remains extractable.",
+    "mounted_gif": "Exercise the actual Compose AppMessageContent image mount and retain its visible GIF and original share bytes across process memory trim."
   },
   "verification": {
     "manifest_configured": false,
     "declared_commands": [],
     "local_test_execution": "not run; no approved WP-218 command is declared",
-    "hosted_exact_candidate": "Historical exact workflow 41118672455 passed on 0b9a53541623971b1ba8cfbbdb9b64a3a5cd33dc. The merged candidate ff9430d9378b281cccdd9e340bb26520e21680ca passed workflow 41122960507, including Android build, controller policy, and scope classification; later review candidates identified follow-up concerns. Candidate 9affad21edf964724d2cefee275e9d93ffccdf66 passed controller policy and scope classification; its Linux Android build was still running when the three latest review findings were repaired. No local Kotlin/Gradle tests were run because WP-218 declares no commands; no physical-device/iOS result is claimed.",
+    "hosted_exact_candidate": "Historical exact workflow 41118672455 passed on 0b9a53541623971b1ba8cfbbdb9b64a3a5cd33dc. The merged candidate ff9430d9378b281cccdd9e340bb26520e21680ca passed workflow 41122960507, including Android build, controller policy, and scope classification. Candidate 4fab30b14c4de52a76b82a9a3e4dae9490fa92d5 passed controller policy and scope classification but its Android build failed in :app:compileDebugUnitTestKotlin due to unresolved Compose test imports (`assertExists` and `waitUntil`) in the newly added malware warning test. The next candidate removes those imports and expands the regression coverage for arbitrary opaque URIs and actual mounted GIF retention; exact-head hosted validation is pending. No local Kotlin/Gradle tests were run because WP-218 declares no commands; no physical-device/iOS result is claimed.",
     "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
   },
   "limitations": [

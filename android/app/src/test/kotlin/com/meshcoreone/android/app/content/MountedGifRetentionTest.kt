@@ -3,15 +3,24 @@ package com.meshcoreone.android.app.content
 
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.AppChatContent
 import com.meshcoreone.android.app.container.ChatImage
+import com.meshcoreone.android.app.navigation.AppMessageContent
 import com.meshcoreone.android.app.navigation.shareMountedImage
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
 import java.io.File
@@ -29,8 +38,12 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.junit.Rule
+import org.junit.Before
+import org.junit.After
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.android.controller.ActivityController
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -40,6 +53,18 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class MountedGifRetentionTest {
     @get:Rule val temporary = TemporaryFolder()
+    @get:Rule val compose = createEmptyComposeRule()
+    private lateinit var activityController: ActivityController<ComponentActivity>
+
+    @Before
+    fun createActivity() {
+        activityController = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+    }
+
+    @After
+    fun destroyActivity() {
+        activityController.pause().stop().destroy()
+    }
 
     private fun context(directory: File): Context {
         val application = ApplicationProvider.getApplicationContext<Context>()
@@ -103,14 +128,36 @@ class MountedGifRetentionTest {
             assertSame(mounted.encodedData, cacheOnly.encodedData)
             assertEquals(1, fetchCalls)
 
+            val message = MessageDTO(
+                radioId = RadioId(java.util.UUID.randomUUID()),
+                text = url,
+                timestamp = 1u,
+            )
+            compose.runOnUiThread {
+                activityController.get().setContent {
+                    MeshCoreTheme(motionScale = 0f) {
+                        AppMessageContent(owner, message, { operation, error ->
+                            throw AssertionError(operation, error)
+                        }, onMap = {})
+                    }
+                }
+            }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithContentDescription(url, useUnmergedTree = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithContentDescription(url, useUnmergedTree = true).assertExists()
+
             owner.trimMemory()
+            compose.onNodeWithContentDescription(url, useUnmergedTree = true).assertExists()
             var sharedBytes: ByteArray? = null
-            shareMountedImage(owner, mounted) { sharedBytes = it }
+            shareMountedImage(owner, cacheOnly) { sharedBytes = it }
             assertContentEquals(bytes, sharedBytes)
             assertEquals(1, fetchCalls)
         } finally {
             withContext(NonCancellable) {
                 lifetime.cancelAndJoin()
+                compose.runOnUiThread { activityController.get().setContent {} }
                 try {
                     content?.close()
                 } finally {

@@ -154,6 +154,16 @@ class LinkUrlExtractionTest {
     }
 
     @Test
+    fun `does not extract web domains embedded in arbitrary opaque URIs`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("custom:tracker.example/path"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("magnet:?xt=urn:btih:tracker.example"))
+        assertEquals(
+            "https://Example.COM/Page",
+            LinkUrlExtraction.extractFirstUrl("Link:HTTPS://Example.COM/Page"),
+        )
+    }
+
+    @Test
     fun `does not extract URL-like email local parts as web links`() {
         assertNull(LinkUrlExtraction.extractFirstUrl("Contact project.com/sales@example.com"))
         assertEquals(

@@ -15,6 +15,11 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertIs
+import kotlin.test.assertSame
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import com.meshcoreone.android.feature.chats.timeline.ChatTimelineDependencies
+import com.meshcoreone.android.feature.chats.timeline.TimelineDataSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.test.runTest
@@ -69,6 +74,9 @@ class SharedTimelineIntegrationTest : RoomProcessTest() {
             assertEquals(render.hasMoreMessages, mounted.hasMoreMessages)
             assertEquals(render.isLoadingOlder, mounted.isLoadingOlder)
             assertEquals(render.totalFetchedCount.toInt(), mounted.totalFetchedCount)
+            sibling.updateScrollPosition(null, isAtLatest = false)
+            assertSame(mounted.rows, sibling.state.value.rows, "scroll-only updates reuse grouped rows")
+            assertSame(mounted.renderItems, sibling.state.value.renderItems, "scroll does not rebuild render wrappers")
             assertFalse(sibling.state.value.hasMoreMessages)
             sibling.close()
             assertNotNull(coordinator.bindWriter(Any(), ChatWriterRole.PRIME), "explicit close permits prime immediately")
@@ -77,6 +85,77 @@ class SharedTimelineIntegrationTest : RoomProcessTest() {
             first.close()
             second?.close()
             harness.container.close()
+        }
+
+        @Test fun suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging() = runTest {
+            for (explicitRelease in listOf(false, true)) {
+                val radio = RadioId(UUID.fromString(if (explicitRelease) {
+                    "44444444-4444-4444-4444-444444444444"
+                } else "55555555-5555-5555-5555-555555555555"))
+                store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Radio"))
+                val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
+                store.saveContact(contact)
+                repeat(65) { index ->
+                    val date = Instant.ofEpochSecond(1_700_000_000L + index)
+                    store.saveMessage(MessageDTO(radioId = radio, contactID = contact.id, text = "message $index",
+                        timestamp = date.epochSecond.toUInt(), createdAt = date, sortDate = date,
+                        direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED))
+                }
+                val harness = ContainerHarness(this, store)
+                val conversation = TimelineConversation.Direct(contact)
+                val firstStarted = CompletableDeferred<Unit>()
+                val firstRelease = CompletableDeferred<Unit>()
+                val nextStarted = CompletableDeferred<Unit>()
+                val nextRelease = CompletableDeferred<Unit>()
+                fun pausing(started: CompletableDeferred<Unit>, release: CompletableDeferred<Unit>): ChatTimelineDependencies {
+                    val base = harness.container.chatsFeature.timeline(conversation)
+                    return object : ChatTimelineDependencies by base {
+                        override val data = object : TimelineDataSource by base.data {
+                            override suspend fun fetchMessages(conversation: TimelineConversation, limit: Int, offset: Int): List<MessageDTO> {
+                                val page = base.data.fetchMessages(conversation, limit, offset)
+                                if (offset > 0) { started.complete(Unit); release.await() }
+                                return page
+                            }
+                        }
+                    }
+                }
+                val screenScope = CoroutineScope(currentCoroutineContext())
+                val first = ChatViewModel(conversation, pausing(firstStarted, firstRelease), screenScope)
+                var successor: ChatViewModel? = null
+                try {
+                    first.open()
+                    val abandoned = launch { first.loadOlder() }
+                    firstStarted.await()
+                    assertTrue(first.state.value.isLoadingOlder)
+                    if (explicitRelease) {
+                        first.close()
+                        assertFalse(first.state.value.isLoadingOlder)
+                    }
+                    val next = ChatViewModel(conversation, pausing(nextStarted, nextRelease), screenScope)
+                    successor = next
+                    assertFalse(next.state.value.isLoadingOlder, "handoff settles the abandoned owner's spinner")
+                    val opened = launch { next.open() }
+                    firstRelease.complete(Unit)
+                    abandoned.join()
+                    opened.join()
+                    assertEquals(50, next.state.value.messages.size, "stale page did not commit into successor")
+                    val paging = launch { next.loadOlder() }
+                    nextStarted.await()
+                    first.close()
+                    assertTrue(next.state.value.isLoadingOlder, "stale teardown cannot clear successor's live operation")
+                    nextRelease.complete(Unit)
+                    paging.join()
+                    assertEquals(65, next.state.value.messages.size)
+                    assertFalse(next.state.value.isLoadingOlder)
+                    assertFalse(next.state.value.hasMoreMessages)
+                } finally {
+                    firstRelease.complete(Unit)
+                    nextRelease.complete(Unit)
+                    first.close()
+                    successor?.close()
+                    harness.container.close()
+                }
+            }
         }
 
         @Test fun productionDefaultPrimerRefreshesTheSameClosedWindowWithoutMarkingRead() = runTest {

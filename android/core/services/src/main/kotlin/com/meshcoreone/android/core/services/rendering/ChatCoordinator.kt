@@ -197,6 +197,7 @@ class ChatCoordinator internal constructor(
             } else {
                 writerGenerationValue += 1UL
                 renderStateIDValue += 1UL
+                settleReleasedWindowLocked()
                 buildItemsTaskValue?.cancel()
                 buildItemsTaskValue = null
                 writerOwner = WeakReference(owner)
@@ -223,12 +224,21 @@ class ChatCoordinator internal constructor(
             if (writerOwner?.get() !== owner) return
             writerGenerationValue += 1UL
             renderStateIDValue += 1UL
+            settleReleasedWindowLocked()
             buildItemsTaskValue?.cancel()
             buildItemsTaskValue = null
             writerOwner = null
             writerRole = ChatWriterRole.PRIME
             renderItemRebuilderValue = null
             renderStateInvalidatedValue = null
+        }
+
+        private fun settleReleasedWindowLocked() {
+            val state = renderState
+            val phase = if (state.phase == ChatRenderState.LoadPhase.LOADING) ChatRenderState.LoadPhase.UNINITIALIZED else state.phase
+            if (state.isLoadingOlder || state.phase != phase) {
+                renderStateFlowBacking.value = state.with(isLoadingOlder = false, phase = phase)
+            }
         }
     }
 

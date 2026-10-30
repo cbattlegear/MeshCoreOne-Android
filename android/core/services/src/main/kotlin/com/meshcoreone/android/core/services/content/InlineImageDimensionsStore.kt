@@ -134,11 +134,11 @@ class InlineImageDimensionsStore(private val file: File, private val clock: Cloc
         }
 
     override fun close() {
-        synchronized(subscriptionsLock) {
+        val finishing = synchronized(subscriptionsLock) {
             closed = true
-            subscribers.forEach { it.close() }
-            subscribers.clear()
+            subscribers.toList().also { subscribers.clear() }
         }
+        finishing.forEach { it.close() }
     }
 
     /** Wait-free lookup against the in-memory mirror; never touches the filesystem. Returns
@@ -159,9 +159,9 @@ class InlineImageDimensionsStore(private val file: File, private val clock: Cloc
         mutex.withLock {
             entries = entries + (url to Entry(aspect, clock.instant()))
             aspectMirror[url] = aspect
-            synchronized(subscriptionsLock) {
-                subscribers.removeAll { it.trySend(url).isClosed }
-            }
+            val targets = synchronized(subscriptionsLock) { subscribers.toList() }
+            val finished = targets.filter { it.trySend(url).isClosed }.toSet()
+            synchronized(subscriptionsLock) { subscribers.removeAll(finished) }
             persist()
         }
     }

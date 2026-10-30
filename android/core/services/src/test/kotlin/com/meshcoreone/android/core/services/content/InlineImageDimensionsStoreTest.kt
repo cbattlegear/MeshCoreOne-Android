@@ -23,7 +23,6 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
@@ -37,6 +36,21 @@ class InlineImageDimensionsStoreTest {
         val dir = File(System.getProperty("java.io.tmpdir"), "InlineImageDimensionsStoreTest-${UUID.randomUUID()}")
         createdDirs += dir
         return File(dir, "InlineImageDimensions.json")
+    }
+
+    @Test
+    fun `inline subscriber completion cannot mutate a delivery or finish iteration`() = runTest {
+        val store = InlineImageDimensionsStore(tempFile())
+        val first = async(kotlinx.coroutines.Dispatchers.Unconfined) { store.resolutionUpdates.first() }
+        val second = async(kotlinx.coroutines.Dispatchers.Unconfined) { store.resolutionUpdates.first() }
+        store.save("first", 2.0, 1.0)
+        assertEquals("first", first.await())
+        assertEquals("first", second.await())
+        val finishingA = async(kotlinx.coroutines.Dispatchers.Unconfined) { store.resolutionUpdates.toList() }
+        val finishingB = async(kotlinx.coroutines.Dispatchers.Unconfined) { store.resolutionUpdates.toList() }
+        store.close()
+        assertEquals(emptyList(), finishingA.await())
+        assertEquals(emptyList(), finishingB.await())
     }
 
     @AfterTest

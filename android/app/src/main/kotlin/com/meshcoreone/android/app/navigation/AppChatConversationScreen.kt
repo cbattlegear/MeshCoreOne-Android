@@ -38,6 +38,10 @@ internal fun AppChatConversationScreen(
 ) {
     val configuration = MessageBubbleConfiguration.forConversation(timeline.conversation)
     val state by timeline.state.collectAsState()
+    val renderedItems = remember(state.renderItems) {
+        state.renderItems.filterIsInstance<com.meshcoreone.android.app.container.CoordinatedRenderItem>()
+            .associate { it.id to it.item }
+    }
     val draft by composer.state.collectAsState()
     val scope = rememberCoroutineScope()
     var picker by remember { mutableStateOf<MentionPickerContext?>(null) }
@@ -99,8 +103,7 @@ internal fun AppChatConversationScreen(
                 incomingAvatar = incomingAvatar,
                 messageAccessibilityLabel = messageAccessibilityLabel,
                 messageBody = { message, outgoing ->
-                    val item = state.renderItems.filterIsInstance<com.meshcoreone.android.app.container.CoordinatedRenderItem>()
-                        .firstOrNull { it.id == message.id }?.item
+                    val item = renderedItems[message.id]
                     val text = item?.content?.filterIsInstance<com.meshcoreone.android.core.services.rendering.MessageFragment.Text>()
                         ?.firstOrNull()?.payload
                     Column {

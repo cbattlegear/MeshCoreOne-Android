@@ -796,6 +796,12 @@ internal class CoordinatedTimelineState(
     private val report: (String, Throwable?) -> Unit = { _, _ -> },
 ) : TimelineStateStore {
     private val presentation = MutableStateFlow(initial)
+    private val projectionLock = Any()
+    private var rowMessages: List<MessageDTO>? = null
+    private var rowAnchor: UUID? = null
+    private var cachedRows: List<TimelineRow> = emptyList()
+    private var renderedSource: List<MessageItem>? = null
+    private var cachedRendered: List<CoordinatedRenderItem> = emptyList()
     @Volatile private var closed = false
     private var ready = false
     private var assemblyJob: Job? = null
@@ -822,6 +828,23 @@ internal class CoordinatedTimelineState(
     }
     override val isCurrent: Boolean get() = !closed && writer.isCurrent
 
+    private fun rowsFor(messages: List<MessageDTO>, anchor: UUID?): List<TimelineRow> = synchronized(projectionLock) {
+        if (rowMessages !== messages || rowAnchor != anchor) {
+            cachedRows = buildTimelineRows(messages, anchor, zoneId)
+            rowMessages = messages
+            rowAnchor = anchor
+        }
+        cachedRows
+    }
+
+    private fun renderedFor(items: List<MessageItem>): List<CoordinatedRenderItem> = synchronized(projectionLock) {
+        if (renderedSource !== items) {
+            cachedRendered = items.map(::CoordinatedRenderItem)
+            renderedSource = items
+        }
+        cachedRendered
+    }
+
     private fun project(): ChatTimelineState {
         val snapshot = coordinator.snapshot()
         val render = snapshot.renderState
@@ -830,8 +853,8 @@ internal class CoordinatedTimelineState(
         val unread = (ui.initialAnchor as? InitialTimelineAnchor.Message)?.messageId
         return ui.copy(
             messages = messages,
-            rows = buildTimelineRows(messages, unread, zoneId),
-            renderItems = render.items.map(::CoordinatedRenderItem),
+            rows = rowsFor(messages, unread),
+            renderItems = renderedFor(render.items),
             renderItemIndexByID = render.itemIndexByID,
             isLoading = render.phase == ChatRenderState.LoadPhase.LOADING,
             hasLoadedOnce = render.phase == ChatRenderState.LoadPhase.LOADED,
@@ -947,7 +970,7 @@ internal class CoordinatedTimelineState(
             try {
                 val snapshot = coordinator.snapshot()
                 val anchor = (presentation.value.initialAnchor as? InitialTimelineAnchor.Message)?.messageId
-                val batch = build(snapshot.messages, buildTimelineRows(snapshot.messages, anchor, zoneId))
+                val batch = build(snapshot.messages, rowsFor(snapshot.messages, anchor))
                 writer.performMutation {
                     if (snapshot.revision == coordinator.renderStateID) writer.rebuildItems(batch.inputs, batch.env)
                     else requestRender()

@@ -16,7 +16,6 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
@@ -410,7 +409,7 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             storage.preferences, storage.preferences.snapshot(), scope, mapPreviews,
         )
         val harness = ContainerHarness(test, store, chatContent = content, simulatorSeedStore = wrapSeed(RoomSimulatorSeedStore(store)))
-        val flags = WriteBehindOnboardingFlags(emptyMap(), scope) { _, _ -> }
+        val flags = WriteBehindOnboardingFlags(emptyMap(), scope, persist = { _, _ -> })
         val onboarding = AppOnboardingFactory.create(harness.container, OnboardingPlatform(flags, FakePermissionFacts()),
             scope, DemoModeManager(DataStoreDemoModeDefaults.load(storage.preferences)))
         return Fixture(storage, scope, content, harness, onboarding, requests, mapRequests)

@@ -46,12 +46,16 @@ internal fun AppMessageContent(
     report: (String, Throwable?) -> Unit,
     onMap: (String) -> Unit,
     rendered: MessageItem? = null,
+    onShareImage: (suspend (ByteArray) -> Unit)? = null,
 ) {
     val resolutions by content.resolutions.collectAsState()
     val media = remember(content, message.text, resolutions) { content.media(message.text) }
     val scope = rememberCoroutineScope()
     val uri = LocalUriHandler.current
     val context = androidx.compose.ui.platform.LocalContext.current
+    val shareImage: suspend (ByteArray) -> Unit = onShareImage ?: { bytes ->
+        com.meshcoreone.android.app.platform.shareImage(context, bytes)
+    }
     val preferences by content.rendering.collectAsState()
     val malwareRevision by content.malware.revision.collectAsState()
     val autoResolve = preferences[if (message.isChannelMessage) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM]
@@ -219,7 +223,7 @@ internal fun AppMessageContent(
                                 scope.launch {
                                     try {
                                         shareMountedImage(content, loaded) { bytes ->
-                                            com.meshcoreone.android.app.platform.shareImage(context, bytes)
+                                            shareImage(bytes)
                                         }
                                     }
                                     catch (cancelled: CancellationException) { throw cancelled }

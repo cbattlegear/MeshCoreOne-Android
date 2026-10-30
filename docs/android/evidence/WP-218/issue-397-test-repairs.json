@@ -14,7 +14,7 @@
     },
     "DATA-24": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
-      "case": "AppChatContent produces a real two-frame GIF, the actual AppMessageContent Compose consumer mounts it, and after trimMemory the displayed image remains mounted while shareMountedImage submits the original encoded bytes without refetch"
+      "case": "AppChatContent produces a real two-frame GIF, the actual AppMessageContent Compose consumer mounts it, and after trimMemory the mounted viewer's Share control sends the original encoded bytes without refetch"
     },
     "DATA-25": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/ImageHeaderDecoderTest.kt",
@@ -60,13 +60,13 @@
     "timeline_miss_cache": "Bound negative persisted-lookup memory by both 10,000 entries and an estimated 4 MiB while retaining cache writes as miss invalidations.",
     "url_apostrophes": "Allow apostrophes within explicit, bare-domain and URI candidate spans while retaining the existing trailing-quote trimming policy.",
     "unsupported_uri_prefetch": "Suppress embedded domains for the known non-HTTP opaque schemes while retaining prose-label extraction; retain hierarchical-scheme suppression for all `scheme://` URIs.",
-    "mounted_gif": "Exercise the actual Compose AppMessageContent image mount and retain its visible GIF and original share bytes across process memory trim."
+    "mounted_gif": "Exercise the actual Compose AppMessageContent image mount, advance the background test scheduler while malware policy initializes, and retain its visible GIF and original share bytes through the mounted viewer's Share control across process memory trim."
   },
   "verification": {
     "manifest_configured": false,
     "declared_commands": [],
     "local_test_execution": "not run; no approved WP-218 command is declared",
-    "hosted_exact_candidate": "Historical exact workflow 41118672455 passed on 0b9a53541623971b1ba8cfbbdb9b64a3a5cd33dc. The merged candidate ff9430d9378b281cccdd9e340bb26520e21680ca passed workflow 41122960507, including Android build, controller policy, and scope classification. Candidate 4fab30b14c4de52a76b82a9a3e4dae9490fa92d5 passed controller policy and scope classification but its Android build failed in :app:compileDebugUnitTestKotlin due to unresolved Compose test imports (`assertExists` and `waitUntil`) in the newly added malware warning test. Candidate 4227917af3bc8fc475163a3cf95f35f12314d2d5 fixed those imports but its :core:services:test run found two URL-regex regressions where generic opaque-scheme matching suppressed prose-label URLs and failed the opaque-URI assertion. The next candidate narrows opaque suppression to recognized non-HTTP schemes and includes those regression cases, while retaining hierarchical scheme suppression; it also exercises the actual mounted GIF consumer. Exact-head hosted validation is pending. No local Kotlin/Gradle tests were run because WP-218 declares no commands; no physical-device/iOS result is claimed.",
+    "hosted_exact_candidate": "Historical exact workflow 41118672455 passed on 0b9a53541623971b1ba8cfbbdb9b64a3a5cd33dc. Candidate 21c0ba4909f0114a6866ae0bc3eb6e7babadae29 passed scope classification, controller/workflow policy, and the PR checklist, but Android candidate CI 41137058872 failed :app:testDebugUnitTest (1819 discovered, 1816 passed, 3 failed): MountedGifRetentionTest timed out on SDK 31 and 37 because compose.waitUntil did not advance the background test scheduler; the resulting uncaught malware-refresh worker exception also failed BitmapImageDecoderTest on SDK 31 during its next-test setup. The mounted-image test now advances its scheduler while waiting, handles malware-feed fetches as expected offline failures, and invokes the mounted viewer Share action after memory trim to assert the exact bytes without refetch. Candidate 21c0ba49 narrowed opaque-scheme extraction and passed core services tests. Exact-head hosted validation is pending. No local Kotlin/Gradle tests were run because WP-218 declares no commands; no physical-device/iOS result is claimed.",
     "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
   },
   "limitations": [

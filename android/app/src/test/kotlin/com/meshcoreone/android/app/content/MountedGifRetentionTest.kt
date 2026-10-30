@@ -13,12 +13,12 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.AppChatContent
 import com.meshcoreone.android.app.container.ChatImage
 import com.meshcoreone.android.app.navigation.AppMessageContent
-import com.meshcoreone.android.app.navigation.shareMountedImage
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
@@ -30,6 +30,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -89,7 +90,7 @@ class MountedGifRetentionTest {
         var fetchCalls = 0
         val http = object : BoundedHttpFetching {
             override suspend fun fetch(requestUrl: String, timeoutMs: Long, rangeHeader: String?): HttpFetchAttempt {
-                assertEquals(url, requestUrl)
+                if (requestUrl != url) return HttpFetchAttempt.Failed("Image test does not fetch malware feeds")
                 fetchCalls++
                 return HttpFetchAttempt.Started(
                     statusCode = 200,
@@ -133,16 +134,21 @@ class MountedGifRetentionTest {
                 text = url,
                 timestamp = 1u,
             )
+            val sharedBytes = CompletableDeferred<ByteArray>()
             compose.runOnUiThread {
                 activityController.get().setContent {
                     MeshCoreTheme(motionScale = 0f) {
                         AppMessageContent(owner, message, { operation, error ->
                             throw AssertionError(operation, error)
-                        }, onMap = {})
+                        }, onMap = {}, onShareImage = {
+                            sharedBytes.complete(it)
+                            Unit
+                        })
                     }
                 }
             }
             compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
                 compose.onAllNodesWithContentDescription(url, useUnmergedTree = true)
                     .fetchSemanticsNodes().isNotEmpty()
             }
@@ -150,9 +156,16 @@ class MountedGifRetentionTest {
 
             owner.trimMemory()
             compose.onNodeWithContentDescription(url, useUnmergedTree = true).assertExists()
-            var sharedBytes: ByteArray? = null
-            shareMountedImage(owner, cacheOnly) { sharedBytes = it }
-            assertContentEquals(bytes, sharedBytes)
+            compose.onNodeWithContentDescription(url, useUnmergedTree = true).performClick()
+            compose.onNodeWithText(
+                context.getString(AppChatsStrings.chatsImageViewerShare),
+                useUnmergedTree = true,
+            ).performClick()
+            compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
+                sharedBytes.isCompleted
+            }
+            assertContentEquals(bytes, sharedBytes.await())
             assertEquals(1, fetchCalls)
         } finally {
             withContext(NonCancellable) {

@@ -205,14 +205,14 @@ class ExecutionRecoveryTests(unittest.TestCase):
         self.assertEqual(request["receipt"], self.receipt)
         self.assertEqual(request["admission"], "/mnt/c/admission.json")
         self.assertEqual(request["repository"], "/mnt/c/" + Path.cwd().name)
-        self.assertEqual(request["windows_launcher_pid"], os.getpid())
+        self.assertEqual(request["windows_launcher_pid"], self.receipt["payload"]["pid"])
         self.assertEqual(self.ledger.hard_lock_records(), [self.receipt])
         self.assertEqual(self.audit_rows(), [])
 
     def test_linux_handoff_requires_trusted_source_and_exited_windows_launcher(self):
         request = {
             "receipt": self.receipt, "admission": str(self.admission),
-            "repository": str(self.root), "windows_launcher_pid": 1234,
+            "repository": str(self.root), "windows_launcher_pid": self.receipt["payload"]["pid"],
         }
         with patch.object(recovery, "trusted_context", side_effect=PortError("candidate source")), \
                 patch.object(recovery, "windows_launcher_alive") as launcher, \
@@ -221,6 +221,18 @@ class ExecutionRecoveryTests(unittest.TestCase):
                 patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]), \
                 contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(recovery.main(), 1)
+        launcher.assert_not_called()
+        cancel.assert_not_called()
+
+        wrong_pid = {**request, "windows_launcher_pid": 1234}
+        with patch.object(recovery, "trusted_context") as trusted, \
+                patch.object(recovery, "windows_launcher_alive") as launcher, \
+                patch.object(recovery, "cancel_supervisor") as cancel, \
+                patch("sys.stdin", io.StringIO(json.dumps(wrong_pid))), \
+                patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(recovery.main(), 1)
+        trusted.assert_not_called()
         launcher.assert_not_called()
         cancel.assert_not_called()
 

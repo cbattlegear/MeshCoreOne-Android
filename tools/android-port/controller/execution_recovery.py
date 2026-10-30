@@ -336,7 +336,7 @@ def cancel_owned(receipt, distribution=None):
         "receipt": receipt,
         "admission": linux_path(admission),
         "repository": linux_path(Path.cwd()),
-        "windows_launcher_pid": os.getpid(),
+        "windows_launcher_pid": receipt["payload"]["pid"],
     }
     command = [
         *prefix, "bash", "-c",
@@ -439,11 +439,13 @@ def main(argv=None):
             if (
                 not isinstance(request, dict)
                 or set(request) != {"receipt", "admission", "repository", "windows_launcher_pid"}
+                or not isinstance(request["receipt"], dict)
                 or not isinstance(request["admission"], str)
                 or not isinstance(request["repository"], str)
                 or type(request["windows_launcher_pid"]) is not int
+                or request["windows_launcher_pid"] != request["receipt"].get("payload", {}).get("pid")
             ):
-                raise PortError("Malformed Windows-to-Linux recovery handoff")
+                raise PortError("Malformed or wrong-invocation Windows-to-Linux recovery handoff")
             receipt_key(request["receipt"])
             trusted_context(Path(request["repository"]))
             if windows_launcher_alive(request["windows_launcher_pid"]):

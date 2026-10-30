@@ -29,6 +29,18 @@ controller, protocol session and Room persistence are production implementations
 
 ## Execution status
 
+Initial exact-head hosted run `41067845663`, Android job `124104216919`,
+failed three of 588 `core:data` tests: the existing Room channel companions still
+expected same-link reconciliation. Those companions now assert the approved
+reconnect-required outcomes while retaining real Room row/history/cache checks.
+This is a candidate correction, not a passing execution claim.
+
+After archive/restore relocated this worktree, the user explicitly directed
+correction of its stale reservation path. An exact identity/revision/path CAS
+changed only the worktree column; all other columns were asserted unchanged.
+Normal supported scope evolution then admitted the Room companion path at
+revision 4. Issue #482 records this resolved recovery; no execution lock changed.
+
 No product test pass is claimed yet. Local readiness has no configured native
 Windows `ANDROID_CI_STATE`; the supported `python tools\android-port\local\check.py
 --worktree` refused because the installed verifier does not support working-tree

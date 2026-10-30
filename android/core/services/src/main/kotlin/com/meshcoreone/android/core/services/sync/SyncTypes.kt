@@ -83,7 +83,6 @@ sealed interface ContactWatermarkUse {
     data class Invalid(val stored: UInt) : ContactWatermarkUse
 }
 
-// AndroidOnly: WP-214 Recoverable receive-clock range failure; the sender stamp remains deliverable.
 class TimestampRangeError(val receiveTime: Instant) :
     Exception("Receive time $receiveTime is outside UInt32 Unix seconds; retaining the original sender timestamp.")
 

@@ -4,9 +4,14 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.model.DebugLogEntryDTO
+import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.services.diagnostics.DebugLogPlatformSink
+import com.meshcoreone.android.core.services.diagnostics.DebugLogRecorder
+import com.meshcoreone.android.core.services.diagnostics.PersistentLogger
 import com.meshcoreone.android.core.services.sync.SyncClock
 import java.time.Instant
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -41,7 +46,19 @@ class TimestampRangeRecoveryTest : RoomProcessTest() {
             override fun elapsed() = test.testScheduler.currentTime.milliseconds
             override suspend fun sleep(duration: Duration) = delay(duration)
         }
-        val harness = ContainerHarness(test, store, syncClock = clock)
+        val diagnostics = CopyOnWriteArrayList<DebugLogEntryDTO>()
+        val platformDiagnostics = CopyOnWriteArrayList<Pair<DebugLogLevel, String>>()
+        val logSink = productionSyncLogSink { category ->
+            PersistentLogger(
+                subsystem = "com.mc1",
+                category = category,
+                platformSink = DebugLogPlatformSink { level, subsystem, category, message ->
+                    platformDiagnostics += level to "$subsystem.$category:$message"
+                },
+                recorder = DebugLogRecorder { diagnostics.add(it) },
+            )
+        }
+        val harness = ContainerHarness(test, store, syncClock = clock, syncLogSink = logSink)
         val peerKey = key(3)
         val secret = Bytes(ByteArray(16) { (it + 1).toByte() })
         harness.links.configureRadio = { radio ->
@@ -104,6 +121,19 @@ class TimestampRangeRecoveryTest : RoomProcessTest() {
                         }
                     }
                 }
+                assertTrue(
+                    diagnostics.any {
+                        it.level == DebugLogLevel.ERROR && it.category == "SyncCoordinator" &&
+                            it.message.contains("TimestampRangeError")
+                    },
+                    "the App integration emits an ERROR diagnostic through PersistentLogger",
+                )
+                assertTrue(
+                    platformDiagnostics.any {
+                        it.first == DebugLogLevel.ERROR && it.second.contains("com.mc1.SyncCoordinator:TimestampRangeError")
+                    },
+                    "the diagnostic also reaches the platform sink",
+                )
                 poll("original message", 1000)
                 assertEquals(listOf(saved.id), messages().map { it.id })
                 receiveTime = EPOCH

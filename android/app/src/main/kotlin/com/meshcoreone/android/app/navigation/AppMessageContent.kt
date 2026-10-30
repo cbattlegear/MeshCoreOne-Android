@@ -61,6 +61,7 @@ internal fun AppMessageContent(
             var image by remember(content, url) {
                 mutableStateOf<ChatImage?>(null)
             }
+            var imageBlocked by remember(content, url) { mutableStateOf(false) }
             var verifiedMalwareRevision by remember(content, url) { mutableLongStateOf(Long.MIN_VALUE) }
             var failure by remember { mutableStateOf<Throwable?>(null) }
             var manualImage by remember { mutableStateOf(false) }
@@ -82,7 +83,7 @@ internal fun AppMessageContent(
                     scope, ComposerDiagnostics(report))
             }
             DisposableEffect(holder) { onDispose { holder.close() } }
-            if (!inline || displayedImage == ChatImage.HtmlPage) {
+            if (!inline || displayedImage == ChatImage.HtmlPage || imageBlocked) {
                 val preview by holder.state.collectAsState()
                 SideEffect {
                     if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, preview)
@@ -109,6 +110,7 @@ internal fun AppMessageContent(
                     val host = LinkOpenPolicy.host(url) ?: error("Image link has no host")
                     if (content.malware.isBlocked(host)) {
                         image = null
+                        imageBlocked = true
                         failure = null
                         verifiedMalwareRevision = malwareRevision
                         if (url == media.firstOrNull()?.url) {
@@ -116,6 +118,7 @@ internal fun AppMessageContent(
                         }
                         return@LaunchedEffect
                     }
+                    imageBlocked = false
                     verifiedMalwareRevision = malwareRevision
                     if (image is ChatImage.Decoded) {
                         if (url == media.firstOrNull()?.url) {

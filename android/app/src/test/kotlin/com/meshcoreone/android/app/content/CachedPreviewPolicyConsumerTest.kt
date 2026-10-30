@@ -104,6 +104,13 @@ class CachedPreviewPolicyConsumerTest {
                 assertEquals(PreviewLoadState.LOADED, rendered.state)
                 assertEquals("Persisted preview", rendered.preview?.title)
 
+                if (!isChannel) {
+                    val missing = message.copy(text = "https://uncached.example/missing")
+                    val readsBeforeMissing = previewReads
+                    repeat(3) { owner.renderContent(missing, EnvInputs.DEFAULT) }
+                    assertEquals(readsBeforeMissing + 1, previewReads)
+                }
+
                 val htmlPage = owner.renderContent(message.copy(text = htmlPageUrl), EnvInputs.DEFAULT)
                 assertEquals(PreviewLoadState.LOADED, htmlPage.state)
                 assertEquals("Persisted HTML page", htmlPage.preview?.title)

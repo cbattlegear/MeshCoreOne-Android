@@ -2,15 +2,15 @@
   "wp": "WP-218",
   "issue": 397,
   "pinned_source": "db14559b39d32322b06477c6ae676112f583db50",
-  "status": "seven latest automated-review findings have focused source/test repairs; exact-head hosted validation and approval review are pending",
+  "status": "the three findings in the latest automated review have focused source/test repairs; new exact-head hosted validation and approval review are pending",
   "concerns": {
     "DATA-22": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
-      "case": "persisted previews rehydrate through the app policy port and LinkPreviewStateHolder for DM and channel consumers; image-extension HTML previews select the card route after a cold AppChatContent start; hero and icon bytes reload from persistent storage without live DNS; mounted inline image state is retained across unrelated media-resolution updates"
+      "case": "persisted previews rehydrate through the app policy port and LinkPreviewStateHolder for DM and channel consumers; image-extension HTML previews select the card route after a cold AppChatContent start; hero and icon bytes reload from persistent storage without live DNS; repeated AppChatContent renderContent calls for the same persisted miss issue a single Room lookup; mounted inline image state is retained across unrelated media-resolution updates"
     },
     "DATA-23": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/platform/PreviewPolicyTest.kt; android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/composer/LinkLogicTest.kt",
-      "case": "cached results remain visible through the state-holder with auto-resolve disabled and unavailable DNS; bounded persisted misses are reused and invalidated after preview writes, read failures are not memoized, 201 distinct URL misses remain memoized across repeated timeline reads, and globally disabled previews skip persistent lookup; cached inline image bytes mount before automatic-fetch gating and without DNS/network work"
+      "case": "cached results remain visible through the state-holder with auto-resolve disabled and unavailable DNS; bounded persisted misses are reused and invalidated after preview writes, read failures are not memoized, 201 distinct URL misses remain memoized across repeated timeline reads, and repeated AppChatContent rendering queries a missing preview only once; globally disabled previews skip persistent lookup; cached inline image bytes mount before automatic-fetch gating and without DNS/network work"
     },
     "DATA-24": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
@@ -33,7 +33,7 @@
       "case": "authorized nil-country resolution reaches geocoder; unauthorized resolution does not"
     },
     "DATA-29": {
-      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/MalwareDomainFilterTest.kt",
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/MalwareDomainFilterTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/content/AndroidMalwareDomainFilterTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedInlineMalwareWarningTest.kt",
       "case": "legitimate-domain decisions use the bundled malware-domain snapshot; loaded and refreshed domains plus queried hosts are normalized case-insensitively; successful network refreshes publish a policy revision so mounted cached images are rechecked"
     },
     "DATA-30": {
@@ -56,7 +56,7 @@
   "latest_review_repairs": {
     "cached_inline_images": "Check the current malware policy first, then hydrate an encoded cached image before any DNS safety check; perform URL DNS safety only for an actual network fetch, including when auto-resolve is disabled.",
     "mounted_image_lifecycle": "Keep the Compose-mounted image keyed to content and URL rather than the global media-resolution counter, preserving the original decoded handle and share bytes across unrelated rebuilds.",
-    "malware_refresh": "Publish an observable revision after replacing the malware list; mounted images are hidden until rechecked and become a malware warning when newly blocked.",
+    "malware_refresh": "Publish an observable revision after replacing the malware list; mounted images are hidden until rechecked and each blocked image entry routes through the localized malware warning, including non-first URLs. A Robolectric Compose regression covers a blocked second image.",
     "timeline_miss_cache": "Bound negative persisted-lookup memory by both 10,000 entries and an estimated 4 MiB while retaining cache writes as miss invalidations.",
     "url_apostrophes": "Allow apostrophes within explicit, bare-domain and URI candidate spans while retaining the existing trailing-quote trimming policy."
   },
@@ -64,7 +64,7 @@
     "manifest_configured": false,
     "declared_commands": [],
     "local_test_execution": "not run; no approved WP-218 command is declared",
-    "hosted_exact_candidate": "Historical exact workflow 41118672455 passed on 0b9a53541623971b1ba8cfbbdb9b64a3a5cd33dc. The merged candidate ff9430d9378b281cccdd9e340bb26520e21680ca passed workflow 41122960507, including Android build, controller policy, and scope classification; subsequent automated review identified seven remaining concerns. Focused source/test repairs are now prepared on the PR branch; exact-head hosted validation and approval review are pending. No local Kotlin/Gradle tests were run because WP-218 declares no commands; no physical-device/iOS result is claimed.",
+    "hosted_exact_candidate": "Historical exact workflow 41118672455 passed on 0b9a53541623971b1ba8cfbbdb9b64a3a5cd33dc. The merged candidate ff9430d9378b281cccdd9e340bb26520e21680ca passed workflow 41122960507, including Android build, controller policy, and scope classification; later review candidates identified follow-up concerns. Candidate 9affad21edf964724d2cefee275e9d93ffccdf66 passed controller policy and scope classification; its Linux Android build was still running when the three latest review findings were repaired. No local Kotlin/Gradle tests were run because WP-218 declares no commands; no physical-device/iOS result is claimed.",
     "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
   },
   "limitations": [

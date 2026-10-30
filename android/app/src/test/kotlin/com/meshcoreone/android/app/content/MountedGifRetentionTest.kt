@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.Dispatchers
 import com.meshcoreone.android.app.container.AppChatContent
 import com.meshcoreone.android.app.container.ChatImage
 import com.meshcoreone.android.app.navigation.AppMessageContent
@@ -34,7 +35,6 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
@@ -85,8 +85,8 @@ class MountedGifRetentionTest {
         val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
             .allowMainThreadQueries().build()
         val store = RoomPersistenceStore(database, backgroundScope)
-        val lifetime = SupervisorJob(requireNotNull(backgroundScope.coroutineContext[Job]))
-        val scope = CoroutineScope(backgroundScope.coroutineContext + lifetime)
+        val lifetime = SupervisorJob()
+        val scope = CoroutineScope(lifetime + Dispatchers.Main.immediate)
         val url = "https://8.8.8.8/mounted.gif"
         val bytes = gif()
         var fetchCalls = 0
@@ -150,7 +150,6 @@ class MountedGifRetentionTest {
                 }
             }
             compose.waitUntil(10_000) {
-                testScheduler.runCurrent()
                 compose.onAllNodesWithContentDescription(url, useUnmergedTree = true)
                     .fetchSemanticsNodes().isNotEmpty()
             }
@@ -164,17 +163,19 @@ class MountedGifRetentionTest {
                 useUnmergedTree = true,
             ).performClick()
             compose.waitUntil(10_000) {
-                testScheduler.runCurrent()
                 sharedBytes.isCompleted
             }
             assertContentEquals(bytes, sharedBytes.await())
             assertEquals(1, fetchCalls)
         } finally {
             withContext(NonCancellable) {
-                lifetime.cancelAndJoin()
                 compose.runOnUiThread { activityController.get().setContent {} }
                 try {
-                    content?.close()
+                    try {
+                        content?.close()
+                    } finally {
+                        lifetime.cancelAndJoin()
+                    }
                 } finally {
                     try {
                         store.close()

@@ -3,6 +3,10 @@ package com.meshcoreone.android.core.connectivity.support
 
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceAccess
 import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
+import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -48,9 +52,15 @@ internal fun selfInfo(preset: PresetRow): SelfInfo =
     selfInfo(preset.frequencyMHz, preset.bandwidthKHz, preset.spreadingFactor, preset.codingRate)
 
 internal class InMemoryDeviceAccess(initial: DeviceDTO? = null) : ConnectedDeviceAccess {
+    private val epoch = ProcessEpoch(UUID.randomUUID())
+    private var sequence = 0L
     override var connectedDevice: DeviceDTO? = initial
         private set
-    override fun replaceConnectedDevice(device: DeviceDTO) { connectedDevice = device }
+    override fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit {
+        val previous = connectedDevice ?: device
+        connectedDevice = device
+        return ConnectedDeviceEdit(SessionToken(epoch, Generation(0), device.radioId), ++sequence, previous.knownRegions)
+    }
 }
 
 /** Read-through to the runtime; replacement is the missing runtime seam (coordinator note C-03). */

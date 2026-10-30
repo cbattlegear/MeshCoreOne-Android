@@ -7,6 +7,8 @@ import com.meshcoreone.android.core.datastore.BackupPreferenceKeys
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.app.state.RegionSelectionStore
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -21,13 +23,20 @@ class ProcessRegionSelectionIntegrationTest : RoomProcessTest() {
         val original = RegionSelection("US", RegionSelection.Source.LOCATION, "US-CA", "los angeles")
         val replacement = RegionSelection("CA", RegionSelection.Source.MANUAL, "CA-ON")
         preferences.persist(original)
-        val h = ContainerHarness(this, store, regionStore = preferences)
+        val writes = Channel<RegionSelection?>(Channel.UNLIMITED)
+        val observedPreferences = object : RegionSelectionStore by preferences {
+            override suspend fun persist(selection: RegionSelection?) {
+                preferences.persist(selection)
+                writes.send(selection)
+            }
+        }
+        val h = ContainerHarness(this, store, regionStore = observedPreferences)
         try {
             h.container.start().join()
             assertEquals(original, h.appState.regionSelection)
             assertEquals(original, preferences.load())
             h.appState.regionSelection = replacement
-            h.settle()
+            assertEquals(replacement, writes.receive())
             assertEquals(replacement, preferences.load())
             h.manager.connect(h.target())
             h.settle()
@@ -36,11 +45,12 @@ class ProcessRegionSelectionIntegrationTest : RoomProcessTest() {
             assertEquals(replacement, h.appState.regionSelection)
             assertEquals(replacement, preferences.load())
             h.appState.regionSelection = null
-            h.settle()
+            assertNull(writes.receive())
             assertNull(preferences.load())
             assertTrue(BackupPreferenceKeys.regionSelection.rawValue !in storage.preferences.snapshot().storedValues)
         } finally {
             h.container.close()
+            writes.close()
             storage.close()
         }
     }

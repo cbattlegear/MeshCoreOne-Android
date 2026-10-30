@@ -59,6 +59,10 @@ class ChannelSheetsStateHolderTest {
         assertTrue(ChannelSheetsStateHolder.isValidHashtag("ops-room2"))
         assertFalse(ChannelSheetsStateHolder.isValidHashtag("-ops"))
         assertFalse(ChannelSheetsStateHolder.isValidHashtag(""))
+        assertFalse(ChannelSheetsStateHolder.isValidHashtag("ops-é"))
+        val holder = rig(emptyList(), maxChannels = 4u).holder
+        holder.updateHashtag("--#Équipe 日本 Ops! 42-\uD83D\uDCBB")
+        assertEquals("quipeops42-", holder.state.value.name)
     }
 
     @Test

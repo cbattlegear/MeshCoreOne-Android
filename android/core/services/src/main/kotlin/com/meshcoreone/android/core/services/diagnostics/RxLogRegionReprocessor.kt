@@ -44,6 +44,7 @@ internal class RxLogRegionReprocessor(
     private var knownRegionsValue: List<String> = emptyList()
     private var scopeKeyCache: List<RegionScopeKey> = emptyList()
     private var cacheGeneration = 0L
+    private var hasExplicitRegionUpdate = false
     private var lastRegionMissLogTime: Instant? = null
     private var lastRegionAmbiguousLogTime: Instant? = null
     private var isReprocessingValue = false
@@ -59,11 +60,11 @@ internal class RxLogRegionReprocessor(
     val generation: Long get() = synchronized(lock) { cacheGeneration }
 
     /**
-     * Installs regions loaded from the device row unless a region update superseded the load.
+     * Installs regions loaded from the device row unless an explicit region update already won.
      * Returns the resolvable count, or `null` when the load was stale.
      */
     fun applyLoadedRegions(loadGeneration: Long, regions: List<String>): Int? = synchronized(lock) {
-        if (loadGeneration != cacheGeneration) return null
+        if (hasExplicitRegionUpdate || loadGeneration != cacheGeneration) return null
         knownRegionsValue = regions.toList()
         scopeKeyCache = buildScopeKeyCache(knownRegionsValue)
         scopeKeyCache.size
@@ -76,8 +77,10 @@ internal class RxLogRegionReprocessor(
     /** Updates known regions, rebuilds the cache and reprocesses; runs for an empty list so labels clear. */
     suspend fun updateKnownRegions(regions: List<String>) {
         val changed = synchronized(lock) {
-            if (knownRegionsValue == regions) return@synchronized false
+            // An equal explicit value still supersedes any pending or future device-row load for this session.
+            hasExplicitRegionUpdate = true
             cacheGeneration += 1
+            if (knownRegionsValue == regions) return@synchronized false
             knownRegionsValue = regions.toList()
             scopeKeyCache = buildScopeKeyCache(knownRegionsValue)
             true
@@ -88,6 +91,7 @@ internal class RxLogRegionReprocessor(
     /** Test seam: injects names that share one key without needing a real 16-bit collision. */
     suspend fun replaceScopeKeyCacheAndReprocess(cache: List<RegionScopeKey>) {
         synchronized(lock) {
+            hasExplicitRegionUpdate = true
             cacheGeneration += 1
             knownRegionsValue = cache.map { it.name }
             scopeKeyCache = cache.toList()

@@ -39,6 +39,12 @@ import kotlinx.coroutines.withContext
  */
 enum class ChatWriterRole { INTERACTIVE, PRIME }
 
+data class ChatTimelineSnapshot(
+    val messages: SnapshotList<MessageDTO>,
+    val renderState: ChatRenderState,
+    val revision: ULong,
+)
+
 /**
  * Per-(radio, conversation) source of truth for chat timeline state, shared by every view model showing
  * the same conversation and resolved through [ChatCoordinatorRegistry].
@@ -98,6 +104,11 @@ class ChatCoordinator internal constructor(
      * assignment. An off-thread build captures it and its result is discarded if it advanced meanwhile.
      */
     val renderStateID: ULong get() = synchronized(lock) { renderStateIDValue }
+
+    /** One coherent read for consumers assembling DTO and render projections across threads. */
+    fun snapshot(): ChatTimelineSnapshot = synchronized(lock) {
+        ChatTimelineSnapshot(messages, renderState, renderStateIDValue)
+    }
 
     /** In-flight off-thread batch build, cancelled before each new [rebuildItems]. */
     val buildItemsTask: Job? get() = synchronized(lock) { buildItemsTaskValue }
@@ -185,6 +196,10 @@ class ChatCoordinator internal constructor(
                 null
             } else {
                 writerGenerationValue += 1UL
+                renderStateIDValue += 1UL
+                settleReleasedWindowLocked()
+                buildItemsTaskValue?.cancel()
+                buildItemsTaskValue = null
                 writerOwner = WeakReference(owner)
                 writerRole = role
                 renderItemRebuilderValue = renderItemRebuilder
@@ -201,15 +216,29 @@ class ChatCoordinator internal constructor(
 
     /**
      * Vacates the writer slot if [owner] still holds it, clearing the hooks with it. The identity check
-     * keeps a stale view's teardown from evicting a successor; no generation bump.
+     * keeps a stale view's teardown from evicting a successor. Release also revokes the writer:
+     * a cancelled screen's last suspended operation must not commit after teardown.
      */
     fun releaseWriter(owner: Any) {
         synchronized(lock) {
             if (writerOwner?.get() !== owner) return
+            writerGenerationValue += 1UL
+            renderStateIDValue += 1UL
+            settleReleasedWindowLocked()
+            buildItemsTaskValue?.cancel()
+            buildItemsTaskValue = null
             writerOwner = null
             writerRole = ChatWriterRole.PRIME
             renderItemRebuilderValue = null
             renderStateInvalidatedValue = null
+        }
+    }
+
+    private fun settleReleasedWindowLocked() {
+        val state = renderState
+        val phase = if (state.phase == ChatRenderState.LoadPhase.LOADING) ChatRenderState.LoadPhase.UNINITIALIZED else state.phase
+        if (state.isLoadingOlder || state.phase != phase) {
+            renderStateFlowBacking.value = state.with(isLoadingOlder = false, phase = phase)
         }
     }
 

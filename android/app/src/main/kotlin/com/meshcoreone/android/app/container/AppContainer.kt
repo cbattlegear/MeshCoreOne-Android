@@ -30,11 +30,13 @@ import com.meshcoreone.android.core.connectivity.service.ConnectedDeviceHostingC
 import com.meshcoreone.android.core.connectivity.service.ForegroundServiceStarter
 import com.meshcoreone.android.core.contracts.domain.Capability
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.MessagingIssueReporter
 import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.maps.OfflineMapController
@@ -113,7 +115,7 @@ class AppContainerDependencies(
     val platform: AppStatePlatform = AppStatePlatform.NONE,
     val regionStore: RegionSelectionStore? = null,
     val stalePreferences: StaleCleanupPreferences? = null,
-    val primerFactory: ChatPrimerFactory = ChatPrimerFactory { null },
+    val primerFactory: ChatPrimerFactory? = null,
     val syncClock: SyncClock = SyncClock.SYSTEM,
     val logSink: SyncLogSink = SyncLogSink.NONE,
     val messagingReporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
@@ -241,7 +243,12 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             RadioPresets.matchingPresets(frequency, bandwidth, spreadingFactor, codingRate).map { it.id }.toSet()
         },
         processScope, { Instant.now() }, dependencies.connectivityDiagnostics,
+        onKnownRegionsChanged = ::knownRegionsChanged,
     )
+
+    internal fun knownRegionsChanged(edit: ConnectedDeviceEdit, regions: List<String>) {
+        sessions.current?.takeIf { it.token == edit.token }?.knownRegionsChanged(edit.sequence, regions)
+    }
 
     val connectionPort = ConnectionManagerAppPort(
         connectionManager, platformAdapter, pairing, lastConnection, deviceEditor, dependencies.scans::stopBleScanning,
@@ -260,7 +267,15 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             registryFactory = { store ->
                 ChatCoordinatorRegistry(store, dependencies.mainScope)
             },
-            primerFactory = dependencies.primerFactory,
+            primerFactory = dependencies.primerFactory ?: ChatPrimerFactory { primerDependencies ->
+                com.meshcoreone.android.app.state.ChatTimelinePrimer(
+                    primerDependencies, CoordinatedPrimeTimeline(chatsFeature, uiScope),
+                    dependencies.chatContent?.primerWarmer,
+                    dependencies.chatContent?.primerPreferences
+                        ?: com.meshcoreone.android.app.state.LinkPreviewPreferences { false },
+                )
+            },
+            chatEnvInputsFactory = { kind, snapshot -> chatsFeature.envInputs(kind, snapshot) },
             navigation = navigation,
             platform = ContainerAppStatePlatform(dependencies.platform),
             regionStore = dependencies.regionStore,

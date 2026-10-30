@@ -37,10 +37,17 @@ sealed interface InitialTimelineAnchor {
 
 data class TimelineScrollAnchor(val messageId: UUID, val offset: Int)
 
+/** Immutable App-owned render values; feature code does not depend on the service implementation. */
+interface TimelineRenderItem {
+    val id: UUID
+}
+
 data class ChatTimelineState(
     /** Always oldest to newest. Reverse layout is a presentation detail. */
     val messages: List<MessageDTO> = emptyList(),
     val rows: List<TimelineRow> = emptyList(),
+    val renderItems: List<TimelineRenderItem> = emptyList(),
+    val renderItemIndexByID: Map<UUID, Long> = emptyMap(),
     val isLoading: Boolean = false,
     val isLoadingOlder: Boolean = false,
     val hasLoadedOnce: Boolean = false,
@@ -58,7 +65,7 @@ data class ChatTimelineState(
     val sendError: Throwable? = null,
 )
 
-internal fun buildTimelineRows(
+fun buildTimelineRows(
     messages: List<MessageDTO>,
     unreadAnchorId: UUID?,
     zoneId: ZoneId,

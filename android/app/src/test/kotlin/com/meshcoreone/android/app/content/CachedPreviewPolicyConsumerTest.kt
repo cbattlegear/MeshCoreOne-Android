@@ -11,9 +11,13 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.LinkPreviewDataDTO
+import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
+import com.meshcoreone.android.core.services.rendering.EnvInputs
+import com.meshcoreone.android.core.services.rendering.PreviewLoadState
 import com.meshcoreone.android.feature.chats.composer.LinkPreviewCardState
 import com.meshcoreone.android.feature.chats.composer.LinkPreviewOutcome
 import com.meshcoreone.android.feature.chats.composer.LinkPreviewStateHolder
@@ -79,6 +83,16 @@ class CachedPreviewPolicyConsumerTest {
             )
             for (isChannel in listOf(false, true)) {
                 val owner = newContent(context, store, http, storage, scope).also(contents::add)
+                val message = MessageDTO(
+                    radioId = RadioId(java.util.UUID.randomUUID()),
+                    channelIndex = if (isChannel) 1u.toUByte() else null,
+                    text = url,
+                    timestamp = 1u,
+                )
+                val rendered = owner.renderContent(message, EnvInputs.DEFAULT)
+                assertEquals(PreviewLoadState.LOADED, rendered.state)
+                assertEquals("Persisted preview", rendered.preview?.title)
+
                 val holder = LinkPreviewStateHolder(
                     url,
                     isChannel,

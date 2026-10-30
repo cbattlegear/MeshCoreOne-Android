@@ -317,7 +317,15 @@ class SyncCoordinator(
             val timestampSeconds = timestamp.toDouble()
             val isTooFarInFuture = timestampSeconds > receiveSeconds + TIMESTAMP_TOLERANCE_FUTURE_SECONDS
             val isTooFarInPast = timestampSeconds < receiveSeconds - TIMESTAMP_TOLERANCE_PAST_SECONDS
-            if (isTooFarInFuture || isTooFarInPast) return TimestampCorrection(receiveTime.uint32Seconds(), true)
+            if (isTooFarInFuture || isTooFarInPast) {
+                // Check the truncated integer without Double rounding at the UInt32 boundary.
+                val truncatedSeconds = receiveTime.epochSecond +
+                    if (receiveTime.epochSecond < 0 && receiveTime.nano > 0) 1L else 0L
+                if (truncatedSeconds !in 0L..UInt.MAX_VALUE.toLong()) {
+                    return TimestampCorrection(timestamp, false, TimestampRangeError(receiveTime))
+                }
+                return TimestampCorrection(truncatedSeconds.toUInt(), true)
+            }
             return TimestampCorrection(timestamp, false)
         }
 

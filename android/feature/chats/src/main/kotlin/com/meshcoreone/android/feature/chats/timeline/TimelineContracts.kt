@@ -12,7 +12,14 @@ import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import java.time.Instant
 import java.util.UUID
+import java.time.ZoneId
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 sealed interface TimelineConversation {
     val id: ChatConversationID
@@ -86,6 +93,30 @@ interface TimelineContent {
     suspend fun prefetch(text: String, isChannelMessage: Boolean)
 }
 
+/** App composition bridges this port to the process-owned coordinator, without a feature/service dependency. */
+interface TimelineStateStore : AutoCloseable {
+    val state: StateFlow<ChatTimelineState>
+    val value: ChatTimelineState get() = state.value
+    val isCurrent: Boolean get() = true
+    fun update(transform: (ChatTimelineState) -> ChatTimelineState)
+    suspend fun <T> performWindowOperation(operation: suspend () -> T): T
+    override fun close()
+}
+
+/** Standalone presentation host for previews, benchmark workloads and isolated feature tests. */
+class StandaloneTimelineStateStore(initial: ChatTimelineState) : TimelineStateStore {
+    private val mutable = MutableStateFlow(initial)
+    override val state: StateFlow<ChatTimelineState> = mutable
+    private val window = Mutex()
+    private var closed = false
+    override val isCurrent get() = !closed
+    override fun update(transform: (ChatTimelineState) -> ChatTimelineState) {
+        if (!closed) mutable.update(transform)
+    }
+    override suspend fun <T> performWindowOperation(operation: suspend () -> T): T = window.withLock { operation() }
+    override fun close() { closed = true }
+}
+
 interface ChatTimelineDependencies {
     val data: TimelineDataSource
     val retryService: TimelineRetryService
@@ -93,6 +124,14 @@ interface ChatTimelineDependencies {
     val events: Flow<TimelineEvent>
     val diagnostics: TimelineDiagnostics get() = TimelineDiagnostics { _, _ -> }
     val content: TimelineContent? get() = null
+    /** Index a fetched page through the same session reaction service before committing its DTOs. */
+    suspend fun prepareMessages(messages: List<MessageDTO>): List<MessageDTO> = messages
+    fun bindTimeline(
+        owner: Any,
+        scope: CoroutineScope,
+        zoneId: ZoneId,
+        initial: ChatTimelineState,
+    ): TimelineStateStore = StandaloneTimelineStateStore(initial)
     /** Sent outgoing reactions render as badges, so the timeline hides them while the database keeps the rows. */
     fun isHiddenOutgoingReaction(message: MessageDTO): Boolean = false
     fun admissionIdentity(): SessionToken? = null

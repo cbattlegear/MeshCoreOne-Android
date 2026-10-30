@@ -74,6 +74,7 @@ class ConnectionManager(
         var session: MeshCoreSession? = null
         var token: SessionToken? = null
         var device: DeviceDTO? = null
+        var deviceEditSequence = 0L
         var ownership: FactoryOwnership? = null
         var services: OwnedRadioServices? = null
         var servicesClosed: Deferred<TeardownReport>? = null
@@ -1490,14 +1491,16 @@ class ConnectionManager(
     fun clearSurfacedAuthenticationFailure() { synchronized(lock) { authFailureDevice = null } }
 
     /** Swift updateDevice(with:) after a device edit, limited to the current generation's radio. */
-    fun replaceConnectedDevice(device: DeviceDTO) {
-        synchronized(lock) {
-            val owner = active ?: return
-            val current = deviceValue ?: return
-            if (!isCurrent(owner) || current.id != device.id || current.radioId != device.radioId) return
-            deviceValue = device
-            owner.device = device
-        }
+    fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? = synchronized(lock) {
+        val owner = active ?: return@synchronized null
+        val current = deviceValue ?: return@synchronized null
+        if (!isCurrent(owner) || current.id != device.id || current.radioId != device.radioId) return@synchronized null
+        val token = owner.token ?: return@synchronized null
+        val sequence = Math.incrementExact(owner.deviceEditSequence)
+        owner.deviceEditSequence = sequence
+        deviceValue = device
+        owner.device = device
+        ConnectedDeviceEdit(token, sequence, current.knownRegions)
     }
 
     private fun dispatch(

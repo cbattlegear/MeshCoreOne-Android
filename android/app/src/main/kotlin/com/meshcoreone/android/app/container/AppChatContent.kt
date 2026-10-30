@@ -19,6 +19,13 @@ import java.net.URI
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import com.meshcoreone.android.feature.chats.timeline.TimelineContent
+import com.meshcoreone.android.core.services.rendering.EnvInputs
+import com.meshcoreone.android.core.services.rendering.PreviewLoadState
+import com.meshcoreone.android.core.services.rendering.WebURL
+import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.Coordinate
+import com.meshcoreone.android.core.maps.MapSnapshotRequest
+import com.meshcoreone.android.feature.chats.composer.LinkPreviewCardState
 
 internal sealed interface ChatImage {
     class Decoded(val handle: DecodedImageHandle, val encodedData: EncodedImageBytes) : ChatImage
@@ -37,6 +44,7 @@ class AppChatContent internal constructor(
         enabled = { preferenceStore.get(AppStorageKey.showMapPreviewThumbnails) }),
     imageSafety: suspend (String) -> Boolean = { UrlSafetyChecker.isSafe(it) },
 ) : AutoCloseable, TimelineContent {
+    internal val resources = context.resources
     val rendering = preferenceStore.snapshots.catch { failure ->
         java.util.logging.Logger.getLogger("com.mc1.ChatContent").log(java.util.logging.Level.WARNING, "Chat rendering preferences unavailable", failure)
         throw failure
@@ -46,6 +54,7 @@ class AppChatContent internal constructor(
     private val dimensions = inlineImageDimensionsStore(context).also(imageCache::attachDimensionsStore)
     private val mutableResolutions = MutableStateFlow(0L)
     internal val resolutions: StateFlow<Long> = mutableResolutions.asStateFlow()
+    private val previewStates = android.util.LruCache<java.util.UUID, PreviewLoadState>(128)
     private val dimensionSubscription = scope.launch(start = CoroutineStart.UNDISPATCHED) {
         dimensions.resolutionUpdates.collect { invalidateMedia() }
     }
@@ -101,8 +110,79 @@ class AppChatContent internal constructor(
     private fun automatic(isChannelMessage: Boolean) = rendering.value[
         if (isChannelMessage) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM
     ]
+    internal val primerPreferences = com.meshcoreone.android.app.state.LinkPreviewPreferences(::automatic)
+    internal val primerWarmer = object : com.meshcoreone.android.app.state.InlinePreviewPrefetching {
+        override fun containsUrls(text: String) = this@AppChatContent.containsUrls(text)
+        override suspend fun prefetch(text: String, isChannelMessage: Boolean, allowImageProbes: Boolean) {
+            if (!enabled) return
+            prefetcher.prefetch(text, isChannelMessage, allowImageProbes && automatic(isChannelMessage))
+            invalidateMedia()
+        }
+    }
     private fun invalidateMedia() {
         mutableResolutions.update(Math::incrementExact)
+    }
+    internal val renderInvalidations: Flow<Unit> = merge(
+        rendering.map { Unit }, resolutions.map { Unit }, mapPreviews.network.map { Unit },
+        mapPreviews.snapshots.resolutions.map { Unit },
+    )
+    internal fun applyRenderPreferences(base: EnvInputs) = base.copy(
+        autoPlayGIFs = rendering.value[AppStorageKey.autoPlayGIFs],
+        showIncomingPath = rendering.value[AppStorageKey.showIncomingPath],
+        showIncomingHopCount = rendering.value[AppStorageKey.showIncomingHopCount],
+        showIncomingRegion = rendering.value[AppStorageKey.showIncomingRegion],
+        showIncomingHeardCount = rendering.value[AppStorageKey.showIncomingHeardCount],
+        showIncomingSendTime = rendering.value[AppStorageKey.showIncomingSendTime],
+        previewsEnabled = enabled,
+        showMapPreviews = rendering.value[AppStorageKey.showMapPreviewThumbnails],
+        isOffline = mapPreviews.network.value != ChatMapNetwork.Online,
+        translationOffersEnabled = false,
+    )
+    internal data class RenderContent(
+        val url: WebURL?,
+        val state: PreviewLoadState,
+        val preview: LinkPreviewDataDTO?,
+        val inline: Boolean,
+        val hasInlineRef: Boolean,
+        val gif: Boolean,
+        val aspect: Double?,
+        val coordinate: Coordinate?,
+        val mapReady: Boolean,
+    )
+    internal suspend fun renderContent(message: MessageDTO, env: EnvInputs): RenderContent {
+        val media = media(message.text).firstOrNull()
+        val url = media?.url
+        val decoded = url?.let { imageCache.decoded(ImageUrlClassifier.directImageUrl(URI(it)).toString()) }
+        val preview = url?.let { previewCache.cachedPreview(it, store) }
+        val recorded = previewStates.get(message.id)
+        val state = when {
+            !enabled -> PreviewLoadState.DISABLED
+            recorded == PreviewLoadState.MALWARE_WARNING -> recorded
+            recorded == PreviewLoadState.NO_PREVIEW -> recorded
+            !automatic(message.isChannelMessage) && decoded == null && preview == null &&
+                recorded != PreviewLoadState.LOADED && recorded != PreviewLoadState.LOADING ->
+                PreviewLoadState.DISABLED
+            recorded == PreviewLoadState.LOADING -> recorded
+            decoded != null || preview != null -> PreviewLoadState.LOADED
+            url == null -> PreviewLoadState.IDLE
+            else -> recorded ?: PreviewLoadState.IDLE
+        }
+        val coordinate = com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate(message.text, env.showMapPreviews)
+        val mapReady = coordinate?.let {
+            mapPreviews.snapshots.isResolved(MapSnapshotRequest(it.latitude, it.longitude, env.isDark, env.isOffline))
+        } ?: false
+        return RenderContent(url?.let(WebURL::parse), state, preview, media?.isImage == true,
+            decoded != null, decoded?.isGif == true, media?.aspect, coordinate, mapReady)
+    }
+    internal fun recordPreviewState(id: java.util.UUID, state: LinkPreviewCardState) = recordPreviewState(id, when (state) {
+        LinkPreviewCardState.Hidden -> PreviewLoadState.NO_PREVIEW
+        is LinkPreviewCardState.Loading -> PreviewLoadState.LOADING
+        is LinkPreviewCardState.TapToLoad -> PreviewLoadState.DISABLED
+        is LinkPreviewCardState.Malware -> PreviewLoadState.MALWARE_WARNING
+        is LinkPreviewCardState.Loaded -> PreviewLoadState.LOADED
+    })
+    internal fun recordPreviewState(id: java.util.UUID, state: PreviewLoadState) {
+        if (previewStates.put(id, state) != state) invalidateMedia()
     }
     internal data class Media(val url: String, val isImage: Boolean, val aspect: Double?)
     internal fun media(text: String): List<Media> = LinkUrlExtraction.extractAllUrls(text).distinct().mapNotNull { url ->
@@ -180,6 +260,7 @@ class AppChatContent internal constructor(
                 is ImageDecodeOutcome.Decoded -> {
                     val cached = CachedDecodedImage(decoded.handle, decoded.handle is GifDecodedImageHandle, fetch.data)
                     imageCache.storeDecoded(cached, resolved)
+                    invalidateMedia()
                     ChatImage.Decoded(decoded.handle, requireNotNull(cached.encodedData))
                 }
                 is ImageDecodeOutcome.Failed -> throw IllegalStateException(decoded.reason)
@@ -208,11 +289,13 @@ class AppChatContent internal constructor(
         LinkPreviewResult.Failed -> LinkPreviewOutcome.Failed
     }
     fun trimMemory() {
+        previewStates.evictAll()
         imageCache.clearDecodedMirror()
         imageCache.clearRawMemory()
         mapPreviews.snapshots.clear()
     }
     override fun close() {
+        dimensions.close()
         dimensionSubscription.cancel()
         mapPreviews.close()
         previewCache.close()

@@ -8,6 +8,7 @@ import android.icu.text.ListFormatter
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -34,6 +35,8 @@ internal fun rememberMessageBubbleLabels(
     content: AppChatContent?,
     contacts: List<ContactDTO>,
     currentUserName: String?,
+    rendered: Map<java.util.UUID, MessageItem> = emptyMap(),
+    onEnvironment: ((EnvInputs, Resources) -> Unit)? = null,
 ): ((MessageDTO) -> String)? {
     // An unbound, standalone graph retains the basic timeline label; never synthesize rendering preferences.
     if (content == null) return null
@@ -63,9 +66,10 @@ internal fun rememberMessageBubbleLabels(
     val nicknames = remember(contacts) {
         MessageBubbleConfiguration.buildNicknameLookup(contacts)
     }
+    SideEffect { onEnvironment?.invoke(env, resources) }
     return { message ->
         val resolution = bubbleSenderResolution(message, contacts, nicknames, resources)
-        val item = messageBubbleAccessibilityItem(message, resolution, env, resources)
+        val item = rendered[message.id] ?: messageBubbleAccessibilityItem(message, resolution, env, resources)
         messageBubbleAccessibilityLabel(message, item, message.isChannelMessage, resources)
     }
 }
@@ -99,22 +103,40 @@ internal fun messageBubbleAccessibilityItem(
     resources: Resources,
 ): MessageItem = MessageFragmentBuilder.makeItem(
     message,
-    MessageBuildInputs(
+    messageBubbleBuildInputs(message, resolution, env, resources),
+    env,
+)
+
+internal fun messageBubbleBuildInputs(
+    message: MessageDTO,
+    resolution: NodeNameResolution,
+    env: EnvInputs,
+    resources: Resources?,
+    row: com.meshcoreone.android.feature.chats.timeline.TimelineRow.Message? = null,
+    rich: AppChatContent.RenderContent? = null,
+    showUnreadDivider: Boolean = false,
+): MessageBuildInputs = MessageBuildInputs(
         messageID = message.id,
-        // The rich body/media keep their own existing renderer and references. This projection consumes
-        // only the real envelope/footer, never these unused content-fragment or preview-fetch fields.
-        previewState = PreviewLoadState.IDLE, loadedPreview = null, cachedURL = null,
-        isInlineImageURL = false, hasInlineImageRef = false, hasPreviewImageRef = false,
-        hasPreviewIconRef = false, imageIsGIF = false, formattedText = null,
+        previewState = rich?.state ?: PreviewLoadState.IDLE, loadedPreview = rich?.preview, cachedURL = rich?.url,
+        isInlineImageURL = rich?.inline == true, hasInlineImageRef = rich?.hasInlineRef == true,
+        hasPreviewImageRef = rich?.preview?.imageData != null,
+        hasPreviewIconRef = rich?.preview?.iconData != null, imageIsGIF = rich?.gif == true,
+        inlineImageAspect = rich?.aspect,
+        previewHeroAspect = rich?.preview?.let { data ->
+            val width = data.imageWidth
+            val height = data.imageHeight
+            if (width != null && height != null && width > 0 && height > 0) width.toDouble() / height else null
+        },
+        mapPreviewLatitude = rich?.coordinate?.latitude, mapPreviewLongitude = rich?.coordinate?.longitude,
+        isMapPreviewReady = rich?.mapReady == true, formattedText = null,
         baseColor = if (message.isOutgoing) BaseColorSlot.OUTGOING else BaseColorSlot.INCOMING,
-        formattedPath = if (env.showIncomingPath && !message.isOutgoing) MessagePathFormatter.format(
+        formattedPath = if (resources != null && env.showIncomingPath && !message.isOutgoing) MessagePathFormatter.format(
             message, resources.getString(AppChatsStrings.chatsMessagePathDirect),
             resources.getString(AppChatsStrings.chatsMessagePathFlood),
         ) else null,
-        senderResolution = resolution, showTimestamp = false, showDirectionGap = false,
-        showSenderName = message.isChannelMessage && !message.isOutgoing, showNewMessagesDivider = false,
-    ),
-    env,
+        senderResolution = resolution, showTimestamp = row?.endsGroup == true, showDirectionGap = row?.startsGroup == true,
+        showSenderName = message.isChannelMessage && !message.isOutgoing && row?.startsGroup != false,
+        showNewMessagesDivider = showUnreadDivider,
 )
 
 internal fun messageBubbleAccessibilityLabel(

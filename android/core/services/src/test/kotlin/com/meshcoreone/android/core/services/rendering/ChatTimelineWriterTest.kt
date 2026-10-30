@@ -6,7 +6,6 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.RadioId
 import java.lang.ref.Reference
-import java.lang.ref.WeakReference
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -14,7 +13,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.test.fail
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 
@@ -22,9 +20,8 @@ import org.junit.jupiter.api.TestFactory
 private class WriterOwner
 
 /**
- * Adaptation: Swift frees the transient owner when its scope ends (ARC). The JVM frees it on garbage
- * collection, so the deallocated-owner case drops every strong reference and then requests full GCs
- * until a probe weak reference clears (bounded attempts, no sleeps).
+ * Android owners explicitly release at screen/prime completion. Correctness never waits for a JVM
+ * collection cycle; the source's ARC teardown family exercises that deterministic native equivalent.
  */
 class ChatTimelineWriterTest {
     private fun makeMessage(text: String = "hello"): MessageDTO = MessageDTO(
@@ -148,8 +145,12 @@ class ChatTimelineWriterTest {
                 assertFalse(primeA.isCurrent)
                 assertTrue(primeB.isCurrent)
 
-                val probe = bindTransientInteractiveOwner(coordinator)
-                awaitCollected(probe)
+                val owner = WriterOwner()
+                val interactive = assertNotNull(coordinator.bindWriter(owner, ChatWriterRole.INTERACTIVE))
+                coordinator.releaseWriter(owner)
+                assertFalse(interactive.isCurrent)
+                interactive.append(makeMessage("released"))
+                assertTrue(coordinator.messages.isEmpty())
                 assertNotNull(coordinator.bindWriter(WriterOwner(), ChatWriterRole.PRIME))
             }
         },
@@ -184,24 +185,6 @@ class ChatTimelineWriterTest {
         },
     )
 
-    /** Binds an interactive owner whose only strong reference dies with this frame; returns a probe. */
-    private fun bindTransientInteractiveOwner(coordinator: ChatCoordinator): WeakReference<Any> {
-        val owner = WriterOwner()
-        assertNotNull(coordinator.bindWriter(owner, ChatWriterRole.INTERACTIVE))
-        return WeakReference(owner)
-    }
-
-    private fun awaitCollected(probe: WeakReference<Any>) {
-        repeat(GC_ATTEMPTS) {
-            if (probe.get() == null) return
-            System.gc()
-        }
-        if (probe.get() != null) fail("transient owner was not collected after $GC_ATTEMPTS full GCs")
-    }
-
     private fun case(name: String, body: () -> Unit): DynamicTest = DynamicTest.dynamicTest("ChatTimelineWriterTests::$name()", body)
 
-    private companion object {
-        const val GC_ATTEMPTS = 50
-    }
 }

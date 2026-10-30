@@ -145,6 +145,9 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
 
     val receiveTime = clock.now()
     val correction = SyncCoordinator.correctTimestampIfNeeded(timestamp, receiveTime)
+    correction.rangeError?.let { failure ->
+        log(DebugLogLevel.ERROR, "TimestampRangeError (${resolvedKind.logLabel} message): ${failure.message}")
+    }
     if (correction.wasCorrected) {
         log(DebugLogLevel.DEBUG, "Corrected invalid ${resolvedKind.logLabel} message timestamp from $timestamp to $receiveTime")
     }

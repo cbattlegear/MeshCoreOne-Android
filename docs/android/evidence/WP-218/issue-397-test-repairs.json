@@ -57,7 +57,7 @@
     "manifest_configured": false,
     "declared_commands": [],
     "local_test_execution": "not run; no approved WP-218 command is declared",
-    "hosted_exact_candidate": "the c0a73f9 candidate failed LinkUrlExtractionTest.keeps outer bare links when email or nested uri appears in their query; the 1ff3504 candidate addresses its Copilot findings, including malware-host case folding and offline persistent image reload, and the final exact-candidate hosted run is authoritative",
+    "hosted_exact_candidate": "the c0a73f9 candidate failed LinkUrlExtractionTest.keeps outer bare links when email or nested uri appears in their query; the d22684c candidate then exposed two URI-span regression failures caused by a missing scheme quantifier. The pattern and the app test's Bytes import/cache-cold setup are corrected in the next candidate; exact-candidate hosted verification is authoritative",
     "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
   },
   "limitations": [

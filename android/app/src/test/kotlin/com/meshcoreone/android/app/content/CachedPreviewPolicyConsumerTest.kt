@@ -10,8 +10,8 @@ import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
-import com.meshcoreone.android.core.model.Bytes
 import com.meshcoreone.android.core.model.LinkPreviewDataDTO
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
 import com.meshcoreone.android.feature.chats.composer.LinkPreviewCardState
@@ -22,6 +22,7 @@ import com.meshcoreone.android.feature.chats.composer.UrlSafetyPort
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -64,7 +65,7 @@ class CachedPreviewPolicyConsumerTest {
                 return HttpFetchAttempt.Failed("unexpected network fetch")
             }
         }
-        var content: AppChatContent? = null
+        val contents = mutableListOf<AppChatContent>()
         try {
             storage.preferences.set(AppStorageKey.linkPreviewsEnabled, true)
             storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveDM, false)
@@ -77,46 +78,36 @@ class CachedPreviewPolicyConsumerTest {
                     iconData = Bytes(NativeImageFixtures.png(2, 2)),
                 ),
             )
-            val owner = AppChatContent(
-                context = context,
-                store = store,
-                http = http,
-                preferences = DataStoreLinkPreviewPreferencesSource.create(storage.preferences, scope),
-                preferenceStore = storage.preferences,
-                initialPreferences = storage.preferences.snapshot(),
-                scope = scope,
-                imageSafety = { true },
-            )
-            content = owner
-
-            assertNotNull(owner.images.load("mc1-preview-hero:$url"))
-            assertNotNull(owner.images.load("mc1-preview-icon:$url"))
             for (isChannel in listOf(false, true)) {
-                val port = owner.previews(isChannel)
-                val cached = requireNotNull(port.cachedPreview(url))
-                assertEquals(url, cached.url)
-                assertEquals("Persisted preview", cached.title)
-                assertEquals(LinkPreviewOutcome.Disabled, port.preview("https://new.example/article", isChannel))
-
+                val owner = newContent(context, store, http, storage, scope).also(contents::add)
                 val holder = LinkPreviewStateHolder(
                     url,
                     isChannel,
-                    port,
+                    owner.previews(isChannel),
                     UrlSafetyPort { false },
                     MalwareDomainPort { false },
                     backgroundScope,
                 )
                 holder.start()
                 runCurrent()
-                assertEquals(LinkPreviewCardState.Loaded(cached), holder.state.value)
+                val loaded = assertIs<LinkPreviewCardState.Loaded>(holder.state.value)
+                assertEquals(url, loaded.data.url)
+                assertEquals("Persisted preview", loaded.data.title)
                 holder.close()
+
+                val port = owner.previews(isChannel)
+                assertEquals(LinkPreviewOutcome.Disabled, port.preview("https://new.example/article", isChannel))
             }
+
+            val imageOwner = newContent(context, store, http, storage, scope).also(contents::add)
+            assertNotNull(imageOwner.images.load("mc1-preview-hero:$url"))
+            assertNotNull(imageOwner.images.load("mc1-preview-icon:$url"))
             assertEquals(0, fetchCalls)
         } finally {
             withContext(NonCancellable) {
                 lifetime.cancelAndJoin()
                 try {
-                    content?.close()
+                    contents.asReversed().forEach(AppChatContent::close)
                 } finally {
                     try {
                         store.close()
@@ -131,4 +122,21 @@ class CachedPreviewPolicyConsumerTest {
             }
         }
     }
+
+    private fun newContent(
+        context: Context,
+        store: RoomPersistenceStore,
+        http: BoundedHttpFetching,
+        storage: MeshCoreStorage,
+        scope: CoroutineScope,
+    ) = AppChatContent(
+        context = context,
+        store = store,
+        http = http,
+        preferences = DataStoreLinkPreviewPreferencesSource.create(storage.preferences, scope),
+        preferenceStore = storage.preferences,
+        initialPreferences = storage.preferences.snapshot(),
+        scope = scope,
+        imageSafety = { true },
+    )
 }

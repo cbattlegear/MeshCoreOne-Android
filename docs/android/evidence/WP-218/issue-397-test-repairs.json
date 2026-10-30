@@ -57,7 +57,7 @@
     "manifest_configured": false,
     "declared_commands": [],
     "local_test_execution": "not run; no approved WP-218 command is declared",
-    "hosted_exact_candidate": "the d22684c candidate exposed two URI-span regressions caused by a missing scheme quantifier. The 6de6afd candidate fixed those cases but exposed two more URI-span failures for explicit URLs following natural-language labels, plus non-suspending setup-helper calls in the app test. The next candidate adjusts URI-span boundaries, awaits the cache consumer job, and makes setup suspend; exact-candidate hosted verification is authoritative",
+    "hosted_exact_candidate": "the d22684c candidate exposed two URI-span regressions caused by a missing scheme quantifier. The 6de6afd candidate fixed those cases but exposed two more URI-span failures for explicit URLs following natural-language labels, plus non-suspending setup-helper calls in the app test. The 791b988 Copilot review also identified an inconsistent label-versus-scheme heuristic. The next candidate recognizes hierarchical URI syntax and known opaque wrappers, tests labels and view-source nesting, awaits the cache consumer job, and makes setup suspend; exact-candidate hosted verification is authoritative",
     "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
   },
   "limitations": [

@@ -139,6 +139,13 @@ class LinkUrlExtractionTest {
             emptyList(),
             LinkUrlExtraction.extractAllUrls("ftp://example.com/?next=https://other.com/path"),
         )
+        assertNull(LinkUrlExtraction.extractFirstUrl("view-source:https://example.com"))
+    }
+
+    @Test
+    fun `extracts links after prose labels without treating labels as URI schemes`() {
+        assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Link:(https://example.com)"))
+        assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Visit:example.com"))
     }
 
     @Test

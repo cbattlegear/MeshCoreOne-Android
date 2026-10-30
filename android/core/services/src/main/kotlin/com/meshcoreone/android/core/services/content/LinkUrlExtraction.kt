@@ -25,8 +25,9 @@ object LinkUrlExtraction {
     private val giphyShortCodePattern = Regex("^g:([A-Za-z0-9_-]+)$")
     private val mentionPattern = Regex("""@\[([^\]]+)\]""")
     private val explicitHttpUrlPattern = Regex("""(?i)https?://\S+""")
+    // Opaque wrappers are explicit so prose labels such as "Visit:" remain plain text.
     private val uriPattern = Regex(
-        """(?i)(?<![\w.-])(?![a-z0-9.-]+-https?://)[a-z][a-z0-9+.-]*:(?!https?://)(?://)?[^\s<>"']*""",
+        """(?i)(?<![\w.-])(?:[a-z][a-z0-9+.-]*://|(?:mailto|view-source|file|data|javascript|tel|sms|geo|urn):)[^\s<>"']*""",
     )
     private val emailPattern = Regex(
         """(?i)[\w.!#$%&'*+/^_`{|}~-]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})""",

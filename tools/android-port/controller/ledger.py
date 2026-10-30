@@ -2,6 +2,7 @@ import json
 import math
 import re
 import sqlite3
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -153,6 +154,14 @@ class Ledger:
                     merge_sha TEXT NOT NULL, paths TEXT NOT NULL,
                     reconciled_at REAL NOT NULL,
                     PRIMARY KEY (repository, session_id, pr_number)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS execution_recoveries (
+                    repository TEXT NOT NULL, resource TEXT NOT NULL,
+                    receipt_sha256 TEXT NOT NULL, original_row TEXT NOT NULL,
+                    actor TEXT NOT NULL, cleanup TEXT NOT NULL, recovered_at REAL NOT NULL,
+                    PRIMARY KEY (repository, resource, receipt_sha256)
                 )
             """)
 
@@ -992,6 +1001,51 @@ class Ledger:
                     (self.repository,),
                 )
             ]
+
+    def recover_execution(self, receipt: dict):
+        """Finalize one proven, abandoned local check; retain its exact original row."""
+        from .execution_recovery import cleanup_proof, operator_identity, receipt_key
+
+        key = receipt_key(receipt)
+        with self.transaction() as connection:
+            previous = connection.execute("""
+                SELECT * FROM execution_recoveries
+                WHERE repository=? AND resource=? AND receipt_sha256=?
+            """, (self.repository, receipt["resource"], key)).fetchone()
+            if receipt["repository"] != self.repository:
+                raise PortError("Recovery receipt belongs to another repository")
+            if previous is not None:
+                return {"recovered": True, "already_recovered": True, "audit": dict(previous)}
+            row = connection.execute("""
+                SELECT * FROM hard_locks WHERE repository=? AND resource=?
+            """, (self.repository, receipt["resource"])).fetchone()
+            actual = (
+                {**dict(row), "payload": decode_json(row["payload"]), "record_state": "hard"}
+                if row is not None else None
+            )
+            if actual != receipt:
+                raise PortError("Missing, stale or foreign execution receipt; recovery cannot recreate it")
+            # Recheck real evidence inside the same transaction as the exact-row removal.
+            proof = cleanup_proof(receipt)
+            actor, now = operator_identity(), time.time()
+            original = json.dumps(dict(row))
+            connection.execute("""
+                INSERT INTO execution_recoveries
+                (repository,resource,receipt_sha256,original_row,actor,cleanup,recovered_at)
+                VALUES (?,?,?,?,?,?,?)
+            """, (self.repository, receipt["resource"], key, original,
+                  json.dumps(actor), json.dumps(proof), now))
+            connection.execute("""
+                DELETE FROM hard_locks WHERE repository=? AND resource=? AND owner=?
+            """, (self.repository, receipt["resource"], receipt["owner"]))
+            return {
+                "recovered": True, "already_recovered": False,
+                "audit": {
+                    "repository": self.repository, "resource": receipt["resource"],
+                    "receipt_sha256": key, "original_row": original,
+                    "actor": json.dumps(actor), "cleanup": json.dumps(proof), "recovered_at": now,
+                },
+            }
 
     def transition(self, wp: str, attempt: str, state: str, identity: Identity | None = None):
         if state not in STATES:

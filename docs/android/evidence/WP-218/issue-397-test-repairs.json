@@ -6,15 +6,15 @@
   "concerns": {
     "DATA-22": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
-      "case": "persisted previews rehydrate through the app policy port for DM and channel consumers while automatic network work remains gated"
+      "case": "persisted previews rehydrate through the app policy port and LinkPreviewStateHolder for DM and channel consumers while automatic network work remains gated"
     },
     "DATA-23": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/platform/PreviewPolicyTest.kt; android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/composer/LinkLogicTest.kt",
-      "case": "cached results remain visible with auto-resolve disabled and without live DNS, while uncached app-facing previews return Disabled without network calls"
+      "case": "cached results remain visible through the state-holder with auto-resolve disabled and unavailable DNS, while uncached app-facing previews return Disabled without network calls"
     },
     "DATA-24": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
-      "case": "AppChatContent mounts a real two-frame GIF; mounted consumers share one immutable encoded-byte owner with the decoded cache and keep it for sharing across trimMemory without a refetch"
+      "case": "AppChatContent mounts a real two-frame GIF; after trimMemory the production shareMountedImage action still submits the mounted image's original bytes without refetch"
     },
     "DATA-25": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/ImageHeaderDecoderTest.kt",
@@ -57,7 +57,7 @@
     "manifest_configured": false,
     "declared_commands": [],
     "local_test_execution": "not run; no approved WP-218 command is declared",
-    "hosted_exact_candidate": "the PR's exact-candidate hosted job and log are authoritative; they are not duplicated here",
+    "hosted_exact_candidate": "the c0a73f9 candidate failed LinkUrlExtractionTest.keeps outer bare links when email or nested uri appears in their query; commit 292468061 fixes the false email-span match and is awaiting exact-candidate hosted verification",
     "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
   },
   "limitations": [

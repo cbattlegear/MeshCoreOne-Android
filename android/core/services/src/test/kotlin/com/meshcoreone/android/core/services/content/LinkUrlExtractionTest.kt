@@ -124,6 +124,36 @@ class LinkUrlExtractionTest {
     }
 
     @Test
+    fun `does not extract URL-like email local parts as web links`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("Contact project.com/sales@example.com"))
+        assertEquals(
+            listOf("https://example.com/contact?email=foo@example.org"),
+            LinkUrlExtraction.extractAllUrls("example.com/contact?email=foo@example.org"),
+        )
+    }
+
+    @Test
+    fun `does not extract domains embedded in non-hierarchical or unsupported URI values`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("mailto:alice@example.org?subject=tracker.com"))
+        assertEquals(
+            emptyList(),
+            LinkUrlExtraction.extractAllUrls("ftp://example.com/?next=https://other.com/path"),
+        )
+    }
+
+    @Test
+    fun `trims surrounding quotes and angle brackets from bare URL suffixes`() {
+        assertEquals("https://example.com/path", LinkUrlExtraction.extractFirstUrl("Visit \"example.com/path\""))
+        assertEquals("https://example.com/path", LinkUrlExtraction.extractFirstUrl("Visit <example.com/path>"))
+    }
+
+    @Test
+    fun `preserves mixed-case hostnames for shared case-insensitive malware checking`() {
+        assertEquals("https://Blocked.Example/path", LinkUrlExtraction.extractFirstUrl("Blocked.Example/path"))
+        assertEquals("https://BLOCKED.EXAMPLE/path", LinkUrlExtraction.extractFirstUrl("HTTPS://BLOCKED.EXAMPLE/path"))
+    }
+
+    @Test
     fun `normalizes uppercase explicit schemes without changing the rest of the url`() {
         assertEquals("https://Example.COM/Page", LinkUrlExtraction.extractFirstUrl("Link:HTTPS://Example.COM/Page"))
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("See-https://example.com"))

@@ -129,8 +129,8 @@ class AppChatContent internal constructor(
             if (handle is BitmapDecodedImageHandle) return@InlineImageSource handle.bitmap.asImageBitmap()
         }
         val data = when {
-            reference.startsWith(HERO) -> previewCache.cachedPreview(reference.removePrefix(HERO))?.imageData?.toByteArray()
-            reference.startsWith(ICON) -> previewCache.cachedPreview(reference.removePrefix(ICON))?.iconData?.toByteArray()
+            reference.startsWith(HERO) -> previewCache.cachedPreview(reference.removePrefix(HERO), store)?.imageData?.toByteArray()
+            reference.startsWith(ICON) -> previewCache.cachedPreview(reference.removePrefix(ICON), store)?.iconData?.toByteArray()
             else -> throw IllegalArgumentException("Unknown preview image reference")
         } ?: return@InlineImageSource null
         when (val result = thumbnails.decode(data, 900)) {

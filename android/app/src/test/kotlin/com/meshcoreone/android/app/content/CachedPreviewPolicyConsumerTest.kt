@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.content
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.graphics.Bitmap
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.AppChatContent
@@ -10,6 +11,7 @@ import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.core.model.Bytes
 import com.meshcoreone.android.core.model.LinkPreviewDataDTO
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
@@ -18,9 +20,11 @@ import com.meshcoreone.android.feature.chats.composer.LinkPreviewOutcome
 import com.meshcoreone.android.feature.chats.composer.LinkPreviewStateHolder
 import com.meshcoreone.android.feature.chats.composer.MalwareDomainPort
 import com.meshcoreone.android.feature.chats.composer.UrlSafetyPort
+import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -67,7 +71,16 @@ class CachedPreviewPolicyConsumerTest {
             storage.preferences.set(AppStorageKey.linkPreviewsEnabled, true)
             storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveDM, false)
             storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveChannels, false)
-            store.saveLinkPreview(LinkPreviewDataDTO(url, title = "Persisted preview"))
+            val imageBytes = ByteArrayOutputStream().use { output ->
+                Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888).apply {
+                    compress(Bitmap.CompressFormat.PNG, 100, output)
+                    recycle()
+                }
+                output.toByteArray()
+            }
+            store.saveLinkPreview(
+                LinkPreviewDataDTO(url, title = "Persisted preview", imageData = Bytes(imageBytes)),
+            )
             val owner = AppChatContent(
                 context = context,
                 store = store,
@@ -80,6 +93,7 @@ class CachedPreviewPolicyConsumerTest {
             )
             content = owner
 
+            assertNotNull(owner.images.load("mc1-preview-hero:$url"))
             for (isChannel in listOf(false, true)) {
                 val port = owner.previews(isChannel)
                 val cached = requireNotNull(port.cachedPreview(url))

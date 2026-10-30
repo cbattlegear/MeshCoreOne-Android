@@ -25,12 +25,12 @@ object LinkUrlExtraction {
     private val giphyShortCodePattern = Regex("^g:([A-Za-z0-9_-]+)$")
     private val mentionPattern = Regex("""@\[([^\]]+)\]""")
     private val explicitHttpUrlPattern = Regex("""(?i)https?://\S+""")
-    private val uriPattern = Regex("""(?i)\b[a-z][a-z0-9+.-]*://\S+""")
+    private val uriPattern = Regex("""(?i)\b[a-z][a-z0-9+.-]:(?://)?[^\s<>"']*""")
     private val emailPattern = Regex(
-        """(?i)[\w.!#$%&'*+=^_`{|}~-]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})""",
+        """(?i)[\w.!#$%&'*+/^_`{|}~-]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})""",
     )
     private val bareDomainPattern = Regex(
-        """(?i)(?<![\w.@/-])(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9][a-z0-9-]{1,57}[a-z0-9])(?::\d{1,5})?(?:[/?#]\S*)?(?![\w@+%-])""",
+        """(?i)(?<![\w.@/-])(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9][a-z0-9-]{1,57}[a-z0-9])(?::\d{1,5})?(?:[/?#][^\s<>"']*)?(?![\w@+%-])""",
     )
     private data class UrlMatch(val range: IntRange, val value: String, val explicitScheme: Boolean)
 
@@ -77,10 +77,8 @@ object LinkUrlExtraction {
         for (match in matches.sortedBy { it.range.first }) {
             if (mentionRanges.any { it.overlaps(match.range) }) continue
             if (accepted.any { it.range.contains(match.range.first) }) continue
-            if (!match.explicitScheme &&
-                (emailRanges.any { it.contains(match.range.first) } ||
-                    embeddedLinkRanges.any { it.contains(match.range.first) })
-            ) continue
+            if (emailRanges.any { it.contains(match.range.first) }) continue
+            if (embeddedLinkRanges.any { it.first < match.range.first && it.contains(match.range.first) }) continue
             accepted.add(match)
         }
 
@@ -97,7 +95,7 @@ object LinkUrlExtraction {
     private fun trimUrlCandidate(value: String): String {
         var candidate = value
         while (candidate.isNotEmpty()) {
-            val withoutPunctuation = candidate.dropLastWhile { it in ".,!?;:" }
+            val withoutPunctuation = candidate.dropLastWhile { it in ".,!?;:'\">" }
             if (withoutPunctuation != candidate) {
                 candidate = withoutPunctuation
                 continue

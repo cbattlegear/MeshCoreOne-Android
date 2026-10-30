@@ -29,7 +29,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.junit.Rule
@@ -88,8 +87,7 @@ class CachedPreviewPolicyConsumerTest {
                     MalwareDomainPort { false },
                     backgroundScope,
                 )
-                holder.start()
-                runCurrent()
+                holder.start().join()
                 val loaded = assertIs<LinkPreviewCardState.Loaded>(holder.state.value)
                 assertEquals(url, loaded.data.url)
                 assertEquals("Persisted preview", loaded.data.title)
@@ -123,7 +121,7 @@ class CachedPreviewPolicyConsumerTest {
         }
     }
 
-    private fun newContent(
+    private suspend fun newContent(
         context: Context,
         store: RoomPersistenceStore,
         http: BoundedHttpFetching,

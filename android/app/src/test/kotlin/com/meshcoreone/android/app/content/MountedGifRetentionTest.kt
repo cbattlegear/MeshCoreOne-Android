@@ -13,7 +13,6 @@ import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
-import com.meshcoreone.android.core.services.content.DataStoreLinkPreviewPreferencesSource
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -48,8 +47,9 @@ class MountedGifRetentionTest {
     }
 
     @Test
-    fun `mounted GIF retains share bytes and is fetched again after process memory trim`() = runTest {
-        val context = context(temporary.newFolder())
+    fun `mounted GIF retains its original share bytes across process memory trim`() = runTest {
+        val noBackupDirectory = temporary.newFolder()
+        val context = context(noBackupDirectory)
         val storage = MeshCoreStorage.get(context)
         val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
             .allowMainThreadQueries().build()
@@ -90,11 +90,11 @@ class MountedGifRetentionTest {
 
             val mounted = assertIs<ChatImage.Decoded>(owner.inline(url))
             assertIs<GifDecodedImageHandle>(mounted.handle)
-            assertContentEquals(bytes, owner.shareData(url))
+            assertContentEquals(bytes, owner.shareData(mounted))
 
             owner.trimMemory()
-            assertContentEquals(bytes, owner.shareData(url))
-            assertEquals(2, fetchCalls)
+            assertContentEquals(bytes, owner.shareData(mounted))
+            assertEquals(1, fetchCalls)
         } finally {
             withContext(NonCancellable) {
                 lifetime.cancelAndJoin()

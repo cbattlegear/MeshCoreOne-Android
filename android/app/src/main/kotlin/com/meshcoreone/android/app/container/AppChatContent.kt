@@ -21,7 +21,10 @@ import kotlinx.coroutines.flow.*
 import com.meshcoreone.android.feature.chats.timeline.TimelineContent
 
 internal sealed interface ChatImage {
-    data class Decoded(val handle: DecodedImageHandle) : ChatImage
+    class Decoded(val handle: DecodedImageHandle, data: ByteArray) : ChatImage {
+        private val retainedData = data.copyOf()
+        fun shareData(): ByteArray = retainedData.copyOf()
+    }
     data object HtmlPage : ChatImage
 }
 
@@ -148,14 +151,7 @@ class AppChatContent internal constructor(
     fun isImage(url: String) = ImageUrlClassifier.isImageUrl(URI(url)) &&
         !imageCache.servesHtmlPage(ImageUrlClassifier.directImageUrl(URI(url)).toString())
     fun aspect(url: String) = dimensions.aspect(ImageUrlClassifier.directImageUrl(URI(url)).toString()) ?: dimensions.aspect(url)
-    internal suspend fun shareData(url: String): ByteArray {
-        val direct = ImageUrlClassifier.directImageUrl(URI(url)).toString()
-        imageCache.decoded(direct)?.data?.let { return it }
-        inline(url)
-        return requireNotNull(imageCache.decoded(direct)?.data) {
-            "The displayed image is no longer available for sharing"
-        }
-    }
+    internal fun shareData(image: ChatImage.Decoded): ByteArray = image.shareData()
     suspend fun recordReaction(emoji: String) {
         preferenceStore.update {
             this[AppStorageKey.recentReactionEmojis] =
@@ -169,7 +165,11 @@ class AppChatContent internal constructor(
     internal suspend fun inline(url: String): ChatImage {
         check(rendering.value[AppStorageKey.linkPreviewsEnabled]) { "Link content is disabled" }
         val resolved = ImageUrlClassifier.directImageUrl(URI(url)).toString()
-        imageCache.decoded(resolved)?.let { return ChatImage.Decoded(it.handle) }
+        imageCache.decoded(resolved)?.let { cached ->
+            return ChatImage.Decoded(cached.handle, requireNotNull(cached.data) {
+                "The decoded image no longer has its original encoded bytes"
+            })
+        }
         val fetch = withTimeoutOrNull(30_000) {
             var result = imageCache.fetchImageData(resolved)
             while (result == InlineImageResult.Loading) {
@@ -182,7 +182,7 @@ class AppChatContent internal constructor(
             is InlineImageResult.Loaded -> when (val decoded = decoder.decode(fetch.data, 900)) {
                 is ImageDecodeOutcome.Decoded -> {
                     imageCache.storeDecoded(CachedDecodedImage(decoded.handle, decoded.handle is GifDecodedImageHandle, fetch.data), resolved)
-                    ChatImage.Decoded(decoded.handle)
+                    ChatImage.Decoded(decoded.handle, fetch.data)
                 }
                 is ImageDecodeOutcome.Failed -> throw IllegalStateException(decoded.reason)
                 is ImageDecodeOutcome.Unsupported -> throw IllegalStateException(decoded.reason)

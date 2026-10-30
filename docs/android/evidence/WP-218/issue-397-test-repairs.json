@@ -9,12 +9,12 @@
       "case": "persisted previews rehydrate through the app policy port for DM and channel consumers while automatic network work remains gated"
     },
     "DATA-23": {
-      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/platform/PreviewPolicyTest.kt",
-      "case": "cached results remain visible with auto-resolve disabled, while uncached app-facing previews return Disabled without network calls"
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/platform/PreviewPolicyTest.kt; android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/composer/LinkLogicTest.kt",
+      "case": "cached results remain visible with auto-resolve disabled and without live DNS, while uncached app-facing previews return Disabled without network calls"
     },
     "DATA-24": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
-      "case": "AppChatContent mounts a real two-frame GIF, retains share bytes, clears caches through trimMemory, and the still-mounted share action reloads exact bytes"
+      "case": "AppChatContent mounts a real two-frame GIF; its mounted consumer retains original encoded bytes for sharing across trimMemory without a refetch"
     },
     "DATA-25": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/ImageHeaderDecoderTest.kt",
@@ -38,7 +38,7 @@
     },
     "DATA-30": {
       "evidence": "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtraction.kt; #403",
-      "case": "explicit schemes are normalized; bare and www domains use HTTPS, punctuation is trimmed without removing balanced delimiters, punycode TLDs are complete, dotted email spans are excluded; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
+      "case": "explicit schemes are normalized; bare and www domains use HTTPS, punctuation is trimmed without removing balanced delimiters, URI/email-contained domains are excluded, punycode TLDs are complete, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
     },
     "DATA-31": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt",

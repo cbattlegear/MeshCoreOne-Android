@@ -126,6 +126,19 @@ class LinkUrlExtractionTest {
     @Test
     fun `normalizes uppercase explicit schemes without changing the rest of the url`() {
         assertEquals("https://Example.COM/Page", LinkUrlExtraction.extractFirstUrl("Link:HTTPS://Example.COM/Page"))
+        assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("See-https://example.com"))
+    }
+
+    @Test
+    fun `does not extract bare domains embedded in supported or unsupported uri urls`() {
+        assertEquals(
+            listOf("https://example.com/?next=tracker.com"),
+            LinkUrlExtraction.extractAllUrls("https://example.com/?next=tracker.com"),
+        )
+        assertEquals(
+            emptyList(),
+            LinkUrlExtraction.extractAllUrls("ftp://example.com/?next=tracker.com"),
+        )
     }
 
     @Test

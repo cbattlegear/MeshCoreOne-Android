@@ -24,7 +24,11 @@ import java.util.Locale
 object LinkUrlExtraction {
     private val giphyShortCodePattern = Regex("^g:([A-Za-z0-9_-]+)$")
     private val mentionPattern = Regex("""@\[([^\]]+)\]""")
-    private val explicitHttpUrlPattern = Regex("""(?i)(?<![a-z0-9+.-])https?://\S+""")
+    private val explicitHttpUrlPattern = Regex("""(?i)https?://\S+""")
+    private val uriPattern = Regex("""(?i)\b[a-z][a-z0-9+.-]*://\S+""")
+    private val emailPattern = Regex(
+        """(?i)[\w.!#$%&'*+/=?^_`{|}~-]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})""",
+    )
     private val bareDomainPattern = Regex(
         """(?i)(?<![\w.@/-])(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9][a-z0-9-]{1,57}[a-z0-9])(?::\d{1,5})?(?:[/?#]\S*)?(?![\w@+%-])""",
     )
@@ -55,6 +59,8 @@ object LinkUrlExtraction {
         extractGiphyGifUrl(text)?.let { return listOf(it) }
 
         val mentionRanges = mentionPattern.findAll(text).map { it.range }.toList()
+        val embeddedLinkRanges = uriPattern.findAll(text).map { it.range }.toList()
+        val emailRanges = emailPattern.findAll(text).map { it.range }.toList()
 
         val matches = buildList {
             explicitHttpUrlPattern.findAll(text).forEach { match ->
@@ -70,6 +76,11 @@ object LinkUrlExtraction {
         return matches.asSequence()
             .sortedBy { it.range.first }
             .filter { match -> mentionRanges.none { it.overlaps(match.range) } }
+            .filter { match ->
+                match.explicitScheme ||
+                    (emailRanges.none { it.overlaps(match.range) } &&
+                        embeddedLinkRanges.none { it.overlaps(match.range) })
+            }
             .map { match ->
                 if (match.explicitScheme) {
                     val scheme = match.value.substringBefore("://").lowercase(Locale.ROOT)

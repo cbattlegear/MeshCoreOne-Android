@@ -141,7 +141,10 @@ internal fun AppMessageContent(
                             }
                             TextButton(onClick = {
                                 scope.launch {
-                                    try { com.meshcoreone.android.app.platform.shareImage(context, content.shareData(url)) }
+                                    try {
+                                        val mountedImage = requireNotNull(loaded) { "No mounted image is available to share" }
+                                        com.meshcoreone.android.app.platform.shareImage(context, content.shareData(mountedImage))
+                                    }
                                     catch (cancelled: CancellationException) { throw cancelled }
                                     catch (problem: Exception) { report("Image sharing failed", problem); failure = problem }
                                 }

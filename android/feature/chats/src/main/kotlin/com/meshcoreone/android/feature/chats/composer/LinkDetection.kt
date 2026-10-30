@@ -4,7 +4,7 @@ package com.meshcoreone.android.feature.chats.composer
 
 import java.util.Locale
 
-/** A detected web link: UTF-16 [start]..[end) and the openable [url] (`www.` hosts resolve to `http://`). */
+/** A detected web link: UTF-16 [start]..[end) and the openable [url] (`www.` hosts resolve to `https://`). */
 data class DetectedUrl(val start: Int, val end: Int, val url: String)
 
 /**
@@ -30,7 +30,7 @@ object LinkDetection {
         val raw = text.substring(match.range.first, end + 1)
         val prefixLength = if (raw.startsWith("www.", ignoreCase = true)) 4 else raw.indexOf("://") + 3
         if (raw.length <= prefixLength) return@mapNotNull null // scheme or `www.` with no host after trimming
-        val url = if (raw.startsWith("www.", ignoreCase = true)) "http://$raw" else raw
+        val url = if (raw.startsWith("www.", ignoreCase = true)) "https://$raw" else raw
         DetectedUrl(match.range.first, end + 1, url)
     }.toList()
 }

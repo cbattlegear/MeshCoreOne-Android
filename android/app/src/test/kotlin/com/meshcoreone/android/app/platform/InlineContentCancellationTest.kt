@@ -29,6 +29,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlin.test.assertIs
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -49,9 +50,8 @@ class InlineContentCancellationTest : RoomProcessTest() {
             } catch (_: TimeoutCancellationException) {
                 assertEquals(1_000L, testScheduler.currentTime - started)
             }
-            val loaded = content.inline(URL)
-            assertTrue(loaded is ChatImage.Decoded)
-            assertArrayEquals(image, content.shareData(URL))
+            val loaded = assertIs<ChatImage.Decoded>(content.inline(URL))
+            assertArrayEquals(image, content.shareData(loaded))
             assertEquals(2, attempts)
             assertEquals(1, closed)
             assertSame((loaded as ChatImage.Decoded).handle, (content.inline(URL) as ChatImage.Decoded).handle)

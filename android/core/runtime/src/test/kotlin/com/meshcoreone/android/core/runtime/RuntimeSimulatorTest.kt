@@ -27,6 +27,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -36,7 +37,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import org.junit.jupiter.api.TestFactory
 
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
 class RuntimeSimulatorTest {
     @TestFactory
     fun simulatorLifecycle() = listOf(
@@ -96,6 +97,7 @@ class RuntimeSimulatorTest {
                 assertEquals(DeviceConnectionState.READY, fixture.manager.connectionState)
                 assertTrue(fixture.manager.isSimulatorConnection)
                 assertEquals(0, fixture.links.single().radio.connectionAttempts)
+                assertEquals(0, fixture.links.single().sendAttempts)
                 assertTrue(fixture.links.single().radio.frames.isEmpty())
                 assertEquals(0, fixture.services.single().teardowns)
             } finally {
@@ -433,8 +435,17 @@ private class SimulatorLink(
     val radio = TestRadio()
     var disconnects = 0
     var registrationClosures = 0
+    var sendAttempts = 0
     override val type = TransportType.SIMULATOR
     override val transport: MeshTransport = object : MeshTransport by radio {
+        override suspend fun send(data: Bytes) {
+            sendAttempts++
+            radio.send(data)
+        }
+        override suspend fun sendWithoutResponse(data: Bytes) {
+            sendAttempts++
+            radio.sendWithoutResponse(data)
+        }
         override suspend fun disconnect() {
             disconnects++
             radio.disconnect()

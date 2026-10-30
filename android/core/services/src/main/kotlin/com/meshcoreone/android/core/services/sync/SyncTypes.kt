@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.services.sync
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.contracts.domain.errors.SourceServiceFaultCarrier
 import com.meshcoreone.android.core.contracts.domain.errors.SyncFault
+import java.time.Instant
 
 /** Current state of the sync coordinator. */
 sealed interface SyncState {
@@ -82,8 +83,16 @@ sealed interface ContactWatermarkUse {
     data class Invalid(val stored: UInt) : ContactWatermarkUse
 }
 
-/** Swift `(correctedTimestamp:, wasCorrected:)` tuple from `correctTimestampIfNeeded`. */
-data class TimestampCorrection(val correctedTimestamp: UInt, val wasCorrected: Boolean)
+// AndroidOnly: WP-214 Recoverable receive-clock range failure; the sender stamp remains deliverable.
+class TimestampRangeError(val receiveTime: Instant) :
+    Exception("Receive time $receiveTime is outside UInt32 Unix seconds; retaining the original sender timestamp.")
+
+/** Swift correction tuple, with the approved native recoverable receive-clock error. */
+data class TimestampCorrection(
+    val correctedTimestamp: UInt,
+    val wasCorrected: Boolean,
+    val rangeError: TimestampRangeError? = null,
+)
 
 /** Swift `(senderNodeName:, messageText:)` tuple from `parseChannelMessage`. */
 data class ParsedChannelText(val senderNodeName: String?, val messageText: String)

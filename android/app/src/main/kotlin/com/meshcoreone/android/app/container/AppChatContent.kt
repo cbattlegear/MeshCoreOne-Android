@@ -115,7 +115,7 @@ class AppChatContent internal constructor(
             dimensions.aspect(resolved) ?: dimensions.aspect(url))
     }
     private val previews = object : LinkPreviewPort {
-        override suspend fun cachedPreview(url: String) = previewCache.cachedPreview(url)?.forUi()
+        override suspend fun cachedPreview(url: String) = previewCache.cachedPreview(url, store)?.forUi()
         override suspend fun preview(url: String, isChannelMessage: Boolean) = previewCache.preview(url, store, isChannelMessage).forUi()
         override suspend fun manualFetch(url: String) = previewCache.manualFetch(url, store).forUi()
     }
@@ -148,9 +148,14 @@ class AppChatContent internal constructor(
     fun isImage(url: String) = ImageUrlClassifier.isImageUrl(URI(url)) &&
         !imageCache.servesHtmlPage(ImageUrlClassifier.directImageUrl(URI(url)).toString())
     fun aspect(url: String) = dimensions.aspect(ImageUrlClassifier.directImageUrl(URI(url)).toString()) ?: dimensions.aspect(url)
-    internal fun shareData(url: String): ByteArray = requireNotNull(
-        imageCache.decoded(ImageUrlClassifier.directImageUrl(URI(url)).toString())?.data,
-    ) { "The displayed image is no longer cached; reload it before sharing" }
+    internal suspend fun shareData(url: String): ByteArray {
+        val direct = ImageUrlClassifier.directImageUrl(URI(url)).toString()
+        imageCache.decoded(direct)?.data?.let { return it }
+        inline(url)
+        return requireNotNull(imageCache.decoded(direct)?.data) {
+            "The displayed image is no longer available for sharing"
+        }
+    }
     suspend fun recordReaction(emoji: String) {
         preferenceStore.update {
             this[AppStorageKey.recentReactionEmojis] =
@@ -227,7 +232,7 @@ class AppChatContent internal constructor(
         private val autoResolve: () -> Boolean,
     ) : LinkPreviewPort {
         override suspend fun cachedPreview(url: String) =
-            if (enabled() && autoResolve()) delegate.cachedPreview(url) else null
+            if (enabled()) delegate.cachedPreview(url) else null
         override suspend fun preview(url: String, isChannelMessage: Boolean): LinkPreviewOutcome = when {
             !enabled() -> LinkPreviewOutcome.NoPreviewAvailable
             !autoResolve() -> LinkPreviewOutcome.Disabled

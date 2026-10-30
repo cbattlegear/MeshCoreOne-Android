@@ -97,6 +97,9 @@ class LinkPreviewCache(
 
     override suspend fun cachedPreview(url: String): LinkPreviewDataDTO? = memoryCache.get(url)
 
+    suspend fun cachedPreview(url: String, dataStore: LinkPreviewPersisting): LinkPreviewDataDTO? =
+        checkCaches(url, dataStore)
+
     /**
      * Checks memory cache and database for existing preview data. Returns the DTO if found, and
      * caches it in memory if it was loaded from the database.

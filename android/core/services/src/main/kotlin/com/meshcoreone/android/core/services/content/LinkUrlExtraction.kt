@@ -9,8 +9,8 @@
 // http/https, then excludes matches overlapping mentions. The JVM adaptation recognizes
 // explicit HTTP(S) URLs and web-domain forms (including bare domains) so mention suppression
 // does not depend on the detector happening to reject the mention text first. Bare domains
-// receive the same inferred HTTP scheme as detector-produced web links; email addresses and
-// bare IP addresses are not treated as web links.
+// receive HTTPS because Android does not permit cleartext network traffic by default; email
+// addresses and bare IP addresses are not treated as web links.
 //
 // The mention-range exclusion depends only on `MentionUtilities.mentionPattern`'s literal
 // regex string (`@\[([^\]]+)\]`), not the full `MentionUtilities` type (a separate,
@@ -18,13 +18,17 @@
 // undeclared cross-module dependency on code this WP does not own.
 package com.meshcoreone.android.core.services.content
 
+import java.util.Locale
+
 /** Pure text-scanning helpers extracted from `LinkPreviewService`. */
 object LinkUrlExtraction {
     private val giphyShortCodePattern = Regex("^g:([A-Za-z0-9_-]+)$")
     private val mentionPattern = Regex("""@\[([^\]]+)\]""")
-    private val httpUrlPattern = Regex(
-        """(?i)(?<![\w.@:/-])(?:https?://\S+|(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?(?:[/?#]\S*)?)""",
+    private val explicitHttpUrlPattern = Regex("""(?i)(?<![a-z0-9+.-])https?://\S+""")
+    private val bareDomainPattern = Regex(
+        """(?i)(?<![\w.@/-])(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9][a-z0-9-]{1,57}[a-z0-9])(?::\d{1,5})?(?:[/?#]\S*)?(?![\w@+%-])""",
     )
+    private data class UrlMatch(val range: IntRange, val value: String, val explicitScheme: Boolean)
 
     /**
      * Extracts a Giphy GIF URL from meshcore-open `g:{id}` message format. The entire
@@ -36,7 +40,7 @@ object LinkUrlExtraction {
         return "https://media.giphy.com/media/${match.groupValues[1]}/giphy.gif"
     }
 
-    /** The first HTTP(S) URL in [text], excluding URLs inside `@[mention]` ranges, or `null`. */
+    /** The first web URL in [text], excluding URLs inside `@[mention]` ranges, or `null`. */
     fun extractFirstUrl(text: String): String? = extractAllUrls(text).firstOrNull()
 
     /**
@@ -52,18 +56,49 @@ object LinkUrlExtraction {
 
         val mentionRanges = mentionPattern.findAll(text).map { it.range }.toList()
 
-        return httpUrlPattern.findAll(text)
+        val matches = buildList {
+            explicitHttpUrlPattern.findAll(text).forEach { match ->
+                val value = trimUrlCandidate(match.value)
+                if (value.isNotEmpty()) add(UrlMatch(match.range.first..(match.range.first + value.lastIndex), value, true))
+            }
+            bareDomainPattern.findAll(text).forEach { match ->
+                val value = trimUrlCandidate(match.value)
+                if (value.isNotEmpty()) add(UrlMatch(match.range.first..(match.range.first + value.lastIndex), value, false))
+            }
+        }
+
+        return matches.asSequence()
+            .sortedBy { it.range.first }
             .filter { match -> mentionRanges.none { it.overlaps(match.range) } }
             .map { match ->
-                val value = match.value
-                if (value.startsWith("http://", ignoreCase = true) ||
-                    value.startsWith("https://", ignoreCase = true)) {
-                    value
+                if (match.explicitScheme) {
+                    val scheme = match.value.substringBefore("://").lowercase(Locale.ROOT)
+                    "$scheme://${match.value.substringAfter("://")}"
                 } else {
-                    "http://$value"
+                    "https://${match.value}"
                 }
             }
             .toList()
+    }
+
+    private fun trimUrlCandidate(value: String): String {
+        var candidate = value
+        while (candidate.isNotEmpty()) {
+            val withoutPunctuation = candidate.dropLastWhile { it in ".,!?;:" }
+            if (withoutPunctuation != candidate) {
+                candidate = withoutPunctuation
+                continue
+            }
+            val opening = when (candidate.last()) {
+                ')' -> '('
+                ']' -> '['
+                '}' -> '{'
+                else -> return candidate
+            }
+            if (candidate.count { it == opening } >= candidate.count { it == candidate.last() }) return candidate
+            candidate = candidate.dropLast(1)
+        }
+        return candidate
     }
 
     private fun IntRange.overlaps(other: IntRange): Boolean =

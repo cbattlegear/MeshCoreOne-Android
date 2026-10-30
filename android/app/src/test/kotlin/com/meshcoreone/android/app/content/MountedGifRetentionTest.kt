@@ -12,14 +12,12 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
-import com.meshcoreone.android.core.services.content.DataStoreLinkPreviewPreferencesSource
-import com.meshcoreone.android.core.services.content.GifDecodedImageHandle
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
+import com.meshcoreone.android.core.services.content.DataStoreLinkPreviewPreferencesSource
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -95,10 +93,6 @@ class MountedGifRetentionTest {
             assertContentEquals(bytes, owner.shareData(url))
 
             owner.trimMemory()
-            assertFailsWith<IllegalArgumentException> { owner.shareData(url) }
-
-            val reloaded = assertIs<ChatImage.Decoded>(owner.inline(url))
-            assertIs<GifDecodedImageHandle>(reloaded.handle)
             assertContentEquals(bytes, owner.shareData(url))
             assertEquals(2, fetchCalls)
         } finally {

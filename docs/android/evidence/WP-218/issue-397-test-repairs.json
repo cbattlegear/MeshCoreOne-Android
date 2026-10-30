@@ -5,16 +5,16 @@
   "status": "source and test changes recorded; local product tests were not run",
   "concerns": {
     "DATA-22": {
-      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
-      "case": "cached previews rehydrate while automatic network fetch remains gated for both conversation types"
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
+      "case": "persisted previews rehydrate through the app policy port for DM and channel consumers while automatic network work remains gated"
     },
     "DATA-23": {
-      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
-      "case": "both DM and channel cached results load without metadata network calls when automatic resolution is disabled"
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/platform/PreviewPolicyTest.kt",
+      "case": "cached results remain visible with auto-resolve disabled, while uncached app-facing previews return Disabled without network calls"
     },
     "DATA-24": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
-      "case": "AppChatContent mounts a real two-frame GIF, retains share bytes, clears them through trimMemory, and refetches on remount"
+      "case": "AppChatContent mounts a real two-frame GIF, retains share bytes, clears caches through trimMemory, and the still-mounted share action reloads exact bytes"
     },
     "DATA-25": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/ImageHeaderDecoderTest.kt",
@@ -26,7 +26,7 @@
     },
     "DATA-27": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/OkHttpContentFetchingTest.kt",
-      "case": "private redirect target listens and must receive zero connections"
+      "case": "private redirect target reaches the private-address predicate and listens but must receive zero connections"
     },
     "DATA-28": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/RegionResolverTest.kt",
@@ -38,7 +38,7 @@
     },
     "DATA-30": {
       "evidence": "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtraction.kt; #403",
-      "case": "ASCII bare and www domains are recognized as HTTP(S) links; full NSDataDetector equivalence remains unclaimed and cross-work-group adjudication remains tracked by WP-308"
+      "case": "explicit schemes are normalized; bare and www domains use HTTPS, punctuation is trimmed without removing balanced delimiters, punycode TLDs are complete, dotted email spans are excluded; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
     },
     "DATA-31": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt",

@@ -11,7 +11,8 @@ data class DetectedUrl(val start: Int, val end: Int, val url: String)
  * Link scan feeding both URL tokens and the ranges hashtags must skip. The JVM has no `NSDataDetector`,
  * so this matches explicit `http(s)://` links and `www.` hosts and trims trailing sentence punctuation
  * and unbalanced `)` as the detector does. Bare domains (`example.com`) and emails are NOT linked
- * (oracle shows Swift links them); WP-218 `LinkUrlExtraction` made the same scoped choice.
+ * by this UI tokenizer; its broader detector adaptation remains tracked by #403. WP-218's
+ * independent preview-content extractor recognizes a bounded ASCII bare-domain subset.
  */
 object LinkDetection {
     private val candidate = Regex("""(?i)\b(?:https?://|www\.)[^${ChatCoordinateDetector.WHITE_SPACE.removeSurrounding("[", "]")}<>"]+""")

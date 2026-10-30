@@ -20,13 +20,13 @@ class LinkUrlExtractionTest {
     }
 
     @Test
-    fun `extracts a bare web domain with inferred http scheme`() {
-        assertEquals("http://WCMesh.com", LinkUrlExtraction.extractFirstUrl("Visit WCMesh.com today"))
+    fun `extracts a bare web domain with inferred https scheme`() {
+        assertEquals("https://WCMesh.com", LinkUrlExtraction.extractFirstUrl("Visit WCMesh.com today"))
     }
 
     @Test
-    fun `extracts a www web domain as an absolute http url`() {
-        assertEquals("http://www.example.com", LinkUrlExtraction.extractFirstUrl("Visit www.example.com"))
+    fun `extracts a www web domain as an absolute https url`() {
+        assertEquals("https://www.example.com", LinkUrlExtraction.extractFirstUrl("Visit www.example.com"))
     }
 
     @Test
@@ -98,6 +98,34 @@ class LinkUrlExtractionTest {
     fun `extracts url when no mentions present`() {
         val text = "Just a normal message with https://example.com link"
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl(text))
+    }
+
+    @Test
+    fun `trims trailing punctuation and only unmatched closing delimiters`() {
+        assertEquals(
+            listOf("https://example.com", "https://www.example.org/path(a)"),
+            LinkUrlExtraction.extractAllUrls("Visit example.com, then (www.example.org/path(a))."),
+        )
+        assertEquals("https://example.com/a(b)", LinkUrlExtraction.extractFirstUrl("Link:https://example.com/a(b)."))
+    }
+
+    @Test
+    fun `matches a complete punycode top-level domain`() {
+        assertEquals("https://site.xn--p1ai/path", LinkUrlExtraction.extractFirstUrl("Visit site.xn--p1ai/path"))
+    }
+
+    @Test
+    fun `does not extract dotted email addresses as domains`() {
+        assertNull(
+            LinkUrlExtraction.extractFirstUrl(
+                "Email first.last@example.com or first.last+tag@example.net or name.with.dots@sub.example.org",
+            ),
+        )
+    }
+
+    @Test
+    fun `normalizes uppercase explicit schemes without changing the rest of the url`() {
+        assertEquals("https://Example.COM/Page", LinkUrlExtraction.extractFirstUrl("Link:HTTPS://Example.COM/Page"))
     }
 
     @Test

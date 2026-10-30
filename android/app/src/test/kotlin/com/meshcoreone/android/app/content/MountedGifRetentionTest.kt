@@ -18,6 +18,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -90,6 +91,8 @@ class MountedGifRetentionTest {
 
             val mounted = assertIs<ChatImage.Decoded>(owner.inline(url))
             assertIs<GifDecodedImageHandle>(mounted.handle)
+            val shared = assertIs<ChatImage.Decoded>(owner.inline(url))
+            assertSame(mounted.encodedData, shared.encodedData)
             assertContentEquals(bytes, owner.shareData(mounted))
 
             owner.trimMemory()

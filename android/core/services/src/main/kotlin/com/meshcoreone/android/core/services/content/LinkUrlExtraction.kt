@@ -73,15 +73,18 @@ object LinkUrlExtraction {
             }
         }
 
-        return matches.asSequence()
-            .sortedBy { it.range.first }
-            .filter { match -> mentionRanges.none { it.overlaps(match.range) } }
-            .filter { match ->
-                match.explicitScheme ||
-                    (emailRanges.none { it.overlaps(match.range) } &&
-                        embeddedLinkRanges.none { it.overlaps(match.range) })
-            }
-            .map { match ->
+        val accepted = mutableListOf<UrlMatch>()
+        for (match in matches.sortedBy { it.range.first }) {
+            if (mentionRanges.any { it.overlaps(match.range) }) continue
+            if (accepted.any { it.range.contains(match.range.first) }) continue
+            if (!match.explicitScheme &&
+                (emailRanges.any { it.contains(match.range.first) } ||
+                    embeddedLinkRanges.any { it.contains(match.range.first) })
+            ) continue
+            accepted.add(match)
+        }
+
+        return accepted.map { match ->
                 if (match.explicitScheme) {
                     val scheme = match.value.substringBefore("://").lowercase(Locale.ROOT)
                     "$scheme://${match.value.substringAfter("://")}"
@@ -89,7 +92,6 @@ object LinkUrlExtraction {
                     "https://${match.value}"
                 }
             }
-            .toList()
     }
 
     private fun trimUrlCandidate(value: String): String {

@@ -142,6 +142,18 @@ class LinkUrlExtractionTest {
     }
 
     @Test
+    fun `keeps outer bare links when email or nested uri appears in their query`() {
+        assertEquals(
+            listOf("https://example.com/contact?email=foo@example.org"),
+            LinkUrlExtraction.extractAllUrls("example.com/contact?email=foo@example.org"),
+        )
+        assertEquals(
+            listOf("https://example.com/?next=https://other.com/path"),
+            LinkUrlExtraction.extractAllUrls("example.com/?next=https://other.com/path"),
+        )
+    }
+
+    @Test
     fun `returns null when only url-like text in mention`() {
         assertNull(LinkUrlExtraction.extractFirstUrl("Message from @[192.168.1.100]"))
     }

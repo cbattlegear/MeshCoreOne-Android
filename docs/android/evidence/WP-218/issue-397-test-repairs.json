@@ -14,7 +14,7 @@
     },
     "DATA-24": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
-      "case": "AppChatContent mounts a real two-frame GIF; its mounted consumer retains original encoded bytes for sharing across trimMemory without a refetch"
+      "case": "AppChatContent mounts a real two-frame GIF; mounted consumers share one immutable encoded-byte owner with the decoded cache and keep it for sharing across trimMemory without a refetch"
     },
     "DATA-25": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/ImageHeaderDecoderTest.kt",
@@ -38,7 +38,7 @@
     },
     "DATA-30": {
       "evidence": "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtraction.kt; #403",
-      "case": "explicit schemes are normalized; bare and www domains use HTTPS, punctuation is trimmed without removing balanced delimiters, URI/email-contained domains are excluded, punycode TLDs are complete, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
+      "case": "explicit schemes are normalized; bare and www domains use HTTPS, punctuation is trimmed without removing balanced delimiters, nested URI/email matches are suppressed without discarding the outer URL, punycode TLDs are complete, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
     },
     "DATA-31": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt",

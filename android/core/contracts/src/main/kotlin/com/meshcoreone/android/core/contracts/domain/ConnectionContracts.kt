@@ -19,6 +19,15 @@ import kotlinx.coroutines.flow.StateFlow
 @JvmInline value class Generation(val value: Long) { init { require(value >= 0) { "Generation must not be negative" } } }
 data class SessionToken(val epoch: ProcessEpoch, val generation: Generation, val radioId: RadioId)
 
+/** An accepted device replacement, ordered within its connection generation. */
+data class ConnectedDeviceEdit(
+    val token: SessionToken,
+    val sequence: Long,
+    val previousKnownRegions: SnapshotList<String>,
+) {
+    init { require(sequence > 0) { "Device edit sequence must be positive" } }
+}
+
 enum class DeviceConnectionState {
     DISCONNECTED, CONNECTING, CONNECTED, SYNCING, READY;
     val isOperational: Boolean get() = this == SYNCING || this == READY

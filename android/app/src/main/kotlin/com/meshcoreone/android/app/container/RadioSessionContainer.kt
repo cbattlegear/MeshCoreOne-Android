@@ -105,6 +105,8 @@ class RadioSessionContainer private constructor(
 ) : RuntimeServices, AppSession {
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
     private val lock = Any()
+    private val knownRegionLock = Any()
+    private var lastKnownRegionEdit = 0L
     private var closed = false
     internal val chatSendQueueProgress: ChatSendQueueProgress = env.chatSendQueueProgress
     private val session: MeshCoreSession = inputs.connection.session
@@ -138,9 +140,14 @@ class RadioSessionContainer private constructor(
         diagnostics = persistentRxLogDiagnostics(),
     )
 
-    internal fun knownRegionsChanged(regions: List<String>): Job =
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            if (!isClosed) rxLogService.updateKnownRegions(regions)
+    // The undispatched launch installs the cache before releasing this lock, so the sequence check cannot race it.
+    internal fun knownRegionsChanged(sequence: Long, regions: List<String>): Job? =
+        synchronized(knownRegionLock) {
+            if (sequence <= lastKnownRegionEdit) return@synchronized null
+            lastKnownRegionEdit = sequence
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                if (!isClosed) rxLogService.updateKnownRegions(regions)
+            }
         }
 
     override val notificationService = NotificationService(

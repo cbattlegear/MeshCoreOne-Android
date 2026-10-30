@@ -278,12 +278,13 @@ class RxIngestionOracleTest : RoomProcessTest() {
         }
     }
 
-    @Test fun realCorrelationAdoptsUnknownCanonicalPathAndRoomRefusesReplacementAndOutgoingAdoption() = runTest {
+    @Test fun realCorrelationAdoptsUnknownPathAndOutgoingHarvestDoesNotAdopt() = runTest {
         withFixture { f ->
             val stamp = 1_704_000_800u
             val text = "NodeAlpha: dup path"
             f.poll(stamp, text)
             val key = f.independentKey(stamp, "dup path")
+            assertEquals(key, DeduplicationKey.contentBased(null, 0u, "NodeAlpha", stamp, "dup path"))
             val unknown = assertNotNull(store.fetchMessage(key, f.radio))
             assertNull(unknown.pathNodes)
             val entry = f.ingest(f.packet(f.encrypted(stamp, text), Bytes.of(0xA1)))
@@ -298,10 +299,24 @@ class RxIngestionOracleTest : RoomProcessTest() {
             assertEquals(Bytes.of(0xA1), assertNotNull(store.fetchMessage(messageKey)).pathNodes)
             assertTrue(store.fetchMessageRepeats(messageKey).isEmpty())
             assertFalse(store.messageRepeatExists(EntityKey(f.radio, entry.id)))
-            val outgoing = unknown.copy(id = UUID.randomUUID(), direction = MessageDirection.OUTGOING, deduplicationKey = null)
+            val decoded = assertNotNull(f.live.rxLogService.decryptEntry(entry).decodedText)
+            assertEquals(text, decoded)
+            val candidate = entry.copy(decodedText = decoded)
+            val incoming = unknown.copy(id = UUID.randomUUID())
+            val incomingKey = EntityKey(f.radio, incoming.id)
+            store.saveMessage(incoming)
+            f.live.heardRepeatsService.harvestIncomingPaths(incoming, listOf(candidate))
+            assertEquals(Bytes.of(0xA1), assertNotNull(store.fetchMessage(incomingKey)).pathNodes)
+
+            val outgoing = unknown.copy(id = UUID.randomUUID(), direction = MessageDirection.OUTGOING)
+            val outgoingKey = EntityKey(f.radio, outgoing.id)
             store.saveMessage(outgoing)
-            assertFalse(store.adoptIncomingPathIfUnknown(EntityKey(f.radio, outgoing.id), Bytes.of(0xC3), 1u))
-            assertNull(assertNotNull(store.fetchMessage(EntityKey(f.radio, outgoing.id))).pathNodes)
+            f.live.heardRepeatsService.harvestIncomingPaths(outgoing, listOf(candidate))
+            assertNull(assertNotNull(store.fetchMessage(outgoingKey)).pathNodes)
+            assertTrue(store.fetchMessageRepeats(outgoingKey).isEmpty())
+            assertTrue(store.adoptIncomingPathIfUnknown(outgoingKey, Bytes.of(0xC3), 1u))
+            assertFalse(store.adoptIncomingPathIfUnknown(outgoingKey, Bytes.of(0xB2), 1u))
+            assertEquals(Bytes.of(0xC3), assertNotNull(store.fetchMessage(outgoingKey)).pathNodes)
         }
     }
 

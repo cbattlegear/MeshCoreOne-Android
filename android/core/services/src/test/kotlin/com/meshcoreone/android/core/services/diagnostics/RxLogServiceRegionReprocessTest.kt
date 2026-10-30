@@ -107,8 +107,7 @@ class RxLogServiceRegionReprocessTest {
                 h.store.saveRxLogEntry(entry)
 
                 h.service.startEventMonitoring(radioId)
-                // Wait for the secret load so knownRegions is ["Germany"] before clearing;
-                // updateKnownRegions([]) while still default-empty is a no-op.
+                // Wait for the secret load so this case exercises an actual cache transition.
                 rxLogSvcWaitUntil("known regions loaded from device") { h.service.knownRegions == listOf("Germany") }
 
                 h.service.updateKnownRegions(emptyList())
@@ -319,6 +318,49 @@ class RxLogServiceRegionReprocessTest {
                 gate.complete(Unit)
                 rxLogSvcWaitUntil("load finished and monitor subscribed") { h.session.subscriberCount == 1 }
                 assertEquals(listOf("Newer"), h.service.knownRegions, "the generation check discards the stale load")
+            }
+        },
+        case("WP-212::an empty update supersedes an in-flight nonempty device load") {
+            RxLogSvcHarness().use { h ->
+                val radioId = rxLogSvcRadio()
+                h.store.saveDevice(rxLogSvcDevice(radioId, listOf("Germany")))
+                val entry = transportCodedEntry(
+                    radioId, Bytes.of(0xAA, 0xBB, 0xCC), 1_704_000_100u, null, "Germany", listOf("Germany"),
+                )
+                h.store.saveRxLogEntry(entry)
+                val gate = CompletableDeferred<Unit>()
+                h.store.beforeDeviceFetch = { gate.await() }
+                try {
+                    h.service.startEventMonitoring(radioId)
+                    rxLogSvcWaitUntil("device load is in flight") { h.store.deviceFetchCount == 1 }
+                    assertEquals(emptyList(), h.service.knownRegions)
+                    h.service.updateKnownRegions(emptyList())
+                    gate.complete(Unit)
+                    rxLogSvcWaitUntil("stale load discarded and sticky label cleared") {
+                        h.session.subscriberCount == 1 && h.store.entry(entry.id)?.regionScope == null
+                    }
+                    assertEquals(emptyList(), h.service.knownRegions)
+                    assertEquals(emptyList(), assertNotNull(h.store.entry(entry.id)).regionScopeMatches)
+                } finally {
+                    gate.complete(Unit)
+                }
+            }
+        },
+        case("WP-212::an explicit empty update before monitoring supersedes the first device load") {
+            RxLogSvcHarness().use { h ->
+                val radioId = rxLogSvcRadio()
+                h.store.saveDevice(rxLogSvcDevice(radioId, listOf("Germany")))
+                val entry = transportCodedEntry(
+                    radioId, Bytes.of(0xAA, 0xBB, 0xCC), 1_704_000_100u, null, "Germany", listOf("Germany"),
+                )
+                h.store.saveRxLogEntry(entry)
+                h.service.updateKnownRegions(emptyList())
+                h.service.startEventMonitoring(radioId)
+                rxLogSvcWaitUntil("first load ignored and sticky label cleared") {
+                    h.session.subscriberCount == 1 && h.store.entry(entry.id)?.regionScope == null
+                }
+                assertEquals(emptyList(), h.service.knownRegions)
+                assertEquals(emptyList(), assertNotNull(h.store.entry(entry.id)).regionScopeMatches)
             }
         },
         case("WP-212::scope-key cache skips dollar-prefixed and blank region names") {

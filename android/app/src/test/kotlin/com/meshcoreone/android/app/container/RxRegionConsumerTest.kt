@@ -13,6 +13,7 @@ import com.meshcoreone.android.app.navigation.AppSettingsExternal
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceAccess
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
 import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
+import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -31,6 +32,7 @@ import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
@@ -237,11 +239,11 @@ class RxRegionConsumerTest : RoomProcessTest() {
             val old = f.live
             val id = assertNotNull(f.harness.manager.connectedDevice).id
             val access = object : ConnectedDeviceAccess by f.harness.container.deviceAccess {
-                override fun replaceConnectedDevice(device: DeviceDTO): SessionToken? {
-                    val token = f.harness.container.deviceAccess.replaceConnectedDevice(device)
-                    accepted.complete(assertNotNull(token))
+                override fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? {
+                    val edit = f.harness.container.deviceAccess.replaceConnectedDevice(device)
+                    accepted.complete(assertNotNull(edit).token)
                     check(resumeCallback.await(10, TimeUnit.SECONDS)) { "Accepted-edit callback was not released" }
-                    return token
+                    return edit
                 }
             }
             val editor = ConnectedDeviceEditor(
@@ -270,6 +272,74 @@ class RxRegionConsumerTest : RoomProcessTest() {
             assertNull(f.ingest(f.packet(Bytes.of(5, 6, 7, 8), region = "Germany")).regionScope)
         } finally {
             resumeCallback.countDown()
+            f.harness.container.close()
+        }
+    }
+
+    @Test fun laterSameSessionEditWinsWhenItsNotificationOvertakesAnEarlierEdit() = runTest {
+        val f = RxIngestionFixture(this, store)
+        val firstCallback = CompletableDeferred<ConnectedDeviceEdit>()
+        val secondCallback = CompletableDeferred<ConnectedDeviceEdit>()
+        val releaseFirst = CountDownLatch(1)
+        var observer: Job? = null
+        try {
+            f.connect()
+            val stamp = 1_704_444_000u
+            val text = "NodeAlpha: overlapping regions"
+            val retained = f.ingest(f.packet(f.encrypted(stamp, text), region = "France"))
+            assertNull(retained.regionScope)
+            f.poll(stamp, text)
+            val message = store.fetchMessages(f.radio, 0u).single()
+            val events = CopyOnWriteArrayList<List<UUID>>()
+            observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                f.live.rxLogService.regionUpdateEvents().collect { events += it.toList() }
+            }
+            val original = assertNotNull(f.harness.manager.connectedDevice)
+            val editor = ConnectedDeviceEditor(
+                f.harness.container.deviceAccess, store, store, { null },
+                RadioPresetMatcher { _, _, _, _ -> emptySet() }, backgroundScope, { EPOCH },
+                onKnownRegionsChanged = { edit, regions ->
+                    if (regions == listOf("Germany")) {
+                        firstCallback.complete(edit)
+                        check(releaseFirst.await(30, TimeUnit.SECONDS)) { "First callback was not released" }
+                    } else if (regions == listOf("France")) {
+                        secondCallback.complete(edit)
+                    }
+                    f.harness.container.knownRegionsChanged(edit, regions)
+                },
+            )
+            val first = async(Dispatchers.Default) {
+                editor.updateDevice(original.copy(knownRegions = SnapshotList.of("Germany")))
+            }
+            f.harness.eventually("first accepted edit paused before its RX callback") { firstCallback.isCompleted }
+            val second = async(Dispatchers.Default) {
+                editor.updateDevice(original.copy(knownRegions = SnapshotList.of("France")))
+            }
+            second.await()
+            val earlier = firstCallback.await()
+            val later = secondCallback.await()
+            assertEquals(earlier.token, later.token)
+            assertTrue(later.sequence > earlier.sequence)
+            assertEquals(listOf("Germany"), later.previousKnownRegions)
+            assertEquals(listOf("France"), assertNotNull(f.harness.manager.connectedDevice).knownRegions)
+            f.harness.eventually("newer edit reprocesses the retained message") { events.size == 1 }
+            assertEquals(listOf(listOf(message.id)), events.toList())
+            assertEquals("France", assertNotNull(store.fetchMessage(
+                com.meshcoreone.android.core.contracts.domain.EntityKey(f.radio, message.id),
+            )).regionScope)
+            assertEquals("France", store.fetchRxLogEntries(f.radio).single { it.id == retained.id }.regionScope)
+            assertEquals("France", f.ingest(f.packet(Bytes.of(1, 2, 3, 4), region = "France")).regionScope)
+
+            releaseFirst.countDown()
+            first.await()
+            f.harness.settle()
+            assertEquals(listOf("France"), assertNotNull(f.harness.manager.connectedDevice).knownRegions)
+            assertEquals(listOf(listOf(message.id)), events.toList())
+            assertNull(f.ingest(f.packet(Bytes.of(5, 6, 7, 8), region = "Germany")).regionScope)
+            assertEquals("France", f.ingest(f.packet(Bytes.of(9, 10, 11, 12), region = "France")).regionScope)
+        } finally {
+            releaseFirst.countDown()
+            observer?.cancelAndJoin()
             f.harness.container.close()
         }
     }

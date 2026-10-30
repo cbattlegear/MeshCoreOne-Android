@@ -30,6 +30,7 @@ import com.meshcoreone.android.core.connectivity.service.ConnectedDeviceHostingC
 import com.meshcoreone.android.core.connectivity.service.ForegroundServiceStarter
 import com.meshcoreone.android.core.contracts.domain.Capability
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.MessagingIssueReporter
 import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
@@ -245,8 +246,8 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         onKnownRegionsChanged = ::knownRegionsChanged,
     )
 
-    internal fun knownRegionsChanged(token: SessionToken, regions: List<String>) {
-        sessions.current?.takeIf { it.token == token }?.knownRegionsChanged(regions)
+    internal fun knownRegionsChanged(edit: ConnectedDeviceEdit, regions: List<String>) {
+        sessions.current?.takeIf { it.token == edit.token }?.knownRegionsChanged(edit.sequence, regions)
     }
 
     val connectionPort = ConnectionManagerAppPort(

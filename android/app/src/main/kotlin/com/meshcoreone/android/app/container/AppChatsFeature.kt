@@ -41,6 +41,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.services.contacts.ChannelFloodScopeResolver
+import com.meshcoreone.android.core.services.rendering.ChatCoordinator
+import com.meshcoreone.android.core.services.rendering.ChatRenderState
+import com.meshcoreone.android.core.services.rendering.ChatWriterRole
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
+import java.time.ZoneId
 
 class AppChatsFeature internal constructor(private val container: AppContainer) {
     private data class PushedFloodScope(
@@ -357,6 +364,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     fun timeline(conversation: TimelineConversation): ChatTimelineDependencies = object : ChatTimelineDependencies {
         private val radio = conversation.id.radioId
+        override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
+            CoordinatedTimelineState(
+                requireNotNull(app.ensureChatCoordinatorRegistry()) { "Chat coordinator registry unavailable" }
+                    .coordinator(conversation.id),
+                owner, zoneId, initial,
+            )
         override fun isHiddenOutgoingReaction(message: MessageDTO) =
             message.isHiddenOutgoingReaction(isDM = conversation is TimelineConversation.Direct)
         override val content get() = this@AppChatsFeature.content
@@ -639,6 +652,83 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     fun report(operation: String, failure: Throwable?) {
         logger.log(Level.WARNING, operation, failure)
+    }
+}
+
+/** A screen's presentation projection; messages and paging are always read back from the shared coordinator. */
+internal class CoordinatedTimelineState(
+    internal val coordinator: ChatCoordinator,
+    private val owner: Any,
+    private val zoneId: ZoneId,
+    initial: ChatTimelineState,
+) : TimelineStateStore {
+    private val presentation = MutableStateFlow(initial)
+    private var closed = false
+    private val writer = checkNotNull(coordinator.bindWriter(owner, ChatWriterRole.INTERACTIVE))
+    override val state: StateFlow<ChatTimelineState> = object : StateFlow<ChatTimelineState> {
+        override val value: ChatTimelineState get() = project()
+        override val replayCache: List<ChatTimelineState> get() = listOf(value)
+
+        @OptIn(InternalCoroutinesApi::class)
+        override suspend fun collect(collector: FlowCollector<ChatTimelineState>): Nothing {
+            combine(presentation, coordinator.messagesFlow, coordinator.renderStateFlow) { _, _, _ -> project() }
+                .distinctUntilChanged().collect(collector)
+            awaitCancellation()
+        }
+    }
+    override val isCurrent: Boolean get() = !closed && writer.isCurrent
+
+    private fun project(): ChatTimelineState {
+        val render = coordinator.renderState
+        val messages = coordinator.messages
+        val ui = presentation.value
+        val unread = (ui.initialAnchor as? InitialTimelineAnchor.Message)?.messageId
+        return ui.copy(
+            messages = messages,
+            rows = buildTimelineRows(messages, unread, zoneId),
+            isLoading = render.phase == ChatRenderState.LoadPhase.LOADING,
+            hasLoadedOnce = render.phase == ChatRenderState.LoadPhase.LOADED,
+            hasMoreMessages = render.hasMoreMessages,
+            isLoadingOlder = render.isLoadingOlder,
+            totalFetchedCount = Math.toIntExact(render.totalFetchedCount),
+        )
+    }
+
+    override fun update(transform: (ChatTimelineState) -> ChatTimelineState) {
+        if (closed) return
+        writer.performMutation {
+            val before = project()
+            val next = transform(before)
+            if (next.messages != before.messages) writer.replaceAll(next.messages)
+            when {
+                next.isLoading -> writer.beginLoading()
+                next.hasLoadedOnce -> writer.markLoaded()
+                else -> writer.updateRenderState { it.with(phase = ChatRenderState.LoadPhase.IDLE) }
+            }
+            val render = coordinator.renderState
+            if (next.hasMoreMessages != render.hasMoreMessages ||
+                next.isLoadingOlder != render.isLoadingOlder ||
+                next.totalFetchedCount.toLong() != render.totalFetchedCount
+            ) {
+                writer.updateRenderState {
+                    it.with(
+                        hasMoreMessages = next.hasMoreMessages,
+                        isLoadingOlder = next.isLoadingOlder,
+                        totalFetchedCount = next.totalFetchedCount.toLong(),
+                    )
+                }
+            }
+            presentation.value = next.copy(messages = emptyList(), rows = emptyList())
+        }
+    }
+
+    override suspend fun <T> performWindowOperation(operation: suspend () -> T): T =
+        writer.performWindowOperation(operation)
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        coordinator.releaseWriter(owner)
     }
 }
 

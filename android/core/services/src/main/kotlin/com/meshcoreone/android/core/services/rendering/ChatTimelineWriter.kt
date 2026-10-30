@@ -30,6 +30,9 @@ class ChatTimelineWriter internal constructor(
     /** Runs [operation] on the coordinator's serialized window lane. */
     suspend fun <T> performWindowOperation(operation: suspend () -> T): T = coordinator.performWindowOperation(operation)
 
+    /** Keeps a consumer's DTO, paging and presentation commit in the same writer generation. */
+    fun performMutation(operation: () -> Unit) = ifCurrent("performMutation", operation)
+
     /**
      * Runs [body] only while this writer is current. A dropped prime write is expected teardown noise; a
      * dropped interactive write almost always means a missed rebind, so it is logged as a warning.

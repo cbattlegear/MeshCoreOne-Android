@@ -16,9 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -37,20 +35,30 @@ class ChatViewModel(
     private val scope: CoroutineScope,
     private val zoneId: ZoneId = ZoneId.systemDefault(),
     private val prefetchTimeoutMillis: Long = 3_000,
-) {
-    private val mutableState = MutableStateFlow(
+) : AutoCloseable {
+    private val mutableState = dependencies.bindTimeline(this, scope, zoneId,
         ChatTimelineState(draft = dependencies.draftStore.get(conversation.id).orEmpty()),
     )
-    val state: StateFlow<ChatTimelineState> = mutableState
+    val state: StateFlow<ChatTimelineState> = mutableState.state
 
-    private val operationMutex = Mutex()
     private val retryAdmissionMutex = Mutex()
     private var eventJob: Job? = null
+    private val contentJobs = mutableSetOf<Job>()
     private var unreadAnchorId: UUID? = null
     private var openGeneration = 0L
 
+    private val completion = scope.coroutineContext[Job]?.invokeOnCompletion { mutableState.close() }
+
+    override fun close() {
+        openGeneration++
+        mutableState.close()
+        eventJob?.cancel()
+        contentJobs.toList().forEach { it.cancel() }
+        completion?.dispose()
+    }
+
     fun start() {
-        if (eventJob != null) return
+        if (eventJob != null || !mutableState.isCurrent) return
         eventJob = scope.launch {
             dependencies.events.collect { event ->
                 if (event.conversationId == conversation.id) handleEvent(event)
@@ -59,11 +67,12 @@ class ChatViewModel(
     }
 
     suspend fun open() {
+        if (!mutableState.isCurrent) return
         val generation = ++openGeneration
         var didLoad = false
         mutableState.update { it.copy(isLoading = true, loadError = null, passiveError = null) }
         try {
-            operationMutex.withLock {
+            mutableState.performWindowOperation {
                 val limit = initialPageSize(conversation.unreadCount)
                 val fetched = dependencies.data.fetchMessages(conversation, limit + 1, 0)
                 val page = fetched.takeLast(limit)
@@ -72,7 +81,7 @@ class ChatViewModel(
                 } else {
                     null
                 }
-                if (generation != openGeneration) return@withLock
+                if (generation != openGeneration || !mutableState.isCurrent) return@performWindowOperation
                 val ordered = normalize(visible(page))
                 val anchor = persistedAnchor
                     ?.takeIf { candidate -> ordered.any { it.id == candidate } }
@@ -101,7 +110,7 @@ class ChatViewModel(
             }
             dependencies.diagnostics.report("open timeline", failure)
         }
-        if (generation != openGeneration) return
+        if (generation != openGeneration || !mutableState.isCurrent) return
         currentCoroutineContext().ensureActive()
         if (conversation is TimelineConversation.Channel) {
             try {
@@ -133,9 +142,10 @@ class ChatViewModel(
      * intentionally not repeated.
      */
     suspend fun refresh() {
+        if (!mutableState.isCurrent) return
         mutableState.update { it.copy(passiveError = null) }
         try {
-            operationMutex.withLock {
+            mutableState.performWindowOperation {
                 val anchorSortDate = mutableState.value.messages.minOfOrNull { it.sortDate }
                 val window = dependencies.data.fetchMessageWindow(
                     conversation,
@@ -162,14 +172,15 @@ class ChatViewModel(
     }
 
     suspend fun loadOlder() {
+        if (!mutableState.isCurrent) return
         if (mutableState.value.isLoadingOlder || !mutableState.value.hasMoreMessages) return
         mutableState.update { it.copy(isLoadingOlder = true, passiveError = null) }
         try {
-            operationMutex.withLock {
+            mutableState.performWindowOperation {
                 val before = mutableState.value
                 if (!before.hasMoreMessages) {
                     mutableState.update { it.copy(isLoadingOlder = false) }
-                    return@withLock
+                    return@performWindowOperation
                 }
                 val fetched = dependencies.data.fetchMessages(conversation, PAGE_SIZE + 1, before.totalFetchedCount)
                 val page = fetched.takeLast(PAGE_SIZE)
@@ -212,6 +223,7 @@ class ChatViewModel(
     }
 
     fun updateDraft(text: String) {
+        if (!mutableState.isCurrent) return
         mutableState.update { it.copy(draft = text) }
         dependencies.draftStore.set(conversation.id, text.ifEmpty { null })
     }
@@ -219,7 +231,9 @@ class ChatViewModel(
     fun clearDraftAfterAcceptedSend() = updateDraft("")
 
     suspend fun retry(messageId: UUID) {
+        if (!mutableState.isCurrent) return
         val message = retryAdmissionMutex.withLock {
+            if (!mutableState.isCurrent) return
             val current = mutableState.value
             val candidate = current.messages.firstOrNull { it.id == messageId }
             if (candidate == null || !candidate.isOutgoing || !candidate.hasFailed ||
@@ -276,26 +290,29 @@ class ChatViewModel(
     }
 
     private suspend fun handleEvent(event: TimelineEvent) {
+        if (!mutableState.isCurrent) return
         if (event is TimelineEvent.HistoryChanged) {
             refresh()
             return
         }
-        operationMutex.withLock {
+        mutableState.performWindowOperation {
             when (event) {
                 is TimelineEvent.HistoryChanged -> error("History refresh must run outside the operation mutex")
                 is TimelineEvent.MessageReceived -> {
                     val message = event.message
-                    if (mutableState.value.messages.any { it.id == message.id }) return
+                    if (mutableState.value.messages.any { it.id == message.id }) return@performWindowOperation
                     val identity = dependencies.admissionIdentity()
-                    if (!dependencies.isCurrentAdmission(identity)) return
+                    if (!dependencies.isCurrentAdmission(identity)) return@performWindowOperation
                     if (message.direction == MessageDirection.INCOMING) {
                         prefetch(message, bounded = true)
                         currentCoroutineContext().ensureActive()
-                        if (!dependencies.isCurrentAdmission(identity)) return
+                        if (!dependencies.isCurrentAdmission(identity)) return@performWindowOperation
                         admit(message)
                     } else {
                         admit(message)
-                        scope.launch { prefetch(message, bounded = false) }
+                        val job = scope.launch { prefetch(message, bounded = false) }
+                        contentJobs.add(job)
+                        job.invokeOnCompletion { contentJobs.remove(job) }
                     }
                 }
                 is TimelineEvent.StatusChanged -> mutableState.update {
@@ -313,7 +330,7 @@ class ChatViewModel(
                         })
                 }
                 is TimelineEvent.MessageChanged -> {
-                    val refreshed = dependencies.data.fetchMessage(event.messageId) ?: return
+                    val refreshed = dependencies.data.fetchMessage(event.messageId) ?: return@performWindowOperation
                     mutableState.update { current ->
                         if (current.messages.none { it.id == refreshed.id }) return@update current
                         val messages = normalize(current.messages.filterNot { it.id == refreshed.id } + refreshed)

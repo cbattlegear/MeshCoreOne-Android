@@ -16,7 +16,7 @@ class MessageFootprintHashTest {
     fun messageFootprintHashTests(): List<DynamicTest> = listOf(
         case("sendCount change flips MessageItem.hashValue") {
             val baseline = RenderingFixtures.makeMessage(text = "hello")
-            val bumped = RenderingFixtures.makeMessage(text = "hello", sendCount = baseline.sendCount + 1)
+            val bumped = baseline.copy(sendCount = baseline.sendCount + 1)
             val inputs = RenderingFixtures.makeInputs(baseline.id)
             val env = RenderingFixtures.makeEnvInputs(isOutgoing = true)
             val baseItem = MessageFragmentBuilder.makeItem(baseline, inputs, env)
@@ -26,17 +26,26 @@ class MessageFootprintHashTest {
         },
         case("heardRepeats change flips MessageItem.hashValue") {
             val baseline = RenderingFixtures.makeMessage(text = "hello", heardRepeats = 0)
-            val bumped = RenderingFixtures.makeMessage(text = "hello", heardRepeats = 1)
+            val bumped = baseline.copy(heardRepeats = 1)
             val inputs = RenderingFixtures.makeInputs(baseline.id)
             val env = RenderingFixtures.makeEnvInputs(isOutgoing = true)
-            assertNotEquals(MessageFragmentBuilder.makeItem(baseline, inputs, env), MessageFragmentBuilder.makeItem(bumped, inputs, env))
+            val baseItem = MessageFragmentBuilder.makeItem(baseline, inputs, env)
+            val bumpedItem = MessageFragmentBuilder.makeItem(bumped, inputs, env)
+            assertNotEquals(baseItem, bumpedItem)
+            assertNotEquals(baseItem.hashCode(), bumpedItem.hashCode())
+            assertNotEquals(baseItem.footer.heardRepeats, bumpedItem.footer.heardRepeats)
         },
         case("status change flips MessageItem.hashValue") {
             val pending = RenderingFixtures.makeMessage(text = "hello", status = MessageStatus.PENDING)
-            val sent = RenderingFixtures.makeMessage(text = "hello", status = MessageStatus.SENT)
+            val sent = pending.copy(status = MessageStatus.SENT)
             val inputs = RenderingFixtures.makeInputs(pending.id)
             val env = RenderingFixtures.makeEnvInputs(isOutgoing = true)
-            assertNotEquals(MessageFragmentBuilder.makeItem(pending, inputs, env), MessageFragmentBuilder.makeItem(sent, inputs, env))
+            val pendingItem = MessageFragmentBuilder.makeItem(pending, inputs, env)
+            val sentItem = MessageFragmentBuilder.makeItem(sent, inputs, env)
+            assertNotEquals(pendingItem, sentItem)
+            assertNotEquals(pendingItem.hashCode(), sentItem.hashCode())
+            assertNotEquals(pendingItem.envelope.status, sentItem.envelope.status)
+            assertNotEquals(pendingItem.footer.status, sentItem.footer.status)
         },
     )
 

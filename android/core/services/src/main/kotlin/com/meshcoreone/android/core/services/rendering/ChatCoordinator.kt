@@ -201,11 +201,16 @@ class ChatCoordinator internal constructor(
 
     /**
      * Vacates the writer slot if [owner] still holds it, clearing the hooks with it. The identity check
-     * keeps a stale view's teardown from evicting a successor; no generation bump.
+     * keeps a stale view's teardown from evicting a successor. Release also revokes the writer:
+     * a cancelled screen's last suspended operation must not commit after teardown.
      */
     fun releaseWriter(owner: Any) {
         synchronized(lock) {
             if (writerOwner?.get() !== owner) return
+            writerGenerationValue += 1UL
+            renderStateIDValue += 1UL
+            buildItemsTaskValue?.cancel()
+            buildItemsTaskValue = null
             writerOwner = null
             writerRole = ChatWriterRole.PRIME
             renderItemRebuilderValue = null

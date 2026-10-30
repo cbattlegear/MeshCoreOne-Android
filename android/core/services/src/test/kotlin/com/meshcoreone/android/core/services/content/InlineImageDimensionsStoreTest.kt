@@ -23,6 +23,11 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.cancelAndJoin
 
 class InlineImageDimensionsStoreTest {
 
@@ -187,6 +192,40 @@ class InlineImageDimensionsStoreTest {
         )
         assertEquals(expected, subscriberOne.await())
         assertEquals(expected, subscriberTwo.await())
+    }
+
+    @Test
+    fun `subscription registers before collection and keeps the newest 64 independently`() = runTest {
+        val store = InlineImageDimensionsStore(tempFile())
+        val slow = store.resolutionUpdates
+        val fastEvents = mutableListOf<String>()
+        val fast = launch(start = CoroutineStart.UNDISPATCHED) {
+            store.resolutionUpdates.collect { fastEvents.add(it) }
+        }
+        repeat(100) {
+            store.save("https://example.com/$it.png", 200.0, 100.0)
+            testScheduler.runCurrent()
+        }
+        assertEquals((0 until 100).map { "https://example.com/$it.png" }, fastEvents)
+        store.close()
+        assertEquals((36 until 100).map { "https://example.com/$it.png" }, slow.toList())
+        fast.join()
+        assertEquals(emptyList(), store.resolutionUpdates.toList())
+    }
+
+    @Test
+    fun `cancelling one subscription does not terminate another and close drains its tail`() = runTest {
+        val store = InlineImageDimensionsStore(tempFile())
+        val received = mutableListOf<String>()
+        val cancelled = launch(start = CoroutineStart.UNDISPATCHED) { store.resolutionUpdates.collect {} }
+        val survivor = launch(start = CoroutineStart.UNDISPATCHED) {
+            store.resolutionUpdates.collect { received.add(it) }
+        }
+        cancelled.cancelAndJoin()
+        repeat(2) { store.save("https://example.com/same.png", 200.0, 100.0) }
+        store.close()
+        survivor.join()
+        assertEquals(List(2) { "https://example.com/same.png" }, received)
     }
 
     // PortedFrom-case: "round-trip: recreated store reads previously persisted aspect"

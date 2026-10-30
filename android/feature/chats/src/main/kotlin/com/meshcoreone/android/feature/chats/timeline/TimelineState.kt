@@ -58,7 +58,7 @@ data class ChatTimelineState(
     val sendError: Throwable? = null,
 )
 
-internal fun buildTimelineRows(
+fun buildTimelineRows(
     messages: List<MessageDTO>,
     unreadAnchorId: UUID?,
     zoneId: ZoneId,

@@ -52,6 +52,7 @@ internal fun AppChatConversationScreen(
             }, route = links.route, openExternal = links.openExternal)
     }
     LaunchedEffect(timeline) { timeline.start(); timeline.open() }
+    DisposableEffect(timeline) { onDispose { timeline.close() } }
     LaunchedEffect(timeline, scrollTo) {
         val requested = scrollTo ?: return@LaunchedEffect
         timeline.state.first { it.hasLoadedOnce && !it.isLoading }

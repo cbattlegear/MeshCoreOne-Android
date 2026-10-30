@@ -210,6 +210,7 @@ class AppChatContent internal constructor(
         mapPreviews.snapshots.clear()
     }
     override fun close() {
+        dimensions.close()
         dimensionSubscription.cancel()
         mapPreviews.close()
         previewCache.close()

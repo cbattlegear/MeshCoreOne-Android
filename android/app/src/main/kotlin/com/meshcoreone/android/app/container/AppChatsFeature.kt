@@ -41,6 +41,26 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.services.contacts.ChannelFloodScopeResolver
+import com.meshcoreone.android.core.services.rendering.ChatCoordinator
+import com.meshcoreone.android.core.services.rendering.ChatRenderState
+import com.meshcoreone.android.core.services.rendering.ChatWriterRole
+import com.meshcoreone.android.core.services.rendering.ChatTimelineWriter
+import com.meshcoreone.android.core.services.rendering.EnvInputs
+import com.meshcoreone.android.core.services.rendering.MessageBuildInputs
+import com.meshcoreone.android.core.services.rendering.MessageItem
+import com.meshcoreone.android.core.services.rendering.NodeNameResolution
+import com.meshcoreone.android.core.services.rendering.NodeNameMatchKind
+import com.meshcoreone.android.app.navigation.bubbleSenderResolution
+import com.meshcoreone.android.app.navigation.messageBubbleBuildInputs
+import com.meshcoreone.android.app.navigation.MessageBubbleConfiguration
+import com.meshcoreone.android.app.state.ChatConversationType
+import com.meshcoreone.android.app.state.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import java.time.ZoneId
 
 class AppChatsFeature internal constructor(private val container: AppContainer) {
     private data class PushedFloodScope(
@@ -56,6 +76,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     private val app get() = container.appState
     private val navigation get() = container.navigation
     private val logger = Logger.getLogger("com.mc1.AppChatsFeature")
+    private val renderEnvironment = MutableStateFlow(EnvInputs.DEFAULT.copy(translationOffersEnabled = false))
+    private val renderResources = MutableStateFlow<android.content.res.Resources?>(null)
     internal val content get() = container.chatContent
     private val changes = merge(combine(
         app.servicesVersion, app.conversationsVersion, app.contactsVersion,
@@ -355,11 +377,138 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     private fun events(): Flow<MessageEvent> = flow { emitAll(app.messageEventStream.events()) }
 
+    internal fun updateRenderEnvironment(env: EnvInputs, resources: android.content.res.Resources? = null) {
+        if (resources != null) renderResources.value = resources
+        renderEnvironment.value = env
+        app.chatEnvInputs(null, ChatEnvSnapshot(env.themeID, env.isDark, env.isHighContrast, env.contentSizeCategory))
+    }
+
+    internal fun envInputs(conversation: ChatConversationType?, snapshot: ChatEnvSnapshot): EnvInputs {
+        val name = app.connectedDevice?.takeIf {
+            conversation == null || it.radioId == conversation.coordinatorId.radioId
+        }?.nodeName.orEmpty()
+        val base = renderEnvironment.value.copy(
+            themeID = snapshot.themeId, isDark = snapshot.isDark,
+            isHighContrast = snapshot.isHighContrast, contentSizeCategory = snapshot.contentSizeCategory,
+            currentUserName = name, translationOffersEnabled = false,
+        )
+        return content?.applyRenderPreferences(base) ?: base
+    }
+
+    internal fun bindState(
+        conversation: TimelineConversation,
+        coordinator: ChatCoordinator,
+        owner: Any,
+        zoneId: ZoneId,
+        initial: ChatTimelineState,
+        writer: ChatTimelineWriter? = null,
+        senderTables: (() -> ChatSenderTables)? = null,
+        envOverride: EnvInputs? = null,
+    ): CoordinatedTimelineState {
+        val invalidations = merge(
+            changes, renderEnvironment.map { Unit }, renderResources.map { Unit },
+            content?.renderInvalidations ?: emptyFlow(),
+        )
+        return CoordinatedTimelineState(
+            coordinator, owner, zoneId, initial, writer, scope, invalidations,
+            assemble = { messages, rows ->
+                val kind = when (conversation) {
+                    is TimelineConversation.Direct -> ChatConversationType.Dm(conversation.contact)
+                    is TimelineConversation.Channel -> ChatConversationType.Channel(conversation.channel)
+                }
+                val env = envOverride?.copy(translationOffersEnabled = false) ?: envInputs(kind, app.lastChatEnvSnapshot ?: ChatEnvSnapshot(
+                    renderEnvironment.value.themeID, renderEnvironment.value.isDark,
+                    renderEnvironment.value.isHighContrast, renderEnvironment.value.contentSizeCategory,
+                ))
+                val resources = renderResources.value ?: content?.resources
+                val contacts = if (conversation is TimelineConversation.Channel) {
+                    senderTables?.invoke()?.contacts ?: store.fetchContacts(conversation.id.radioId)
+                } else emptyList()
+                val nicknames = MessageBubbleConfiguration.buildNicknameLookup(contacts)
+                val rowById = rows.filterIsInstance<TimelineRow.Message>().associateBy { it.message.id }
+                val unreadIds = rows.filterIsInstance<TimelineRow.UnreadDivider>().mapTo(HashSet()) { it.beforeMessageId }
+                val inputs = messages.map { message ->
+                    val resolution = if (resources == null) NodeNameResolution(
+                        message.senderNodeName.orEmpty(), NodeNameMatchKind.UNRESOLVED,
+                    ) else bubbleSenderResolution(message, contacts, nicknames, resources)
+                    message to messageBubbleBuildInputs(
+                        message, resolution, env, resources, rowById[message.id], content?.renderContent(message, env),
+                        showUnreadDivider = message.id in unreadIds,
+                    )
+                }
+                TimelineRenderBatch(inputs, env)
+            },
+            report = ::report,
+        )
+    }
+
+    internal suspend fun prepareTimelineMessages(
+        messages: List<MessageDTO>,
+        indexing: ReactionIndexing?,
+    ): List<MessageDTO> {
+        if (indexing == null) return messages
+        val radio = when (val target = indexing.scope) {
+            is ReactionIndexScope.Direct -> target.contact.radioId
+            is ReactionIndexScope.Channel -> target.channel.radioId
+        }
+        check(messages.all { it.radioId == radio }) { "Reaction indexing crossed a conversation radio" }
+        return messages.map { message ->
+            val reactions = when (val target = indexing.scope) {
+                is ReactionIndexScope.Direct -> indexing.service.indexDMMessage(
+                    message.id, target.contact.id, message.text, message.reactionTimestamp,
+                ).map { pending ->
+                    check(pending.radioId == radio) { "Pending direct reaction belongs to another radio" }
+                    ReactionDTO(
+                        messageID = message.id, emoji = pending.parsed.emoji, senderName = pending.senderName,
+                        messageHash = pending.parsed.messageHash, rawText = pending.rawText,
+                        contactID = target.contact.id, radioId = pending.radioId,
+                    )
+                }
+                is ReactionIndexScope.Channel -> {
+                    val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
+                    if (name == null) emptyList() else indexing.service.indexMessage(
+                        message.id, target.channel.index, name, message.text, message.timestamp,
+                    ).map { pending ->
+                        check(pending.radioId == radio) { "Pending channel reaction belongs to another radio" }
+                        ReactionDTO(
+                            messageID = message.id, emoji = pending.parsed.emoji, senderName = pending.senderNodeName,
+                            messageHash = pending.parsed.messageHash, rawText = pending.rawText,
+                            channelIndex = pending.channelIndex, radioId = pending.radioId,
+                        )
+                    }
+                }
+            }
+            var updated = message
+            for (reaction in reactions) {
+                if (!store.reactionExists(EntityKey(message.radioId, message.id), reaction.senderName, reaction.emoji)) {
+                    indexing.service.persistReactionAndUpdateSummary(reaction, store)?.let {
+                        updated = updated.copy(reactionSummary = it.summary)
+                    }
+                }
+            }
+            updated
+        }
+    }
+
     fun timeline(conversation: TimelineConversation): ChatTimelineDependencies = object : ChatTimelineDependencies {
         private val radio = conversation.id.radioId
+        override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
+            bindState(conversation,
+                app.mountedChatCoordinator(conversation.id),
+                owner, zoneId, initial,
+            )
         override fun isHiddenOutgoingReaction(message: MessageDTO) =
             message.isHiddenOutgoingReaction(isDM = conversation is TimelineConversation.Direct)
         override val content get() = this@AppChatsFeature.content
+        override suspend fun prepareMessages(messages: List<MessageDTO>): List<MessageDTO> {
+            val current = container.sessions.current?.takeIf { it.token.radioId == radio } ?: return messages
+            return prepareTimelineMessages(messages, ReactionIndexing(current.reactionService, when (conversation) {
+                is TimelineConversation.Direct -> ReactionIndexScope.Direct(conversation.contact)
+                is TimelineConversation.Channel -> ReactionIndexScope.Channel(
+                    conversation.channel, app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName,
+                )
+            }))
+        }
         override fun admissionIdentity() = container.sessions.current?.takeIf { it.token.radioId == radio }?.token
         override fun isCurrentAdmission(identity: SessionToken?) =
             identity != null && container.sessions.current?.token == identity &&
@@ -639,6 +788,244 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     fun report(operation: String, failure: Throwable?) {
         logger.log(Level.WARNING, operation, failure)
+    }
+}
+
+internal data class CoordinatedRenderItem(val item: MessageItem) : TimelineRenderItem {
+    override val id get() = item.id
+}
+
+internal data class TimelineRenderBatch(
+    val inputs: List<Pair<MessageDTO, MessageBuildInputs>>,
+    val env: EnvInputs,
+)
+
+/** PRIME uses the mounted feature's population/window implementation, never a competing fetch graph. */
+internal class CoordinatedPrimeTimeline(
+    private val feature: AppChatsFeature,
+    private val scope: CoroutineScope,
+) : PrimeTimeline {
+    override var envInputs = EnvInputs.DEFAULT
+    override val messages get() = coordinator?.messages ?: SnapshotList.empty()
+    override var conversation: ChatConversationType? = null
+        private set
+    private var coordinator: ChatCoordinator? = null
+    private var writer: ChatTimelineWriter? = null
+    private var viewModel: ChatViewModel? = null
+    private var binding: CoordinatedTimelineState? = null
+    private var senderTables: () -> ChatSenderTables = { ChatSenderTables.EMPTY }
+
+    override fun bind(coordinator: ChatCoordinator, senderTables: () -> ChatSenderTables): Boolean {
+        close()
+        val bound = coordinator.bindWriter(this, ChatWriterRole.PRIME,
+            renderItemRebuilder = { binding?.requestRender() },
+            renderStateInvalidated = { binding?.requestRender() },
+        ) ?: return false
+        this.coordinator = coordinator
+        this.senderTables = senderTables
+        writer = bound
+        return true
+    }
+
+    override suspend fun open(
+        conversation: ChatConversationType,
+        reactions: ReactionIndexing?,
+        populateMode: PopulateMode,
+    ): TimelineOpenOutcome {
+        val shared = coordinator ?: return TimelineOpenOutcome.Unavailable
+        val bound = writer?.takeIf { it.isCurrent } ?: return TimelineOpenOutcome.Unavailable
+        this.conversation = conversation
+        val target = when (conversation) {
+            is ChatConversationType.Dm -> TimelineConversation.Direct(conversation.contact)
+            is ChatConversationType.Channel -> TimelineConversation.Channel(conversation.channel)
+        }
+        val dependencies = object : ChatTimelineDependencies by feature.timeline(target) {
+            override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
+                feature.bindState(target, shared, this@CoordinatedPrimeTimeline, zoneId, initial,
+                    bound, senderTables, envInputs).also { binding = it }
+            override suspend fun prepareMessages(messages: List<MessageDTO>) =
+                feature.prepareTimelineMessages(messages, reactions)
+        }
+        val mounted = ChatViewModel(target, dependencies, scope).also { viewModel = it }
+        when (populateMode) {
+            PopulateMode.REPLACE -> mounted.prime()
+        }
+        binding?.awaitRender()
+        if (!bound.isCurrent) return TimelineOpenOutcome.Unavailable
+        val state = mounted.state.value
+        (state.loadError ?: state.passiveError)?.let { return TimelineOpenOutcome.Failed(it) }
+        return TimelineOpenOutcome.Loaded
+    }
+
+    override fun close() {
+        viewModel?.close()
+        viewModel = null
+        binding = null
+        coordinator?.releaseWriter(this)
+        coordinator = null
+        writer = null
+    }
+}
+
+/** A screen's presentation projection; messages and paging are always read back from the shared coordinator. */
+internal class CoordinatedTimelineState(
+    internal val coordinator: ChatCoordinator,
+    private val owner: Any,
+    private val zoneId: ZoneId,
+    initial: ChatTimelineState,
+    boundWriter: ChatTimelineWriter? = null,
+    private val renderingScope: CoroutineScope? = null,
+    invalidations: Flow<Unit> = emptyFlow(),
+    private val assemble: (suspend (List<MessageDTO>, List<TimelineRow>) -> TimelineRenderBatch)? = null,
+    private val report: (String, Throwable?) -> Unit = { _, _ -> },
+) : TimelineStateStore {
+    private val presentation = MutableStateFlow(initial)
+    private val projectionLock = Any()
+    private var rowMessages: List<MessageDTO>? = null
+    private var rowAnchor: UUID? = null
+    private var cachedRows: List<TimelineRow> = emptyList()
+    private var renderedSource: List<MessageItem>? = null
+    private var cachedRendered: List<CoordinatedRenderItem> = emptyList()
+    @Volatile private var closed = false
+    private var ready = false
+    private var assemblyJob: Job? = null
+    private val writer = boundWriter ?: checkNotNull(coordinator.bindWriter(
+        owner, ChatWriterRole.INTERACTIVE,
+        renderItemRebuilder = { requestRender() }, renderStateInvalidated = ::requestRender,
+    ))
+    private val observation: Job?
+    init {
+        ready = true
+        observation = renderingScope?.launch { invalidations.collect { requestRender() } }
+        requestRender()
+    }
+    override val state: StateFlow<ChatTimelineState> = object : StateFlow<ChatTimelineState> {
+        override val value: ChatTimelineState get() = project()
+        override val replayCache: List<ChatTimelineState> get() = listOf(value)
+
+        @OptIn(InternalCoroutinesApi::class)
+        override suspend fun collect(collector: FlowCollector<ChatTimelineState>): Nothing {
+            combine(presentation, coordinator.messagesFlow, coordinator.renderStateFlow) { _, _, _ -> project() }
+                .distinctUntilChanged().collect(collector)
+            awaitCancellation()
+        }
+    }
+    override val isCurrent: Boolean get() = !closed && writer.isCurrent
+
+    private fun rowsFor(messages: List<MessageDTO>, anchor: UUID?): List<TimelineRow> = synchronized(projectionLock) {
+        if (rowMessages !== messages || rowAnchor != anchor) {
+            cachedRows = buildTimelineRows(messages, anchor, zoneId)
+            rowMessages = messages
+            rowAnchor = anchor
+        }
+        cachedRows
+    }
+
+    private fun renderedFor(items: List<MessageItem>): List<CoordinatedRenderItem> = synchronized(projectionLock) {
+        if (renderedSource !== items) {
+            cachedRendered = items.map(::CoordinatedRenderItem)
+            renderedSource = items
+        }
+        cachedRendered
+    }
+
+    private fun project(): ChatTimelineState {
+        val snapshot = coordinator.snapshot()
+        val render = snapshot.renderState
+        val messages = snapshot.messages
+        val ui = presentation.value
+        val unread = (ui.initialAnchor as? InitialTimelineAnchor.Message)?.messageId
+        return ui.copy(
+            messages = messages,
+            rows = rowsFor(messages, unread),
+            renderItems = renderedFor(render.items),
+            renderItemIndexByID = render.itemIndexByID,
+            isLoading = ui.isLoading || render.phase == ChatRenderState.LoadPhase.LOADING,
+            hasLoadedOnce = render.phase == ChatRenderState.LoadPhase.LOADED,
+            hasMoreMessages = render.hasMoreMessages,
+            isLoadingOlder = render.isLoadingOlder,
+            totalFetchedCount = Math.toIntExact(render.totalFetchedCount),
+        )
+    }
+
+    override fun update(transform: (ChatTimelineState) -> ChatTimelineState) {
+        if (closed) return
+        var rebuild = false
+        writer.performMutation {
+            val before = project()
+            val next = transform(before)
+            rebuild = next.messages != before.messages || next.initialAnchor != before.initialAnchor
+            if (next.messages != before.messages) writer.replaceAll(next.messages)
+            when {
+                next.isLoading -> writer.beginLoading()
+                next.hasLoadedOnce -> writer.markLoaded()
+                coordinator.renderState.phase != ChatRenderState.LoadPhase.UNINITIALIZED ->
+                    writer.updateRenderState { it.with(phase = ChatRenderState.LoadPhase.UNINITIALIZED) }
+            }
+            val render = coordinator.renderState
+            if (next.hasMoreMessages != render.hasMoreMessages ||
+                next.isLoadingOlder != render.isLoadingOlder ||
+                next.totalFetchedCount.toLong() != render.totalFetchedCount
+            ) {
+                writer.updateRenderState {
+                    it.with(
+                        hasMoreMessages = next.hasMoreMessages,
+                        isLoadingOlder = next.isLoadingOlder,
+                        totalFetchedCount = next.totalFetchedCount.toLong(),
+                    )
+                }
+            }
+            presentation.value = next.copy(
+                messages = emptyList(), rows = emptyList(), renderItems = emptyList(), renderItemIndexByID = emptyMap(),
+            )
+        }
+        if (rebuild) requestRender()
+    }
+
+    fun requestRender() {
+        if (!ready || !isCurrent) return
+        val scope = renderingScope ?: return
+        val build = assemble ?: return
+        assemblyJob?.cancel()
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            try {
+                val snapshot = coordinator.snapshot()
+                val anchor = (presentation.value.initialAnchor as? InitialTimelineAnchor.Message)?.messageId
+                val batch = build(snapshot.messages, rowsFor(snapshot.messages, anchor))
+                writer.performMutation {
+                    if (snapshot.revision == coordinator.renderStateID) writer.rebuildItems(batch.inputs, batch.env)
+                    else requestRender()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                presentation.update { it.copy(passiveError = failure) }
+                report("Build mounted chat render inputs", failure)
+            }
+        }
+        assemblyJob = job
+        job.start()
+    }
+
+    suspend fun awaitRender() {
+        while (isCurrent) {
+            val assembly = assemblyJob
+            assembly?.join()
+            val build = coordinator.buildItemsTask
+            build?.join()
+            if (assembly === assemblyJob && build === coordinator.buildItemsTask) return
+        }
+    }
+
+    override suspend fun <T> performWindowOperation(operation: suspend () -> T): T =
+        writer.performWindowOperation(operation)
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        observation?.cancel()
+        assemblyJob?.cancel()
+        coordinator.releaseWriter(owner)
     }
 }
 

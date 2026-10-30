@@ -27,6 +27,26 @@ class ComposerStateHolderTest {
     private val alice = Fixtures.contact("Alice")
     private val channel = Fixtures.channel("Ops", index = 2u)
 
+    @Test
+    fun `reconnect restores only an empty composer and never clobbers typing`() = scenario {
+        val target = ComposerTarget.Direct(alice)
+        val env = FakeEnvironment(connection = DeviceConnectionState.DISCONNECTED)
+        val drafts = MemoryDrafts()
+        val rig = rig(target, env, drafts)
+        drafts.values[target.conversationId] = "saved after mount"
+        env.connectionState.value = DeviceConnectionState.READY
+        assertEquals("saved after mount", rig.state.draft)
+        rig.holder.onDraftChanged("typing")
+        env.connectionState.value = DeviceConnectionState.DISCONNECTED
+        drafts.values[target.conversationId] = "different saved text"
+        env.connectionState.value = DeviceConnectionState.READY
+        assertEquals("typing", rig.state.draft)
+        rig.holder.onDraftChanged("")
+        env.connectionState.value = DeviceConnectionState.DISCONNECTED
+        env.connectionState.value = DeviceConnectionState.READY
+        assertEquals("", rig.state.draft)
+    }
+
     private class Rig(
         val holder: ComposerStateHolder,
         val port: FakeSendPort,

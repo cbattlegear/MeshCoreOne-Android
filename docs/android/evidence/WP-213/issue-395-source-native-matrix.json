@@ -1,0 +1,2836 @@
+{
+  "schema_version": 1,
+  "kind": "source-native-mapping-not-execution-results",
+  "wp": "WP-213",
+  "issue": "https://github.com/cbattlegear/MeshCoreOne-Android/issues/395",
+  "source_sha": "db14559b39d32322b06477c6ae676112f583db50",
+  "generator": "join-exact-issue-register-to-frozen-WP-213-and-WP-209-parity-groups",
+  "selected_distinct_families": 101,
+  "acceptance_complete": false,
+  "execution_authority": "Exact-candidate hosted job/log for reproducible software checks; separately retained native-method evidence for instrumentation. This file is not a CI-result bundle or an assertion that any test ran.",
+  "families": [
+    {
+      "case_id": "ChatCoordinatorRegistryOfflineTests::coordinator against offline store returns coordinator bound to store()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorRegistryOfflineTests.swift",
+        "blob_sha": "2545d58691428876aa4a9d1572e24d82032826fd",
+        "lines": [
+          8,
+          29
+        ],
+        "declaration_sha256": "af696c082102f07d17811c87504ddbb7ed1a82fc99ac044bb57ca67b47697c9a",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorRegistryTest.kt",
+          "method_or_family": "ChatCoordinatorRegistryOfflineTests::coordinator against offline store returns coordinator bound to store()",
+          "factory_method": "chatCoordinatorRegistryOfflineTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatCoordinatorRegistryTests::Distinct conversation IDs yield distinct coordinators()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorRegistryTests.swift",
+        "blob_sha": "74ce83c7730302a7e4bd3e8f7f367d5dc733e7da",
+        "lines": [
+          26,
+          36
+        ],
+        "declaration_sha256": "b2c293845d9052ecad61a3241710aa29ea33848481a16a51843e42294e3367b9",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorRegistryTest.kt",
+          "method_or_family": "Distinct conversation IDs yield distinct coordinators",
+          "factory_method": "chatCoordinatorRegistryTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatCoordinatorRegistryTests::coordinator exceeding cap evicts least recently used()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorRegistryTests.swift",
+        "blob_sha": "74ce83c7730302a7e4bd3e8f7f367d5dc733e7da",
+        "lines": [
+          38,
+          54
+        ],
+        "declaration_sha256": "4d6749a008b657bc0e73f9eb53eaacb8951b2a287bdf8fed4d5a07fadb86cbfe",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorRegistryTest.kt",
+          "method_or_family": "coordinator exceeding cap evicts least recently used",
+          "factory_method": "chatCoordinatorRegistryTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatCoordinatorRegistryTests::coordinator touching entry promotes it to most recently used()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorRegistryTests.swift",
+        "blob_sha": "74ce83c7730302a7e4bd3e8f7f367d5dc733e7da",
+        "lines": [
+          56,
+          73
+        ],
+        "declaration_sha256": "9e2d332077d539edb2d34cd814d4e291545fa2b343ad8a129800139460498144",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorRegistryTest.kt",
+          "method_or_family": "coordinator touching entry promotes it to most recently used",
+          "factory_method": "chatCoordinatorRegistryTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatCoordinatorRegistryTests::coordinator(for:) returns the same instance on repeat calls()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorRegistryTests.swift",
+        "blob_sha": "74ce83c7730302a7e4bd3e8f7f367d5dc733e7da",
+        "lines": [
+          15,
+          23
+        ],
+        "declaration_sha256": "545a76dba8312aa13bbd255de197d931b2ab0719b8994c13abf9e6a261070206",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorRegistryTest.kt",
+          "method_or_family": "coordinator(for:) returns the same instance on repeat calls",
+          "factory_method": "chatCoordinatorRegistryTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatCoordinatorRegistryTests::remove(for:) evicts only that conversation so the next lookup starts fresh()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorRegistryTests.swift",
+        "blob_sha": "74ce83c7730302a7e4bd3e8f7f367d5dc733e7da",
+        "lines": [
+          75,
+          89
+        ],
+        "declaration_sha256": "161f532bad7763cdea4f7cd9abc1c4b6187f89a18b65b2faba7e66eecd0da3e0",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorRegistryTest.kt",
+          "method_or_family": "remove(for:) evicts only that conversation so the next lookup starts fresh",
+          "factory_method": "chatCoordinatorRegistryTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::append adds a new message and bumps renderStateID()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          34,
+          47
+        ],
+        "declaration_sha256": "01c8c9367bf66297f0fda3276c7814e53adf70340063607d99b65c37e8fb117f",
+        "original_assertion_count": 4
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "append adds a new message and bumps renderStateID",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::append is idempotent on duplicate id()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          50,
+          62
+        ],
+        "declaration_sha256": "e9c93306a1cc740fc03db926998c6e18fab88878514759ddeda9fcceb4920f92",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "append is idempotent on duplicate id",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::applyReloadedIDs invokes renderItemRebuilder after refreshing a DTO()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          217,
+          258
+        ],
+        "declaration_sha256": "92a8d8fcc8fb32ecf29c705e4c0f29f29ee814692f20185b0583cdc5d59d0b22",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "applyReloadedIDs invokes renderItemRebuilder after refreshing a DTO",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::applyReloadedIDs skips renderItemRebuilder for unknown IDs()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          413,
+          444
+        ],
+        "declaration_sha256": "c52635c377f14e19db6edeb927a49b80d4fe8d400ca09e293e75f848c853de2d",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "applyReloadedIDs skips renderItemRebuilder for unknown IDs",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::applyStatusUpdate blocks .failed -> .pending unless userInitiated()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          266,
+          281
+        ],
+        "declaration_sha256": "19cb04a5bfd1acd983f213414457b0ef260f588d5f7b6bef923bb090b8d310d7",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "applyStatusUpdate blocks .failed -> .pending unless userInitiated",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::beginLoading is a no-op once .loaded()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          301,
+          310
+        ],
+        "declaration_sha256": "0763a3526fffe59124b4129e70751493830ac7e67b65d9e0a40fdd45de74ccd4",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "beginLoading is a no-op once .loaded",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::beginLoading is a no-op while already .loading()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          313,
+          322
+        ],
+        "declaration_sha256": "cdc64b70b4aff1c3ce9296f9d5f6c82a284b40f57630e2e1bb7c475747dd0453",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "beginLoading is a no-op while already .loading",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::beginLoading transitions .uninitialized to .loading()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          290,
+          298
+        ],
+        "declaration_sha256": "432815b2b74af142da166f838aeb862da716f0989dbf616170446dd00e31c2df",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "beginLoading transitions .uninitialized to .loading",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::enqueueReload unions IDs into pendingReloadIDs()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          193,
+          207
+        ],
+        "declaration_sha256": "8e6650039b8ef3d4049081cc88a1944339dc3e3f4788427aeccddcec9150bc94",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "enqueueReload unions IDs into pendingReloadIDs",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::fresh coordinator starts in .uninitialized phase()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          284,
+          287
+        ],
+        "declaration_sha256": "af2403d561a55631ce0fbd8b9b19f93d10aa8bf4b3f2fa63887882e0c9a670ec",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "fresh coordinator starts in .uninitialized phase",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::initialPageSize caps a huge unread backlog()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          28,
+          31
+        ],
+        "declaration_sha256": "1db3a042cda9b17c6aa3398230e6b4a936a6ed4997e3aeab95d7929374c23845",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "initialPageSize caps a huge unread backlog",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::initialPageSize grows to cover all unread plus read context()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          18,
+          25
+        ],
+        "declaration_sha256": "1ef4337f454b84c47128b199fafacb8a1c2a02de07d64713da582496b0d1991a",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "initialPageSize grows to cover all unread plus read context",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::initialPageSize keeps the standard page when unread fits within it()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          9,
+          15
+        ],
+        "declaration_sha256": "f28929c1475a4497b5a499ba202c48d28e6af5acaa5b0844d9918ece1b3f64ce",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "initialPageSize keeps the standard page when unread fits within it",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::markLoaded is idempotent when already .loaded()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          348,
+          357
+        ],
+        "declaration_sha256": "fcf1d916b48398ae14eb0fa1d8b16160a8daf4e038ae344061b81dd18928010f",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "markLoaded is idempotent when already .loaded",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::markLoaded transitions .loading to .loaded()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          336,
+          345
+        ],
+        "declaration_sha256": "40c2af8a7a2cc96701c87abebbf1ebbe7c744349d3479a3653a04eb61dfe6a07",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "markLoaded transitions .loading to .loaded",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::markLoaded transitions .uninitialized to .loaded()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          325,
+          333
+        ],
+        "declaration_sha256": "bdd0f08ded53d3fa2d030cfbe332aa9f2e29928729e8d694d44f15761e428bdd",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "markLoaded transitions .uninitialized to .loaded",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::phase is observed identically by sibling view models sharing one coordinator()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          387,
+          405
+        ],
+        "declaration_sha256": "2cfbc13718ef8ce41c783695547a53bebd23d543155d247b3c3defa0cafbfab6",
+        "original_assertion_count": 4
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "phase is observed identically by sibling view models sharing one coordinator",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::rebuildItems fires renderStateInvalidated when setRenderState rejects stale build()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          110,
+          161
+        ],
+        "declaration_sha256": "382ea3dd66f26ef346123a6ed925d1c9aabcf7ae0f4cd571bdbd77ab1ced1a47",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "rebuildItems fires renderStateInvalidated when setRenderState rejects stale build",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::renderStateID increments on every mutation()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          93,
+          103
+        ],
+        "declaration_sha256": "c7246eae379e713614c06e7ec8be24d5327cb0bdd38763d0b150446898b09b6c",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "renderStateID increments on every mutation",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::replaceAll transitions phase to .loaded()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          360,
+          367
+        ],
+        "declaration_sha256": "5a17a2daf1300c669e7471e3d6378e343c74eb20538f934881313a8bee8052e5",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "replaceAll transitions phase to .loaded",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::replaceAll with empty list still transitions to .loaded()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          370,
+          378
+        ],
+        "declaration_sha256": "735e5a9851e0430ffee7ad34addb622667933b104478e190742455b0ca985a6d",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "replaceAll with empty list still transitions to .loaded",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::setRenderState applies when capturedID matches()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          179,
+          190
+        ],
+        "declaration_sha256": "b59f6557da58c55c1ab74431bb434be26eb5e0088a7c1192a61aefd327c12aee",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "setRenderState applies when capturedID matches",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::setRenderState returns false on stale capturedID()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          164,
+          176
+        ],
+        "declaration_sha256": "dbcf68dfb7ab5dbfbe1d57024cf3c839109fcf33e6da4a012584614e93612e23",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "setRenderState returns false on stale capturedID",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::update mutates an existing message in place and bumps renderStateID()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          78,
+          90
+        ],
+        "declaration_sha256": "20f5490e301498024b8247eb7f77638cc0d9c3f9b5ecba99374fd1bb77d95f42",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "update mutates an existing message in place and bumps renderStateID",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatCoordinatorTests::update no-ops on missing id()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Services/ChatCoordinatorTests.swift",
+        "blob_sha": "406bfac38e45da60e271583840becbbd1a5e174d",
+        "lines": [
+          65,
+          75
+        ],
+        "declaration_sha256": "4fd78bb3f4155faa56ad0a22880c8d8306427c8b7998667b6d9002811725e30a",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatCoordinatorTest.kt",
+          "method_or_family": "update no-ops on missing id",
+          "factory_method": "chatCoordinatorTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatRenderStateTests::ChatViewModel accessors mirror renderState field-for-field()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          128,
+          137
+        ],
+        "declaration_sha256": "eea032b68151804a5194affc7777934b002c8ec55b76d3e6bac390bbb4321e38",
+        "original_assertion_count": 5
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "ChatViewModel accessors mirror renderState field-for-field",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        }
+      ],
+      "acceptance_boundary": "All five actual mounted StateFlow fields, including complete MessageItems and item index, compared with coordinator render state; historical coordinator-to-own-flow smoke test is not accessor evidence."
+    },
+    {
+      "case_id": "ChatRenderStateTests::Two builds with identical inputs produce equal render states()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          117,
+          125
+        ],
+        "declaration_sha256": "4518a10708729912a41cad898b7075a6e02c963f4d52fff51ca98d4116f94412",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "Two builds with identical inputs produce equal render states",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::appendingItem appends and updates totalFetchedCount()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          189,
+          198
+        ],
+        "declaration_sha256": "fcf38ae7b7e802e49ed0e19c85057b2da568b8f4da60aa1a4f607a634fddcedb",
+        "original_assertion_count": 4
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "appendingItem appends and updates totalFetchedCount",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::appendingItem preserves phase()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          71,
+          76
+        ],
+        "declaration_sha256": "673281bfde97860a77fff0086bb389612885af42f6f4e5e51e2c2dc3d200144c",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "appendingItem preserves phase",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::empty has expected field defaults()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          37,
+          45
+        ],
+        "declaration_sha256": "5354d274e562d7843e535842072ba4e612de49e35c289fec2a070e8951210199",
+        "original_assertion_count": 6
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "empty has expected field defaults",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::itemIndexByID matches items after buildItems()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          106,
+          114
+        ],
+        "declaration_sha256": "2223e0db472781d82f8a45a233422728567b8ef280289decf6afcf9c99756501",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "itemIndexByID matches items after buildItems",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::removingItem no-ops on missing ID()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          180,
+          186
+        ],
+        "declaration_sha256": "a5b75c13c4d06b52057600fcc75d8c12e9d2edb5a7c723504a29c256669d2994",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "removingItem no-ops on missing ID",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::removingItem preserves phase()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          93,
+          103
+        ],
+        "declaration_sha256": "8e9e9968ce97973f5e07763e10a6be0a7207859cf8178f46bb34929a32f49357",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "removingItem preserves phase",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::removingItem removes the row and rebuilds the index()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          165,
+          177
+        ],
+        "declaration_sha256": "551ac5b0e7f8f000e457f4afc3449b4affb790c755cf039377ee127daf7d7c93",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "removingItem removes the row and rebuilds the index",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::updatingItem no-ops on missing ID()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          154,
+          162
+        ],
+        "declaration_sha256": "8db0a7f765bcff6f71bdd197681d5855cd62301b3ac85a2fd099f10129de610c",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "updatingItem no-ops on missing ID",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::updatingItem preserves phase()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          79,
+          90
+        ],
+        "declaration_sha256": "fd43dabb746f6350fa211e56c304d7aef54f5ff2c166a1efa83cd2fae12e8cda",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "updatingItem preserves phase",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::updatingItem replaces a single row, leaves others untouched()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          140,
+          151
+        ],
+        "declaration_sha256": "bac15393c2db7b850fbfeab06857cf64f911e5542f56f8d0b21b43d1b4ae34c3",
+        "original_assertion_count": 4
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "updatingItem replaces a single row, leaves others untouched",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::with(...) replaces only specified fields()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          48,
+          57
+        ],
+        "declaration_sha256": "47b6c7e9bb4219836950f2b118e95d756a3d7f9e271478ae3f7d03047f360d92",
+        "original_assertion_count": 6
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "with(...) replaces only specified fields",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatRenderStateTests::with(phase:) replaces only the phase()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/ChatRenderStateTests.swift",
+        "blob_sha": "96d417acc41a85d776624a9d009ce6de77f58377",
+        "lines": [
+          60,
+          68
+        ],
+        "declaration_sha256": "60b818c7f44b7cc21d53fc1cfbb4381b44d901276fde423d36cadaeca196df88",
+        "original_assertion_count": 4
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatRenderStateTest.kt",
+          "method_or_family": "with(phase:) replaces only the phase",
+          "factory_method": "chatRenderStateTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "ChatTimelineWriterTests::current writer mutations apply()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/ChatTimelineWriterTests.swift",
+        "blob_sha": "173dae80e1722d8a450daae0df514ee7ad041530",
+        "lines": [
+          127,
+          141
+        ],
+        "declaration_sha256": "ff8aac82f4fcf658aff5758e3b108d61f96708935c2e56b5dc46fe4a4f121752",
+        "original_assertion_count": 5
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatTimelineWriterTest.kt",
+          "method_or_family": "current writer mutations apply",
+          "factory_method": "chatTimelineWriterTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatTimelineWriterTests::interactive bind always succeeds and revokes the prior writer()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/ChatTimelineWriterTests.swift",
+        "blob_sha": "173dae80e1722d8a450daae0df514ee7ad041530",
+        "lines": [
+          41,
+          52
+        ],
+        "declaration_sha256": "4ce3235938bbb61c61bbb2387a92f66ce00bb940af0177b9b8e1d5a4ccb7417e",
+        "original_assertion_count": 5
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatTimelineWriterTest.kt",
+          "method_or_family": "interactive bind always succeeds and revokes the prior writer",
+          "factory_method": "chatTimelineWriterTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatTimelineWriterTests::interactive bind swaps hooks atomically with write ownership()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/ChatTimelineWriterTests.swift",
+        "blob_sha": "173dae80e1722d8a450daae0df514ee7ad041530",
+        "lines": [
+          181,
+          202
+        ],
+        "declaration_sha256": "e376365539155cf5c51a538d5b542366319f5a289e7da8b56e1670a5d2123994",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatTimelineWriterTest.kt",
+          "method_or_family": "interactive bind swaps hooks atomically with write ownership",
+          "factory_method": "chatTimelineWriterTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatTimelineWriterTests::prime bind is denied while an interactive owner is alive()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/ChatTimelineWriterTests.swift",
+        "blob_sha": "173dae80e1722d8a450daae0df514ee7ad041530",
+        "lines": [
+          144,
+          152
+        ],
+        "declaration_sha256": "614ed683fadd93e9ae30af763b48a70f07076696eea1aba623a9b1c4918c38f1",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatTimelineWriterTest.kt",
+          "method_or_family": "prime bind is denied while an interactive owner is alive",
+          "factory_method": "chatTimelineWriterTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatTimelineWriterTests::prime bind succeeds over a vacant slot, a prior prime, and a deallocated owner()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/ChatTimelineWriterTests.swift",
+        "blob_sha": "173dae80e1722d8a450daae0df514ee7ad041530",
+        "lines": [
+          155,
+          178
+        ],
+        "declaration_sha256": "3784b44ce8e0235a86e130bd7910e258821290b7c0edcc95cf2bac360407856e",
+        "original_assertion_count": 6
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatTimelineWriterTest.kt",
+          "method_or_family": "prime bind succeeds over a vacant slot, a prior prime, and a deallocated owner",
+          "factory_method": "chatTimelineWriterTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatTimelineWriterTests::releaseWriter from a superseded owner does not evict the successor()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/ChatTimelineWriterTests.swift",
+        "blob_sha": "173dae80e1722d8a450daae0df514ee7ad041530",
+        "lines": [
+          71,
+          84
+        ],
+        "declaration_sha256": "f14f375cf59d016ee29399db8f09a13573ea224fb164aee069fb988915e879ac",
+        "original_assertion_count": 4
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatTimelineWriterTest.kt",
+          "method_or_family": "releaseWriter from a superseded owner does not evict the successor",
+          "factory_method": "chatTimelineWriterTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatTimelineWriterTests::releaseWriter vacates the slot for a later prime bind()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/ChatTimelineWriterTests.swift",
+        "blob_sha": "173dae80e1722d8a450daae0df514ee7ad041530",
+        "lines": [
+          55,
+          68
+        ],
+        "declaration_sha256": "945706e3d1a64a287bbd28f6b08794030debc56f530dd6e204d65bbf45a4666f",
+        "original_assertion_count": 5
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatTimelineWriterTest.kt",
+          "method_or_family": "releaseWriter vacates the slot for a later prime bind",
+          "factory_method": "chatTimelineWriterTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatTimelineWriterTests::stale writer cannot schedule a full rebuild()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/ChatTimelineWriterTests.swift",
+        "blob_sha": "173dae80e1722d8a450daae0df514ee7ad041530",
+        "lines": [
+          205,
+          223
+        ],
+        "declaration_sha256": "049c69ebe434a1d4955d03dcba36da968cf1c7549b74266bd19d137e3af547c3",
+        "original_assertion_count": 4
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatTimelineWriterTest.kt",
+          "method_or_family": "stale writer cannot schedule a full rebuild",
+          "factory_method": "chatTimelineWriterTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "ChatTimelineWriterTests::stale writer mutations all no-op()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/ChatTimelineWriterTests.swift",
+        "blob_sha": "173dae80e1722d8a450daae0df514ee7ad041530",
+        "lines": [
+          87,
+          124
+        ],
+        "declaration_sha256": "831c0ed1da81fb3ebc188eb644c6874489332a55b25a8e1c45296681fb7294f3",
+        "original_assertion_count": 8
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/ChatTimelineWriterTest.kt",
+          "method_or_family": "stale writer mutations all no-op",
+          "factory_method": "chatTimelineWriterTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership"
+        },
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/SharedTimelineIntegrationTest.kt",
+          "method_or_family": "suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging"
+        }
+      ],
+      "acceptance_boundary": "Original core predicate retained. Additional mounted shared-window, explicit release/handoff and stale teardown evidence; no ARC/GC timing assumption."
+    },
+    {
+      "case_id": "DraftStoreTests::clearChannelDrafts(radioID:indices:) clears the given slots and persists()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/DraftStoreTests.swift",
+        "blob_sha": "bdea7109e34f4d6aa2df3ab689aa1c7b73340f2d",
+        "lines": [
+          178,
+          195
+        ],
+        "declaration_sha256": "0580f1c8d4471a8995c1d8373074732dfde4107579419acb47d42085984efab2",
+        "original_assertion_count": 5
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/DraftStoreTest.kt",
+          "method_or_family": "clearChannelDrafts(radioID:indices:) clears the given slots and persists",
+          "factory_method": "draftStoreTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/DraftDurabilityTest.kt",
+          "method_or_family": "batchDeletionPreservesOtherSlotsRadiosAndDirectDrafts"
+        }
+      ],
+      "acceptance_boundary": "Real SharedPreferences adapter and fresh DraftStore/adapter. Robolectric is not actual process-kill/device evidence."
+    },
+    {
+      "case_id": "DraftStoreTests::clearDraft persists the deletion across a fresh instance (restart)()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/DraftStoreTests.swift",
+        "blob_sha": "bdea7109e34f4d6aa2df3ab689aa1c7b73340f2d",
+        "lines": [
+          137,
+          147
+        ],
+        "declaration_sha256": "e366fcfeaf2f159fb191071d66b145d044a4b94ccb380c789215ea0f5ba08a15",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/DraftStoreTest.kt",
+          "method_or_family": "clearDraft persists the deletion across a fresh instance (restart)",
+          "factory_method": "draftStoreTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/DraftDurabilityTest.kt",
+          "method_or_family": "explicitDeletionSurvivesFreshAdapterAndStore"
+        }
+      ],
+      "acceptance_boundary": "Real SharedPreferences adapter and fresh DraftStore/adapter. Robolectric is not actual process-kill/device evidence."
+    },
+    {
+      "case_id": "DraftStoreTests::draft survives a new DraftStore instance on the same suite (restart)()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/DraftStoreTests.swift",
+        "blob_sha": "bdea7109e34f4d6aa2df3ab689aa1c7b73340f2d",
+        "lines": [
+          44,
+          53
+        ],
+        "declaration_sha256": "15b394960033b8f34db2ddadf330478cbfd9a755e4d09894185e4453ef3aa6b8",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/DraftStoreTest.kt",
+          "method_or_family": "draft survives a new DraftStore instance on the same suite (restart)",
+          "factory_method": "draftStoreTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/DraftDurabilityTest.kt",
+          "method_or_family": "verbatimDraftSurvivesFreshAdapterAndStore"
+        }
+      ],
+      "acceptance_boundary": "Real SharedPreferences adapter and fresh DraftStore/adapter. Robolectric is not actual process-kill/device evidence."
+    },
+    {
+      "case_id": "DraftStoreTests::draftToApply returns nil when no draft exists()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/DraftStoreTests.swift",
+        "blob_sha": "bdea7109e34f4d6aa2df3ab689aa1c7b73340f2d",
+        "lines": [
+          99,
+          104
+        ],
+        "declaration_sha256": "d0b8b8034d331f8f764f08fa480aed511dc832d9c17a88af28995dc805b35405",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/DraftStoreTest.kt",
+          "method_or_family": "draftToApply returns nil when no draft exists",
+          "factory_method": "draftStoreTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/composer/ComposerStateHolderTest.kt",
+          "method_or_family": "reconnect restores only an empty composer and never clobbers typing"
+        }
+      ],
+      "acceptance_boundary": "Core helper predicate plus actual composer reconnect decision; original text retained."
+    },
+    {
+      "case_id": "DraftStoreTests::draftToApply returns nil when the field already has text()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/DraftStoreTests.swift",
+        "blob_sha": "bdea7109e34f4d6aa2df3ab689aa1c7b73340f2d",
+        "lines": [
+          90,
+          96
+        ],
+        "declaration_sha256": "23071e2b78c8e734344165fe95fe8982265c9b2acd7ce76a1659aaf391ef6b2f",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/DraftStoreTest.kt",
+          "method_or_family": "draftToApply returns nil when the field already has text",
+          "factory_method": "draftStoreTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/composer/ComposerStateHolderTest.kt",
+          "method_or_family": "reconnect restores only an empty composer and never clobbers typing"
+        }
+      ],
+      "acceptance_boundary": "Core helper predicate plus actual composer reconnect decision; original text retained."
+    },
+    {
+      "case_id": "DraftStoreTests::draftToApply returns the saved draft when the field is empty()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/DraftStoreTests.swift",
+        "blob_sha": "bdea7109e34f4d6aa2df3ab689aa1c7b73340f2d",
+        "lines": [
+          81,
+          87
+        ],
+        "declaration_sha256": "f026594c5e306be7b8626dc045d3e3ca7cdeb771c5776d67d96d7022bfa02062",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/DraftStoreTest.kt",
+          "method_or_family": "draftToApply returns the saved draft when the field is empty",
+          "factory_method": "draftStoreTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/composer/ComposerStateHolderTest.kt",
+          "method_or_family": "reconnect restores only an empty composer and never clobbers typing"
+        }
+      ],
+      "acceptance_boundary": "Core helper predicate plus actual composer reconnect decision; original text retained."
+    },
+    {
+      "case_id": "DraftStoreTests::whitespace-clear persists the deletion across a fresh instance (restart)()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/DraftStoreTests.swift",
+        "blob_sha": "bdea7109e34f4d6aa2df3ab689aa1c7b73340f2d",
+        "lines": [
+          150,
+          160
+        ],
+        "declaration_sha256": "d0dddb323d4501f3c3a9a154381b9f91d2436606737b883fab4a819c9954157e",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/DraftStoreTest.kt",
+          "method_or_family": "whitespace-clear persists the deletion across a fresh instance (restart)",
+          "factory_method": "draftStoreTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/DraftDurabilityTest.kt",
+          "method_or_family": "whitespaceDeletionSurvivesFreshAdapterAndStore"
+        }
+      ],
+      "acceptance_boundary": "Real SharedPreferences adapter and fresh DraftStore/adapter. Robolectric is not actual process-kill/device evidence."
+    },
+    {
+      "case_id": "HashtagUtilitiesTests::sanitizeHashtagNameInput lowercases and strips invalid characters()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-209",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/Utilities/HashtagUtilitiesTests.swift",
+        "blob_sha": "e668464624f42e58abff27b5f654e5ae4000bd4a",
+        "lines": [
+          108,
+          112
+        ],
+        "declaration_sha256": "d0912eba73e02bca28958152e662cf7a833dff4c859465f2f5401d8a63149579",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/contacts/HashtagUtilitiesTest.kt",
+          "method_or_family": "sanitizeHashtagNameInput lowercases and strips invalid characters",
+          "factory_method": "extractionAndNames"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/channels/ChannelSheetsStateHolderTest.kt",
+          "method_or_family": "hashtag sanitization and validation match source"
+        }
+      ],
+      "acceptance_boundary": "Preserve live sanitation already present in the pinned JoinHashtagChannelView and native updateHashtag callback; align ASCII membership. Not a new validation-only product flow."
+    },
+    {
+      "case_id": "InlineImageDimensionsStoreTests::resolutionUpdates delivers every event to every concurrent subscriber()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/InlineImageDimensionsStoreTests.swift",
+        "blob_sha": "8eac140df37b55845d8b39e2b80e039350740a2d",
+        "lines": [
+          130,
+          173
+        ],
+        "declaration_sha256": "7cea57087c4f007705ac4b78728f371982278ef8575fa0e283db5e4827b4f842",
+        "original_assertion_count": 4
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "resolutionUpdates delivers every event to every concurrent subscriber"
+        },
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "resolutionUpdates delivers every event to every concurrent subscriber",
+          "factory_method": "inlineImageDimensionsStoreTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "resolutionUpdates delivers every event to every concurrent subscriber"
+        },
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "subscription registers before collection and keeps the newest 64 independently"
+        },
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "cancelling one subscription does not terminate another and close drains its tail"
+        },
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "inline subscriber completion cannot mutate a delivery or finish iteration"
+        }
+      ],
+      "acceptance_boundary": "Actual production dimensions store, not only the rendering fake. Newest-64 per single-consumer subscription; cancellation and explicit owner finish."
+    },
+    {
+      "case_id": "InlineImageDimensionsStoreTests::resolutionUpdates emits the URL on save()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Services/Tests/MC1ServicesTests/InlineImageDimensionsStoreTests.swift",
+        "blob_sha": "8eac140df37b55845d8b39e2b80e039350740a2d",
+        "lines": [
+          96,
+          127
+        ],
+        "declaration_sha256": "11f404649c19b199e2373c3a1be62ecfe1ecf735ad08b311a46ae73680f3be75",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "resolutionUpdates emits the URL on save"
+        },
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "resolutionUpdates emits the URL on save",
+          "factory_method": "inlineImageDimensionsStoreTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "resolutionUpdates emits the URL on save"
+        },
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "subscription registers before collection and keeps the newest 64 independently"
+        },
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "cancelling one subscription does not terminate another and close drains its tail"
+        },
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/InlineImageDimensionsStoreTest.kt",
+          "method_or_family": "inline subscriber completion cannot mutate a delivery or finish iteration"
+        }
+      ],
+      "acceptance_boundary": "Actual production dimensions store, not only the rendering fake. Newest-64 per single-consumer subscription; cancellation and explicit owner finish."
+    },
+    {
+      "case_id": "MessageFootprintHashTests::heardRepeats change flips MessageItem.hashValue()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFootprintHashTests.swift",
+        "blob_sha": "2b1d13c961ebd615b7b64c7668bd95ff0b1f5777",
+        "lines": [
+          31,
+          41
+        ],
+        "declaration_sha256": "d8b3464b54ffd1644fe0227a4a8c0829d5f33a8cae1c64a4dd3557e08f0bb177",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFootprintHashTest.kt",
+          "method_or_family": "heardRepeats change flips MessageItem.hashValue",
+          "factory_method": "messageFootprintHashTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "UUID and unrelated DTO fields held constant; structural hash and changed footer/envelope fields are the oracle, not the case title."
+    },
+    {
+      "case_id": "MessageFootprintHashTests::sendCount change flips MessageItem.hashValue()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFootprintHashTests.swift",
+        "blob_sha": "2b1d13c961ebd615b7b64c7668bd95ff0b1f5777",
+        "lines": [
+          16,
+          28
+        ],
+        "declaration_sha256": "8703f6864091e43f94ff7ec13b5ee906606621ca407441f86a9412ec6b0aabb3",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFootprintHashTest.kt",
+          "method_or_family": "sendCount change flips MessageItem.hashValue",
+          "factory_method": "messageFootprintHashTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "UUID and unrelated DTO fields held constant; structural hash and changed footer/envelope fields are the oracle, not the case title."
+    },
+    {
+      "case_id": "MessageFootprintHashTests::status change flips MessageItem.hashValue()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFootprintHashTests.swift",
+        "blob_sha": "2b1d13c961ebd615b7b64c7668bd95ff0b1f5777",
+        "lines": [
+          44,
+          54
+        ],
+        "declaration_sha256": "f66915db90e692e4b10888005e4da288f5e39c8dc7ef1af49df223f3127018e2",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFootprintHashTest.kt",
+          "method_or_family": "status change flips MessageItem.hashValue",
+          "factory_method": "messageFootprintHashTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "UUID and unrelated DTO fields held constant; structural hash and changed footer/envelope fields are the oracle, not the case title."
+    },
+    {
+      "case_id": "MessageFragmentBuilderOffMainTests::Builder is callable from a detached task off the main actor()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderOffMainTests.swift",
+        "blob_sha": "52f6bdcc4f98077322aa00b3030daf910e07ecb2",
+        "lines": [
+          12,
+          28
+        ],
+        "declaration_sha256": "d42bcf8da768b948b1b3881b14a9a0582f93f60f3e4a4baf4eb01641fc69d91e",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderOffMainTest.kt",
+          "method_or_family": "MessageFragmentBuilderOffMainTests::Builder is callable from a detached task off the main actor()",
+          "factory_method": "messageFragmentBuilderOffMainTests"
+        }
+      ],
+      "additional_consumer_oracles": [
+        {
+          "path": "android/app/src/androidTest/kotlin/com/meshcoreone/android/app/platform/NativeChatRenderingTest.kt",
+          "method_or_family": "androidMainRemainsFrameResponsiveAndReleasedBuildCannotCommit",
+          "requires": "actual Android instrumentation execution"
+        }
+      ],
+      "acceptance_boundary": "BLOCKED pending real Android method evidence. Uses actual Main/Looper/Choreographer and Default-dispatched builder; JVM stand-in cannot discharge this family."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::A coordinate in build inputs emits a mapPreview fragment()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          727,
+          745
+        ],
+        "declaration_sha256": "19534d0463d061718da21241955fe15bc6f7ed0784d96e3e2508f7d0cf4bca1a",
+        "original_assertion_count": 5
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "A coordinate in build inputs emits a mapPreview fragment",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::MessageDTO field change flips the item hash(scenario : HashFlipScenario)",
+      "parameter_family": "arguments-sha256:179f0c4bf8e7daf8f6fa014954e8582ca4a8167fe17cf0ef5341833fd5959c4a",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          550,
+          565
+        ],
+        "declaration_sha256": "c5a8f5c0b45dbfde0ea2f02dfc6d5f67e6de3ec28957791341cf4b3f541cfc82",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "MessageFragmentBuilderTests::MessageDTO field change flips the item hash(scenario : HashFlipScenario)",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::No coordinate means no mapPreview fragment()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          748,
+          753
+        ],
+        "declaration_sha256": "a011634e081a998bb8034c3d050613f1d23be863d731949e0af68788d1ec83ed",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "No coordinate means no mapPreview fragment",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::adding a reaction flips the item hash()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          93,
+          102
+        ],
+        "declaration_sha256": "5e6afc4c7ada9e6604d177ef62602fafbe0cfd02543ee29a70db2b45f5032c80",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "adding a reaction flips the item hash",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::disabled preview state yields disabled inline image()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          201,
+          219
+        ],
+        "declaration_sha256": "46f8fb30a288ea9560c37cf7ebf56dec1bc55500477658886474003d18bd0e6e",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "disabled preview state yields disabled inline image",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::envelope captures containsSelfMention from message()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          324,
+          329
+        ],
+        "declaration_sha256": "37eb98b43ddd337886e26f640a6568b46a23f92f3bfb0ae48df0586da1231d8d",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "envelope captures containsSelfMention from message",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::envelope captures mentionSeen from message()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          332,
+          337
+        ],
+        "declaration_sha256": "024a1390f6363f0cafc2dc040cdbfb8adb721f8ddfb7b1ac4a9464690aa0a624",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "envelope captures mentionSeen from message",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::envelope date is the message send time, not its drain time()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          340,
+          374
+        ],
+        "declaration_sha256": "f4904eb82220cd5a58b201c9ffda4f7790d2403f16bcacd92cfc24b6d2d9a020",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "envelope date is the message send time, not its drain time",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::footer captures heardRepeats from message()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          377,
+          382
+        ],
+        "declaration_sha256": "e2f49fc07004a35f21c659ee0819fac116ed25724050c70a3760ce570106ee4f",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "footer captures heardRepeats from message",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::footer captures maxRetryAttempts from message()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          393,
+          398
+        ],
+        "declaration_sha256": "935d8694ec07b645da88dd3e5659222d378fb9b9498572948a1b2b0dff38e8b9",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "footer captures maxRetryAttempts from message",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::footer captures retryAttempt from message()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          385,
+          390
+        ],
+        "declaration_sha256": "2d4cb4ed721fa4818e2e17479865c917c013fda0457ef39dfdee222898a2ac30",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "footer captures retryAttempt from message",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::footer send time uses the corrected value and flags correction()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          436,
+          448
+        ],
+        "declaration_sha256": "fd1df78fab10802897b7673f1c1bbf13e57ff29fe3f6718f00900e62c3cc28c1",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "footer send time uses the corrected value and flags correction",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::footer shows send time on incoming message()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          403,
+          412
+        ],
+        "declaration_sha256": "053c91e339cde00caf7bc4511c5ccb919f6943c87f67eddb6ec1cc000eb19872",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "footer shows send time on incoming message",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::footer shows send time on outgoing messages()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          426,
+          433
+        ],
+        "declaration_sha256": "7085b44db6099f1851978bb6f5b04c41bddf851c74d0933a3e87c056c419df09",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "footer shows send time on outgoing messages",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::footer shows send time regardless of the legacy showIncomingSendTime flag()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          415,
+          423
+        ],
+        "declaration_sha256": "abbea395c6125937a40b83911b9fc3760ead15411ca3f61629c409e189daf2fa",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "footer shows send time regardless of the legacy showIncomingSendTime flag",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::image url with isInlineImageURL true routes to inline image()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          123,
+          138
+        ],
+        "declaration_sha256": "cb02e6753f2553f787a282562f25619ca5e7ef6f6e851646da771f0ece7f78c7",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "image url with isInlineImageURL true routes to inline image",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::legacy link preview carries image reference when inputs say so()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          266,
+          285
+        ],
+        "declaration_sha256": "1918435e0da9643aaa495597f5a70c3d8a040dd456235663b54dc544e102d8c1",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "legacy link preview carries image reference when inputs say so",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::legacy link preview surfaces with persisted fields when state is idle()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          244,
+          263
+        ],
+        "declaration_sha256": "da7c595296bc54abc1755a967d83811fff18f78aef384df4efe79ec7522583b7",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "legacy link preview surfaces with persisted fields when state is idle",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::link content off suppresses inline image and link preview for image url()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          143,
+          158
+        ],
+        "declaration_sha256": "5e20cdfe879fbb3e887bc311d1f23deacf2e8260b57e1fc4328e2645c34a7055",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "link content off suppresses inline image and link preview for image url",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::link content off suppresses link preview for non image url()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          162,
+          176
+        ],
+        "declaration_sha256": "8c1d1b43fb83334973b18ea7c91d3145d2f1657c889ffee5a943a08744b1a08e",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "link content off suppresses link preview for non image url",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::link content on routes non image url to link preview()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          180,
+          195
+        ],
+        "declaration_sha256": "32c1594cae94b3bfad91e0201552b858a5f293573267c4349452b4ca1cf97638",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "link content on routes non image url to link preview",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::loadedPreview change flips the item hash()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          476,
+          499
+        ],
+        "declaration_sha256": "b5d9a8c4843ca9d640211923064a1d3656fc000706fd3fc4f570658d955280b3",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "loadedPreview change flips the item hash",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::malware warning replaces preview and inline image fragments()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          105,
+          116
+        ],
+        "declaration_sha256": "fd5d09bb5b5ca051be162eb605119cccf7b903a3baecf799db0139475bbc6e59",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "malware warning replaces preview and inline image fragments",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::page serving image url reroutes to link preview()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          226,
+          241
+        ],
+        "declaration_sha256": "637193b19220e6e09f6c0d1083e10f456c4b12de447137499915da82dd33c186",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "page serving image url reroutes to link preview",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::plain text produces a single text fragment()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          11,
+          21
+        ],
+        "declaration_sha256": "87336d7357cc346705e9886a29b806756d0b4c04647533aa1c81e202143c3e83",
+        "original_assertion_count": 3
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "plain text produces a single text fragment",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::preview fetch task id is distinct per fetch-wanting message()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          509,
+          526
+        ],
+        "declaration_sha256": "ca35d85a316be9678162070f9a4136fcaa68e709b7ee88afcd8439a29d64dcf1",
+        "original_assertion_count": 7
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "preview fetch task id is distinct per fetch-wanting message",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::preview fetch task id is nil when no fetch is wanted()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          531,
+          547
+        ],
+        "declaration_sha256": "0fce05f3a5b01881b1285bc7c778c1bb486113364c66a1096386fbc40a3eba91",
+        "original_assertion_count": 4
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "preview fetch task id is nil when no fetch is wanted",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::previewState change flips the item hash()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          453,
+          473
+        ],
+        "declaration_sha256": "49b288034f43c1e892d3a355c283037d2010c65e22a6189fe0c6ca85674fa84e",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "previewState change flips the item hash",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::reaction summary appears after the text fragment()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          72,
+          86
+        ],
+        "declaration_sha256": "11feba630d7eb4505c089c340a69791b6a77e89925dc2bfe131c3639c679ac4e",
+        "original_assertion_count": 4
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "reaction summary appears after the text fragment",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::same inputs produce equal items and equal hashes()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          288,
+          295
+        ],
+        "declaration_sha256": "4e57c68897d84d221dbac6e4f4d0a17f6b00741af309fd1687859dd72ed99891",
+        "original_assertion_count": 2
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "same inputs produce equal items and equal hashes",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::shouldRequestPreviewFetch is false on legacy message()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          311,
+          321
+        ],
+        "declaration_sha256": "b18b608c0af44e83032580ad20019269cbda07743c0c40db08ba9345197230a6",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "shouldRequestPreviewFetch is false on legacy message",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::shouldRequestPreviewFetch is true on idle with URL and no legacy fields()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          298,
+          308
+        ],
+        "declaration_sha256": "ec32cc9da6412f95c6bfc58797b7215af620d3a3962cc662f42d25f06d18c3d9",
+        "original_assertion_count": 1
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "shouldRequestPreviewFetch is true on idle with URL and no legacy fields",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Original core predicates remain independent from mounted integration assertions."
+    },
+    {
+      "case_id": "MessageFragmentBuilderTests::translation chrome copies onto the payload and leaves raw original()",
+      "parameter_family": "single",
+      "source_family_owner": "WP-213",
+      "source": {
+        "path": "MC1Tests/Views/Chats/Models/MessageFragmentBuilderTests.swift",
+        "blob_sha": "a42084411b62419108f0f920789c67fc0d8f3410",
+        "lines": [
+          24,
+          69
+        ],
+        "declaration_sha256": "18da38f55d79ae5213d4757de857872534b56ce90a45b439c5c6e4572d5d4173",
+        "original_assertion_count": 10
+      },
+      "retained_native_oracles": [
+        {
+          "path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/rendering/MessageFragmentBuilderTest.kt",
+          "method_or_family": "translation chrome copies onto the payload and leaves raw original",
+          "factory_method": "messageFragmentBuilderTests"
+        }
+      ],
+      "additional_consumer_oracles": [],
+      "acceptance_boundary": "Removed-scope inert value compatibility only. Raw original retained; no provider/model, active translation, or future translation debt."
+    }
+  ]
+}

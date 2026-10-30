@@ -46,12 +46,8 @@
 // (matching actor isolation), a [ConcurrentHashMap] mirror is updated before the file write
 // (matching the mirror-before-persist ordering) and backs the wait-free, lock-free [aspect] read.
 //
-// The source's `EventBroadcaster<URL>` multicasts every post-subscription `save` to every live
-// subscriber independently, buffering the newest 64 per-subscriber on backpressure. A
-// [MutableSharedFlow] with `replay = 0` (new subscribers see nothing retroactively, matching
-// "events yielded after subscription") and `onBufferOverflow = DROP_OLDEST` (matching "newest 64")
-// is the direct Kotlin equivalent; each `collect()` call is an independent subscription, mirroring
-// the source's `resolutionUpdates()` returning a fresh `AsyncStream` per call.
+// Each resolutionUpdates property read registers one independently buffered subscription before
+// returning, like the source's resolutionUpdates() call. Closing the owner finishes all streams.
 package com.meshcoreone.android.core.services.content
 
 import java.io.File
@@ -67,9 +63,10 @@ import kotlin.math.floor
 import kotlin.math.roundToLong
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerializationException
@@ -105,7 +102,7 @@ private const val NSDATE_REFERENCE_DATE_EPOCH_OFFSET_SECONDS = 978_307_200L
  * in-memory mirror populated eagerly at [save] time (before the file write completes), and
  * [resolutionUpdates] multicasts every post-subscription [save]'s URL to every live collector.
  */
-class InlineImageDimensionsStore(private val file: File, private val clock: Clock = Clock.systemUTC()) {
+class InlineImageDimensionsStore(private val file: File, private val clock: Clock = Clock.systemUTC()) : AutoCloseable {
     private data class Entry(val aspect: Double, val fetchedAt: Instant)
 
     private val mutex = Mutex()
@@ -119,16 +116,30 @@ class InlineImageDimensionsStore(private val file: File, private val clock: Cloc
     // an unrelated import. Constructing directly from the already-mapped values avoids the shadow.
     private val aspectMirror = ConcurrentHashMap<String, Double>(entries.mapValues { it.value.aspect })
 
-    private val resolutionEvents = MutableSharedFlow<String>(
-        replay = 0,
-        extraBufferCapacity = RESOLUTION_STREAM_BUFFER_DEPTH,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
+    private val subscriptionsLock = Any()
+    private val subscribers = mutableSetOf<Channel<String>>()
+    private var closed = false
 
-    /** Multicast stream of URLs whose aspect was just [save]d; a fresh subscription (each
-     * `collect()` call) only observes events emitted strictly after it starts collecting,
-     * matching the source's `resolutionUpdates()` returning a fresh `AsyncStream` per call. */
-    val resolutionUpdates: SharedFlow<String> = resolutionEvents.asSharedFlow()
+    /** One single-consumer subscription per read, synchronously registered, newest 64 on overflow. */
+    val resolutionUpdates: Flow<String>
+        get() {
+            val channel = Channel<String>(RESOLUTION_STREAM_BUFFER_DEPTH, BufferOverflow.DROP_OLDEST)
+            synchronized(subscriptionsLock) {
+                if (closed) channel.close() else subscribers.add(channel)
+            }
+            return channel.receiveAsFlow().onCompletion {
+                synchronized(subscriptionsLock) { subscribers.remove(channel) }
+                channel.cancel()
+            }
+        }
+
+    override fun close() {
+        val finishing = synchronized(subscriptionsLock) {
+            closed = true
+            subscribers.toList().also { subscribers.clear() }
+        }
+        finishing.forEach { it.close() }
+    }
 
     /** Wait-free lookup against the in-memory mirror; never touches the filesystem. Returns
      * `null` for a URL with no recorded (or rejected, non-positive) dimensions. */
@@ -148,7 +159,9 @@ class InlineImageDimensionsStore(private val file: File, private val clock: Cloc
         mutex.withLock {
             entries = entries + (url to Entry(aspect, clock.instant()))
             aspectMirror[url] = aspect
-            resolutionEvents.emit(url)
+            val targets = synchronized(subscriptionsLock) { subscribers.toList() }
+            val finished = targets.filter { it.trySend(url).isClosed }.toSet()
+            synchronized(subscriptionsLock) { subscribers.removeAll(finished) }
             persist()
         }
     }

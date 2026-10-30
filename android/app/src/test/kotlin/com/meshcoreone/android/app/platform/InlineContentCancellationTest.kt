@@ -33,6 +33,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InlineContentCancellationTest : RoomProcessTest() {
+    @Test fun sharedRenderSnapshotDoesNotTurnAnObservedFailureIntoCachedSuccess() = runTest {
+        withContent(fetching { response(png()) {} }) { content, _, _ ->
+            assertTrue(content.inline(URL) is ChatImage.Decoded)
+            val message = com.meshcoreone.android.core.model.MessageDTO(
+                radioId = com.meshcoreone.android.core.model.RadioId(java.util.UUID.randomUUID()), text = URL, timestamp = 1u,
+            )
+            val env = com.meshcoreone.android.core.services.rendering.EnvInputs.DEFAULT
+            for (state in listOf(
+                com.meshcoreone.android.core.services.rendering.PreviewLoadState.NO_PREVIEW,
+                com.meshcoreone.android.core.services.rendering.PreviewLoadState.LOADING,
+                com.meshcoreone.android.core.services.rendering.PreviewLoadState.MALWARE_WARNING,
+            )) {
+                content.recordPreviewState(message.id, state)
+                val snapshot = content.renderContent(message, env)
+                assertTrue("the real decoded image remains cached", snapshot.hasInlineRef)
+                assertEquals(state, snapshot.state)
+            }
+        }
+    }
+
     @Test fun callerTimeoutPropagatesAndTheSameUrlCanBeRetried() = runTest {
         val image = png()
         var attempts = 0

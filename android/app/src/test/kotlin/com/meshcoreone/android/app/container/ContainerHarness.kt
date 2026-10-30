@@ -103,7 +103,7 @@ internal class ContainerHarness(
     val store: RoomPersistenceStore,
     identity: (ConnectionTarget) -> Bytes = { key(7) },
     deliveryOverride: RecordingDelivery? = null,
-    primerFactory: com.meshcoreone.android.app.state.ChatPrimerFactory = com.meshcoreone.android.app.state.ChatPrimerFactory { null },
+    primerFactory: com.meshcoreone.android.app.state.ChatPrimerFactory? = com.meshcoreone.android.app.state.ChatPrimerFactory { null },
     chatContent: AppChatContent? = null,
     syncClock: com.meshcoreone.android.core.services.sync.SyncClock = com.meshcoreone.android.core.services.sync.SyncClock.SYSTEM,
     recoveryDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,

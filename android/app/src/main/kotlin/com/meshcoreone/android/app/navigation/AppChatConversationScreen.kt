@@ -38,6 +38,10 @@ internal fun AppChatConversationScreen(
 ) {
     val configuration = MessageBubbleConfiguration.forConversation(timeline.conversation)
     val state by timeline.state.collectAsState()
+    val renderedItems = remember(state.renderItems) {
+        state.renderItems.filterIsInstance<com.meshcoreone.android.app.container.CoordinatedRenderItem>()
+            .associate { it.id to it.item }
+    }
     val draft by composer.state.collectAsState()
     val scope = rememberCoroutineScope()
     var picker by remember { mutableStateOf<MentionPickerContext?>(null) }
@@ -52,6 +56,7 @@ internal fun AppChatConversationScreen(
             }, route = links.route, openExternal = links.openExternal)
     }
     LaunchedEffect(timeline) { timeline.start(); timeline.open() }
+    DisposableEffect(timeline) { onDispose { timeline.close() } }
     LaunchedEffect(timeline, scrollTo) {
         val requested = scrollTo ?: return@LaunchedEffect
         timeline.state.first { it.hasLoadedOnce && !it.isLoading }
@@ -98,8 +103,12 @@ internal fun AppChatConversationScreen(
                 incomingAvatar = incomingAvatar,
                 messageAccessibilityLabel = messageAccessibilityLabel,
                 messageBody = { message, outgoing ->
+                    val item = renderedItems[message.id]
+                    val text = item?.content?.filterIsInstance<com.meshcoreone.android.core.services.rendering.MessageFragment.Text>()
+                        ?.firstOrNull()?.payload
                     Column {
-                        MessageBody(message.text, outgoing, currentUserName, onLink = { dispatcher.dispatch(it) })
+                        MessageBody(text?.raw ?: message.text, outgoing, text?.currentUserName ?: currentUserName,
+                            onLink = { dispatcher.dispatch(it) })
                         attachments(message, outgoing)
                     }
                 },

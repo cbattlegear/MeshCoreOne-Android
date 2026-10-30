@@ -276,13 +276,21 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         deps.registryFactory(store).also { chatRegistry = it }
     }
 
+    /** An explicitly mounted persisted conversation may be read before last-connection restoration. */
+    internal fun mountedChatCoordinator(id: com.meshcoreone.android.core.model.ChatConversationID) = synchronized(lock) {
+        val registry = chatRegistry ?: deps.registryFactory(
+            checkNotNull(deps.processStore()) { "Mounted chat requires the process persistence store" },
+        ).also { chatRegistry = it }
+        registry.coordinator(id)
+    }
+
     val chatCoordinatorRegistry: ChatCoordinatorRegistry? get() = synchronized(lock) { chatRegistry }
 
     fun makeChatTimelinePrimerDependencies(): ChatTimelinePrimer.Dependencies = ChatTimelinePrimer.Dependencies(
         registry = ::ensureChatCoordinatorRegistry,
         dataStore = { offlineDataStore },
-        reactionService = { services?.reactionService },
-        connectedDeviceNodeName = { connectedDevice?.nodeName },
+        reactionService = { radio -> services?.takeIf { it.token.radioId == radio }?.reactionService },
+        connectedDeviceNodeName = { radio -> connectedDevice?.takeIf { it.radioId == radio }?.nodeName },
     )
 
     /** Records the view-environment values the background refresh bakes with and returns the inputs for [conversation]. */

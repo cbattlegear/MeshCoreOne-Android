@@ -60,7 +60,13 @@ class ComposerStateHolder(
     init {
         observers += scope.launch {
             environment.connectionState.collect { connection ->
-                mutableState.update { it.copy(isConnected = connection == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY) }
+                val ready = connection == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                mutableState.update {
+                    val restored = if (ready && !it.isConnected && it.draft.isEmpty()) {
+                        drafts.get(target.conversationId).orEmpty()
+                    } else it.draft
+                    withMentions(it.copy(isConnected = ready, draft = restored))
+                }
             }
         }
         observers += scope.launch {

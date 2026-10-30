@@ -118,6 +118,9 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             assertTrue(fixture.storage.preferences.get(AppStorageKey.isDemoModeEnabled))
             button(L.commonOk).performClick()
             button(O.deviceScanContinueDemo).performScrollTo().performClick()
+            fixture.harness.eventually("mounted simulator connection", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
+                fixture.harness.manager.connectionState == DeviceConnectionState.READY
+            }
             compose.waitUntil(30_000) {
                 fixture.harness.settle()
                 compose.onAllNodesWithText(text(O.regionTitle)).fetchSemanticsNodes().isNotEmpty()

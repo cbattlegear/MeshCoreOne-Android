@@ -12,6 +12,7 @@ import com.meshcoreone.android.core.model.DevicePlatform
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
 import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.transport.MeshTransport
@@ -206,6 +207,7 @@ private class SimulatorFixture(test: TestScope, preferences: ProcessConnectionPr
         RuntimeIssueReporter {},
         clock,
         context = test.backgroundScope.coroutineContext,
+        configuration = SessionConfiguration(defaultTimeout = 1.0, clientIdentifier = "MCore"),
         simulatorDeviceId = id,
     )
 }

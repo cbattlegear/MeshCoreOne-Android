@@ -10,7 +10,8 @@
 - **Authored coverage:** real-Room simulator onboarding and seed families,
   failure/cancellation/retry, durable preference readback and ordering,
   simulator lifecycle and teardown, snapshot transaction races, and restricted
-  offline chat fixtures. These tests are **not yet run** on this candidate.
+  offline chat fixtures. Exact-candidate results are reported in the PR and
+  hosted job, not inferred from the historical evidence below.
 - **Windows readiness:** pinned Python 3.12.4 is available, but no same-host
   `ANDROID_CI_STATE` or verification venv is configured and the pinned Android
   command-line tools are absent. The documented native preflight below stopped

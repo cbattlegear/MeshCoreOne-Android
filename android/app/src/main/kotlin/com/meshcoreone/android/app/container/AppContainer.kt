@@ -39,6 +39,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
@@ -54,6 +55,7 @@ import com.meshcoreone.android.core.runtime.SystemRuntimeClock
 import com.meshcoreone.android.core.services.contacts.ContactPreferenceFlags
 import com.meshcoreone.android.core.services.device.RadioPresets
 import com.meshcoreone.android.core.services.diagnostics.DebugLogBuffer
+import com.meshcoreone.android.core.services.diagnostics.PersistentLogger
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueConfig
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueProgress
 import com.meshcoreone.android.core.services.messaging.ChannelQueryAccountingEvent
@@ -117,7 +119,17 @@ class AppContainerDependencies(
     val stalePreferences: StaleCleanupPreferences? = null,
     val primerFactory: ChatPrimerFactory = ChatPrimerFactory { null },
     val syncClock: SyncClock = SyncClock.SYSTEM,
-    val logSink: SyncLogSink = SyncLogSink.NONE,
+    val logSink: SyncLogSink = SyncLogSink { level, category, message ->
+        val logger = PersistentLogger("com.mc1", category)
+        when (level) {
+            DebugLogLevel.DEBUG -> logger.debug(message)
+            DebugLogLevel.INFO -> logger.info(message)
+            DebugLogLevel.NOTICE -> logger.notice(message)
+            DebugLogLevel.WARNING -> logger.warning(message)
+            DebugLogLevel.ERROR -> logger.error(message)
+            DebugLogLevel.FAULT -> logger.fault(message)
+        }
+    },
     val messagingReporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
     val runtimeReporter: RuntimeIssueReporter = RuntimeIssueReporter {},
     val connectivityDiagnostics: ConnectivityDiagnostics = ConnectivityDiagnostics.NONE,

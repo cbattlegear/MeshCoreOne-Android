@@ -5,9 +5,11 @@ import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.sync.SyncClock
+import com.meshcoreone.android.core.services.sync.SyncLogSink
 import java.time.Instant
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
@@ -93,6 +95,13 @@ class TimestampRangeRecoveryTest : RoomProcessTest() {
                 assertEquals(outOfRange, saved.createdAt)
                 assertFalse(saved.timestampCorrected)
                 assertNull(saved.senderTimestamp)
+                live.debugLogBuffer.flush()
+                val diagnostic = store.fetchDebugLogEntries(Instant.EPOCH).single {
+                    it.level == DebugLogLevel.ERROR && it.category == SyncLogSink.CATEGORY &&
+                        it.message.startsWith("TimestampRangeError")
+                }
+                assertTrue(diagnostic.message.contains(outOfRange.toString()))
+                assertTrue(diagnostic.message.contains("retaining the original sender timestamp"))
                 val contentKey = assertNotNull(saved.deduplicationKey)
                 assertTrue(contentKey.contains("-1000-"))
                 harness.eventually("range-error message reaches the process consumer") {

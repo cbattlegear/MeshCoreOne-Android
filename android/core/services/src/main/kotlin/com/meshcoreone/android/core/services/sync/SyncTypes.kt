@@ -4,7 +4,6 @@ package com.meshcoreone.android.core.services.sync
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.contracts.domain.errors.SourceServiceFaultCarrier
 import com.meshcoreone.android.core.contracts.domain.errors.SyncFault
-import java.time.Instant
 
 /** Current state of the sync coordinator. */
 sealed interface SyncState {
@@ -82,10 +81,6 @@ sealed interface ContactWatermarkUse {
     /** Stamp is implausibly ahead of the reference; fetch without the stamp this round only. */
     data class Invalid(val stored: UInt) : ContactWatermarkUse
 }
-
-// AndroidOnly: WP-214 Recoverable receive-clock range failure; the sender stamp remains deliverable.
-class TimestampRangeError(val receiveTime: Instant) :
-    Exception("Receive time $receiveTime is outside UInt32 Unix seconds; retaining the original sender timestamp.")
 
 /** Swift correction tuple, with the approved native recoverable receive-clock error. */
 data class TimestampCorrection(

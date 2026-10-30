@@ -184,15 +184,23 @@ def owned_by(pid, root):
     return True
 
 
+def supervisor_script(admission, trusted_advisory):
+    """Support snapshot and trusted-adapter launch paths without trusting candidate bytes."""
+    snapshot = admission.parent / "control" / "advisory.py"
+    for candidate in (snapshot, trusted_advisory):
+        if (
+            candidate.is_file() and not candidate.is_symlink() and candidate.resolve() == candidate
+            and candidate.read_bytes().replace(b"\r\n", b"\n")
+            == trusted_advisory.read_bytes().replace(b"\r\n", b"\n")
+        ):
+            return candidate
+    raise PortError("No reviewed invocation-local or adapter supervisor source")
+
+
 def supervisor_pid(admission, receipt, trusted_advisory):
     """Find a live trusted supervisor by its invocation AND actual open admission inode."""
     admission_binding(admission, receipt)
-    control = admission.parent / "control" / "advisory.py"
-    if (
-        not control.is_file() or control.is_symlink() or control.resolve() != control
-        or control.read_bytes().replace(b"\r\n", b"\n") != trusted_advisory.read_bytes().replace(b"\r\n", b"\n")
-    ):
-        raise PortError("Retained supervisor code differs from reviewed supervisor; no candidate execution")
+    control = supervisor_script(admission, trusted_advisory)
     found = []
     for entry in Path("/proc").iterdir():
         try:
@@ -325,7 +333,10 @@ def cancel_owned(receipt, distribution=None):
         return subprocess.check_output([*prefix, "wslpath", "-u", str(path)], text=True).strip()
 
     request = {
-        "receipt": receipt, "admission": linux_path(admission),
+        "receipt": receipt,
+        "admission": linux_path(admission),
+        "repository": linux_path(Path.cwd()),
+        "windows_launcher_pid": os.getpid(),
     }
     command = [
         *prefix, "bash", "-c",
@@ -334,6 +345,27 @@ def cancel_owned(receipt, distribution=None):
         "--", linux_path(Path(__file__).resolve()),
     ]
     subprocess.run(command, input=json.dumps(request), text=True, check=True, timeout=RECOVERY_SECONDS + 15)
+
+
+def windows_launcher_alive(pid):
+    if type(pid) is not int or pid <= 0:
+        raise PortError("Windows recovery handoff requires the actual positive launcher PID")
+    command = (
+        "& { param([int]$processId) "
+        "try { Get-Process -Id $processId -ErrorAction Stop | Out-Null; exit 0 } "
+        "catch [Microsoft.PowerShell.Commands.ProcessCommandException] { exit 3 } "
+        "catch { exit 4 } }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command, str(pid)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise PortError("Cannot verify the original Windows launcher from the WSL guest") from error
+    if result.returncode not in (0, 3):
+        raise PortError("Windows launcher liveness check failed; ownership retained")
+    return result.returncode == 0
 
 
 def recover(ledger, receipt, *, cancel=False, distribution=None):
@@ -404,10 +436,18 @@ def main(argv=None):
         # A Windows-ledger handoff never opens or substitutes a Linux database.
         try:
             request = json.load(sys.stdin)
-            if not isinstance(request, dict) or set(request) != {"receipt", "admission"} \
-                    or not isinstance(request["admission"], str):
+            if (
+                not isinstance(request, dict)
+                or set(request) != {"receipt", "admission", "repository", "windows_launcher_pid"}
+                or not isinstance(request["admission"], str)
+                or not isinstance(request["repository"], str)
+                or type(request["windows_launcher_pid"]) is not int
+            ):
                 raise PortError("Malformed Windows-to-Linux recovery handoff")
             receipt_key(request["receipt"])
+            trusted_context(Path(request["repository"]))
+            if windows_launcher_alive(request["windows_launcher_pid"]):
+                raise PortError("Original Windows launcher is still active; recovery refused")
             admission = Path(request["admission"])
             cancel_supervisor(admission, request["receipt"], advisory_source())
             return 0

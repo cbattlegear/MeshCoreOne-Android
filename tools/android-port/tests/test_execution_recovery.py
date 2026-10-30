@@ -204,8 +204,42 @@ class ExecutionRecoveryTests(unittest.TestCase):
         request = json.loads(transport.call_args.kwargs["input"])
         self.assertEqual(request["receipt"], self.receipt)
         self.assertEqual(request["admission"], "/mnt/c/admission.json")
+        self.assertEqual(request["repository"], "/mnt/c/" + Path.cwd().name)
+        self.assertEqual(request["windows_launcher_pid"], os.getpid())
         self.assertEqual(self.ledger.hard_lock_records(), [self.receipt])
         self.assertEqual(self.audit_rows(), [])
+
+    def test_linux_handoff_requires_trusted_source_and_exited_windows_launcher(self):
+        request = {
+            "receipt": self.receipt, "admission": str(self.admission),
+            "repository": str(self.root), "windows_launcher_pid": 1234,
+        }
+        with patch.object(recovery, "trusted_context", side_effect=PortError("candidate source")), \
+                patch.object(recovery, "windows_launcher_alive") as launcher, \
+                patch.object(recovery, "cancel_supervisor") as cancel, \
+                patch("sys.stdin", io.StringIO(json.dumps(request))), \
+                patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(recovery.main(), 1)
+        launcher.assert_not_called()
+        cancel.assert_not_called()
+
+        with patch.object(recovery, "trusted_context", return_value=self.ledger), \
+                patch.object(recovery, "windows_launcher_alive", return_value=True), \
+                patch.object(recovery, "cancel_supervisor") as cancel, \
+                patch("sys.stdin", io.StringIO(json.dumps(request))), \
+                patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(recovery.main(), 1)
+        cancel.assert_not_called()
+
+        with patch.object(recovery, "trusted_context", return_value=self.ledger), \
+                patch.object(recovery, "windows_launcher_alive", return_value=False), \
+                patch.object(recovery, "cancel_supervisor") as cancel, \
+                patch("sys.stdin", io.StringIO(json.dumps(request))):
+            with patch.object(recovery.sys, "argv", ["execution_recovery.py", "--linux-cancel"]):
+                self.assertEqual(recovery.main(), 0)
+        cancel.assert_called_once()
 
     def test_windows_receipt_is_valid_in_linux_handoff_without_opening_windows_database(self):
         receipt = copy.deepcopy(self.receipt)
@@ -230,6 +264,34 @@ class ExecutionRecoveryTests(unittest.TestCase):
             "--commit", "d" * 40, "--affected-base", "e" * 40,
         ])
         self.assertEqual(self.ledger.hard_lock_records(), [])
+
+    def test_adapter_supervisor_uses_existing_reviewed_direct_launch_path(self):
+        from local import check
+
+        with tempfile.TemporaryDirectory(prefix="adapter-recovery-") as directory:
+            root = Path(directory)
+            state = root / "adapter.json"
+            state.write_text(json.dumps({"schema_version": 1, "adapter": ["fixture-adapter"]}))
+            completion, admission = root / "cleanup.json", root / "admission.json"
+            command = {
+                "schema_version": 1, "interlock_version": 2, "owner": "local-check:" + self.token,
+                "token": self.token, "commit": "b" * 40, "tree": "c" * 40,
+            }
+            admission.write_text(json.dumps(command))
+            with patch.object(check, "binding", return_value=("b" * 40, "c" * 40)), \
+                    patch.object(recovery.subprocess, "run") as run:
+                # Import the exact supported adapter launcher and inspect its invocation path.
+                with patch.object(check, "validate_result", return_value={"result": "success"}):
+                    check.run_adapter(
+                        root, "b" * 40, state, completion=completion, token=self.token,
+                        admission=admission, execution={"started": False},
+                    )
+            supervisor = Path(check.__file__).with_name("advisory.py")
+            self.assertEqual(
+                recovery.supervisor_script(admission, supervisor),
+                supervisor,
+            )
+            self.assertEqual(run.call_args.args[0][1], str(supervisor))
 
     def test_unproven_recovery_never_starts_another_check(self):
         path = self.root / "receipt.json"
@@ -273,7 +335,6 @@ class SupervisorRecoveryTests(unittest.TestCase):
             control = root / "control"
             control.mkdir()
             advisory = Path(recovery.__file__).parents[1] / "local/advisory.py"
-            shutil.copyfile(advisory, control / "advisory.py")
             token = "a" * 32
             admission, completion = root / "admission.json", root / "cleanup.json"
             receipt = {
@@ -297,7 +358,7 @@ class SupervisorRecoveryTests(unittest.TestCase):
             )
             foreign = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
             supervisor = subprocess.Popen([
-                sys.executable, str(control / "advisory.py"),
+                sys.executable, str(advisory),
                 "--completion", str(completion), "--token", token, "--preserve-daemons",
                 "--admission", str(admission), "--commit", "b" * 40, "--",
                 sys.executable, "-c", child, str(ready),

@@ -98,7 +98,9 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
             SettingsExternalDestination.RegionManagement -> {
                 var name by remember { mutableStateOf("") }
                 var known by remember { mutableStateOf(emptyList<String>()) }
-                LaunchedEffect(version) { known = container.appState.connectedDevice?.knownRegions.orEmpty() }
+                LaunchedEffect(version, container.appState.currentRadioId) {
+                    known = container.appState.connectedDevice?.knownRegions.orEmpty()
+                }
                 known.forEach { region ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(region)

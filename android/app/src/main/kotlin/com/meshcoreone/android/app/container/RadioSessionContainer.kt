@@ -77,6 +77,7 @@ import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
@@ -136,6 +137,12 @@ class RadioSessionContainer private constructor(
         session, RxLogServiceStore.from(dataStore), HeardRepeatProcessingAdapter(heardRepeatsService), scope,
         diagnostics = persistentRxLogDiagnostics(),
     )
+
+    internal fun knownRegionsChanged(regions: List<String>): Job =
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            if (!isClosed) rxLogService.updateKnownRegions(regions)
+        }
+
     override val notificationService = NotificationService(
         radioId, env.notificationDelivery, env.notificationPreferences, env.appState,
         NotificationUnreadCounting {

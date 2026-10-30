@@ -61,7 +61,7 @@ class ConnectedDeviceEditor(
     private val scope: CoroutineScope,
     private val now: () -> Instant,
     private val diagnostics: ConnectivityDiagnostics = ConnectivityDiagnostics.NONE,
-    private val onKnownRegionsChanged: suspend (List<String>) -> Unit = {},
+    private val onKnownRegionsChanged: (DeviceDTO) -> Unit = {},
     private val clearDefaultFloodScope: suspend () -> Unit = {},
 ) {
     val connectedDevice: DeviceDTO? get() = access.connectedDevice
@@ -80,7 +80,14 @@ class ConnectedDeviceEditor(
         return replaceAndSave(updated, "updateDevice")
     }
 
-    fun updateDevice(device: DeviceDTO) = access.replaceConnectedDevice(device)
+    fun updateDevice(device: DeviceDTO) {
+        val previous = access.connectedDevice
+        access.replaceConnectedDevice(device)
+        if (access.connectedDevice == device && previous?.radioId == device.radioId &&
+            previous.knownRegions != device.knownRegions) {
+            onKnownRegionsChanged(device)
+        }
+    }
 
     fun updateAutoAddConfig(config: AutoAddConfig): Job? = edit("autoAddConfig") {
         it.copy(autoAddConfig = config.bitmask, autoAddMaxHops = config.maxHops)
@@ -100,10 +107,9 @@ class ConnectedDeviceEditor(
         val device = access.connectedDevice ?: return null
         if (region in device.knownRegions) return null
         val updated = device.copy(knownRegions = (device.knownRegions + region).snapshot())
-        access.replaceConnectedDevice(updated)
+        updateDevice(updated)
         return scope.launch {
             report("addKnownRegion") { devices.addDeviceKnownRegion(updated.radioId, region) }
-            report("knownRegions") { onKnownRegionsChanged(updated.knownRegions.toList()) }
         }
     }
 
@@ -114,11 +120,10 @@ class ConnectedDeviceEditor(
             knownRegions = device.knownRegions.filterNot { it == region }.snapshot(),
             defaultFloodScopeName = if (wasDefault) null else device.defaultFloodScopeName,
         )
-        access.replaceConnectedDevice(updated)
+        updateDevice(updated)
         return scope.launch {
             report("removeKnownRegion") { devices.removeDeviceKnownRegion(updated.radioId, region) }
             if (wasDefault) report("clearDefaultFloodScope") { clearDefaultFloodScope() }
-            report("knownRegions") { onKnownRegionsChanged(updated.knownRegions.toList()) }
         }
     }
 

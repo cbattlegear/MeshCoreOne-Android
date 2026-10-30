@@ -241,6 +241,10 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             RadioPresets.matchingPresets(frequency, bandwidth, spreadingFactor, codingRate).map { it.id }.toSet()
         },
         processScope, { Instant.now() }, dependencies.connectivityDiagnostics,
+        onKnownRegionsChanged = { device ->
+            sessions.current?.takeIf { it.token.radioId == device.radioId }
+                ?.knownRegionsChanged(device.knownRegions.toList())
+        },
     )
 
     val connectionPort = ConnectionManagerAppPort(

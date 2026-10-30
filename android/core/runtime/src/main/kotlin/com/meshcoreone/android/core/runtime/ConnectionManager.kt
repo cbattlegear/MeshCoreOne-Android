@@ -1244,11 +1244,11 @@ class ConnectionManager(
             (hasCause<SessionCorrelationException.ConcurrentTransportOwner>(failure) ||
                 hasCause<SessionCorrelationException.RetainedTransport>(failure))
 
-    private suspend fun recoverCorrelation(owner: RadioGeneration, failure: Throwable) {
+    private suspend fun recoverCorrelation(owner: RadioGeneration, failure: MeshCoreException.ConnectionLost) {
         val accounting = synchronized(lock) {
-            if (!isCurrent(owner) || owner.lossHandled || owner.correlationAccounting != null) null
+            if (!isCurrent(owner) || owner.lossHandled || owner.operation?.isCancelled == true || owner.correlationAccounting != null) null
             else owner.scope.async(start = CoroutineStart.LAZY) {
-                owner.services?.services?.awaitChannelQueryAccounting()
+                owner.services?.services?.awaitChannelQueryAccounting(failure)
                 Unit
             }.also { owner.correlationAccounting = it }
         } ?: return
@@ -1256,7 +1256,7 @@ class ConnectionManager(
         try { accounting.await() }
         catch (cancelled: CancellationException) {
             currentCoroutineContext().ensureActive()
-            if (!isCurrent(owner)) return
+            if (!isCurrent(owner) || owner.operation?.isCancelled == true) return
             reporter.report(RuntimeDiagnostic.Failure("session.channelQueryAccounting.cancelled", cancelled))
         }
         catch (accountingFailure: Exception) {
@@ -1264,6 +1264,12 @@ class ConnectionManager(
             reporter.report(RuntimeDiagnostic.Failure("session.channelQueryAccounting", accountingFailure))
         }
         if (!isCurrent(owner)) return
+        synchronized(lock) {
+            if (!isCurrent(owner) || owner.operation?.isCancelled == true) return
+            // A partial channel drain must not suppress the fresh generation's recovery read.
+            cleanSync = null
+            attemptedSync = null
+        }
         handleConnectionLoss(owner, failure, disconnectPhysical = true)
     }
 

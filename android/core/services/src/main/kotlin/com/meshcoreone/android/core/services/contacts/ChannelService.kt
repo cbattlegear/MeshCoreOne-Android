@@ -25,6 +25,7 @@ import java.util.logging.Logger
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 
 /**
  * Channel (group) management: CRUD, secret hashing and device sync.
@@ -44,20 +45,35 @@ class ChannelService(
     private val logger = Logger.getLogger("com.mc1.ChannelService")
     private val lock = Any()
     private var isSyncing = false
+    private var syncAccounting: CompletableDeferred<Unit>? = null
+    private var requiresFreshSession = false
+    private var retirementFailure: MeshCoreException.ConnectionLost? = null
     private var slotOccupantChangedHandler: SlotOccupantChangedHandler? = null
 
     /** Whether an RX log (decryption cache) consumer was injected at construction. */
     val hasRxLogServiceWired: Boolean get() = decryptionCache != null
 
+    /** Let the connection owner preserve a completed partial drain before ending this generation. */
+    suspend fun awaitSyncAccounting(failure: MeshCoreException.ConnectionLost? = null) {
+        val accounting = synchronized(lock) {
+            requiresFreshSession = true
+            if (failure != null) retirementFailure = failure
+            syncAccounting
+        }
+        accounting?.await()
+    }
+
     // region Sync
 
     override suspend fun syncChannels(radioId: RadioId, maxChannels: UByte, usePipelinedRead: Boolean): ChannelSyncResult {
         synchronized(lock) {
+            if (requiresFreshSession) throw ChannelServiceError.NotConnected()
             if (isSyncing) {
                 logger.warning("Channel sync already in progress, rejecting concurrent request")
                 throw ChannelServiceError.SyncAlreadyInProgress()
             }
             isSyncing = true
+            syncAccounting = CompletableDeferred()
         }
         try {
             if (usePipelinedRead) return syncChannelsPipelined(radioId, maxChannels)
@@ -75,13 +91,16 @@ class ChannelService(
             // Indices skipped by the circuit breaker land in neither list, so they are untouched.
             return finalizeChannelSync(radioId, maxChannels, pass, pipelined = false)
         } finally {
-            synchronized(lock) { isSyncing = false }
+            synchronized(lock) {
+                isSyncing = false
+                syncAccounting?.complete(Unit)
+            }
         }
     }
 
     /**
-     * One bounded-window `getChannels` exchange, then acknowledged reconciliation of dropped
-     * requests. An index that could not be read lands in neither list and is never deleted.
+     * A partial drain commits only observed slots. Unanswered requests require a new physical
+     * connection; the runtime owns teardown, reconnect and the next generation's full channel read.
      */
     private suspend fun syncChannelsPipelined(radioId: RadioId, maxChannels: UByte): ChannelSyncResult {
         val pass = ChannelReadPass()
@@ -91,15 +110,11 @@ class ChannelService(
             if (isChannelConfigured(info.name, info.secret)) pass.addConfigured(info, info.index)
             else pass.unconfiguredIndices += info.index
         }
-        val missing = fetched.missing.toList()
-        var consecutiveTimeouts = 0
-        for (index in missing) {
-            if (consecutiveTimeouts >= SYNC_CIRCUIT_BREAKER_THRESHOLD) {
-                logger.severe("Reconcile circuit breaker open: $consecutiveTimeouts consecutive timeouts, stopping reconcile")
-                for (remaining in missing.dropWhile { it != index }) pass.skip(remaining, "Skipped due to circuit breaker")
-                break
-            }
-            consecutiveTimeouts = readSlot(pass, index, consecutiveTimeouts, "Reconcile failed for channel")
+        if (fetched.missing.isNotEmpty()) synchronized(lock) { requiresFreshSession = true }
+        for (index in fetched.missing) {
+            pass.syncErrors += ChannelSyncError(
+                index, ChannelSyncErrorType.TransportError, "Fresh physical connection required before reading channel ${index.toInt()}",
+            )
         }
         return finalizeChannelSync(radioId, maxChannels, pass, pipelined = true)
     }
@@ -160,9 +175,11 @@ class ChannelService(
     /** Retries only the channels that previously failed. Never deletes or prunes slots. */
     override suspend fun retryFailedChannels(radioId: RadioId, indices: SnapshotList<UByte>): ChannelSyncResult {
         synchronized(lock) {
+            if (requiresFreshSession) throw ChannelServiceError.NotConnected()
             if (isSyncing) throw ChannelServiceError.SyncAlreadyInProgress()
             if (indices.isEmpty()) return ChannelSyncResult(0, SnapshotList.empty())
             isSyncing = true
+            syncAccounting = CompletableDeferred()
         }
         try {
             logger.info("Retrying ${indices.size} failed channels: $indices")
@@ -197,7 +214,10 @@ class ChannelService(
             decryptionCache?.updateChannels(allChannels)
             return ChannelSyncResult(pass.configured.size.toLong(), pass.syncErrors.snapshot())
         } finally {
-            synchronized(lock) { isSyncing = false }
+            synchronized(lock) {
+                isSyncing = false
+                syncAccounting?.complete(Unit)
+            }
         }
     }
 
@@ -226,6 +246,13 @@ class ChannelService(
     suspend fun fetchChannel(index: UByte): ChannelInfo? {
         var lastError: MeshCoreException = MeshCoreException.Timeout()
         for (attempt in 1..FETCH_MAX_ATTEMPTS) {
+            synchronized(lock) {
+                if (requiresFreshSession) {
+                    // Preserve the admitted query's correlation failure without another protocol call.
+                    if (attempt > 1) retirementFailure?.let { throw ChannelServiceError.SessionError(it) }
+                    throw ChannelServiceError.NotConnected()
+                }
+            }
             try {
                 val info = session.getChannel(index)
                 if (info.index != index) {

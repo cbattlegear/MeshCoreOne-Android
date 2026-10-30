@@ -1,6 +1,5 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/ChannelServicePipelineTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/ChannelServiceTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// The session-role seam retains the original read/missing/error outcomes; all persistence is actual Room.
 package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.ChannelSyncErrorType
@@ -155,16 +154,19 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
     }
 
     @OriginalCase("ChannelServicePipelineTests::a dropped write is reconciled with a serial read and persisted()")
-    @Test fun missingPipelineSlotIsCommittedOnlyAfterItsAcknowledgedReconcileRead() = runTest {
+    @Test fun missingPipelineSlotRequiresFreshSessionAndCommitsOnlyAnsweredSlots() = runTest {
         val session = Session((0..3).map { info(it) }, missing = setOf(2u))
         val cache = Cache()
         val result = ChannelService(session, store, cache, noDelay).syncChannels(RADIO_A, 4u, true)
-        assertEquals(4L, result.channelsSynced)
-        assertTrue(result.errors.isEmpty())
-        assertEquals(listOf<UByte>(0u, 1u, 2u, 3u, 2u), session.reads)
-        assertEquals((0..3).map { info(it) },
+        assertEquals(3L, result.channelsSynced)
+        assertEquals(listOf<UByte>(2u), result.errors.map { it.index })
+        assertEquals(ChannelSyncErrorType.TransportError, result.errors.single().errorType)
+        assertTrue(result.retryableIndices.isEmpty(), "Retry belongs to a fresh physical connection, not this service")
+        assertEquals(listOf<UByte>(0u, 1u, 2u, 3u), session.reads)
+        assertEquals(listOf(0, 1, 3).map { info(it) },
             store.fetchChannels(RADIO_A).map { ChannelInfo(it.index, it.name, it.secret) })
         assertEquals(1, cache.snapshots.size)
+        assertEquals(store.fetchChannels(RADIO_A), cache.snapshots.single())
     }
 
     @OriginalCase("ChannelServicePipelineTests::a transport send failure mid-pipeline throws and persists nothing()")
@@ -184,7 +186,7 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
     }
 
     @OriginalCase("ChannelServicePipelineTests::a mid-drain stall persists only read slots and never deletes an unread configured slot()")
-    @Test fun failedReconcileCommitsOnlyAnsweredSlotsAndPreservesTheCompleteUnreadRowAndHistory() = runTest {
+    @Test fun reconnectRequiredCommitsOnlyAnsweredSlotsAndPreservesTheCompleteUnreadRowAndHistory() = runTest {
         val kept = ChannelDTO(radioId = RADIO_A, index = 2u, name = "keep", secret = secret(0xCD))
         store.saveChannel(kept)
         val history = message(contactID = null, channelIndex = 2u)
@@ -193,7 +195,7 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
         val cache = Cache()
         val result = ChannelService(session, store, cache, noDelay).syncChannels(RADIO_A, 4u, true)
         assertEquals(3L, result.channelsSynced)
-        assertEquals(listOf<UByte>(0u, 1u, 2u, 3u, 2u), session.reads)
+        assertEquals(listOf<UByte>(0u, 1u, 2u, 3u), session.reads)
         assertEquals(2.toUByte(), result.errors.single().index)
         assertEquals(ChannelSyncErrorType.TransportError, result.errors.single().errorType)
         assertFalse(result.circuitBreakerAborted)
@@ -204,7 +206,7 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
     }
 
     @OriginalCase("ChannelServicePipelineTests::reconcile circuit breaker opens after consecutive failures and never deletes unread slots()")
-    @Test fun threeFailedReconcilesOpenTheBreakerWithoutDeletingAnyUnreadSlot() = runTest {
+    @Test fun allMissingSlotsRequireFreshSessionWithoutDeletingAnyUnreadSlot() = runTest {
         val kept = (2..7).map { ChannelDTO(radioId = RADIO_A, index = it.toUByte(), name = "keep$it", secret = secret(0xCD)) }
         kept.forEach { store.saveChannel(it) }
         val missing = (2..7).map { it.toUByte() }.toSet()
@@ -212,10 +214,11 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
         val cache = Cache()
         val result = ChannelService(session, store, cache, noDelay).syncChannels(RADIO_A, 8u, true)
         assertEquals(2L, result.channelsSynced)
-        assertTrue(result.circuitBreakerAborted)
-        assertEquals(listOf<UByte>(2u, 3u, 4u), result.errors.filter { it.errorType == ChannelSyncErrorType.TransportError }.map { it.index })
-        assertEquals(listOf<UByte>(5u, 6u, 7u), result.errors.filter { it.errorType == ChannelSyncErrorType.CircuitBreaker }.map { it.index })
-        assertEquals((0..7).map { it.toUByte() } + listOf<UByte>(2u, 3u, 4u), session.reads)
+        assertFalse(result.circuitBreakerAborted, "No same-link reconcile loop is entered")
+        assertEquals((2..7).map { it.toUByte() }, result.errors.filter { it.errorType == ChannelSyncErrorType.TransportError }.map { it.index })
+        assertTrue(result.errors.none { it.errorType == ChannelSyncErrorType.CircuitBreaker })
+        assertTrue(result.retryableIndices.isEmpty())
+        assertEquals((0..7).map { it.toUByte() }, session.reads)
         assertEquals((0..7).map { it.toUByte() }, store.fetchChannels(RADIO_A).map { it.index })
         for (row in kept) assertEquals(row, store.fetchChannel(entity(id = row.id)))
         assertEquals(1, cache.snapshots.size)

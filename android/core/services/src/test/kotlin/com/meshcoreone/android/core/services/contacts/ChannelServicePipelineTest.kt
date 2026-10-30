@@ -14,7 +14,9 @@ import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.transport.mock.MockTransport
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
@@ -26,10 +28,9 @@ import org.junit.jupiter.api.TestFactory
  * Service-layer gates for the pipelined channel sync path: #1 correctness with gaps, #2
  * mid-burst disconnect (throw and partial-drain), #4 drop-reconcile, plus serial parity.
  *
- * Gates #2b, #4 and #4b run over [ChannelsMockSession]: the protocol session deliberately refuses to
- * re-read an index whose pipelined reply is still possible (`ConnectionLost`, see the WP-209
- * native cases), so the source's reconcile-succeeds and transport-drop scenarios cannot be
- * produced through it; the service logic under test is identical.
+ * The source's same-link reconciliation cases use the approved WP-107/209 native adaptation:
+ * preserve the partial drain and require a new physical session without entering the scripted retry.
+ * App ChannelRecoveryIntegrationTest supplies actual service/controller/Room recovery evidence.
  */
 class ChannelServicePipelineTest {
     @TestFactory
@@ -64,11 +65,15 @@ class ChannelServicePipelineTest {
 
             val result = service.syncChannels(radioId, 4u, usePipelinedRead = true)
 
-            assertEquals(4, result.channelsSynced)
-            assertEquals(listOf<UByte>(0u, 1u, 2u, 3u, 2u), session.recordedGetChannelIndices, "reconcile issues a serial read for the dropped index")
+            assertEquals(3, result.channelsSynced)
+            assertEquals(listOf<UByte>(0u, 1u, 2u, 3u), session.recordedGetChannelIndices, "no same-connection retry is admitted")
+            assertEquals(listOf<UByte>(2u), result.errors.map { it.index })
+            assertEquals(ChannelSyncErrorType.TransportError, result.errors.single().errorType)
             val stored = store.fetchChannels(radioId)
-            assertEquals(listOf<UByte>(0u, 1u, 2u, 3u), stored.map { it.index })
-            assertEquals("ch2", stored.first { it.index == 2.toUByte() }.name)
+            assertEquals(listOf<UByte>(0u, 1u, 3u), stored.map { it.index })
+            assertFails { service.retryFailedChannels(radioId, SnapshotList.of(2u)) }
+            assertFails { service.fetchChannel(2u) }
+            assertEquals(listOf<UByte>(0u, 1u, 2u, 3u), session.recordedGetChannelIndices)
         },
         "a transport send failure mid-pipeline throws and persists nothing" to {
             val radioId = channelsRadioId()
@@ -113,13 +118,13 @@ class ChannelServicePipelineTest {
 
             val result = service.syncChannels(radioId, 4u, usePipelinedRead = true)
 
-            assertEquals(1, failureEntries, "the reconcile failure must actually be entered")
-            assertEquals(listOf<UByte>(0u, 1u, 2u, 3u, 2u), session.recordedGetChannelIndices)
+            assertEquals(0, failureEntries, "a scripted retry is not physical reconnection")
+            assertEquals(listOf<UByte>(0u, 1u, 2u, 3u), session.recordedGetChannelIndices)
             assertEquals(3, result.channelsSynced)
             val error = result.errors.single()
             assertEquals(2.toUByte(), error.index)
             assertEquals(ChannelSyncErrorType.TransportError, error.errorType)
-            assertEquals(failure.message, error.description)
+            assertTrue(error.description.contains("Fresh physical connection required"))
             assertFalse(result.circuitBreakerAborted)
             assertEquals(1, commits)
             val stored = store.fetchChannels(radioId)
@@ -134,8 +139,7 @@ class ChannelServicePipelineTest {
         "reconcile circuit breaker opens after consecutive failures and never deletes unread slots" to {
             val radioId = channelsRadioId()
             val store = ChannelsInMemoryStore()
-            // Pre-seed configured rows at every index the pipeline fails to read: 2-4 fail their
-            // reconcile read (transport drop), 5-7 are skipped once the breaker opens at 3.
+            // Every missing slot must survive while its old connection awaits physical teardown.
             store.batchSaveChannels(
                 radioId, (2..7).map { ChannelInfo(it.toUByte(), "keep$it", channelsSecret(0xCD)) }.let { SnapshotList(it) },
                 SnapshotList.empty(), null,
@@ -143,18 +147,19 @@ class ChannelServicePipelineTest {
             val session = ChannelsMockSession()
             session.setStubbedChannels((0..1).associate { it.toUByte() to ChannelInfo(it.toUByte(), "ch$it", channelsSecret(0xAB)) })
             session.pipelineMissing = (2..7).map { it.toUByte() }.toSet()
-            // Every reconcile read fails as a transport drop: counted toward the breaker, never retried.
+            // Any accidental same-link retry would enter this failure script.
             (2..7).forEach { index -> session.script(index.toUByte(), { throw MeshTransportError.SendFailed("simulated send failure") }) }
             val service = ChannelService(session, store, null, ChannelsRecordingClock())
 
             val result = service.syncChannels(radioId, 8u, usePipelinedRead = true)
 
             assertEquals(2, result.channelsSynced)
-            assertTrue(result.circuitBreakerAborted)
+            assertFalse(result.circuitBreakerAborted, "all missing indices await a new session, not a local retry breaker")
             val transportErrors = result.errors.filter { it.errorType == ChannelSyncErrorType.TransportError }.map { it.index }.sorted()
             val breakerSkips = result.errors.filter { it.errorType == ChannelSyncErrorType.CircuitBreaker }.map { it.index }.sorted()
-            assertEquals(listOf<UByte>(2u, 3u, 4u), transportErrors, "the first three missing indices each fail their reconcile read")
-            assertEquals(listOf<UByte>(5u, 6u, 7u), breakerSkips, "the open breaker skips the remaining missing indices")
+            assertEquals(listOf<UByte>(2u, 3u, 4u, 5u, 6u, 7u), transportErrors)
+            assertTrue(breakerSkips.isEmpty())
+            assertEquals((0..7).map { it.toUByte() }, session.recordedGetChannelIndices)
             val stored = store.fetchChannels(radioId)
             assertEquals((0..7).map { it.toUByte() }, stored.map { it.index }, "no unread slot is deleted")
             for (index in 2..7) {
@@ -181,6 +186,21 @@ class ChannelServicePipelineTest {
 
     @TestFactory
     fun protocolReconcileBoundary(): List<DynamicTest> = channelsNativeCases(
+        "retirement during query backoff preserves the admitted failure without another session read" to {
+            val session = ChannelsMockSession()
+            session.script(2u, { throw MeshCoreException.Timeout() })
+            val failure = MeshCoreException.ConnectionLost(IllegalStateException("controlled correlation failure"))
+            lateinit var service: ChannelService
+            service = ChannelService(session, ChannelsInMemoryStore(), null, ChannelServiceClock {
+                service.awaitSyncAccounting(failure)
+            })
+
+            val queryFailure = assertFailsWith<ChannelServiceError.SessionError> { service.fetchChannel(2u) }
+            assertSame(failure, queryFailure.error)
+            assertFailsWith<ChannelServiceError.NotConnected> { service.fetchChannel(2u) }
+            assertFailsWith<ChannelServiceError.NotConnected> { service.fetchChannel(3u) }
+            assertEquals(listOf<UByte>(2u), session.recordedGetChannelIndices)
+        },
         "pipelined reconcile of a dropped index fails closed through the protocol session and keeps the row" to {
             val radioId: RadioId = channelsRadioId()
             val store = ChannelsInMemoryStore()
@@ -218,11 +238,12 @@ class ChannelServicePipelineTest {
                 val partial = assertNotNull(drained)
                 assertEquals(listOf<UByte>(0u, 1u, 3u), partial.received.map { it.index })
                 assertEquals(listOf<UByte>(2u), partial.missing)
-                assertEquals(listOf<UByte>(2u), reconcileIndices)
+                assertTrue(reconcileIndices.isEmpty(), "ChannelService must not ask the quarantined session to retry")
+                assertTrue(rejected.isEmpty())
                 assertEquals(3, result.channelsSynced)
                 assertEquals(listOf<UByte>(2u), result.errors.map { it.index })
-                assertEquals(ChannelSyncErrorType.Unknown, result.errors.single().errorType, "ConnectionLost maps like any other session error")
-                assertEquals(rejected.single().message, result.errors.single().description)
+                assertEquals(ChannelSyncErrorType.TransportError, result.errors.single().errorType)
+                assertTrue(result.errors.single().description.contains("Fresh physical connection required"))
                 assertEquals(listOf(0, 1, 2, 3), transport.sentData.drop(1).map { it[1].toInt() })
                 assertEquals(5, transport.sentData.size, "the session refuses the reconcile read before writing")
                 val stored = store.fetchChannels(radioId)

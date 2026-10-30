@@ -154,9 +154,9 @@ class LinkUrlExtractionTest {
     }
 
     @Test
-    fun `does not extract web domains embedded in arbitrary opaque URIs`() {
-        assertNull(LinkUrlExtraction.extractFirstUrl("custom:tracker.example/path"))
+    fun `does not extract web domains embedded in opaque URI schemes`() {
         assertNull(LinkUrlExtraction.extractFirstUrl("magnet:?xt=urn:btih:tracker.example"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("ipfs:tracker.example/path"))
         assertEquals(
             "https://Example.COM/Page",
             LinkUrlExtraction.extractFirstUrl("Link:HTTPS://Example.COM/Page"),

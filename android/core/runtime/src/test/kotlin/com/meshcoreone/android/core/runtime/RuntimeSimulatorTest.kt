@@ -15,17 +15,23 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
 import com.meshcoreone.android.core.protocol.event.ConnectionState
+import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import org.junit.jupiter.api.TestFactory
@@ -61,6 +67,40 @@ class RuntimeSimulatorTest {
             }
             assertEquals(1, fixture.services.single().teardowns)
             assertEquals(1, fixture.links.single().disconnects)
+        },
+        nativeCase("offline simulator rejects radio operations without losing its session") {
+            val fixture = SimulatorFixture(this)
+            try {
+                fixture.manager.connect(ConnectionTarget.Simulator)
+                val session = fixture.services.single().inputs.connection.session
+                repeat(2) {
+                    assertEquals(MeshTransportError.NotConnected, assertFailsWith<MeshTransportError> { session.getBattery() })
+                    assertEquals(MeshTransportError.NotConnected, assertFailsWith<MeshTransportError> { session.getContacts(null) })
+                    assertEquals(MeshTransportError.NotConnected, assertFailsWith<MeshTransportError> {
+                        session.getChannels(listOf(0u, 1u))
+                    })
+                    assertEquals(MeshTransportError.NotConnected, assertFailsWith<MeshTransportError> { session.getMessage(null) })
+                    assertEquals(MeshTransportError.NotConnected, assertFailsWith<MeshTransportError> { session.setName("No radio") })
+                }
+                assertEquals(MeshTransportError.NotConnected, assertFailsWith<MeshTransportError> { session.start() })
+                for (operation in listOf<suspend () -> Unit>({ session.getBattery(); Unit }, { session.start() })) {
+                    val cancellation = CompletableDeferred<Throwable?>()
+                    val cancelledJob = Job().apply { cancel() }
+                    backgroundScope.launch(cancelledJob, start = CoroutineStart.ATOMIC) {
+                        cancellation.complete(runCatching { operation() }.exceptionOrNull())
+                    }
+                    runCurrent()
+                    assertIs<CancellationException>(cancellation.await())
+                }
+                runCurrent()
+                assertEquals(DeviceConnectionState.READY, fixture.manager.connectionState)
+                assertTrue(fixture.manager.isSimulatorConnection)
+                assertEquals(0, fixture.links.single().radio.connectionAttempts)
+                assertTrue(fixture.links.single().radio.frames.isEmpty())
+                assertEquals(0, fixture.services.single().teardowns)
+            } finally {
+                fixture.manager.close()
+            }
         },
         nativeCase("invalid simulator identities fail before graph creation or persistence") {
             for (invalidKey in listOf(false, true)) {

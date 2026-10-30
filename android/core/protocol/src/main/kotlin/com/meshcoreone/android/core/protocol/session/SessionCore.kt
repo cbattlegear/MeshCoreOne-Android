@@ -81,6 +81,7 @@ internal class SessionCore(
     val clock: SessionClock,
     private val context: CoroutineContext,
     val diagnostic: (SessionDiagnostic) -> Unit,
+    private val offlinePlaceholder: Boolean,
 ) {
     init {
         timeoutDuration(configuration.defaultTimeout)
@@ -169,6 +170,7 @@ internal class SessionCore(
     suspend fun start(reconnectingAttempt: Long?, disconnectTransportOnFailure: Boolean) {
         val caller = currentCoroutineContext()
         caller.ensureActive()
+        if (offlinePlaceholder) throw MeshTransportError.NotConnected
         val (generation, startup) = synchronized(lock) {
             if (retainedTransport) throw MeshCoreException.ConnectionLost(SessionCorrelationException.RetainedTransport())
             val generation = active ?: newGeneration().also { active = it; stateStreamsEnded = false }
@@ -407,6 +409,10 @@ internal class SessionCore(
 
     suspend fun <T> exchange(generation: SessionGeneration, operation: suspend ExchangeOwner.() -> T): T {
         val caller = currentCoroutineContext()
+        if (offlinePlaceholder) {
+            caller.ensureActive()
+            throw MeshTransportError.NotConnected
+        }
         try {
             return generation.serializer.withOwnedSerialization {
                 requireCurrent(generation)

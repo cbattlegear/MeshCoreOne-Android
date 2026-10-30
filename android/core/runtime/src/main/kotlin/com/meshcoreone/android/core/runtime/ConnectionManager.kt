@@ -471,24 +471,30 @@ class ConnectionManager(
             override val wallClock: java.time.Clock get() = java.time.Clock.fixed(clock.instant, java.time.ZoneOffset.UTC)
             override suspend fun sleepFor(duration: Duration) = clock.sleep(duration)
         }
-        val session = MeshCoreSession(
-            link.transport, configuration, sessionClock, owner.scope.coroutineContext,
-            onDiagnostic = { diagnostic ->
-                when (diagnostic) {
-                    is SessionDiagnostic.BackgroundFailure ->
-                        reporter.report(RuntimeDiagnostic.Failure(diagnostic.operation, diagnostic.cause))
-                    is SessionDiagnostic.CorrelationUncertain -> {
-                        // The producer holds its protocol lock. Always enqueue recovery off that stack.
-                        dispatch(owner, "session.correlationUncertain", recoveryDispatcher) {
-                            recoverCorrelation(owner, MeshCoreException.ConnectionLost(
-                                SessionCorrelationException.UnresolvedReply(diagnostic.generation, diagnostic.responseFamily),
-                            ))
-                        }
+        val onDiagnostic: (SessionDiagnostic) -> Unit = { diagnostic ->
+            when (diagnostic) {
+                is SessionDiagnostic.BackgroundFailure ->
+                    reporter.report(RuntimeDiagnostic.Failure(diagnostic.operation, diagnostic.cause))
+                is SessionDiagnostic.CorrelationUncertain -> {
+                    // The producer holds its protocol lock. Always enqueue recovery off that stack.
+                    dispatch(owner, "session.correlationUncertain", recoveryDispatcher) {
+                        recoverCorrelation(owner, MeshCoreException.ConnectionLost(
+                            SessionCorrelationException.UnresolvedReply(diagnostic.generation, diagnostic.responseFamily),
+                        ))
                     }
-                    else -> Unit
                 }
-            },
-        )
+                else -> Unit
+            }
+        }
+        val session = if (owner.target == ConnectionTarget.Simulator) {
+            MeshCoreSession.offlinePlaceholder(
+                link.transport, configuration, sessionClock, owner.scope.coroutineContext, onDiagnostic,
+            )
+        } else {
+            MeshCoreSession(
+                link.transport, configuration, sessionClock, owner.scope.coroutineContext, onDiagnostic = onDiagnostic,
+            )
+        }
         synchronized(lock) { requireCurrent(owner); owner.session = session }
         val registration = try { link.register(LinkCallbacks(
             onDisconnected = { failure -> dispatch(owner, "link.disconnected") { handleConnectionLoss(owner, failure) } },

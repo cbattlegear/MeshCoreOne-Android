@@ -52,7 +52,9 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.event.RouteType
+import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
@@ -120,6 +122,7 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
         val recorder = backgroundScope.launch { subscription.transitions.collect { transitions += it } }
         var firstClosed = false
         try {
+            fixture.harness.appState.batteryMonitor.deviceBattery = BatteryInfo(level = 3700)
             host.get().setContent { MeshCoreTheme(motionScale = 0f) { OnboardingFlow(fixture.onboarding, {}) } }
             button(O.welcomeGetStarted).performClick()
             compose.onAllNodes(hasText(text(O.permissionsContinue)) and hasClickAction()).onLast().performClick()
@@ -152,8 +155,23 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             assertTrue(harness.manager.isSimulatorConnection)
             assertEquals(MockDataProvider.simulatorDeviceID, harness.manager.connectedDevice?.id)
             assertEquals(MockDataProvider.simulatorDeviceID, store.fetchActiveDevice()?.id)
-            assertNotNull(harness.appState.services)
+            assertEquals(TransportType.SIMULATOR, assertNotNull(harness.appState.services).transportType)
             assertTrue(harness.links.radios.isEmpty(), "the simulator must not create a physical radio")
+            assertNull(harness.appState.batteryMonitor.deviceBattery, "a prior radio's battery must not carry over")
+            assertFalse(harness.appState.batteryMonitor.isBootstrapActive)
+            assertFalse(harness.appState.batteryMonitor.isRefreshLoopActive)
+            repeat(2) {
+                assertEquals(MeshTransportError.NotConnected, assertFailsWith<MeshTransportError> {
+                    assertNotNull(harness.sessions.current).settingsService.getBattery()
+                })
+            }
+            harness.appState.handleReturnToForeground()
+            harness.settle()
+            assertEquals(DeviceConnectionState.READY, harness.manager.connectionState)
+            assertFalse(harness.appState.batteryMonitor.isBootstrapActive)
+            assertFalse(harness.appState.batteryMonitor.isRefreshLoopActive)
+            assertEquals(1, harness.lifecycle.created.size)
+            assertTrue(harness.lifecycle.tornDown.isEmpty())
             assertEquals(OnboardingPresetOutcome.NoRadioToConfigure, fixture.onboarding.presets.apply("ignored"))
             assertSeedFamilies()
 

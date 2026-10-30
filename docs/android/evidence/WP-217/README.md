@@ -5,14 +5,15 @@
 - **Reference:** `db14559b39d32322b06477c6ae676112f583db50`
 - **Base:** `b90cb4dcca3f7f8f0c8120aeb4eaf2cc82f1633c`
 - **Ownership:** WP-217 session `80307303-9cc0-4944-ab71-5c3554b8f384`,
-  reservation revision 38. This is a bounded implementation, not a whole-WP
+  reservation revision 40. This is a bounded implementation, not a whole-WP
   dependency-acceptance or unlock receipt.
 - **Authored coverage:** real-Room simulator onboarding and seed families,
   failure/cancellation/retry, durable preference readback and ordering,
   simulator lifecycle and teardown, stale activation/foreground restoration,
-  saved-device reconnect, physical association removal, snapshot transaction
-  races, and restricted offline chat fixtures. Exact-candidate results are
-  reported in the PR and hosted job, not inferred from the historical evidence below.
+  saved-device reconnect, physical association removal, offline protocol rejection
+  without a simulated disconnect or hardware battery polling, snapshot transaction
+  races, and restricted offline chat fixtures. Exact-candidate results are reported
+  in the PR and hosted job, not inferred from the historical evidence below.
 - **Windows readiness:** pinned Python 3.12.4 is available, but no same-host
   `ANDROID_CI_STATE` or verification venv is configured and the pinned Android
   command-line tools are absent. The documented native preflight below stopped

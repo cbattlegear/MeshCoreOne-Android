@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RegionSelection
+import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.protocol.model.AutoAddConfig
 import com.meshcoreone.android.core.runtime.DeadlineClock
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
@@ -508,7 +509,12 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
         session.notificationService.updateBadgeCount()
         configureNotificationHandlers(session)
-        batteryMonitor.start(session.batteryServices, connectedDevice)
+        if (session.transportType == TransportType.SIMULATOR) {
+            batteryMonitor.stop()
+            batteryMonitor.deviceBattery = null
+        } else {
+            batteryMonitor.start(session.batteryServices, connectedDevice)
+        }
     }
 
     private fun wireSyncDataEvents(session: AppSession) {
@@ -577,7 +583,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         replaceJob({ rxLogEventsJob }, { rxLogEventsJob = it }, sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
             entries.collect {
                 deps.platform.onPacketReceived()
-                if (deps.platform.hasActiveConnectionActivity()) {
+                if (session.transportType != TransportType.SIMULATOR && deps.platform.hasActiveConnectionActivity()) {
                     batteryMonitor.fetchBatteryIfOverdue(services?.batteryServices, connectedDevice)
                 }
             }
@@ -723,7 +729,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         // Trigger resync if sync failed while connected.
         connection.checkSyncHealth()
 
-        services?.let { session ->
+        services?.takeIf { it.transportType != TransportType.SIMULATOR }?.let { session ->
             batteryMonitor.checkMissedBatteryThreshold(connectedDevice, session.batteryServices)
             batteryMonitor.startRefreshLoop(session.batteryServices, connectedDevice)
         }

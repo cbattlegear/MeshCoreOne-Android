@@ -5,7 +5,9 @@ import copy
 import hashlib
 import json
 import unittest
+import zlib
 from dataclasses import asdict, replace
+from pathlib import Path
 from unittest.mock import patch
 
 from fixtures import BASE, HEAD, MERGE, REPO, base_manifest, bundle, policy
@@ -353,6 +355,335 @@ class RepairContractTests(unittest.TestCase):
 
 
 class RepairExecutionTests(unittest.TestCase):
+    def lineage_inputs(self, sources, *, whole=False):
+        manifest, _, _, scope = whole_fixture() if whole else fixture()
+        if whole:
+            scope["coverage"][0]["path"] = TEST
+        blobs = {
+            path: hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+            for path, data in sources.items()
+        }
+        scope["coverage"][0]["hosted_methods"] = [{**METHOD, "blob_sha": blobs[TEST]}]
+        contents = {blobs[path]: data for path, data in sources.items()}
+        executed = {"core/maps": [{"class": "sample.MapTest", "method": METHOD["id"]}]}
+        return manifest, scope, blobs, contents, executed, {"core/maps": dict(blobs)}
+
+    def test_compiled_superclass_lifecycle_and_transitive_aliases_in_both_modes(self):
+        base = TEST.replace("MapTest.kt", "UnrelatedFilename.kt")
+        root = TEST.replace("MapTest.kt", "Root.kt")
+        for whole in (False, True):
+            sources = {
+                TEST: b"package sample\nimport org.junit.Rule\nimport org.junit.Before\n"
+                      b"class MapTest : Parent() { @get:Rule val rule = example; @Before fun setup() {} "
+                      b"@Test fun keepsListReachable() {} }",
+                base: b"package sample\nimport roots.Root as Ancestor\n"
+                      b"open class Parent : Ancestor<() -> Unit>() { companion object {} }",
+                root: b"package roots\nimport org.junit.Before\nimport org.junit.After\n"
+                      b"open class Root<T> { @Before fun setupRoot() {} @After fun closeRoot() {} }",
+            }
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+            with self.subTest(whole=whole), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ):
+                validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                with self.assertRaisesRegex(PortError, "did not actually execute"):
+                    validate_hosted_methods(scope, blobs, manifest.repo, {
+                        "core/maps": [{"class": "sample.OtherTest", "method": METHOD["id"]}],
+                    }, compiled)
+
+    def test_escaped_package_segments_preserve_exact_superclass_identity(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        for whole in (False, True):
+            for package in ("fixture.`extra`", "`fixture`.`extra`"):
+                for imported, accepted in (("fixture.Parent", False), ("fixture.extra.Parent", True)):
+                    sources = {
+                        TEST: (
+                            "package sample\nimport org.junit.Rule\nimport " + imported + "\n"
+                            "class MapTest : Parent() { @get:Rule val rule = example; "
+                            "@Test fun keepsListReachable() {} }"
+                        ).encode(),
+                        base: ("package " + package + "\nopen class Parent {}").encode(),
+                    }
+                    manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                    with self.subTest(whole=whole, package=package, imported=imported), patch(
+                        "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                    ):
+                        if accepted:
+                            validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                        else:
+                            with self.assertRaisesRegex(PortError, "superclass|inherited Kotlin"):
+                                validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_bodyless_non_inheriting_superclasses_are_empty_compiled_roots(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        for whole in (False, True):
+            for header in ("Parent", "Parent()", "Parent<T>"):
+                for body in ("", " {}"):
+                    parent = "Parent<String>()" if "<" in header else "Parent()"
+                    sources = {
+                        TEST: (
+                            "package sample\nimport org.junit.Rule\nimport org.junit.Before\n"
+                            "class MapTest : " + parent + " { @get:Rule val rule = example; "
+                            "@Before fun setup() {} @Test fun keepsListReachable() {} }"
+                        ).encode(),
+                        base: ("package sample\nopen class " + header + body).encode(),
+                    }
+                    manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                    with self.subTest(whole=whole, header=header, body=body), patch(
+                        "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                    ):
+                        validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_superclass_unknown_shadowed_and_cyclic_lineages_fail_in_both_modes(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        root = TEST.replace("MapTest.kt", "Root.kt")
+        for whole in (False, True):
+            for declaration in (
+                "open class Parent : Missing() {}",
+                "open class Parent : Root() {}\nopen class Root : Missing() {}",
+                "open class Parent : Root by unknownDelegate {}",
+                "open class Parent : Root() {}\nopen class Root : Parent() {}",
+                "open class Parent { annotation class Rule }",
+                "open class Parent { companion object { annotation class Rule } }",
+                "open class Parent { companion object Named { typealias Rule = Other } }",
+                "open class Parent { companion object : Unknown() {} }",
+                "open class Parent { companion object : Unknown() }",
+                "open class Parent { companion object Named : Unknown() }",
+                "open class Parent : Root() {}",
+                "open class Parent : Root() { class Root { annotation class Rule } }",
+            ):
+                sources = {
+                    TEST: b"package sample\nimport org.junit.Rule\nclass MapTest : Parent() { "
+                          b"@get:Rule val rule = example; @Test fun keepsListReachable() {} }",
+                    base: ("package sample\n" + declaration).encode(),
+                }
+                if declaration == "open class Parent : Root() {}":
+                    sources[root] = b"package sample\nopen class Root { annotation class Rule }"
+                elif declaration == "open class Parent : Root() { class Root { annotation class Rule } }":
+                    sources[root] = b"package sample\nopen class Root {}"
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                with self.subTest(whole=whole, declaration=declaration), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaises(PortError):
+                    validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_direct_bodyless_inherited_companions_fail_in_both_modes(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        for whole in (False, True):
+            for companion in ("companion object : Unknown()", "companion object Named : Unknown()"):
+                sources = {
+                    TEST: (
+                        "package sample\nimport org.junit.Rule\nimport org.junit.Before\n"
+                        "class MapTest : Parent() { @get:Rule val rule = example; @Before fun setup() {} "
+                        "@Test fun keepsListReachable() {} " + companion + " }"
+                    ).encode(),
+                    base: b"package sample\nopen class Parent {}",
+                }
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                with self.subTest(whole=whole, companion=companion), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaises(PortError):
+                    validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_qualified_superclasses_cannot_bind_unrelated_package_classes(self):
+        outer = TEST.replace("MapTest.kt", "Outer.kt")
+        unrelated = TEST.replace("MapTest.kt", "Unrelated.kt")
+        for whole in (False, True):
+            for qualifier, imported in (
+                ("fixtures", "actual.Outer as fixtures"), ("Outer", "actual.Outer"), ("Local", None),
+            ):
+                header = "package sample\nimport org.junit.Rule\n"
+                if imported:
+                    header += "import " + imported + "\n"
+                sources = {
+                    TEST: (
+                        header + "class MapTest : " + qualifier + ".Parent() { @get:Rule val rule = example; "
+                        "@Test fun keepsListReachable() {} }"
+                    ).encode(),
+                    outer: (
+                        ("package actual\nopen class Outer" if imported else "package sample\nopen class Local")
+                        + " { open class Parent { annotation class Rule } }"
+                    ).encode(),
+                    unrelated: ("package " + qualifier + "\nopen class Parent {}").encode(),
+                }
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                with self.subTest(whole=whole, qualifier=qualifier), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaises(PortError):
+                    validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_superclass_bindings_require_exact_compiled_candidate_blobs(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        sources = {
+            TEST: b"package sample\nimport org.junit.Rule\nclass MapTest : Parent() { "
+                  b"@get:Rule val rule = example; @Test fun keepsListReachable() {} }",
+            base: b"package sample\nopen class Parent {}",
+        }
+        for whole in (False, True):
+            for mutation in ("uncompiled", "missing", "stale", "wrong-bytes", "duplicate-class", "foreign-module"):
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                if mutation == "uncompiled":
+                    del compiled["core/maps"][base]
+                elif mutation == "missing":
+                    del blobs[base]
+                elif mutation == "stale":
+                    compiled["core/maps"][base] = "7" * 40
+                elif mutation == "wrong-bytes":
+                    contents[blobs[base]] = b"package sample\nopen class Parent { annotation class Rule }"
+                elif mutation == "duplicate-class":
+                    duplicate = base.replace("Parent.kt", "Other.kt")
+                    blobs[duplicate] = blobs[base]
+                    compiled["core/maps"][duplicate] = blobs[base]
+                else:
+                    foreign = base.replace("core/maps", "core/data")
+                    compiled["core/maps"][foreign] = blobs.pop(base)
+                    del compiled["core/maps"][base]
+                with self.subTest(whole=whole, mutation=mutation), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaises(PortError):
+                    validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_shared_compiler_inputs_neither_taint_lineage_nor_supply_foreign_parents(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        shared = "android/accessibility-tests/src/shared/kotlin/Shared.kt"
+        for whole in (False, True):
+            for local_parent in (False, True):
+                sources = {
+                    TEST: b"package sample\nimport org.junit.Rule\nclass MapTest : Parent() { "
+                          b"@get:Rule val rule = example; @Test fun keepsListReachable() {} }",
+                    shared: b"package sample\nopen class Parent {}",
+                }
+                if local_parent:
+                    sources[base] = b"package sample\nopen class Parent {}"
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                with self.subTest(whole=whole, local_parent=local_parent), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ):
+                    if local_parent:
+                        validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                    else:
+                        with self.assertRaises(PortError):
+                            validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_known_superclass_cannot_hide_inherited_tests_from_complete_coverage(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        sources = {
+            TEST: b"package sample\nimport org.junit.Rule\nclass MapTest : Parent() { "
+                  b"@get:Rule val rule = example; @Test fun keepsListReachable() {} }",
+            base: b"package sample\nopen class Parent { @Test fun inheritedCase() {} }",
+        }
+        manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=True)
+        with patch("controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob]), \
+                self.assertRaisesRegex(PortError, "complete inherited Kotlin JUnit declarations"):
+            validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_bodyless_inherited_sibling_cannot_hide_complete_suite(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        for header in ("ExtraTestBase()", "ExtraTestBase(), Other by object : Other {}"):
+            for body in ("", " {}"):
+                sources = {
+                    TEST: (
+                        "package sample\nimport org.junit.Rule\n"
+                        "class MapTest : Parent() { @get:Rule val rule = example; "
+                        "@Test fun keepsListReachable() {} }\nclass HiddenInheritedSuite : " + header + body
+                    ).encode(),
+                    base: b"package sample\nopen class Parent {}\n"
+                          b"open class ExtraTestBase { @Test fun inheritedCase() {} }",
+                }
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=True)
+                with self.subTest(header=header, body=body), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
+                    validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_grouped_annotations_only_block_selected_sources_or_resolved_ancestors(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        unrelated = TEST.replace("MapTest.kt", "Unrelated.kt")
+        grouped = b'@file:[Suppress("unused")]\n'
+        for whole in (False, True):
+            sources = {
+                TEST: b"package sample\nimport org.junit.Rule\nimport org.junit.Before\n"
+                      b"class MapTest : Parent() { @get:Rule val rule = example; @Before fun setup() {} "
+                      b"@Test fun keepsListReachable() {} }",
+                base: b"package sample\nopen class Parent {}",
+                unrelated: b"package other\nclass Unrelated {}",
+            }
+            for location in (None, unrelated, base, TEST):
+                variant = dict(sources)
+                if location:
+                    variant[location] = grouped + variant[location]
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(variant, whole=whole)
+                with self.subTest(whole=whole, location=location), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ):
+                    if location in (None, unrelated):
+                        validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                    else:
+                        with self.assertRaises(PortError):
+                            validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_exact_wp202_changed_suites_use_real_acceptance_with_source_only_doubles(self):
+        from controller.repair_acceptance import _KotlinJUnitLineage, _kotlin_junit_methods
+
+        fixture_path = Path(__file__).with_name("fixtures") / "junit-lineage-sources.json.zlib"
+        source_fixture = json.loads(zlib.decompress(fixture_path.read_bytes()))
+        self.assertEqual(source_fixture["revision"], "434d5bfbf9a79600fbe72bdbcbe18eae1ad18158")
+        mounted = "android/app/src/test/kotlin/com/meshcoreone/android/app/container/BlockedSenderMountedStoreTest.kt"
+        helper = mounted.replace("BlockedSenderMountedStoreTest.kt", "ContainerHarness.kt")
+        self.assertEqual(source_fixture["sources"][mounted]["blob_sha"], "4ee8883cf7245c7274eb3b2e502c29f8c4521b31")
+        self.assertEqual(source_fixture["sources"][helper]["blob_sha"], "e1851351414df0ce396e35abbb60761892789806")
+        expected = {
+            "BlockedSenderMountedStoreTest": 3, "BlockedSenderStoreFlowTest": 7,
+            "ConnectionRuntimeRoomIntegrationTest": 5, "MessagingRoomIntegrationTest": 81,
+            "AdvertisementCoordinatorRoomTest": 68, "ChannelCoordinatorRoomTest": 9,
+            "ContactPathCoordinatorRoomTest": 7, "LegacyImportLifecycleTest": 3,
+            "PendingSendPersistenceTest": 16, "RepositoryTransactionLifecycleTest": 7,
+            "UnsignedPathReopenTest": 2, "SourceConnectionManagerTest": 1, "ReactionsAndStateTest": 11,
+        }
+        sources = {path: item["text"].encode("utf-8") for path, item in source_fixture["sources"].items()}
+        blobs = {path: item["blob_sha"] for path, item in source_fixture["sources"].items()}
+        for path, data in sources.items():
+            self.assertEqual(
+                hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest(), blobs[path],
+            )
+        contents = {blobs[path]: data for path, data in sources.items()}
+        compiled, modules = {}, {}
+        for path, blob in blobs.items():
+            parts = path.split("/")
+            module = parts[1] if parts[1] == "app" else "/".join(parts[1:3])
+            modules[path] = module
+            compiled.setdefault(module, {})[path] = blob
+        _, _, _, scope = fixture()
+        scope["coverage"] = []
+        executed, found = {}, {}
+        for path, data in sources.items():
+            if path == helper:
+                continue
+            module = modules[path]
+            lineage = _KotlinJUnitLineage(blobs, compiled[module], lambda path, blob: sources[path].decode())
+            classes = {}
+            methods = _kotlin_junit_methods(data.decode(), classes, inheritance=lineage.resolve)
+            found[Path(path).stem] = len(methods)
+            scope["coverage"].append({
+                "path": path, "modules": [module], "hosted_methods": [
+                    {"path": path, "blob_sha": blobs[path], "id": method} for method in methods
+                ],
+            })
+            for method, kind in methods.items():
+                record = {"class": classes[method], "method": method}
+                if kind == "factory":
+                    record.update(method="source-only-double:" + method, factory=method)
+                executed.setdefault(module, []).append(record)
+        self.assertEqual(found, expected)
+        with patch("controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob]):
+            validate_compiled_hosted_methods(scope, blobs, REPO, executed, compiled)
+            with self.assertRaisesRegex(PortError, "inventory is missing"):
+                validate_compiled_hosted_methods(scope, blobs, REPO, {}, compiled)
+            complete = copy.deepcopy(scope)
+            complete["schema_version"], complete["kind"] = 3, "whole-wp"
+            complete["coverage"] = [entry for entry in complete["coverage"] if entry["path"] == mounted]
+            validate_compiled_hosted_methods(complete, blobs, REPO, executed, compiled)
+
     def test_whole_scope_accounts_for_every_changed_unit_test_declaration(self):
         manifest, _, _, scope = whole_fixture()
         scope["coverage"].append({

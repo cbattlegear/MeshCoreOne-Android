@@ -666,7 +666,8 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
             "methods": inventory, "compiled_test_sources": compiled}
 
 
-def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=False):
+def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=False,
+                          inheritance=None, source_declarations=None):
     def comment(index):
         if text.startswith("//", index):
             end = text.find("\n", index)
@@ -720,6 +721,12 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
 
     token = re.compile(r"`[^`\r\n]+`|[^\W\d]\w*|[^\s]")
     identifier = re.compile(r"[^\W\d]\w*")
+
+    def name_token(value):
+        return identifier.fullmatch(value) is not None or (
+            value.startswith("`") and value.endswith("`") and len(value) > 2
+        )
+
     tokens, index = [], 0
     while index < len(text):
         if text[index].isspace():
@@ -734,26 +741,30 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             tokens.append(match[0])
             index = match.end()
 
-    for index, value in enumerate(tokens):
-        if value == "@" and (
+    grouped_annotations = any(
+        value == "@" and (
             index + 1 < len(tokens) and tokens[index + 1] == "["
             or index + 3 < len(tokens) and tokens[index + 2:index + 4] == [":", "["]
-        ):
-            raise PortError("Grouped Kotlin annotations are not supported in hosted test sources")
+        )
+        for index, value in enumerate(tokens)
+    )
+    if grouped_annotations and source_declarations is None:
+        raise PortError("Grouped Kotlin annotations are not supported in hosted test sources")
 
-    class_bodies = {}
-    if declaring_classes is not None:
-        package = ""
+    class_bodies, package = {}, ""
+    if declaring_classes is not None or source_declarations is not None or inheritance is not None:
         for index, value in enumerate(tokens):
             if value != "package" or index and tokens[index - 1] == ".":
                 continue
             parts, cursor = [], index + 1
-            while cursor < len(tokens) and re.fullmatch(r"[^\W\d]\w*", tokens[cursor]):
-                parts.append(tokens[cursor])
+            while cursor < len(tokens) and name_token(tokens[cursor]):
+                parts.append(tokens[cursor].strip("`"))
                 cursor += 1
                 if cursor >= len(tokens) or tokens[cursor] != ".":
                     break
                 cursor += 1
+                if cursor >= len(tokens) or not name_token(tokens[cursor]):
+                    raise PortError("Cannot establish Kotlin package identity")
             if not parts or package:
                 raise PortError("Cannot establish Kotlin package identity")
             package = ".".join(parts)
@@ -810,11 +821,6 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         "org.junit.Rule", "org.junit.ClassRule",
     }
     imports = {}
-    def name_token(value):
-        return identifier.fullmatch(value) is not None or (
-            value.startswith("`") and value.endswith("`") and len(value) > 2
-        )
-
     for start, value in enumerate(tokens):
         if value != "import":
             continue
@@ -859,15 +865,17 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     if stack:
         raise PortError("Unbalanced Kotlin scope in hosted test source")
 
-    inherited_bodies, companion_bodies, header_bodies = set(), {}, []
+    inherited_bodies, inherited_companions, companion_bodies, header_bodies = set(), set(), {}, []
+    bodyless_roots = []
     inherited_header_annotations = set()
-    inherited_scope, unresolved_scope = False, False
+    inherited_scope, unresolved_scope, bodyless_inheritance = False, False, False
     for start, value in enumerate(tokens):
         if value not in ("class", "interface", "object") or (
             start and tokens[start - 1] in (".", ":")
         ):
             continue
         index, nesting, inherited, header_annotations = start + 1, [], False, []
+        declaration_body = None
         delegated = False
         while index < len(tokens):
             current = tokens[index]
@@ -910,6 +918,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     delegated = False
                     continue
                 if current == "{":
+                    declaration_body = index
                     if value == "class":
                         header_bodies.append((start, index))
                     if inherited:
@@ -935,12 +944,52 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             index += 1
         unresolved_scope |= bool(nesting)
         inherited_scope |= inherited
+        bodyless_inheritance |= inherited and declaration_body is None
+        if (
+            value == "class" and declaration_body is None and not inherited
+            and not scopes[start] and start + 1 < len(tokens)
+            and identifier.fullmatch(tokens[start + 1])
+        ):
+            bodyless_roots.append(start)
         if inherited:
             inherited_header_annotations.update(header_annotations)
         if inherited and value == "object" and start and tokens[start - 1] == "companion":
             inherited_bodies.update(scopes[start][-1:])
+            inherited_companions.update(scopes[start][-1:])
+    declarations = {}
+    for start, body in header_bodies:
+        if scopes[start] or body not in class_bodies:
+            continue
+        visible = [(body,)] + [(body, companion) for companion in companion_bodies.get((body,), ())]
+        members = set().union(*(declared_names.get(scope, set()) for scope in visible))
+        declarations[body] = {
+            "name": (package + "." if package else "") + class_bodies[body],
+            "package": package, "imports": imports,
+            "parents": _kotlin_parent_names(tokens[start + 2:body]),
+            "members": members,
+            "uncertain": unresolved_scope or grouped_annotations or body in inherited_companions,
+        }
+    for start in bodyless_roots:
+        declarations[-start - 1] = {
+            "name": (package + "." if package else "") + tokens[start + 1],
+            "package": package, "imports": imports, "parents": [], "members": set(),
+            "uncertain": unresolved_scope or grouped_annotations,
+        }
+    if source_declarations is not None:
+        source_declarations.update(declarations)
+        return {}
     if reject_inherited and (inherited_scope or unresolved_scope):
-        raise PortError("Cannot establish all inherited Kotlin JUnit declarations for changed test source")
+        if (
+            inheritance is None or unresolved_scope or bodyless_inheritance or not inherited_bodies
+            or any(body not in declarations for body in inherited_bodies)
+            or inherited_header_annotations
+        ):
+            raise PortError("Cannot establish all inherited Kotlin JUnit declarations for changed test source")
+        for body in inherited_bodies:
+            try:
+                inheritance(declarations[body], True)
+            except PortError as error:
+                raise PortError("Cannot establish all inherited Kotlin JUnit declarations: " + str(error)) from error
     imported_non_tests = {
         name for name, targets in imports.items()
         if len(targets) == 1 and next(iter(targets)) in known_non_tests
@@ -954,13 +1003,20 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         # Companion members are visible in their containing class as well.
         visible += [parent + (body,) for parent in tuple(visible)
                     for body in companion_bodies.get(parent, ())]
-        if (
-            unresolved_scope or position in inherited_header_annotations
-            or any(inherited_bodies.intersection(parent) for parent in visible)
-        ):
+        inherited = set().union(*(inherited_bodies.intersection(parent) for parent in visible))
+        if unresolved_scope:
             return set()
+        if position in inherited_header_annotations:
+            inherited.update(body for start, body in header_bodies if start < position < body)
+            if not inherited:
+                return set()
+        inherited_names = set()
+        for body in inherited:
+            if inheritance is None or body not in declarations:
+                return set()
+            inherited_names.update(inheritance(declarations[body], False))
         shadowed = set().union(*(declared_names.get(parent, set()) for parent in visible))
-        return imported_non_tests - shadowed
+        return imported_non_tests - shadowed - inherited_names
 
     for index, value in enumerate(tokens):
         if value != "@" or index + 2 >= len(tokens) or tokens[index + 2] != ":":
@@ -1041,7 +1097,9 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     index += 1
                 if stack:
                     raise PortError("Unclosed Kotlin annotation in hosted test source")
-        non_test_annotations = non_tests_at(start)
+        non_test_annotations = (
+            non_tests_at(start) if not annotations & (test_annotations | family_annotations) else set()
+        )
         if (
             annotations and not annotations & (test_annotations | family_annotations)
             and not annotations.issubset(non_test_annotations)
@@ -1066,10 +1124,121 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     return methods
 
 
+def _kotlin_parent_names(header):
+    """Recognize ordinary named supertypes; unsupported header expressions stay unresolved."""
+    cursor, nesting, parents, active, expect_parent = 0, [], [], False, False
+    while cursor < len(header):
+        token = header[cursor]
+        if not nesting:
+            if token == ":" and not active:
+                active, expect_parent = True, True
+                cursor += 1
+                continue
+            if active and token == "," and not expect_parent:
+                expect_parent = True
+                cursor += 1
+                continue
+            if active and expect_parent:
+                parts = []
+                while cursor < len(header) and re.fullmatch(r"[^\W\d]\w*", header[cursor]):
+                    parts.append(header[cursor])
+                    cursor += 1
+                    if cursor >= len(header) or header[cursor] != ".":
+                        break
+                    cursor += 1
+                if not parts:
+                    return None
+                parents.append(".".join(parts))
+                expect_parent = False
+                if cursor < len(header) and header[cursor] not in ("(", "<", ","):
+                    return None
+                if cursor == len(header) or header[cursor] == ",":
+                    continue
+                token = header[cursor]
+        if token in ("<", ">") and any(value in ("(", "[", "{") for value in nesting):
+            cursor += 1
+            continue
+        if token in ("(", "[", "<"):
+            nesting.append(token)
+        elif token in (")", "]", ">") and not (
+            token == ">" and cursor and header[cursor - 1] == "-"
+        ):
+            if token in ("<", ">") and any(value in ("(", "[") for value in nesting):
+                cursor += 1
+                continue
+            if not nesting or nesting.pop() != {")": "(", "]": "[", ">": "<"}[token]:
+                return None
+        elif active and not nesting:
+            return None
+        cursor += 1
+    return None if nesting else parents
+
+
+class _KotlinJUnitLineage:
+    def __init__(self, candidate_tree, compiled, read_source):
+        self.candidate_tree, self.compiled, self.read_source = candidate_tree, compiled, read_source
+        self.sources, self.classes = {}, None
+
+    def index(self):
+        if self.classes is not None:
+            return
+        classes = {}
+        for path, blob in self.compiled.items():
+            if not path.endswith(".kt") or self.candidate_tree.get(path) != blob:
+                raise PortError("Stale or missing compiled Kotlin superclass source: " + path)
+            text = self.read_source(path, blob)
+            declarations = {}
+            _kotlin_junit_methods(text, source_declarations=declarations)
+            self.sources[path] = text
+            for record in declarations.values():
+                classes.setdefault(record["name"], []).append((path, record))
+        self.classes = classes
+
+    def parents(self, record):
+        self.index()
+        if record["parents"] is None or record["uncertain"]:
+            raise PortError("Cannot resolve ambiguous Kotlin superclass declaration")
+        result = []
+        for name in record["parents"]:
+            if "." in name:
+                raise PortError("Cannot resolve Kotlin superclass qualifier: " + name)
+            if name in record["members"]:
+                raise PortError("Cannot resolve class-scoped Kotlin superclass: " + name)
+            targets = record["imports"].get(name, {
+                (record["package"] + "." if record["package"] else "") + name,
+            })
+            if len(targets) != 1:
+                raise PortError("Ambiguous Kotlin superclass import: " + name)
+            target = next(iter(targets))
+            found = self.classes.get(target, [])
+            if len(found) != 1:
+                raise PortError("Unknown or ambiguous compiled Kotlin superclass: " + target)
+            result.append(found[0])
+        return result
+
+    def resolve(self, record, complete, visiting=()):
+        names = set()
+        for path, parent in self.parents(record):
+            name = parent["name"]
+            if name in visiting or len(visiting) >= 64:
+                raise PortError("Cyclic or excessive Kotlin superclass lineage")
+            names.update(parent["members"])
+            names.update(self.resolve(parent, complete, (*visiting, name)))
+            if complete:
+                classes = {}
+                methods = _kotlin_junit_methods(
+                    self.sources[path], classes, inheritance=self.resolve,
+                )
+                if any(classes[method] == name for method in methods):
+                    raise PortError("Cannot establish complete inherited Kotlin JUnit declarations")
+        return names
+
+
 def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sources):
     from .staging import object_bytes
 
     verification = verification_only(scope)
+    lineages = {}
 
     def require_compiled(path, blob):
         module = re.match(r"android/((?:core|feature|platform)/[^/]+|app)/", path)
@@ -1077,6 +1246,28 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 or not isinstance(compiled_sources.get(module[1]), dict)
                 or compiled_sources[module[1]].get(path) != blob):
             raise PortError("Hosted test source was not compiled for the selected test task")
+
+    def lineage(path):
+        module = re.match(r"android/((?:core|feature|platform)/[^/]+|app)/", path)[1]
+        if module not in lineages:
+            def read_source(source, blob):
+                git_path(source)
+                if re.match(r"android/" + re.escape(module) + r"/", source) is None:
+                    raise PortError("Kotlin superclass source is outside the compiled module")
+                data = object_bytes(repo, blob)
+                actual = hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+                if actual != blob:
+                    raise PortError("Kotlin superclass source blob identity mismatch")
+                try:
+                    return data.decode("utf-8")
+                except UnicodeError as error:
+                    raise PortError("Kotlin superclass source is not UTF-8") from error
+            sources = {
+                source: blob for source, blob in compiled_sources[module].items()
+                if source.startswith("android/" + module + "/")
+            }
+            lineages[module] = _KotlinJUnitLineage(candidate_tree, sources, read_source)
+        return lineages[module].resolve
 
     for coverage in scope["coverage"]:
         if verification:
@@ -1091,10 +1282,11 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 if "/src/androidTest/" not in path:
                     require_compiled(path, blob)
                 text = object_bytes(repo, blob).decode("utf-8")
-                declared = _kotlin_junit_methods(text, reject_inherited=True)
+                resolver = lineage(path) if "/src/androidTest/" not in path else None
+                declared = _kotlin_junit_methods(text, reject_inherited=True, inheritance=resolver)
                 classes = {}
                 if declared:
-                    declared = _kotlin_junit_methods(text, classes)
+                    declared = _kotlin_junit_methods(text, classes, inheritance=resolver)
                 if "/src/test/" in path or "/src/testDebug/" in path:
                     identities = [m["id"] for m in coverage["hosted_methods"] if m["path"] == path]
                 else:
@@ -1117,7 +1309,7 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 raise PortError("Affected hosted test is outside the verified module")
             text = object_bytes(repo, method["blob_sha"]).decode("utf-8")
             classes = {}
-            declarations = _kotlin_junit_methods(text, classes)
+            declarations = _kotlin_junit_methods(text, classes, inheritance=lineage(method["path"]))
             kind = declarations.get(method["id"])
             if kind is None:
                 raise PortError("Hosted method lacks its actual candidate JUnit test declaration")

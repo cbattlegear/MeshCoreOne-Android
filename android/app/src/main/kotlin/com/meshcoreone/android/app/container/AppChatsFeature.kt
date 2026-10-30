@@ -399,6 +399,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         initial: ChatTimelineState,
         writer: ChatTimelineWriter? = null,
         senderTables: (() -> ChatSenderTables)? = null,
+        envOverride: EnvInputs? = null,
     ): CoordinatedTimelineState {
         val invalidations = merge(
             changes, renderEnvironment.map { Unit },
@@ -411,7 +412,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     is TimelineConversation.Direct -> ChatConversationType.Dm(conversation.contact)
                     is TimelineConversation.Channel -> ChatConversationType.Channel(conversation.channel)
                 }
-                val env = envInputs(kind, app.lastChatEnvSnapshot ?: ChatEnvSnapshot(
+                val env = envOverride?.copy(translationOffersEnabled = false) ?: envInputs(kind, app.lastChatEnvSnapshot ?: ChatEnvSnapshot(
                     renderEnvironment.value.themeID, renderEnvironment.value.isDark,
                     renderEnvironment.value.isHighContrast, renderEnvironment.value.contentSizeCategory,
                 ))
@@ -783,6 +784,73 @@ internal data class TimelineRenderBatch(
     val env: EnvInputs,
 )
 
+/** PRIME uses the mounted feature's population/window implementation, never a competing fetch graph. */
+internal class CoordinatedPrimeTimeline(
+    private val feature: AppChatsFeature,
+    private val scope: CoroutineScope,
+) : PrimeTimeline {
+    override var envInputs = EnvInputs.DEFAULT
+    override val messages get() = coordinator?.messages ?: SnapshotList.empty()
+    override var conversation: ChatConversationType? = null
+        private set
+    private var coordinator: ChatCoordinator? = null
+    private var writer: ChatTimelineWriter? = null
+    private var viewModel: ChatViewModel? = null
+    private var binding: CoordinatedTimelineState? = null
+    private var senderTables: () -> ChatSenderTables = { ChatSenderTables.EMPTY }
+
+    override fun bind(coordinator: ChatCoordinator, senderTables: () -> ChatSenderTables): Boolean {
+        close()
+        val bound = coordinator.bindWriter(this, ChatWriterRole.PRIME,
+            renderItemRebuilder = { binding?.requestRender() },
+            renderStateInvalidated = { binding?.requestRender() },
+        ) ?: return false
+        this.coordinator = coordinator
+        this.senderTables = senderTables
+        writer = bound
+        return true
+    }
+
+    override suspend fun open(
+        conversation: ChatConversationType,
+        reactions: ReactionIndexing?,
+        populateMode: PopulateMode,
+    ): TimelineOpenOutcome {
+        val shared = coordinator ?: return TimelineOpenOutcome.Unavailable
+        val bound = writer?.takeIf { it.isCurrent } ?: return TimelineOpenOutcome.Unavailable
+        this.conversation = conversation
+        val target = when (conversation) {
+            is ChatConversationType.Dm -> TimelineConversation.Direct(conversation.contact)
+            is ChatConversationType.Channel -> TimelineConversation.Channel(conversation.channel)
+        }
+        val dependencies = object : ChatTimelineDependencies by feature.timeline(target) {
+            override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
+                feature.bindState(target, shared, this@CoordinatedPrimeTimeline, zoneId, initial,
+                    bound, senderTables, envInputs).also { binding = it }
+            override suspend fun prepareMessages(messages: List<MessageDTO>) =
+                feature.prepareTimelineMessages(messages, reactions)
+        }
+        val mounted = ChatViewModel(target, dependencies, scope).also { viewModel = it }
+        when (populateMode) {
+            PopulateMode.REPLACE -> mounted.prime()
+        }
+        binding?.awaitRender()
+        if (!bound.isCurrent) return TimelineOpenOutcome.Unavailable
+        val state = mounted.state.value
+        (state.loadError ?: state.passiveError)?.let { return TimelineOpenOutcome.Failed(it) }
+        return TimelineOpenOutcome.Loaded
+    }
+
+    override fun close() {
+        viewModel?.close()
+        viewModel = null
+        binding = null
+        coordinator?.releaseWriter(this)
+        coordinator = null
+        writer = null
+    }
+}
+
 /** A screen's presentation projection; messages and paging are always read back from the shared coordinator. */
 internal class CoordinatedTimelineState(
     internal val coordinator: ChatCoordinator,
@@ -864,70 +932,6 @@ internal class CoordinatedTimelineState(
         )
     }
 
-    /** PRIME uses the mounted feature's population/window implementation, never a competing fetch graph. */
-    internal class CoordinatedPrimeTimeline(
-        private val feature: AppChatsFeature,
-        private val scope: CoroutineScope,
-    ) : PrimeTimeline {
-        override var envInputs = com.meshcoreone.android.core.services.rendering.EnvInputs.DEFAULT
-        override val messages get() = coordinator?.messages ?: SnapshotList.empty()
-        override var conversation: ChatConversationType? = null
-            private set
-        private var coordinator: ChatCoordinator? = null
-        private var writer: ChatTimelineWriter? = null
-        private var viewModel: ChatViewModel? = null
-        private var binding: CoordinatedTimelineState? = null
-        private var senderTables: () -> ChatSenderTables = { ChatSenderTables.EMPTY }
-
-        override fun bind(coordinator: ChatCoordinator, senderTables: () -> ChatSenderTables): Boolean {
-            close()
-            val bound = coordinator.bindWriter(this, ChatWriterRole.PRIME,
-                renderItemRebuilder = { binding?.requestRender() },
-                renderStateInvalidated = { binding?.requestRender() },
-            ) ?: return false
-            this.coordinator = coordinator
-            this.senderTables = senderTables
-            writer = bound
-            return true
-        }
-
-        override suspend fun open(
-            conversation: ChatConversationType,
-            reactions: ReactionIndexing?,
-            populateMode: PopulateMode,
-        ): TimelineOpenOutcome {
-            val shared = coordinator ?: return TimelineOpenOutcome.Unavailable
-            val bound = writer?.takeIf { it.isCurrent } ?: return TimelineOpenOutcome.Unavailable
-            this.conversation = conversation
-            val target = when (conversation) {
-                is ChatConversationType.Dm -> TimelineConversation.Direct(conversation.contact)
-                is ChatConversationType.Channel -> TimelineConversation.Channel(conversation.channel)
-            }
-            val dependencies = object : ChatTimelineDependencies by feature.timeline(target) {
-                override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
-                    feature.bindState(target, shared, this@CoordinatedPrimeTimeline, zoneId, initial, bound, senderTables)
-                        .also { binding = it }
-            override suspend fun prepareMessages(messages: List<MessageDTO>) =
-                    feature.prepareTimelineMessages(messages, reactions)
-            }
-            val mounted = ChatViewModel(target, dependencies, scope).also { viewModel = it }
-            mounted.prime()
-            binding?.awaitRender()
-            if (!bound.isCurrent) return TimelineOpenOutcome.Unavailable
-            mounted.state.value.loadError?.let { return TimelineOpenOutcome.Failed(it) }
-            return TimelineOpenOutcome.Loaded
-        }
-
-        override fun close() {
-            viewModel?.close()
-            viewModel = null
-            binding = null
-            coordinator?.releaseWriter(this)
-            coordinator = null
-            writer = null
-        }
-    }
-
     override fun update(transform: (ChatTimelineState) -> ChatTimelineState) {
         if (closed) return
         var rebuild = false
@@ -939,7 +943,8 @@ internal class CoordinatedTimelineState(
             when {
                 next.isLoading -> writer.beginLoading()
                 next.hasLoadedOnce -> writer.markLoaded()
-                else -> writer.updateRenderState { it.with(phase = ChatRenderState.LoadPhase.UNINITIALIZED) }
+                coordinator.renderState.phase != ChatRenderState.LoadPhase.UNINITIALIZED ->
+                    writer.updateRenderState { it.with(phase = ChatRenderState.LoadPhase.UNINITIALIZED) }
             }
             val render = coordinator.renderState
             if (next.hasMoreMessages != render.hasMoreMessages ||
@@ -975,8 +980,6 @@ internal class CoordinatedTimelineState(
                     if (snapshot.revision == coordinator.renderStateID) writer.rebuildItems(batch.inputs, batch.env)
                     else requestRender()
                 }
-                assemblyJob = job
-                job.start()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -984,6 +987,8 @@ internal class CoordinatedTimelineState(
                 report("Build mounted chat render inputs", failure)
             }
         }
+        assemblyJob = job
+        job.start()
     }
 
     suspend fun awaitRender() {

@@ -86,8 +86,9 @@ class SharedTimelineIntegrationTest : RoomProcessTest() {
             second?.close()
             harness.container.close()
         }
+    }
 
-        @Test fun suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging() = runTest {
+    @Test fun suspendedPagingSettlesOnReleaseOrHandoffButStaleCloseNeverClearsSuccessorPaging() = runTest {
             for (explicitRelease in listOf(false, true)) {
                 val radio = RadioId(UUID.fromString(if (explicitRelease) {
                     "44444444-4444-4444-4444-444444444444"
@@ -158,7 +159,7 @@ class SharedTimelineIntegrationTest : RoomProcessTest() {
             }
         }
 
-        @Test fun productionDefaultPrimerRefreshesTheSameClosedWindowWithoutMarkingRead() = runTest {
+    @Test fun productionDefaultPrimerRefreshesTheSameClosedWindowWithoutMarkingRead() = runTest {
             val radio = RadioId(UUID.fromString("11111111-1111-1111-1111-111111111111"))
             store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Radio"))
             val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer",
@@ -195,7 +196,6 @@ class SharedTimelineIntegrationTest : RoomProcessTest() {
             } finally {
                 viewModel.close()
                 harness.container.close()
-            }
         }
     }
 }

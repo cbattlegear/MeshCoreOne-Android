@@ -113,7 +113,6 @@ class ChannelRecoveryIntegrationTest : RoomProcessTest() {
         withRecovery { f ->
             f.awaitPartialCommit()
             f.connecting.cancelAndJoin()
-            f.h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
             f.commitGate.complete(Unit)
             f.h.settle()
             assertEquals(f.oldMissing, store.fetchChannel(f.radioId, 2u))

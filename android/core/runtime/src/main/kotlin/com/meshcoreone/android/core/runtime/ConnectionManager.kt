@@ -1264,6 +1264,12 @@ class ConnectionManager(
             reporter.report(RuntimeDiagnostic.Failure("session.channelQueryAccounting", accountingFailure))
         }
         if (!isCurrent(owner)) return
+        synchronized(lock) {
+            if (!isCurrent(owner)) return
+            // A partial channel drain must not suppress the fresh generation's recovery read.
+            cleanSync = null
+            attemptedSync = null
+        }
         handleConnectionLoss(owner, failure, disconnectPhysical = true)
     }
 

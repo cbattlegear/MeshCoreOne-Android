@@ -14,10 +14,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.Job
 import org.junit.Test
 
 private val scope = CoroutineScope(Dispatchers.Unconfined)
@@ -109,57 +106,59 @@ class DeviceScanCoordinatorTest {
         assertEquals(1, demo.unlocked)
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    @Test fun demoUnlockWaitsForCommitAndFailureCanBeRetried() = runTest {
+    @Test fun demoUnlockWaitsForCommitAndFailureCanBeRetried() {
         val gate = CompletableDeferred<Unit>()
         val demo = FakeDemo().apply { beforeUnlock = { gate.await() } }
-        val c = DeviceScanCoordinator(backgroundScope, FakePairing(), demo, FakePermissions(granted)) {}
-        repeat(3) { c.onTitleTap() }
-        assertTrue(c.state.value.localBusy)
-        assertFalse(c.state.value.showDemoAlert)
-        assertEquals(0, c.state.value.successTick)
-        gate.completeExceptionally(IllegalStateException("write failed"))
-        runCurrent()
-        assertFalse(c.state.value.localBusy)
-        assertNotNull(c.state.value.failure)
-        assertFalse(c.state.value.showDemoAlert)
-        assertFalse(demo.isEnabled.value)
-        demo.beforeUnlock = {}
-        repeat(3) { c.onTitleTap() }
-        runCurrent()
-        assertTrue(c.state.value.showDemoAlert)
-        assertEquals(1, c.state.value.successTick)
-        assertEquals(1, demo.unlocked)
+        val owner = Job()
+        try {
+            val c = DeviceScanCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), FakePairing(), demo, FakePermissions(granted)) {}
+            repeat(3) { c.onTitleTap() }
+            assertTrue(c.state.value.localBusy)
+            assertFalse(c.state.value.showDemoAlert)
+            assertEquals(0, c.state.value.successTick)
+            gate.completeExceptionally(IllegalStateException("write failed"))
+            assertFalse(c.state.value.localBusy)
+            assertNotNull(c.state.value.failure)
+            assertFalse(c.state.value.showDemoAlert)
+            assertFalse(demo.isEnabled.value)
+            demo.beforeUnlock = {}
+            repeat(3) { c.onTitleTap() }
+            assertTrue(c.state.value.showDemoAlert)
+            assertEquals(1, c.state.value.successTick)
+            assertEquals(1, demo.unlocked)
+        } finally {
+            owner.cancel()
+        }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    @Test fun cancelledDemoUnlockNeverShowsSuccessAndAnotherAttemptCanRetry() = runTest {
+    @Test fun cancelledDemoUnlockNeverShowsSuccessAndAnotherAttemptCanRetry() {
         val gate = CompletableDeferred<Unit>()
         val demo = FakeDemo().apply { beforeUnlock = { gate.await() } }
-        val owner = kotlinx.coroutines.Job()
-        val c = DeviceScanCoordinator(CoroutineScope(coroutineContext + owner), FakePairing(), demo, FakePermissions(granted)) {}
+        val owner = Job()
+        val c = DeviceScanCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), FakePairing(), demo, FakePermissions(granted)) {}
         repeat(3) { c.onTitleTap() }
         assertTrue(c.state.value.localBusy)
         owner.cancel()
-        runCurrent()
         assertFalse(c.state.value.localBusy)
         assertFalse(c.state.value.showDemoAlert)
         assertNull(c.state.value.failure)
         assertFalse(demo.isEnabled.value)
         demo.beforeUnlock = {}
-        val retry = DeviceScanCoordinator(backgroundScope, FakePairing(), demo, FakePermissions(granted)) {}
-        repeat(3) { retry.onTitleTap() }
-        runCurrent()
-        assertTrue(retry.state.value.showDemoAlert)
+        val retryOwner = Job()
+        try {
+            val retry = DeviceScanCoordinator(CoroutineScope(Dispatchers.Unconfined + retryOwner), FakePairing(), demo, FakePermissions(granted)) {}
+            repeat(3) { retry.onTitleTap() }
+            assertTrue(retry.state.value.showDemoAlert)
+        } finally {
+            retryOwner.cancel()
+        }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    @Test fun cancellationAtUnlockReturnDoesNotShowSuccess() = runTest {
-        val owner = kotlinx.coroutines.Job()
+    @Test fun cancellationAtUnlockReturnDoesNotShowSuccess() {
+        val owner = Job()
         val demo = FakeDemo().apply { beforeUnlock = { owner.cancel() } }
-        val c = DeviceScanCoordinator(CoroutineScope(coroutineContext + owner), FakePairing(), demo, FakePermissions(granted)) {}
+        val c = DeviceScanCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), FakePairing(), demo, FakePermissions(granted)) {}
         repeat(3) { c.onTitleTap() }
-        runCurrent()
         assertFalse(c.state.value.localBusy)
         assertFalse(c.state.value.showDemoAlert)
         assertEquals(0, c.state.value.successTick)

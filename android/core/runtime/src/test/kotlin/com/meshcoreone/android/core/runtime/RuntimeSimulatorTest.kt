@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.ConnectionIntent
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.RoomPersisting
@@ -18,11 +19,16 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import org.junit.jupiter.api.TestFactory
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class RuntimeSimulatorTest {
     @TestFactory
     fun simulatorLifecycle() = listOf(
@@ -78,17 +84,83 @@ class RuntimeSimulatorTest {
                 }
             }
         },
+        nativeCase("foreground restores the last simulator when the connection intent is unchanged") {
+            val fixture = SimulatorFixture(this)
+            try {
+                fixture.manager.connect(ConnectionTarget.Simulator)
+                fixture.manager.disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
+                fixture.manager.appDidBecomeActive()
+                assertEquals(DeviceConnectionState.READY, fixture.manager.connectionState)
+                assertTrue(fixture.manager.isSimulatorConnection)
+                assertEquals(2, fixture.links.size)
+            } finally {
+                fixture.manager.close()
+            }
+        },
+        nativeCase("a stale foreground simulator read cannot override a newer disconnect or connection") {
+            for (switchToPhysical in listOf(false, true)) {
+                val delegate = TestPreferences()
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                var blockNextRead = false
+                val preferences = object : ProcessConnectionPreferences by delegate {
+                    override suspend fun read(): RuntimePreferenceSnapshot {
+                        val snapshot = delegate.read()
+                        if (blockNextRead) {
+                            blockNextRead = false
+                            entered.complete(Unit)
+                            release.await()
+                        }
+                        return snapshot
+                    }
+                }
+                val fixture = SimulatorFixture(this, preferences)
+                try {
+                    fixture.manager.connect(ConnectionTarget.Simulator)
+                    fixture.manager.disconnect(RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
+                    blockNextRead = true
+                    val foreground = backgroundScope.async { fixture.manager.appDidBecomeActive() }
+                    runCurrent()
+                    assertTrue(entered.isCompleted)
+
+                    if (switchToPhysical) {
+                        fixture.manager.connect(ConnectionTarget.WiFi("127.0.0.1", 5000u))
+                    } else {
+                        fixture.manager.disconnect()
+                    }
+                    release.complete(Unit)
+                    runCurrent()
+                    foreground.await()
+
+                    assertEquals(1, fixture.links.size, "the old simulator connection must not restart")
+                    assertFalse(fixture.manager.isSimulatorConnection)
+                    if (switchToPhysical) {
+                        assertEquals(DeviceConnectionState.READY, fixture.manager.connectionState)
+                        assertEquals(1, fixture.physicalLinks.size)
+                        assertTrue(fixture.manager.connectionIntent.wantsConnection)
+                    } else {
+                        assertEquals(DeviceConnectionState.DISCONNECTED, fixture.manager.connectionState)
+                        assertEquals(ConnectionIntent.UserDisconnected, fixture.manager.connectionIntent)
+                        assertEquals(ConnectionIntent.UserDisconnected, fixture.last.restoredIntent())
+                    }
+                } finally {
+                    release.complete(Unit)
+                    fixture.manager.close()
+                }
+            }
+        },
     )
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
-private class SimulatorFixture(test: TestScope) {
+private class SimulatorFixture(test: TestScope, preferences: ProcessConnectionPreferences = TestPreferences()) {
     val id: UUID = UUID.fromString("00000000-0000-0000-0000-000000000001")
     val devices = TestDevices()
     val clock = TestClock(test.testScheduler)
-    val last = LastConnectionStore(TestPreferences(), clock)
+    val last = LastConnectionStore(preferences, clock)
     val platform = TestPlatform()
     val links = mutableListOf<SimulatorLink>()
+    val physicalLinks = mutableListOf<TestLink>()
     val services = mutableListOf<TestServices>()
     val order = mutableListOf<String>()
     var device = DeviceDTO(id = id, radioId = RadioId(id), publicKey = publicKey, nodeName = "Simulator")
@@ -105,11 +177,16 @@ private class SimulatorFixture(test: TestScope) {
         last,
         platform,
         RuntimeLinkFactory { target ->
-            check(target == ConnectionTarget.Simulator)
-            SimulatorLink(
-                connectedDevice = { device },
-                seed = { order += "seed"; devices.saveDevice(device) },
-            ).also { links += it }
+            when (target) {
+                ConnectionTarget.Simulator -> SimulatorLink(
+                    connectedDevice = { device },
+                    seed = { order += "seed"; devices.saveDevice(device) },
+                ).also { links += it }
+                is ConnectionTarget.WiFi -> TestLink(
+                    TestRadio().also { it.key = Bytes(ByteArray(32) { 0x41 }) }, TransportType.WIFI,
+                ).also { physicalLinks += it }
+                is ConnectionTarget.Bluetooth -> error("Unexpected Bluetooth link")
+            }
         },
         RuntimeServiceFactory { inputs, ownership ->
             TestServices(inputs).also { service ->

@@ -46,6 +46,7 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
+import com.meshcoreone.android.core.services.rendering.EnvInputs
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.core.services.simulator.DemoOfflineContent
 import com.meshcoreone.android.core.services.simulator.MockDataProvider
@@ -104,7 +105,7 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
         try {
             host.get().setContent { MeshCoreTheme(motionScale = 0f) { OnboardingFlow(fixture.onboarding, {}) } }
             button(O.welcomeGetStarted).performClick()
-            button(O.permissionsContinue).performClick()
+            compose.onAllNodes(hasText(text(O.permissionsContinue)) and hasClickAction()).onLast().performClick()
             val title = compose.onNode(hasText(text(O.deviceScanTitle)) and
                 SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
             repeat(3) { title.performClick() }
@@ -271,6 +272,41 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun bundledImageOverridesAnOrdinaryMessagesHtmlReroute() = runTest {
+        val fixture = fixture(this, ordinaryImageHtml = true)
+        try {
+            val url = MockDataProvider.inlineImageURL
+            val ordinary = MessageDTO(radioId = RadioId(UUID.randomUUID()), text = url, timestamp = 1u)
+            assertTrue(fixture.content.media(ordinary).single().isImage)
+            assertIs<ChatImage.HtmlPage>(fixture.content.inline(url))
+            assertFalse(fixture.content.media(ordinary).single().isImage)
+            assertEquals(listOf(url), fixture.httpRequests)
+
+            assertEquals(OnboardingConnectOutcome.Connected, fixture.onboarding.demo.connectDemo())
+            val bundled = message("10000000-0000-0000-0000-00000000000B")
+            val rendered = fixture.content.renderContent(bundled, EnvInputs.DEFAULT)
+            assertTrue(rendered.inline)
+            assertTrue(rendered.hasInlineRef)
+            assertTrue(fixture.content.media(bundled).single().isImage)
+            assertFalse(fixture.content.media(ordinary).single().isImage)
+
+            val reports = mutableListOf<String>()
+            host.get().setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    AppMessageContent(fixture.content, bundled, { detail, _ -> reports += detail }, {})
+                }
+            }
+            compose.waitUntil(30_000) {
+                fixture.harness.settle()
+                compose.onAllNodesWithContentDescription(url).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertTrue(reports.isEmpty(), reports.toString())
+            assertEquals(listOf(url), fixture.httpRequests, "the simulator must not request the ordinary URL")
+        } finally {
+            fixture.close()
+        }
+    }
+
     @Test fun simulatorCoordinateThumbnailIsOfflineEvenWhenNetworkIsAvailable() = runTest {
         val fixture = fixture(this)
         try {
@@ -375,6 +411,7 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
 
     private suspend fun fixture(
         test: TestScope,
+        ordinaryImageHtml: Boolean = false,
         wrapSeed: (SimulatorSeedStore) -> SimulatorSeedStore = { it },
     ): Fixture {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -401,12 +438,15 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
         val http = object : BoundedHttpFetching {
             override suspend fun fetch(url: String, timeoutMs: Long, rangeHeader: String?): HttpFetchAttempt {
                 requests += url
+                if (ordinaryImageHtml && requests.size == 1 && url == MockDataProvider.inlineImageURL) {
+                    return HttpFetchAttempt.Started(200, "text/html", 0, {}) { }
+                }
                 throw AssertionError("Simulator initiated an HTTP request: $url")
             }
         }
         val content = AppChatContent(
             context, store, http, DataStoreLinkPreviewPreferencesSource.create(storage.preferences, scope),
-            storage.preferences, storage.preferences.snapshot(), scope, mapPreviews,
+            storage.preferences, storage.preferences.snapshot(), scope, mapPreviews, imageSafety = { true },
         )
         val harness = ContainerHarness(test, store, chatContent = content, simulatorSeedStore = wrapSeed(RoomSimulatorSeedStore(store)))
         val flags = WriteBehindOnboardingFlags(emptyMap(), scope, persist = { _, _ -> })

@@ -40,7 +40,7 @@ internal fun AppMessageContent(
     rendered: MessageItem? = null,
 ) {
     val resolutions by content.resolutions.collectAsState()
-    val media = remember(content, message.text, resolutions) { content.media(message.text) }
+    val media = remember(content, message.radioId, message.id, message.text, resolutions) { content.media(message) }
     val scope = rememberCoroutineScope()
     val uri = LocalUriHandler.current
     val context = androidx.compose.ui.platform.LocalContext.current

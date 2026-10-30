@@ -1085,7 +1085,10 @@ class ConnectionManager(
         if (connectionState == DeviceConnectionState.DISCONNECTED && connectionIntent.wantsConnection &&
             simulatorDeviceId != null && lastConnection.read().deviceId == simulatorDeviceId
         ) {
-            try { connect(ConnectionTarget.Simulator) }
+            try {
+                connectAttempt(ConnectionTarget.Simulator, forceFullSync = false, forceReconnect = false,
+                    expectedRevision = expectedRevision)
+            }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { reporter.report(RuntimeDiagnostic.Failure("foreground.simulator", failure)) }
             return

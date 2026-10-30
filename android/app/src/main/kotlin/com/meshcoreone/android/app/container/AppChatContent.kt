@@ -184,7 +184,7 @@ class AppChatContent internal constructor(
         val mapReady: Boolean,
     )
     internal suspend fun renderContent(message: MessageDTO, env: EnvInputs): RenderContent {
-        val media = media(message.text).firstOrNull()
+        val media = media(message).firstOrNull()
         val url = media?.url
         val decoded = url?.let {
             when {
@@ -233,14 +233,19 @@ class AppChatContent internal constructor(
         if (previewStates.put(id, state) != state) invalidateMedia()
     }
     internal data class Media(val url: String, val isImage: Boolean, val aspect: Double?)
-    internal fun media(text: String): List<Media> = LinkUrlExtraction.extractAllUrls(text).distinct().mapNotNull { url ->
+    internal fun media(message: MessageDTO): List<Media> = LinkUrlExtraction.extractAllUrls(message.text).distinct().mapNotNull { url ->
         val uri = try { URI(url) } catch (_: java.net.URISyntaxException) {
             java.util.logging.Logger.getLogger("com.mc1.ChatContent").fine("Malformed extracted media URI; attachment skipped")
             return@mapNotNull null
         }
         val resolved = ImageUrlClassifier.directImageUrl(uri).toString()
-        Media(url, ImageUrlClassifier.isImageUrl(uri) && !imageCache.servesHtmlPage(resolved),
-            dimensions.aspect(resolved) ?: dimensions.aspect(url))
+        val bundledImage = DemoOfflineContent.isInlineImage(message, url)
+        val aspect = if (bundledImage) {
+            imageCache.decoded(DEMO_IMAGE)?.handle?.let { it.width.toDouble() / it.height }
+        } else {
+            dimensions.aspect(resolved) ?: dimensions.aspect(url)
+        }
+        Media(url, bundledImage || ImageUrlClassifier.isImageUrl(uri) && !imageCache.servesHtmlPage(resolved), aspect)
     }
     private val previews = object : LinkPreviewPort {
         override suspend fun cachedPreview(url: String) = previewCache.cachedPreview(url)?.forUi()

@@ -3,7 +3,6 @@ package com.meshcoreone.android.app.content
 
 import android.content.Context
 import android.content.ContextWrapper
-import android.graphics.Bitmap
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.AppChatContent
@@ -20,7 +19,6 @@ import com.meshcoreone.android.feature.chats.composer.LinkPreviewOutcome
 import com.meshcoreone.android.feature.chats.composer.LinkPreviewStateHolder
 import com.meshcoreone.android.feature.chats.composer.MalwareDomainPort
 import com.meshcoreone.android.feature.chats.composer.UrlSafetyPort
-import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -71,15 +69,13 @@ class CachedPreviewPolicyConsumerTest {
             storage.preferences.set(AppStorageKey.linkPreviewsEnabled, true)
             storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveDM, false)
             storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveChannels, false)
-            val imageBytes = ByteArrayOutputStream().use { output ->
-                Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888).apply {
-                    compress(Bitmap.CompressFormat.PNG, 100, output)
-                    recycle()
-                }
-                output.toByteArray()
-            }
             store.saveLinkPreview(
-                LinkPreviewDataDTO(url, title = "Persisted preview", imageData = Bytes(imageBytes)),
+                LinkPreviewDataDTO(
+                    url,
+                    title = "Persisted preview",
+                    imageData = Bytes(NativeImageFixtures.png(2, 2)),
+                    iconData = Bytes(NativeImageFixtures.png(2, 2)),
+                ),
             )
             val owner = AppChatContent(
                 context = context,
@@ -94,6 +90,7 @@ class CachedPreviewPolicyConsumerTest {
             content = owner
 
             assertNotNull(owner.images.load("mc1-preview-hero:$url"))
+            assertNotNull(owner.images.load("mc1-preview-icon:$url"))
             for (isChannel in listOf(false, true)) {
                 val port = owner.previews(isChannel)
                 val cached = requireNotNull(port.cachedPreview(url))

@@ -2,15 +2,15 @@
   "wp": "WP-218",
   "issue": 397,
   "pinned_source": "db14559b39d32322b06477c6ae676112f583db50",
-  "status": "source and test changes recorded; local product tests were not run",
+  "status": "six current-head automated-review findings have focused source/test repairs; latest hosted validation is pending",
   "concerns": {
     "DATA-22": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
-      "case": "persisted previews rehydrate through the app policy port and LinkPreviewStateHolder for DM and channel consumers; hero and icon bytes reload from persistent storage without live DNS"
+      "case": "persisted previews rehydrate through the app policy port and LinkPreviewStateHolder for DM and channel consumers; image-extension HTML previews select the card route after a cold AppChatContent start; hero and icon bytes reload from persistent storage without live DNS"
     },
     "DATA-23": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/platform/PreviewPolicyTest.kt; android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/composer/LinkLogicTest.kt",
-      "case": "cached results remain visible through the state-holder with auto-resolve disabled and unavailable DNS, while uncached app-facing previews return Disabled without network calls"
+      "case": "cached results remain visible through the state-holder with auto-resolve disabled and unavailable DNS; bounded persisted misses are reused and invalidated after preview writes, read failures are not memoized, and globally disabled previews skip persistent lookup; cached inline image bytes mount without network work"
     },
     "DATA-24": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
@@ -38,7 +38,7 @@
     },
     "DATA-30": {
       "evidence": "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtraction.kt; #403",
-      "case": "explicit schemes are normalized; bare and www domains use HTTPS; quotes, angle brackets, punctuation and unmatched delimiters are bounded; non-HTTP URIs, URL-like email local parts and nested candidates are suppressed without discarding outer query URLs; punycode TLDs are complete, malware hosts are checked case-insensitively, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
+      "case": "explicit schemes are normalized and stop at adjacent angle-bracketed links; bare and www domains use HTTPS; punctuation and unmatched delimiters are bounded; quoted email local parts including escaped characters and Unicode-adjacent partial ASCII hosts are excluded; non-HTTP URIs, URL-like email local parts and nested candidates are suppressed without discarding outer query URLs; punycode TLDs are complete, malware hosts are checked case-insensitively, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
     },
     "DATA-31": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt",
@@ -57,7 +57,7 @@
     "manifest_configured": false,
     "declared_commands": [],
     "local_test_execution": "not run; no approved WP-218 command is declared",
-    "hosted_exact_candidate": "The d22684c candidate exposed two URI-span regressions caused by a missing scheme quantifier. The 6de6afd candidate fixed those cases but exposed two more URI-span failures for explicit URLs following natural-language labels, plus non-suspending setup-helper calls in the app test. The 791b988 Copilot review identified an inconsistent label-versus-scheme heuristic; its hosted CI succeeded. The a54fd03 review found the prose-prefix exception and opaque-scheme coverage still incomplete. The 0b9a535 candidate exempts prefixed HTTP(S) from unsupported-wrapper spans, adds XMPP/SIP opaque-span cases, and tests prose labels, view-source, XMPP, and SIP. Exact-candidate workflow 41118672455 completed successfully on 0b9a53541623971b1ba8cfbbdb9b64a3a5cd33dc, including Android build, Swift codec, SwiftData restore/export, controller policy, and scope classification. Main advanced to b90cb4dcc afterward; the merged candidate requires its own hosted verification, and no merged-candidate result is claimed here",
+    "hosted_exact_candidate": "Historical exact workflow 41118672455 passed on 0b9a53541623971b1ba8cfbbdb9b64a3a5cd33dc. The merged candidate ff9430d9378b281cccdd9e340bb26520e21680ca passed workflow 41122960507, including Android build, controller policy, and scope classification; that review then identified six further concerns. The fixes and focused regressions are now on the PR branch; the latest exact-candidate hosted run and Copilot review are pending. No local Kotlin/Gradle tests were run because WP-218 declares no commands; no physical-device/iOS result is claimed.",
     "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
   },
   "limitations": [

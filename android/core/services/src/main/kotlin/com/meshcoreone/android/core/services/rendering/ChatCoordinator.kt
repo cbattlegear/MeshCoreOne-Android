@@ -39,6 +39,12 @@ import kotlinx.coroutines.withContext
  */
 enum class ChatWriterRole { INTERACTIVE, PRIME }
 
+data class ChatTimelineSnapshot(
+    val messages: SnapshotList<MessageDTO>,
+    val renderState: ChatRenderState,
+    val revision: ULong,
+)
+
 /**
  * Per-(radio, conversation) source of truth for chat timeline state, shared by every view model showing
  * the same conversation and resolved through [ChatCoordinatorRegistry].
@@ -158,12 +164,6 @@ class ChatCoordinator internal constructor(
         } catch (error: Exception) {
             logger.severe("$name callback failed: $error")
         }
-
-        data class ChatTimelineSnapshot(
-            val messages: SnapshotList<MessageDTO>,
-            val renderState: ChatRenderState,
-            val revision: ULong,
-        )
     }
 
     /** Debug seam (Swift `#if DEBUG`): when set, populate throws this after the entry spinner clear. */
@@ -232,13 +232,13 @@ class ChatCoordinator internal constructor(
             renderItemRebuilderValue = null
             renderStateInvalidatedValue = null
         }
+    }
 
-        private fun settleReleasedWindowLocked() {
-            val state = renderState
-            val phase = if (state.phase == ChatRenderState.LoadPhase.LOADING) ChatRenderState.LoadPhase.UNINITIALIZED else state.phase
-            if (state.isLoadingOlder || state.phase != phase) {
-                renderStateFlowBacking.value = state.with(isLoadingOlder = false, phase = phase)
-            }
+    private fun settleReleasedWindowLocked() {
+        val state = renderState
+        val phase = if (state.phase == ChatRenderState.LoadPhase.LOADING) ChatRenderState.LoadPhase.UNINITIALIZED else state.phase
+        if (state.isLoadingOlder || state.phase != phase) {
+            renderStateFlowBacking.value = state.with(isLoadingOlder = false, phase = phase)
         }
     }
 

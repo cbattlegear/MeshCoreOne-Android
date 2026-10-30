@@ -421,6 +421,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 } else emptyList()
                 val nicknames = com.meshcoreone.android.core.services.rendering.MessageBubbleConfiguration.buildNicknameLookup(contacts)
                 val rowById = rows.filterIsInstance<TimelineRow.Message>().associateBy { it.message.id }
+                val unreadIds = rows.filterIsInstance<TimelineRow.UnreadDivider>().mapTo(HashSet()) { it.beforeMessageId }
                 val inputs = messages.map { message ->
                     val resources = content?.resources
                     val resolution = if (resources == null) NodeNameResolution(
@@ -428,7 +429,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     ) else bubbleSenderResolution(message, contacts, nicknames, resources)
                     message to messageBubbleBuildInputs(
                         message, resolution, env, resources, rowById[message.id], content?.renderContent(message, env),
-                        showUnreadDivider = rows.any { it is TimelineRow.UnreadDivider && it.beforeMessageId == message.id },
+                        showUnreadDivider = message.id in unreadIds,
                     )
                 }
                 TimelineRenderBatch(inputs, env)

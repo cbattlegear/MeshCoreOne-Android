@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.model.DevicePlatform
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import java.util.UUID
@@ -86,7 +87,7 @@ data class RuntimeServiceInputs(
 /** Implemented by real WPs 208-218 at WP-303; no concrete or no-op graph is constructed here. */
 interface RuntimeServices : SessionServices {
     /** Finish the admitted channel query's accounting/persistence while this generation's token is still live. */
-    suspend fun awaitChannelQueryAccounting()
+    suspend fun awaitChannelQueryAccounting(failure: MeshCoreException.ConnectionLost)
     suspend fun hydrate()
     suspend fun initialSync(forceFullSync: Boolean): RuntimeSyncResult
     suspend fun remoteDisconnected(): Set<UUID>

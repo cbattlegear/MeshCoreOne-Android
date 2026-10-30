@@ -47,15 +47,17 @@ class ChannelService(
     private var isSyncing = false
     private var syncAccounting: CompletableDeferred<Unit>? = null
     private var requiresFreshSession = false
+    private var retirementFailure: MeshCoreException.ConnectionLost? = null
     private var slotOccupantChangedHandler: SlotOccupantChangedHandler? = null
 
     /** Whether an RX log (decryption cache) consumer was injected at construction. */
     val hasRxLogServiceWired: Boolean get() = decryptionCache != null
 
     /** Let the connection owner preserve a completed partial drain before ending this generation. */
-    suspend fun awaitSyncAccounting() {
+    suspend fun awaitSyncAccounting(failure: MeshCoreException.ConnectionLost) {
         val accounting = synchronized(lock) {
             requiresFreshSession = true
+            retirementFailure = failure
             syncAccounting
         }
         accounting?.await()
@@ -244,7 +246,13 @@ class ChannelService(
     suspend fun fetchChannel(index: UByte): ChannelInfo? {
         var lastError: MeshCoreException = MeshCoreException.Timeout()
         for (attempt in 1..FETCH_MAX_ATTEMPTS) {
-            synchronized(lock) { if (requiresFreshSession) throw ChannelServiceError.NotConnected() }
+            synchronized(lock) {
+                if (requiresFreshSession) {
+                    // Preserve the admitted query's correlation failure without another protocol call.
+                    if (attempt > 1) retirementFailure?.let { throw ChannelServiceError.SessionError(it) }
+                    throw ChannelServiceError.NotConnected()
+                }
+            }
             try {
                 val info = session.getChannel(index)
                 if (info.index != index) {

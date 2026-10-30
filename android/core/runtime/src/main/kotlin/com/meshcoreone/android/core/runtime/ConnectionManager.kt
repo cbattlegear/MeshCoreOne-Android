@@ -1244,11 +1244,11 @@ class ConnectionManager(
             (hasCause<SessionCorrelationException.ConcurrentTransportOwner>(failure) ||
                 hasCause<SessionCorrelationException.RetainedTransport>(failure))
 
-    private suspend fun recoverCorrelation(owner: RadioGeneration, failure: Throwable) {
+    private suspend fun recoverCorrelation(owner: RadioGeneration, failure: MeshCoreException.ConnectionLost) {
         val accounting = synchronized(lock) {
             if (!isCurrent(owner) || owner.lossHandled || owner.operation?.isCancelled == true || owner.correlationAccounting != null) null
             else owner.scope.async(start = CoroutineStart.LAZY) {
-                owner.services?.services?.awaitChannelQueryAccounting()
+                owner.services?.services?.awaitChannelQueryAccounting(failure)
                 Unit
             }.also { owner.correlationAccounting = it }
         } ?: return

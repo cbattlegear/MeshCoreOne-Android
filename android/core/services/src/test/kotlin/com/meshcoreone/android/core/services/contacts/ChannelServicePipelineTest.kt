@@ -14,7 +14,9 @@ import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.transport.mock.MockTransport
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
@@ -184,6 +186,21 @@ class ChannelServicePipelineTest {
 
     @TestFactory
     fun protocolReconcileBoundary(): List<DynamicTest> = channelsNativeCases(
+        "retirement during query backoff preserves the admitted failure without another session read" to {
+            val session = ChannelsMockSession()
+            session.script(2u, { throw MeshCoreException.Timeout() })
+            val failure = MeshCoreException.ConnectionLost(IllegalStateException("controlled correlation failure"))
+            lateinit var service: ChannelService
+            service = ChannelService(session, ChannelsInMemoryStore(), null, ChannelServiceClock {
+                service.awaitSyncAccounting(failure)
+            })
+
+            val queryFailure = assertFailsWith<ChannelServiceError.SessionError> { service.fetchChannel(2u) }
+            assertSame(failure, queryFailure.error)
+            assertFailsWith<ChannelServiceError.NotConnected> { service.fetchChannel(2u) }
+            assertFailsWith<ChannelServiceError.NotConnected> { service.fetchChannel(3u) }
+            assertEquals(listOf<UByte>(2u), session.recordedGetChannelIndices)
+        },
         "pipelined reconcile of a dropped index fails closed through the protocol session and keeps the row" to {
             val radioId: RadioId = channelsRadioId()
             val store = ChannelsInMemoryStore()

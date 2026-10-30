@@ -42,6 +42,16 @@ source mappings. `python -B -m unittest test_ci_environment -q` then passed
 all 19 controller fixtures, including source-disposition validation; this is
 not Android execution evidence.
 
+Run `41082777832` at `9426d060a` passed the controller job and executed the new
+ChannelRecoveryIntegrationTest suite successfully. The App task ran 1,768
+tests with one failure in the existing real pending-envelope recovery case:
+retiring an in-flight query during its timeout backoff replaced its precise
+correlation cause with NotConnected. The accounting port now carries the actual
+controller failure to that admitted fetch without another protocol read. New
+reads still reject. A paired service regression checks cause identity and exactly
+one session call; the existing App lifecycle case remains unchanged and required.
+This correction still needs a fresh exact-head hosted run.
+
 After archive/restore relocated this worktree, the user explicitly directed
 correction of its stale reservation path. An exact identity/revision/path CAS
 changed only the worktree column; all other columns were asserted unchanged.

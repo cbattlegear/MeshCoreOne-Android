@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MeshEvent
 import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
 import com.meshcoreone.android.core.protocol.transport.MeshTransport
@@ -241,7 +242,7 @@ internal class TestServices(val inputs: RuntimeServiceInputs) : RuntimeServices 
     var callbacksCleared = false
     var remoteSessions = emptySet<UUID>()
     var reauthenticated = emptySet<UUID>()
-    override suspend fun awaitChannelQueryAccounting() {
+    override suspend fun awaitChannelQueryAccounting(failure: MeshCoreException.ConnectionLost) {
         channelQueryAccountingCalls++
         beforeChannelQueryAccounting()
     }

@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MeshEvent
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
@@ -335,8 +336,8 @@ class RadioSessionContainer private constructor(
 
     // region RuntimeServices
 
-    override suspend fun awaitChannelQueryAccounting() {
-        channelService.awaitSyncAccounting()
+    override suspend fun awaitChannelQueryAccounting(failure: MeshCoreException.ConnectionLost) {
+        channelService.awaitSyncAccounting(failure)
         chatSendQueueService.awaitChannelQueryAccounting()
     }
 

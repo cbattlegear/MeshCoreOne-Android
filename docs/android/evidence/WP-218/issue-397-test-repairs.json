@@ -6,7 +6,7 @@
   "concerns": {
     "DATA-22": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
-      "case": "persisted previews rehydrate through the app policy port and LinkPreviewStateHolder for DM and channel consumers while automatic network work remains gated"
+      "case": "persisted previews rehydrate through the app policy port and LinkPreviewStateHolder for DM and channel consumers; hero and icon bytes reload from persistent storage without live DNS"
     },
     "DATA-23": {
       "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/platform/PreviewPolicyTest.kt; android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/composer/LinkLogicTest.kt",
@@ -34,11 +34,11 @@
     },
     "DATA-29": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/MalwareDomainFilterTest.kt",
-      "case": "legitimate-domain decisions use the bundled malware-domain snapshot"
+      "case": "legitimate-domain decisions use the bundled malware-domain snapshot; loaded and refreshed domains plus queried hosts are normalized case-insensitively"
     },
     "DATA-30": {
       "evidence": "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtraction.kt; #403",
-      "case": "explicit schemes are normalized; bare and www domains use HTTPS, punctuation is trimmed without removing balanced delimiters, nested URI/email matches are suppressed without discarding the outer URL, punycode TLDs are complete, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
+      "case": "explicit schemes are normalized; bare and www domains use HTTPS; quotes, angle brackets, punctuation and unmatched delimiters are bounded; non-HTTP URIs, URL-like email local parts and nested candidates are suppressed without discarding outer query URLs; punycode TLDs are complete, malware hosts are checked case-insensitively, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
     },
     "DATA-31": {
       "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt",
@@ -57,7 +57,7 @@
     "manifest_configured": false,
     "declared_commands": [],
     "local_test_execution": "not run; no approved WP-218 command is declared",
-    "hosted_exact_candidate": "the c0a73f9 candidate failed LinkUrlExtractionTest.keeps outer bare links when email or nested uri appears in their query; commit 292468061 fixes the false email-span match and is awaiting exact-candidate hosted verification",
+    "hosted_exact_candidate": "the c0a73f9 candidate failed LinkUrlExtractionTest.keeps outer bare links when email or nested uri appears in their query; the 1ff3504 candidate addresses its Copilot findings, including malware-host case folding and offline persistent image reload, and the final exact-candidate hosted run is authoritative",
     "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
   },
   "limitations": [

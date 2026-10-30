@@ -54,10 +54,10 @@ class ChannelService(
     val hasRxLogServiceWired: Boolean get() = decryptionCache != null
 
     /** Let the connection owner preserve a completed partial drain before ending this generation. */
-    suspend fun awaitSyncAccounting(failure: MeshCoreException.ConnectionLost) {
+    suspend fun awaitSyncAccounting(failure: MeshCoreException.ConnectionLost? = null) {
         val accounting = synchronized(lock) {
             requiresFreshSession = true
-            retirementFailure = failure
+            if (failure != null) retirementFailure = failure
             syncAccounting
         }
         accounting?.await()

@@ -336,7 +336,9 @@ class RadioSessionContainer private constructor(
 
     // region RuntimeServices
 
-    override suspend fun awaitChannelQueryAccounting(failure: MeshCoreException.ConnectionLost) {
+    override suspend fun awaitChannelQueryAccounting() = awaitChannelQueryAccounting(null)
+
+    override suspend fun awaitChannelQueryAccounting(failure: MeshCoreException.ConnectionLost?) {
         channelService.awaitSyncAccounting(failure)
         chatSendQueueService.awaitChannelQueryAccounting()
     }

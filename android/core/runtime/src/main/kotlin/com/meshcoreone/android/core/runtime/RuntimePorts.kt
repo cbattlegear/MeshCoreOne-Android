@@ -61,6 +61,12 @@ interface RuntimeLink {
     suspend fun mayRefreshBond(deviceId: UUID): Boolean
 }
 
+/** A simulator generation owns a placeholder transport and seeds its real process store without a radio handshake. */
+interface RuntimeSimulatorLink : RuntimeLink {
+    suspend fun connectSimulator(): DeviceDTO
+    suspend fun seedSimulator()
+}
+
 /** Creation allocates only; register() installs handlers before start can activate a physical link. */
 fun interface RuntimeLinkFactory { fun create(target: ConnectionTarget): RuntimeLink }
 

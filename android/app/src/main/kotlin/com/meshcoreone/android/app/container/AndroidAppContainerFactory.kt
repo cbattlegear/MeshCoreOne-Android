@@ -107,7 +107,7 @@ object AndroidAppContainerFactory {
         val themeService = com.meshcoreone.android.core.designsystem.ThemeService.create(storage.preferences, mainScope)
         cleanup.addFirst { themeService.close() }
         // Demo mode reads its flags synchronously: bind the loaded snapshot before the first `shared` access.
-        DemoModeManager.installStandardDefaults(DataStoreDemoModeDefaults.load(storage.preferences, mainScope))
+        DemoModeManager.installStandardDefaults(DataStoreDemoModeDefaults.load(storage.preferences))
         val storeScope = CoroutineScope(SupervisorJob(mainScope.coroutineContext[kotlinx.coroutines.Job]) + Dispatchers.IO)
         cleanup.addFirst { storeScope.cancel() }
         val store = openRoomDatabaseOnIo(
@@ -190,6 +190,14 @@ object AndroidAppContainerFactory {
             application,
             reconnecting = { holder.get()?.connectionManager?.reconnectionCoordinator?.reconnectingDeviceId != null },
             lastDevice = { holder.get()?.connectionPort?.lastConnectedDeviceId },
+            simulator = {
+                val container = holder.get()
+                container != null && (container.connectionManager.isSimulatorConnection ||
+                    container.connectionManager.connectionState ==
+                    com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED &&
+                    container.connectionPort.lastConnectedDeviceId ==
+                    com.meshcoreone.android.core.services.simulator.MockDataProvider.simulatorDeviceID)
+            },
             lan = {
                 val current = holder.get()
                 usesLanHosting(current?.currentTransport, current?.connectionManager?.connectedDevice?.connectionMethods.orEmpty())
@@ -216,6 +224,7 @@ object AndroidAppContainerFactory {
                 linkProbe = probe,
                 scans = scanCoordinator,
                 linkFactory = linkFactory,
+                simulatorSeedStore = RoomSimulatorSeedStore(store),
                 chatSendQueueProgress = chatSendQueueProgress,
                 hostingStarter = AndroidForegroundServiceStarter(application),
                 hostEnvironment = environment,

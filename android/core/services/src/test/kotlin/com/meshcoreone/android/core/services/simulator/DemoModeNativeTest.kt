@@ -8,31 +8,34 @@ import java.net.URI
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 
 class DemoModeNativeTest {
     @TestFactory
     fun demoModeTests(): List<DynamicTest> = listOf(
-        native("demo mode state publishes every assignment") {
+        demo("demo mode state publishes every assignment") {
             val manager = DemoModeManager(InMemoryDemoModeDefaults())
             assertEquals(DemoModeState(isUnlocked = false, isEnabled = false), manager.state.value)
-            manager.isEnabled = true
+            manager.setEnabled(true)
             assertEquals(DemoModeState(isUnlocked = false, isEnabled = true), manager.state.value)
             manager.unlock()
             assertEquals(DemoModeState(isUnlocked = true, isEnabled = true), manager.state.value)
-            manager.isEnabled = false
+            manager.setEnabled(false)
             assertEquals(DemoModeState(isUnlocked = true, isEnabled = false), manager.state.value)
         },
-        native("unlock publishes both flags in one state change") {
+        demo("unlock publishes both flags in one state change") {
             val observed = mutableListOf<DemoModeState>()
             lateinit var manager: DemoModeManager
             val defaults = object : DemoModeDefaults {
                 private val backing = InMemoryDemoModeDefaults()
                 override fun bool(forKey: String): Boolean = backing.bool(forKey)
-                override fun set(value: Boolean, forKey: String) {
+                override suspend fun setAll(values: Map<String, Boolean>) {
                     observed += manager.state.value
-                    backing.set(value, forKey)
+                    backing.setAll(values)
                 }
             }
             manager = DemoModeManager(defaults)
@@ -44,30 +47,127 @@ class DemoModeNativeTest {
             assertEquals(true, defaults.bool(DemoModeManager.IS_DEMO_MODE_UNLOCKED_KEY))
             assertEquals(true, defaults.bool(DemoModeManager.IS_DEMO_MODE_ENABLED_KEY))
         },
-        native("demo mode toggles persist across manager instances") {
+        demo("demo mode toggles persist across manager instances") {
             val defaults = InMemoryDemoModeDefaults()
             DemoModeManager(defaults).unlock()
             val reopened = DemoModeManager(defaults)
             assertEquals(DemoModeState(isUnlocked = true, isEnabled = true), reopened.state.value)
-            reopened.isEnabled = false
+            reopened.setEnabled(false)
             assertEquals(DemoModeState(isUnlocked = true, isEnabled = false), DemoModeManager(defaults).state.value)
         },
-        native("an unchanged assignment still writes through like didSet") {
+        demo("an unchanged assignment still writes through like didSet") {
             val defaults = InMemoryDemoModeDefaults()
             val manager = DemoModeManager(defaults)
-            manager.isUnlocked = false
+            manager.setUnlocked(false)
             assertTrue(defaults.contains(DemoModeManager.IS_DEMO_MODE_UNLOCKED_KEY))
             assertTrue(!defaults.contains(DemoModeManager.IS_DEMO_MODE_ENABLED_KEY))
         },
-        native("shared standard defaults can only be bound once") {
+        demo("shared standard defaults can only be bound once") {
             SimulatorTestSupport.installStandardDefaults()
             SimulatorTestSupport.installStandardDefaults()
             assertFailsWith<IllegalStateException> { DemoModeManager.installStandardDefaults(InMemoryDemoModeDefaults()) }
             try {
-                DemoModeManager.shared.isEnabled = true
+                DemoModeManager.shared.setEnabled(true)
                 assertEquals(true, SimulatorTestSupport.standardDefaults.bool(forKey = "isDemoModeEnabled"))
             } finally {
-                DemoModeManager.shared.isEnabled = false
+                DemoModeManager.shared.setEnabled(false)
+            }
+        },
+        demo("failed unlock leaves both flags unchanged and can be retried") {
+            val backing = InMemoryDemoModeDefaults()
+            val defaults = object : DemoModeDefaults {
+                var fail = true
+                override fun bool(forKey: String) = backing.bool(forKey)
+                override suspend fun setAll(values: Map<String, Boolean>) {
+                    if (fail) throw java.io.IOException("storage unavailable")
+                    backing.setAll(values)
+                }
+            }
+            val manager = DemoModeManager(defaults)
+            assertFailsWith<java.io.IOException> { manager.unlock() }
+            assertEquals(DemoModeState(false, false), manager.state.value)
+            assertEquals(false, backing.bool(DemoModeManager.IS_DEMO_MODE_UNLOCKED_KEY))
+            assertEquals(false, backing.bool(DemoModeManager.IS_DEMO_MODE_ENABLED_KEY))
+            defaults.fail = false
+            manager.unlock()
+            assertEquals(DemoModeState(true, true), manager.state.value)
+        },
+        native("cancellation before commit neither publishes success nor prevents retry") {
+            SimulatorTestSupport.blocking {
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val backing = InMemoryDemoModeDefaults()
+                val defaults = object : DemoModeDefaults {
+                    override fun bool(forKey: String) = backing.bool(forKey)
+                    override suspend fun setAll(values: Map<String, Boolean>) {
+                        entered.complete(Unit)
+                        release.await()
+                        backing.setAll(values)
+                    }
+                }
+                val manager = DemoModeManager(defaults)
+                val first = async { manager.unlock() }
+                entered.await()
+                assertEquals(DemoModeState(false, false), manager.state.value)
+                first.cancelAndJoin()
+                assertEquals(DemoModeState(false, false), manager.state.value)
+                assertEquals(false, backing.bool(DemoModeManager.IS_DEMO_MODE_UNLOCKED_KEY))
+                release.complete(Unit)
+                manager.unlock()
+                assertEquals(DemoModeState(true, true), manager.state.value)
+            }
+        },
+        native("cancellation after commit leaves durable flags retryable without publishing success") {
+            SimulatorTestSupport.blocking {
+                val backing = InMemoryDemoModeDefaults()
+                val defaults = object : DemoModeDefaults {
+                    var cancelAfterCommit = true
+                    override fun bool(forKey: String) = backing.bool(forKey)
+                    override suspend fun setAll(values: Map<String, Boolean>) {
+                        backing.setAll(values)
+                        if (cancelAfterCommit) kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!.cancel()
+                    }
+                }
+                val manager = DemoModeManager(defaults)
+                val first = async { manager.unlock() }
+                assertFailsWith<kotlinx.coroutines.CancellationException> { first.await() }
+                assertEquals(DemoModeState(false, false), manager.state.value)
+                assertEquals(DemoModeState(true, true), DemoModeManager(backing).state.value)
+                defaults.cancelAfterCommit = false
+                manager.unlock()
+                assertEquals(DemoModeState(true, true), manager.state.value)
+            }
+        },
+        native("concurrent changes wait for the prior durable commit") {
+            SimulatorTestSupport.blocking {
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val backing = InMemoryDemoModeDefaults()
+                val writes = mutableListOf<Map<String, Boolean>>()
+                val defaults = object : DemoModeDefaults {
+                    override fun bool(forKey: String) = backing.bool(forKey)
+                    override suspend fun setAll(values: Map<String, Boolean>) {
+                        writes += values.toMap()
+                        if (writes.size == 1) {
+                            entered.complete(Unit)
+                            release.await()
+                        }
+                        backing.setAll(values)
+                    }
+                }
+                val manager = DemoModeManager(defaults)
+                val unlock = async { manager.unlock() }
+                entered.await()
+                val disable = async { manager.setEnabled(false) }
+                kotlinx.coroutines.yield()
+                assertEquals(1, writes.size)
+                assertEquals(DemoModeState(false, false), manager.state.value)
+                release.complete(Unit)
+                unlock.await()
+                disable.await()
+                assertEquals(2, writes.size)
+                assertEquals(DemoModeState(true, false), manager.state.value)
+                assertEquals(DemoModeState(true, false), DemoModeManager(backing).state.value)
             }
         },
     )
@@ -81,7 +181,7 @@ class DemoModeNativeTest {
             assertEquals(120, image.slice(16, 20).toByteArray().fold(0) { acc, b -> (acc shl 8) or (b.toInt() and 0xFF) })
             assertEquals(80, image.slice(20, 24).toByteArray().fold(0) { acc, b -> (acc shl 8) or (b.toInt() and 0xFF) })
         },
-        native("inline image seeder stores the demo bytes under the direct image URL") {
+        demo("inline image seeder stores the demo bytes under the direct image URL") {
             val cache = RecordingImageCache(decodes = true)
             DemoInlineImageSeeder.seed(cache)
             DemoInlineImageSeeder.seed(cache)
@@ -89,7 +189,7 @@ class DemoModeNativeTest {
             assertEquals(listOf(expected, expected), cache.stored)
             assertEquals(listOf(URI(MockDataProvider.inlineImageURL), URI(MockDataProvider.inlineImageURL)), cache.classified)
         },
-        native("inline image seeder skips an undecodable image") {
+        demo("inline image seeder skips an undecodable image") {
             val cache = RecordingImageCache(decodes = false)
             DemoInlineImageSeeder.seed(cache)
             assertEquals(emptyList(), cache.stored)
@@ -118,11 +218,14 @@ class DemoModeNativeTest {
 
     private data class StoredImage(val image: String, val isGIF: Boolean, val data: Bytes, val url: URI)
 
+    private fun demo(description: String, body: suspend () -> Unit): DynamicTest =
+        native(description) { SimulatorTestSupport.blocking { body() } }
+
     private class RecordingImageCache(private val decodes: Boolean) : DemoInlineImageCache<String> {
         val stored = mutableListOf<StoredImage>()
         val classified = mutableListOf<URI>()
 
-        override fun decodeImage(data: Bytes): String? = if (decodes) "decoded:${data.size}" else null
+        override suspend fun decodeImage(data: Bytes): String? = if (decodes) "decoded:${data.size}" else null
 
         override fun directImageURL(url: URI): URI {
             classified += url

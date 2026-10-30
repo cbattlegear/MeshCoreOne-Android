@@ -2,9 +2,13 @@
 package com.meshcoreone.android.core.services.simulator
 
 import java.util.logging.Logger
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Observable demo-mode flags, replacing the Swift `@Observable` properties. */
 data class DemoModeState(val isUnlocked: Boolean, val isEnabled: Boolean)
@@ -13,12 +17,11 @@ data class DemoModeState(val isUnlocked: Boolean, val isEnabled: Boolean)
  * Demo-mode unlock/enable flags persisted in [defaults] under the `AppStorageKey` raw values
  * `isDemoModeUnlocked` and `isDemoModeEnabled`.
  *
- * Swift observes the properties via `@Observable` on the main actor. Here the flags are lock-confined, every
- * assignment persists the value (like Swift's `didSet`, including when it is unchanged) and then publishes it
- * on [state]. The defaults port is synchronous, so nothing suspends while the lock is held.
+ * Swift observes the properties via `@Observable` on the main actor. Mutations are serialized and publish
+ * only after the defaults store confirms the write, including assignments whose value is unchanged.
  */
 class DemoModeManager(private val defaults: DemoModeDefaults) {
-    private val lock = Any()
+    private val writes = Mutex()
     private val mutableState = MutableStateFlow(
         DemoModeState(
             isUnlocked = defaults.bool(IS_DEMO_MODE_UNLOCKED_KEY),
@@ -29,31 +32,31 @@ class DemoModeManager(private val defaults: DemoModeDefaults) {
     /** Current flags, for observers (the Swift `@Observable` surface). */
     val state: StateFlow<DemoModeState> = mutableState.asStateFlow()
 
-    var isUnlocked: Boolean
-        get() = mutableState.value.isUnlocked
-        set(value) = synchronized(lock) {
-            defaults.set(value, IS_DEMO_MODE_UNLOCKED_KEY)
-            mutableState.value = mutableState.value.copy(isUnlocked = value)
-        }
+    val isUnlocked: Boolean get() = mutableState.value.isUnlocked
 
-    var isEnabled: Boolean
-        get() = mutableState.value.isEnabled
-        set(value) = synchronized(lock) {
-            defaults.set(value, IS_DEMO_MODE_ENABLED_KEY)
-            mutableState.value = mutableState.value.copy(isEnabled = value)
-        }
+    val isEnabled: Boolean get() = mutableState.value.isEnabled
+
+    suspend fun setUnlocked(value: Boolean) = writes.withLock {
+        defaults.set(value, IS_DEMO_MODE_UNLOCKED_KEY)
+        currentCoroutineContext().ensureActive()
+        mutableState.value = mutableState.value.copy(isUnlocked = value)
+    }
+
+    suspend fun setEnabled(value: Boolean) = writes.withLock {
+        defaults.set(value, IS_DEMO_MODE_ENABLED_KEY)
+        currentCoroutineContext().ensureActive()
+        mutableState.value = mutableState.value.copy(isEnabled = value)
+    }
 
     /**
      * Unlocks and enables demo mode. Both values are written through before a single state publish, so observers
      * never see the unlocked-but-disabled midpoint (SwiftUI coalesces Swift's two assignments the same way).
      */
-    fun unlock() {
+    suspend fun unlock() = writes.withLock {
+        defaults.setAll(mapOf(IS_DEMO_MODE_UNLOCKED_KEY to true, IS_DEMO_MODE_ENABLED_KEY to true))
+        currentCoroutineContext().ensureActive()
+        mutableState.value = DemoModeState(isUnlocked = true, isEnabled = true)
         logger.info("Demo mode unlocked and enabled")
-        synchronized(lock) {
-            defaults.set(true, IS_DEMO_MODE_UNLOCKED_KEY)
-            defaults.set(true, IS_DEMO_MODE_ENABLED_KEY)
-            mutableState.value = DemoModeState(isUnlocked = true, isEnabled = true)
-        }
     }
 
     companion object {

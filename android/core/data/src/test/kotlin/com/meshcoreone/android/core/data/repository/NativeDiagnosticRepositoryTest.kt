@@ -19,6 +19,40 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class NativeDiagnosticRepositoryTest : RepositoryTest() {
+    @Test fun simulatorSnapshotBatchRechecksMillisecondKeysAndNodeHistory() = runTest {
+        val firstNode = Bytes.of(0x10, 0x20)
+        val secondNode = Bytes.of(0x30, 0x40)
+        val negative = NodeStatusSnapshotDTO(timestamp = Instant.ofEpochSecond(-1, 999_250_000), nodePublicKey = firstNode)
+        val sameMillisecond = NodeStatusSnapshotDTO(timestamp = Instant.ofEpochSecond(0, 200_000), nodePublicKey = firstNode)
+        val previousMillisecond = NodeStatusSnapshotDTO(timestamp = Instant.ofEpochSecond(-1, 998_500_000), nodePublicKey = firstNode)
+        assertEquals(2L to 1L, store.batchInsertNodeStatusSnapshots(
+            listOf(negative, sameMillisecond, previousMillisecond).snapshot(), emptySet(),
+        ))
+        assertEquals(setOf(firstNode to 0L, firstNode to -1L), store.existingNodeStatusSnapshotKeys())
+
+        val staleKeys = store.existingNodeStatusSnapshotKeys()
+        val raced = NodeStatusSnapshotDTO(timestamp = AT, nodePublicKey = secondNode)
+        db.nodeSnapshots().insert(raced.toEntity())
+        val later = raced.copy(id = UUID.randomUUID(), timestamp = AT.plusSeconds(60))
+        val unrelated = NodeStatusSnapshotDTO(timestamp = AT, nodePublicKey = Bytes.of(0x50))
+        assertEquals(1L to 1L, store.batchInsertNodeStatusSnapshots(
+            listOf(later, unrelated).snapshot(), staleKeys, skipNodesWithHistory = true,
+        ))
+        assertEquals(listOf(raced), store.fetchNodeStatusSnapshots(secondNode, null))
+        assertEquals(listOf(unrelated), store.fetchNodeStatusSnapshots(unrelated.nodePublicKey, null))
+    }
+
+    @Test fun simulatorSnapshotBatchRollsBackWhenASecondInsertConflicts() = runTest {
+        val key = Bytes.of(0x42)
+        val duplicateId = UUID.randomUUID()
+        val first = NodeStatusSnapshotDTO(id = duplicateId, timestamp = AT, nodePublicKey = key)
+        val second = first.copy(timestamp = AT.plusSeconds(1))
+        assertFailsWith<PersistenceStoreException> {
+            store.batchInsertNodeStatusSnapshots(listOf(first, second).snapshot(), emptySet())
+        }
+        assertTrue(store.fetchNodeStatusSnapshots(key, null).isEmpty())
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun partialBatchFlushUsesExactlyOneSecondOfTheOwnedTestScheduler() = runTest(scheduler) {
         val entry = rx()

@@ -59,8 +59,8 @@ class OnboardingGateTest {
             wifi = AppOnboardingWiFiPort(host),
             demo = AppOnboardingDemoPort(DemoModeManager(object : DemoModeDefaults {
                 override fun bool(forKey: String) = demoStore[forKey] ?: false
-                override fun set(value: Boolean, forKey: String) { demoStore[forKey] = value }
-            }), scope),
+                override suspend fun setAll(values: Map<String, Boolean>) { demoStore.putAll(values) }
+            }), scope) { error("Simulator connection was not requested by this test") },
             region = AppOnboardingRegionPort(ServicesRegionCatalog(), MutableStateFlow<RegionSelection?>(null), {}, null),
             presets = AppOnboardingPresetPort(FakeRadio(), scope),
             settingsOpener = {}, locationReporter = null, sdkInt = 34, hasCompleted = flags.hasCompleted,

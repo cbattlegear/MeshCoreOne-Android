@@ -5,6 +5,8 @@ import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.ui.UiText
+import com.meshcoreone.android.core.model.TransportType
+import com.meshcoreone.android.feature.settings.device.ui.showPhysicalConnectionSettings
 import com.meshcoreone.android.feature.settings.device.support.TestScheduler
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -18,6 +20,14 @@ class SettingsSupportTest {
     private val scheduler = TestScheduler()
     private val alert = RetryAlertController()
     private val router = SettingsFailureRouter(scheduler.environment(), alert)
+
+    @Test
+    fun `simulator does not expose bluetooth or wifi connection settings`() {
+        assertFalse(showPhysicalConnectionSettings(TransportType.SIMULATOR))
+        assertTrue(showPhysicalConnectionSettings(TransportType.BLUETOOTH))
+        assertTrue(showPhysicalConnectionSettings(TransportType.WIFI))
+        assertTrue(showPhysicalConnectionSettings(null))
+    }
 
     @Test
     fun `retry count rises per show and max retries is the third`() {

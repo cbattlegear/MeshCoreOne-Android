@@ -159,6 +159,7 @@ class LinkUrlExtractionTest {
         assertNull(LinkUrlExtraction.extractFirstUrl("ipfs:tracker.example/path"))
         assertNull(LinkUrlExtraction.extractFirstUrl("ftp:files.example.com"))
         assertNull(LinkUrlExtraction.extractFirstUrl("did:web:example.com"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("custom:payload:tracker.example/path"))
         assertEquals(
             "https://Example.COM/Page",
             LinkUrlExtraction.extractFirstUrl("Link:HTTPS://Example.COM/Page"),

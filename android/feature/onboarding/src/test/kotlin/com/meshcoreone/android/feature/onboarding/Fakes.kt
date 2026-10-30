@@ -34,7 +34,9 @@ class FakePairing(var outcome: OnboardingConnectOutcome = OnboardingConnectOutco
 class FakeDemo(var outcome: OnboardingConnectOutcome = OnboardingConnectOutcome.Connected) : OnboardingDemoPort {
     override val isEnabled = MutableStateFlow(false)
     var unlocked = 0
+    var beforeUnlock: suspend () -> Unit = {}
     override fun unlock() { unlocked += 1; isEnabled.value = true }
+    override suspend fun unlockAndAwait() { beforeUnlock(); unlock() }
     override suspend fun connectDemo(): OnboardingConnectOutcome = outcome
 }
 

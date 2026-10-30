@@ -97,18 +97,22 @@ class OnboardingPairingAdapterTest {
         assertEquals(Outcome.Failed(UiText.Verbatim("refused")), wifi.connect("10.0.0.5", 5000))
     }
 
-    @Test fun `demo unlock enables demo mode and connect is honestly unavailable without a simulator`() = runTest {
+    @Test fun `demo unlock enables demo mode and simulator connection reports failures and success`() = runTest {
         val store = HashMap<String, Boolean>()
         val manager = DemoModeManager(object : DemoModeDefaults {
             override fun bool(forKey: String) = store[forKey] ?: false
-            override fun set(value: Boolean, forKey: String) { store[forKey] = value }
+            override suspend fun setAll(values: Map<String, Boolean>) { store.putAll(values) }
         })
-        val port = AppOnboardingDemoPort(manager, CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+        val port = AppOnboardingDemoPort(manager, CoroutineScope(UnconfinedTestDispatcher(testScheduler))) {
+            throw IllegalStateException("simulator unavailable")
+        }
         assertFalse(port.isEnabled.value)
-        port.unlock()
+        port.unlockAndAwait()
         assertTrue(port.isEnabled.value)
-        assertEquals(Outcome.Failed(UiText.Resource(AppLocalizableStrings.errorMeshCoreFeatureDisabled)), port.connectDemo())
-        val bound = AppOnboardingDemoPort(manager, CoroutineScope(UnconfinedTestDispatcher(testScheduler))) { }
+        assertEquals(Outcome.Failed(UiText.Verbatim("simulator unavailable")), port.connectDemo())
+        var connected = false
+        val bound = AppOnboardingDemoPort(manager, CoroutineScope(UnconfinedTestDispatcher(testScheduler))) { connected = true }
         assertEquals(Outcome.Connected, bound.connectDemo())
+        assertTrue(connected)
     }
 }

@@ -68,6 +68,7 @@ class AndroidHostEnvironment(
     private val reconnecting: () -> Boolean,
     private val lastDevice: () -> UUID?,
     private val lan: () -> Boolean,
+    private val simulator: () -> Boolean = { false },
 ) : HostEnvironment {
     private val context = context.applicationContext
 
@@ -80,6 +81,7 @@ class AndroidHostEnvironment(
     override val reconnectInProgress: Boolean get() = reconnecting()
     override val lastConnectedDeviceId: UUID? get() = lastDevice()
     override val lanOnly: Boolean get() = lan()
+    override val isSimulator: Boolean get() = simulator()
 }
 
 internal fun usesLanHosting(
@@ -88,5 +90,6 @@ internal fun usesLanHosting(
 ): Boolean = when (transport) {
     com.meshcoreone.android.core.model.TransportType.WIFI -> true
     com.meshcoreone.android.core.model.TransportType.BLUETOOTH -> false
+    com.meshcoreone.android.core.model.TransportType.SIMULATOR -> false
     null -> methods.isNotEmpty() && methods.all { it is com.meshcoreone.android.core.model.ConnectionMethod.WiFi }
 }

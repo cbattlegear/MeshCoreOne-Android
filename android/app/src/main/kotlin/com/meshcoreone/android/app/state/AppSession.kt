@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionEventSubscription
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.services.contacts.AdvertisementService
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.contacts.ContactService
@@ -41,6 +42,7 @@ class MessageEventSources(
 /** The per-connection service graph as app state sees it (Swift `ServiceContainer`). */
 interface AppSession {
     val token: SessionToken
+    val transportType: TransportType
     val dataStore: PersistenceStoreProtocol
     val syncCoordinator: SyncCoordinator
     val advertisementService: AdvertisementService

@@ -12,7 +12,7 @@ import java.net.URISyntaxException
  */
 interface DemoInlineImageCache<Image : Any> {
     /** Decodes [data] into a displayable image, or null when it is not a decodable image. */
-    fun decodeImage(data: Bytes): Image?
+    suspend fun decodeImage(data: Bytes): Image?
 
     /** `ImageURLClassifier.directImageURL(for:)`. */
     fun directImageURL(url: URI): URI
@@ -28,7 +28,7 @@ interface DemoInlineImageCache<Image : Any> {
  */
 object DemoInlineImageSeeder {
     /** Idempotent: re-seeding overwrites the same cache key. Does nothing if the URL or image is invalid. */
-    fun <Image : Any> seed(cache: DemoInlineImageCache<Image>) {
+    suspend fun <Image : Any> seed(cache: DemoInlineImageCache<Image>) {
         val url = parseURL(MockDataProvider.inlineImageURL) ?: return
         val data = MockDataProvider.demoImageData
         val image = cache.decodeImage(data) ?: return

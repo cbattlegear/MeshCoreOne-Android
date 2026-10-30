@@ -1,8 +1,43 @@
 # WP-217 evidence
 
-**External contribution:** this was prepared outside the dispatch controller, with
-no lease or receipt. This document lists the commands that actually ran and their
-observed results.
+## #396 production-composition follow-up
+
+- **Reference:** `db14559b39d32322b06477c6ae676112f583db50`
+- **Base:** `b90cb4dcca3f7f8f0c8120aeb4eaf2cc82f1633c`
+- **Ownership:** WP-217 session `80307303-9cc0-4944-ab71-5c3554b8f384`,
+  reservation revision 40. This is a bounded implementation, not a whole-WP
+  dependency-acceptance or unlock receipt.
+- **Authored coverage:** real-Room simulator onboarding and seed families,
+  failure/cancellation/retry, durable preference readback and ordering,
+  simulator lifecycle and teardown, stale activation/foreground restoration,
+  saved-device reconnect, physical association removal, offline protocol rejection
+  without a simulated disconnect or hardware battery polling, snapshot transaction
+  races, and restricted offline chat fixtures. Exact-candidate results are reported
+  in the PR and hosted job, not inferred from the historical evidence below.
+- **Windows readiness:** pinned Python 3.12.4 is available, but no same-host
+  `ANDROID_CI_STATE` or verification venv is configured and the pinned Android
+  command-line tools are absent. The documented native preflight below stopped
+  before running product tests; no SDK terms were accepted and no execution
+  runtime was deployed.
+
+| Command | Observed |
+| --- | --- |
+| `$output = Join-Path $env:TEMP 'MeshCoreOne-WP217-preflight-803073039cc04944ab715c3554b8f384'; & 'C:\Python312\python.exe' .\tools\android-port\controller\ci.py preflight --local --output $output` | Exit 2: `Explicit --state/ANDROID_CI_STATE is required`; product tests did not run. |
+| `& 'C:\Python312\python.exe' .\tools\android-port\controller\validate.py` | Exit 0: valid manifest and policy; 64 work packages and 1,866 tracked reference files. |
+| `& 'C:\Python312\python.exe' .\tools\android-port\portmap.py` | Exit 0; source provenance map emitted, not feature acceptance. |
+| `git --no-pager diff --check` | Passed for tracked worktree changes at the time of the check. |
+| `git --no-pager diff --cached --check` | Passed for the staged candidate, including new files. |
+
+Hosted checks must be evaluated against the exact published candidate. No API
+31/37 device runtime, hardware, signing, iOS compatibility, or whole-WP
+acceptance evidence is claimed here.
+
+## Historical external contribution
+
+The original pure-JVM seed contribution was prepared outside the dispatch
+controller, without a lease or receipt. The following results are retained as
+historical evidence for that earlier base, not evidence that the present
+production-composition candidate passed.
 
 - **Reference:** `db14559b39d32322b06477c6ae676112f583db50`
 - **Base:** `main` @ `7237727f`

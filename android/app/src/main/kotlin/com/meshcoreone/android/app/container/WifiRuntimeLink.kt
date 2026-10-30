@@ -75,6 +75,7 @@ class AndroidRuntimeLinkFactory(
             }
         }
         return when (target) {
+            ConnectionTarget.Simulator -> error("Simulator links are supplied by the app container")
             is ConnectionTarget.WiFi -> WifiRuntimeLink(target.host, target.port,
                 onSessionLive = { sessionChanged(it, TransportType.WIFI) })
             is ConnectionTarget.Bluetooth -> {

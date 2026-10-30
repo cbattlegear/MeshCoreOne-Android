@@ -22,15 +22,38 @@ import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 
-class MeshCoreSession(
+class MeshCoreSession private constructor(
     transport: MeshTransport,
-    configuration: SessionConfiguration = SessionConfiguration.DEFAULT,
-    clock: SessionClock = SystemSessionClock(),
-    coroutineContext: CoroutineContext = Dispatchers.Default,
-    private val randomTag: () -> UInt = ::randomNonzeroTag,
-    onDiagnostic: (SessionDiagnostic) -> Unit = ::logSessionDiagnostic,
+    configuration: SessionConfiguration,
+    clock: SessionClock,
+    coroutineContext: CoroutineContext,
+    private val randomTag: () -> UInt,
+    onDiagnostic: (SessionDiagnostic) -> Unit,
+    offlinePlaceholder: Boolean,
 ) : MeshCoreSessionProtocol, ConfigurationSessionOps, AdvertisingSessionOps, DiagnosticsSessionOps, RemoteAccessSessionOps {
-    internal val core = SessionCore(transport, configuration, clock, coroutineContext, onDiagnostic)
+    constructor(
+        transport: MeshTransport,
+        configuration: SessionConfiguration = SessionConfiguration.DEFAULT,
+        clock: SessionClock = SystemSessionClock(),
+        coroutineContext: CoroutineContext = Dispatchers.Default,
+        randomTag: () -> UInt = ::randomNonzeroTag,
+        onDiagnostic: (SessionDiagnostic) -> Unit = ::logSessionDiagnostic,
+    ) : this(transport, configuration, clock, coroutineContext, randomTag, onDiagnostic, false)
+
+    companion object {
+        /** A local-only graph can observe session state but cannot start or send to a radio. */
+        fun offlinePlaceholder(
+            transport: MeshTransport,
+            configuration: SessionConfiguration = SessionConfiguration.DEFAULT,
+            clock: SessionClock = SystemSessionClock(),
+            coroutineContext: CoroutineContext = Dispatchers.Default,
+            onDiagnostic: (SessionDiagnostic) -> Unit = ::logSessionDiagnostic,
+        ): MeshCoreSession = MeshCoreSession(
+            transport, configuration, clock, coroutineContext, ::randomNonzeroTag, onDiagnostic, true,
+        )
+    }
+
+    internal val core = SessionCore(transport, configuration, clock, coroutineContext, onDiagnostic, offlinePlaceholder)
 
     override val connectionState: Flow<ConnectionState> get() = core.connectionStates()
     override val currentSelfInfo: SelfInfo? get() = synchronized(core.lock) { core.active?.selfInfo }

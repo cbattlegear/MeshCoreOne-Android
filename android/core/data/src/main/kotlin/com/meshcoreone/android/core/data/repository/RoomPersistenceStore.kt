@@ -6,10 +6,14 @@ package com.meshcoreone.android.core.data.repository
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.toDTO
+import com.meshcoreone.android.core.database.toEntity
+import com.meshcoreone.android.core.data.backup.snapshotBackupKey
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Clock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 
 /** The supplied scope and database are process-owned, never a radio-connection generation. */
@@ -43,6 +47,38 @@ class RoomPersistenceStore private constructor(
         contacts.fetchContactPublicKeys(radioId)
     override suspend fun setSessionNotificationLevel(key: EntityKey, level: NotificationLevel) =
         rooms.setSessionNotificationLevel(key, level)
+
+    suspend fun existingNodeStatusSnapshotKeys(): SnapshotSet<Pair<Bytes, Long>> =
+        context.read("existingNodeStatusSnapshotKeys") {
+            database.nodeSnapshots().backupAll().map { snapshotBackupKey(it.toDTO()) }.snapshotSet()
+        }
+
+    /**
+     * Rechecks the keys under the same Room transaction that inserts the rows. The optional node check preserves
+     * the simulator's "seed history only when this node has none" rule if another writer raced its initial read.
+     */
+    suspend fun batchInsertNodeStatusSnapshots(
+        dtos: SnapshotList<NodeStatusSnapshotDTO>,
+        existingKeys: Set<Pair<Bytes, Long>>,
+        skipNodesWithHistory: Boolean = false,
+    ): Pair<Long, Long> = context.write("batchInsertNodeStatusSnapshots") {
+        val persisted = database.nodeSnapshots().backupAll().map { it.toDTO() }
+        val existingNodes = if (skipNodesWithHistory) persisted.mapTo(hashSetOf()) { it.nodePublicKey } else emptySet()
+        val known = existingKeys.toMutableSet().apply { addAll(persisted.map(::snapshotBackupKey)) }
+        var inserted = 0L
+        var skipped = 0L
+        for (dto in dtos) {
+            currentCoroutineContext().ensureActive()
+            if (dto.nodePublicKey in existingNodes || !known.add(snapshotBackupKey(dto))) {
+                skipped = Math.incrementExact(skipped)
+            } else {
+                database.nodeSnapshots().insert(dto.toEntity())
+                inserted = Math.incrementExact(inserted)
+            }
+        }
+        save()
+        inserted to skipped
+    }
 
     override suspend fun warmUp() {
         context.read("warmUp") { database.devices().count() }

@@ -150,8 +150,11 @@ internal fun AppSettingsContent(
                 holders.presetLocationSession, deps.regions, deps.radioCatalog, deps.location, deps.subdivisions)
         }, navigator, done)
         page == Page.LOCATION -> LocationSettingsScreen(holders.location, navigator, done)
-        page == Page.CONNECTION -> if (transport == TransportType.WIFI) AppWifiSettings(feature, device, done)
-            else BluetoothSettingsScreen(holders.bluetoothPin, done)
+        page == Page.CONNECTION -> when (transport) {
+            TransportType.WIFI -> AppWifiSettings(feature, device, done)
+            TransportType.SIMULATOR -> LaunchedEffect(transport) { done() }
+            else -> BluetoothSettingsScreen(holders.bluetoothPin, done)
+        }
         page == Page.ADVANCED -> AdvancedSettingsScreen(remember(holders) {
             AdvancedSettingsHolders(holders.advancedPage, holders.floodScope, holders.contacts, holders.staleCleanup,
                 holders.telemetry, holders.directMessages, holders.batteryCurve, holders.deviceActions,

@@ -23,4 +23,4 @@ sealed interface ConnectionMethod {
     }
 }
 
-enum class TransportType { BLUETOOTH, WIFI }
+enum class TransportType { BLUETOOTH, WIFI, SIMULATOR }

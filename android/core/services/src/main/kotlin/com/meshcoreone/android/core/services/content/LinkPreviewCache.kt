@@ -24,6 +24,7 @@ private object CacheConfig {
     const val MAX_ENTRY_COUNT = 100
     const val MAX_TOTAL_COST_BYTES = 50L * 1024 * 1024 // 50MB
     const val MAX_CONCURRENT_FETCHES = 3
+    const val MAX_PERSISTED_MISSES = 100
 }
 
 /**
@@ -52,6 +53,8 @@ class LinkPreviewCache(
     )
     private val fetchSemaphore = Semaphore(CacheConfig.MAX_CONCURRENT_FETCHES)
     private val mutex = Mutex()
+    private val persistedLookupMutex = Mutex()
+    private val persistedMisses = linkedSetOf<String>()
 
     /**
      * Shared fetch deferred per in-flight URL. Concurrent requests for the same URL await the
@@ -109,16 +112,26 @@ class LinkPreviewCache(
         memoryCache.get(url)?.let { return it }
 
         // Tier 2: Database lookup.
-        return try {
-            dataStore.fetchLinkPreview(url)?.also { memoryCache.put(url, it) }
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (error: Exception) {
-            // Matches the Swift original's log-and-continue behavior: a database read failure is
-            // treated as a cache miss, not a fetch failure - the caller still falls through to a
-            // genuine network fetch attempt, it is not a fabricated success.
-            Logger.getLogger("MeshCore.LinkPreviewCache").fine("Preview database read failed: ${error.javaClass.simpleName}")
-            null
+        return persistedLookupMutex.withLock {
+            memoryCache.get(url)?.let { return@withLock it }
+            if (url in persistedMisses) return@withLock null
+            try {
+                dataStore.fetchLinkPreview(url)?.also { memoryCache.put(url, it) } ?: run {
+                    if (persistedMisses.size == CacheConfig.MAX_PERSISTED_MISSES) {
+                        persistedMisses.remove(persistedMisses.first())
+                    }
+                    persistedMisses.add(url)
+                    null
+                }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
+                // Matches the Swift original's log-and-continue behavior: a database read failure is
+                // treated as a cache miss, not a fetch failure - the caller still falls through to a
+                // genuine network fetch attempt, it is not a fabricated success.
+                Logger.getLogger("MeshCore.LinkPreviewCache").fine("Preview database read failed: ${error.javaClass.simpleName}")
+                null
+            }
         }
     }
 
@@ -175,6 +188,7 @@ class LinkPreviewCache(
             // Persist to database.
             try {
                 dataStore.saveLinkPreview(dto)
+                persistedLookupMutex.withLock { persistedMisses.remove(url) }
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Exception) {

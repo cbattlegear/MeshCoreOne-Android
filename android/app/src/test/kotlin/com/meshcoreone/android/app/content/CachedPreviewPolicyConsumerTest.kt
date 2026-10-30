@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.AppChatContent
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
@@ -26,6 +27,7 @@ import com.meshcoreone.android.feature.chats.composer.UrlSafetyPort
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlinx.coroutines.CoroutineScope
@@ -58,9 +60,17 @@ class CachedPreviewPolicyConsumerTest {
         val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
             .allowMainThreadQueries().build()
         val store = RoomPersistenceStore(database, backgroundScope)
+        var previewReads = 0
+        val countedStore = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchLinkPreview(url: String): LinkPreviewDataDTO? {
+                previewReads++
+                return store.fetchLinkPreview(url)
+            }
+        }
         val lifetime = SupervisorJob(requireNotNull(backgroundScope.coroutineContext[Job]))
         val scope = CoroutineScope(backgroundScope.coroutineContext + lifetime)
         val url = "https://cached.example/article"
+        val htmlPageUrl = "https://cached.example/landing.jpg"
         var fetchCalls = 0
         val http = object : BoundedHttpFetching {
             override suspend fun fetch(url: String, timeoutMs: Long, rangeHeader: String?): HttpFetchAttempt {
@@ -81,8 +91,9 @@ class CachedPreviewPolicyConsumerTest {
                     iconData = Bytes(NativeImageFixtures.png(2, 2)),
                 ),
             )
+            store.saveLinkPreview(LinkPreviewDataDTO(htmlPageUrl, title = "Persisted HTML page"))
             for (isChannel in listOf(false, true)) {
-                val owner = newContent(context, store, http, storage, scope).also(contents::add)
+                val owner = newContent(context, countedStore, http, storage, scope).also(contents::add)
                 val message = MessageDTO(
                     radioId = RadioId(java.util.UUID.randomUUID()),
                     channelIndex = if (isChannel) 1u.toUByte() else null,
@@ -92,6 +103,11 @@ class CachedPreviewPolicyConsumerTest {
                 val rendered = owner.renderContent(message, EnvInputs.DEFAULT)
                 assertEquals(PreviewLoadState.LOADED, rendered.state)
                 assertEquals("Persisted preview", rendered.preview?.title)
+
+                val htmlPage = owner.renderContent(message.copy(text = htmlPageUrl), EnvInputs.DEFAULT)
+                assertEquals(PreviewLoadState.LOADED, htmlPage.state)
+                assertEquals("Persisted HTML page", htmlPage.preview?.title)
+                assertFalse(htmlPage.inline)
 
                 val holder = LinkPreviewStateHolder(
                     url,
@@ -111,9 +127,24 @@ class CachedPreviewPolicyConsumerTest {
                 assertEquals(LinkPreviewOutcome.Disabled, port.preview("https://new.example/article", isChannel))
             }
 
-            val imageOwner = newContent(context, store, http, storage, scope).also(contents::add)
+            val imageOwner = newContent(context, countedStore, http, storage, scope).also(contents::add)
             assertNotNull(imageOwner.images.load("mc1-preview-hero:$url"))
             assertNotNull(imageOwner.images.load("mc1-preview-icon:$url"))
+
+            storage.preferences.set(AppStorageKey.linkPreviewsEnabled, false)
+            testScheduler.runCurrent()
+            val disabledOwner = newContent(context, countedStore, http, storage, scope).also(contents::add)
+            val readsBeforeDisabledRender = previewReads
+            val disabled = disabledOwner.renderContent(
+                MessageDTO(
+                    radioId = RadioId(java.util.UUID.randomUUID()),
+                    text = "https://uncached.example/disabled.jpg",
+                    timestamp = 2u,
+                ),
+                EnvInputs.DEFAULT,
+            )
+            assertEquals(PreviewLoadState.DISABLED, disabled.state)
+            assertEquals(readsBeforeDisabledRender, previewReads)
             assertEquals(0, fetchCalls)
         } finally {
             withContext(NonCancellable) {
@@ -137,7 +168,7 @@ class CachedPreviewPolicyConsumerTest {
 
     private suspend fun newContent(
         context: Context,
-        store: RoomPersistenceStore,
+        store: PersistenceStoreProtocol,
         http: BoundedHttpFetching,
         storage: MeshCoreStorage,
         scope: CoroutineScope,

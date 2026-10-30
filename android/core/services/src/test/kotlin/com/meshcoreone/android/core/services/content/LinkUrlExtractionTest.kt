@@ -124,12 +124,30 @@ class LinkUrlExtractionTest {
     }
 
     @Test
+    fun `does not extract domains inside quoted email local parts`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("\"example.com\"@mail.org"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("\"example.com\\\"suffix\"@mail.org"))
+    }
+
+    @Test
     fun `does not extract URL-like email local parts as web links`() {
         assertNull(LinkUrlExtraction.extractFirstUrl("Contact project.com/sales@example.com"))
         assertEquals(
             listOf("https://example.com/contact?email=foo@example.org"),
             LinkUrlExtraction.extractAllUrls("example.com/contact?email=foo@example.org"),
         )
+    }
+
+    @Test
+    fun `does not extract partial ASCII domains adjacent to Unicode letters marks or numbers`() {
+        val messages = listOf(
+            "bücher.de",
+            "www.exämple.com",
+            "example.comé",
+            "example.com\u0301",
+            "example.com２",
+        )
+        messages.forEach { assertNull(LinkUrlExtraction.extractFirstUrl(it), it) }
     }
 
     @Test
@@ -154,6 +172,14 @@ class LinkUrlExtractionTest {
     fun `trims surrounding quotes and angle brackets from bare URL suffixes`() {
         assertEquals("https://example.com/path", LinkUrlExtraction.extractFirstUrl("Visit \"example.com/path\""))
         assertEquals("https://example.com/path", LinkUrlExtraction.extractFirstUrl("Visit <example.com/path>"))
+    }
+
+    @Test
+    fun `extracts adjacent explicit and bare URLs wrapped in angle brackets`() {
+        assertEquals(
+            listOf("https://one.example", "https://two.example"),
+            LinkUrlExtraction.extractAllUrls("<https://one.example><two.example>"),
+        )
     }
 
     @Test

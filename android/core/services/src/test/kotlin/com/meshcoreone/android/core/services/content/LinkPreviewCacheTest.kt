@@ -190,6 +190,42 @@ class LinkPreviewCacheTest {
     }
 
     @Test
+    fun `persisted misses are memoized but a preview write invalidates the miss`() = runTest {
+        val dataStore = FakePersisting()
+        val url = "https://example.com/after-miss"
+        val service = LinkMetadataFetching {
+            LinkPreviewMetadata("Written preview", null, null)
+        }
+        val cache = previewsEnabledCache(service)
+        try {
+            assertNull(cache.cachedPreview(url, dataStore))
+            assertNull(cache.cachedPreview(url, dataStore))
+            assertEquals(1, dataStore.fetchCallCount)
+
+            assertTrue(cache.manualFetch(url, dataStore) is LinkPreviewResult.Loaded)
+            cache.clearMemory()
+
+            assertEquals("Written preview", cache.cachedPreview(url, dataStore)?.title)
+            assertEquals(2, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
+    fun `failed persisted reads are not memoized as misses`() = runTest {
+        val dataStore = FakePersisting().apply { shouldThrowOnFetch = true }
+        val cache = previewsEnabledCache()
+        try {
+            assertNull(cache.cachedPreview("https://example.com/read-failure", dataStore))
+            assertNull(cache.cachedPreview("https://example.com/read-failure", dataStore))
+            assertEquals(2, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
     fun `cached previews rehydrate while automatic network fetch remains gated for both conversation types`() = runTest {
         var fetchCalls = 0
         val service = LinkMetadataFetching {

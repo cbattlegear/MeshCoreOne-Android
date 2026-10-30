@@ -19,6 +19,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -77,6 +78,7 @@ class MountedGifRetentionTest {
         var content: AppChatContent? = null
         try {
             storage.preferences.set(AppStorageKey.linkPreviewsEnabled, true)
+            storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveDM, false)
             val preferences = DataStoreLinkPreviewPreferencesSource.create(storage.preferences, scope)
             val owner = AppChatContent(
                 context = context,
@@ -95,6 +97,11 @@ class MountedGifRetentionTest {
             val shared = assertIs<ChatImage.Decoded>(owner.inline(url))
             assertSame(mounted.encodedData, shared.encodedData)
             assertContentEquals(bytes, owner.shareData(mounted))
+
+            val cacheOnly = assertNotNull(owner.cachedInline(url))
+            assertSame(mounted.handle, cacheOnly.handle)
+            assertSame(mounted.encodedData, cacheOnly.encodedData)
+            assertEquals(1, fetchCalls)
 
             owner.trimMemory()
             var sharedBytes: ByteArray? = null

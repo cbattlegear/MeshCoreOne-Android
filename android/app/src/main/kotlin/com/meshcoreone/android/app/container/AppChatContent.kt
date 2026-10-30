@@ -153,7 +153,7 @@ class AppChatContent internal constructor(
         val media = media(message.text).firstOrNull()
         val url = media?.url
         val decoded = url?.let { imageCache.decoded(ImageUrlClassifier.directImageUrl(URI(it)).toString()) }
-        val preview = url?.let { previewCache.cachedPreview(it, store) }
+        val preview = if (enabled) url?.let { previewCache.cachedPreview(it, store) } else null
         val recorded = previewStates.get(message.id)
         val state = when {
             !enabled -> PreviewLoadState.DISABLED
@@ -171,7 +171,7 @@ class AppChatContent internal constructor(
         val mapReady = coordinate?.let {
             mapPreviews.snapshots.isResolved(MapSnapshotRequest(it.latitude, it.longitude, env.isDark, env.isOffline))
         } ?: false
-        return RenderContent(url?.let(WebURL::parse), state, preview, media?.isImage == true,
+        return RenderContent(url?.let(WebURL::parse), state, preview, media?.isImage == true && preview == null,
             decoded != null, decoded?.isGif == true, media?.aspect, coordinate, mapReady)
     }
     internal fun recordPreviewState(id: java.util.UUID, state: LinkPreviewCardState) = recordPreviewState(id, when (state) {
@@ -229,6 +229,11 @@ class AppChatContent internal constructor(
         !imageCache.servesHtmlPage(ImageUrlClassifier.directImageUrl(URI(url)).toString())
     fun aspect(url: String) = dimensions.aspect(ImageUrlClassifier.directImageUrl(URI(url)).toString()) ?: dimensions.aspect(url)
     internal fun shareData(image: ChatImage.Decoded): ByteArray = image.encodedData.copy()
+    internal fun cachedInline(url: String): ChatImage.Decoded? {
+        val resolved = ImageUrlClassifier.directImageUrl(URI(url)).toString()
+        val cached = imageCache.decoded(resolved) ?: return null
+        return cached.encodedData?.let { ChatImage.Decoded(cached.handle, it) }
+    }
     suspend fun recordReaction(emoji: String) {
         preferenceStore.update {
             this[AppStorageKey.recentReactionEmojis] =

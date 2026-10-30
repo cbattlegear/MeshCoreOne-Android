@@ -57,12 +57,16 @@ internal fun AppMessageContent(
     (if (preferences[AppStorageKey.linkPreviewsEnabled]) media else emptyList()).forEach { entry ->
         val url = entry.url
         key(url, autoResolve) {
-            var image by remember { mutableStateOf<ChatImage?>(null) }
+            var image by remember(content, url, resolutions) { mutableStateOf(content.cachedInline(url)) }
             var failure by remember { mutableStateOf<Throwable?>(null) }
             var manualImage by remember { mutableStateOf(false) }
             var retry by remember { mutableIntStateOf(0) }
             var fullscreen by remember { mutableStateOf(false) }
-            val inline = entry.isImage
+            val inline = if (url == media.firstOrNull()?.url && rendered != null) {
+                rendered.content.any { it is MessageFragment.InlineImage }
+            } else {
+                entry.isImage
+            }
             val holder = remember(content, url, message.isChannelMessage,
                 preferences[AppStorageKey.linkPreviewsEnabled],
                 preferences[AppStorageKey.linkPreviewsAutoResolveDM], preferences[AppStorageKey.linkPreviewsAutoResolveChannels]) {
@@ -79,7 +83,7 @@ internal fun AppMessageContent(
                 LinkPreviewRoute(holder, content.images, uri::openUri, onImageError = { _, problem ->
                     report("Preview image decode failed", problem)
                 })
-            } else if (!autoResolve && !manualImage) {
+            } else if (!autoResolve && !manualImage && image == null) {
                 SideEffect {
                     if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.DISABLED)
                 }

@@ -57,7 +57,9 @@ internal fun AppMessageContent(
     (if (preferences[AppStorageKey.linkPreviewsEnabled]) media else emptyList()).forEach { entry ->
         val url = entry.url
         key(url, autoResolve) {
-            var image by remember(content, url, resolutions) { mutableStateOf(content.cachedInline(url)) }
+            var image by remember(content, url, resolutions) {
+                mutableStateOf<ChatImage?>(content.cachedInline(url))
+            }
             var failure by remember { mutableStateOf<Throwable?>(null) }
             var manualImage by remember { mutableStateOf(false) }
             var retry by remember { mutableIntStateOf(0) }

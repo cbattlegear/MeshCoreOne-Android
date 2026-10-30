@@ -143,6 +143,8 @@ class LinkUrlExtractionTest {
         val messages = listOf(
             "bücher.de",
             "www.exämple.com",
+            "\u0301example.com",
+            "２example.com",
             "example.comé",
             "example.com\u0301",
             "example.com２",

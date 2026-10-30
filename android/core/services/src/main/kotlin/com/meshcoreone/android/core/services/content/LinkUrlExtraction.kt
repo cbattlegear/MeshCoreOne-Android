@@ -33,7 +33,7 @@ object LinkUrlExtraction {
         """(?i)(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|[\w.!#$%&'*+/^_`{|}~-]+)@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})""",
     )
     private val bareDomainPattern = Regex(
-        """(?i)(?<![\w.@/\p{L}\p{M}\p{N}-])(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9][a-z0-9-]{1,57}[a-z0-9])(?::\d{1,5})?(?:[/?#][^\s<>"']*)?(?![\w@+%-\p{L}\p{M}\p{N}])""",
+        """(?i)(?<![\w.@/\p{L}\p{M}\p{N}-])(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9][a-z0-9-]{1,57}[a-z0-9])(?::\d{1,5})?(?:[/?#][^\s<>"']*)?(?![\w@+%\p{L}\p{M}\p{N}-])""",
     )
     private data class UrlMatch(val range: IntRange, val value: String, val explicitScheme: Boolean)
 

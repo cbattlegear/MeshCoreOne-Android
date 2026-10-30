@@ -27,6 +27,62 @@ import kotlinx.coroutines.flow.first
 import org.junit.Test
 
 class SharedTimelineIntegrationTest : RoomProcessTest() {
+    @Test fun warmReopenReadinessWaitsForTheFreshWindowBeforeResolvingANotificationTarget() = runTest {
+        val radio = RadioId(UUID.fromString("77777777-7777-7777-7777-777777777777"))
+        store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Radio"))
+        val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
+        store.saveContact(contact)
+        val original = MessageDTO(radioId = radio, contactID = contact.id, text = "cached",
+            timestamp = 1_700_000_000u, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED)
+        store.saveMessage(original)
+        val harness = ContainerHarness(this, store)
+        val conversation = TimelineConversation.Direct(contact)
+        val scope = CoroutineScope(currentCoroutineContext())
+        val base = harness.container.chatsFeature.timeline(conversation)
+        val first = ChatViewModel(conversation, base, scope)
+        var reopened: ChatViewModel? = null
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        try {
+            first.prime()
+            first.close()
+            val target = original.copy(id = UUID.randomUUID(), text = "notification target",
+                timestamp = original.timestamp + 1u, sortDate = original.sortDate.plusSeconds(1))
+            store.saveMessage(target)
+            val delayed = object : ChatTimelineDependencies by base {
+                override val data = object : TimelineDataSource by base.data {
+                    override suspend fun fetchMessages(conversation: TimelineConversation, limit: Int, offset: Int): List<MessageDTO> {
+                        val page = base.data.fetchMessages(conversation, limit, offset)
+                        started.complete(Unit)
+                        release.await()
+                        return page
+                    }
+                }
+            }
+            val mounted = ChatViewModel(conversation, delayed, scope)
+            reopened = mounted
+            val opening = launch { mounted.open() }
+            started.await()
+            assertTrue(mounted.state.value.hasLoadedOnce, "the warm window remains visible")
+            assertTrue(mounted.state.value.isLoading, "a loaded shared phase must not hide this owner's open")
+            val ready = CompletableDeferred<com.meshcoreone.android.feature.chats.timeline.ChatTimelineState>()
+            val navigation = launch {
+                ready.complete(mounted.state.first { it.hasLoadedOnce && !it.isLoading })
+            }
+            testScheduler.runCurrent()
+            assertFalse(ready.isCompleted, "notification readiness must not inspect the stale window")
+            release.complete(Unit)
+            opening.join()
+            assertTrue(ready.await().messages.any { it.id == target.id })
+            navigation.join()
+        } finally {
+            release.complete(Unit)
+            first.close()
+            reopened?.close()
+            harness.container.close()
+        }
+    }
+
     @Test fun closedRadioPrimeCannotConsumeAnotherSessionsPendingReaction() = runTest {
         val harness = ContainerHarness(this, store)
         try {

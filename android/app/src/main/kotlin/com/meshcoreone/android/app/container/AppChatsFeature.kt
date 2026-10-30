@@ -940,7 +940,7 @@ internal class CoordinatedTimelineState(
             rows = rowsFor(messages, unread),
             renderItems = renderedFor(render.items),
             renderItemIndexByID = render.itemIndexByID,
-            isLoading = render.phase == ChatRenderState.LoadPhase.LOADING,
+            isLoading = ui.isLoading || render.phase == ChatRenderState.LoadPhase.LOADING,
             hasLoadedOnce = render.phase == ChatRenderState.LoadPhase.LOADED,
             hasMoreMessages = render.hasMoreMessages,
             isLoadingOlder = render.isLoadingOlder,

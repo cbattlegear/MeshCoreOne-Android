@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.state
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageStatus
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RoomMessageDTO
 import java.util.UUID
 
@@ -15,6 +16,7 @@ import java.util.UUID
 sealed interface MessageEvent {
     data class DirectMessageReceived(val message: MessageDTO, val contact: ContactDTO) : MessageEvent
     data class ChannelMessageReceived(val message: MessageDTO, val channelIndex: UByte) : MessageEvent
+    data class ChannelHistoryDeleted(val radioId: RadioId) : MessageEvent
     data class RoomMessageReceived(val message: RoomMessageDTO, val sessionID: UUID) : MessageEvent
 
     /**

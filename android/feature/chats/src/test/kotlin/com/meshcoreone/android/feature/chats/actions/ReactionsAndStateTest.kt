@@ -13,6 +13,7 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +27,119 @@ import kotlinx.coroutines.yield
 import org.junit.Test
 
 class ReactionsAndStateTest {
+    @Test
+    fun `block contact read failure and recovery never become a submission failure`() = runBlocking {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null)
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        source.contactRead = { throw IllegalStateException("controlled read failure") }
+        holder.loadBlockContacts(target.radioId)
+        assertIs<MessageActionsFailure.BlockContactsLoadFailed>(holder.state.value.blockContactsFailure)
+        assertEquals(null, holder.state.value.failure)
+        assertEquals(null, source.blockedSender)
+        assertEquals(emptySet(), source.blockedContacts)
+        val contacts = listOf(contact(0xAA, name = "RemoteNode"))
+        source.contactRead = { contacts }
+        holder.loadBlockContacts(target.radioId)
+        assertEquals(null, holder.state.value.blockContactsFailure)
+        assertEquals(null, holder.state.value.failure)
+        assertSame(contacts, holder.state.value.directory.contacts)
+        assertEquals(2, source.contactReads)
+        assertEquals(null, source.blockedSender)
+    }
+
+    @Test
+    fun `successful block contact retry does not erase an unrelated submission failure`() = runBlocking<Unit> {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null)
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        source.failure = IllegalStateException("controlled save failure")
+        holder.blockSender(target, emptySet())
+        holder.loadBlockContacts(target.radioId)
+        assertIs<MessageActionsFailure.BlockFailed>(holder.state.value.failure)
+        assertIs<MessageActionsFailure.BlockContactsLoadFailed>(holder.state.value.blockContactsFailure)
+        source.failure = null
+        holder.loadBlockContacts(target.radioId)
+        assertEquals(null, holder.state.value.blockContactsFailure)
+        assertIs<MessageActionsFailure.BlockFailed>(holder.state.value.failure)
+    }
+
+    @Test
+    fun `successful path directory load clears the block contact load error before cached reuse`() = runBlocking {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u)
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        source.contactRead = { throw IllegalStateException("controlled read failure") }
+        holder.loadBlockContacts(target.radioId)
+        assertIs<MessageActionsFailure.BlockContactsLoadFailed>(holder.state.value.blockContactsFailure)
+        val contacts = listOf(contact(0xAA, name = "RemoteNode"))
+        source.contactRead = { contacts }
+        holder.loadDetails(target)
+        assertEquals(null, holder.state.value.blockContactsFailure)
+        assertSame(contacts, holder.state.value.directory.contacts)
+        holder.loadBlockContacts(target.radioId)
+        assertEquals(2, source.contactReads)
+        assertEquals(null, holder.state.value.blockContactsFailure)
+    }
+
+    @Test
+    fun `cancelled block contact read does not become a load or submission failure`() = runBlocking {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null)
+        source.contactRead = { throw CancellationException("controlled cancellation") }
+        val job = Job()
+        val holder = MessageActionsStateHolder(source, CoroutineScope(Dispatchers.Unconfined + job))
+        holder.loadBlockContacts(target.radioId)
+        assertEquals(null, holder.state.value.blockContactsFailure)
+        assertEquals(null, holder.state.value.failure)
+        job.cancel()
+    }
+
+    @Test
+    fun `block confirmation shares an in-flight path directory without changing loaded state`() = runBlocking {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u)
+        val pending = CompletableDeferred<List<ContactDTO>>()
+        source.contactRead = { pending.await() }
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        holder.loadDetails(target)
+        holder.loadBlockContacts(target.radioId)
+        assertEquals(1, source.contactReads)
+        assertTrue(holder.state.value.isLoadingDetails)
+        val contacts = listOf(contact(0xAA, name = "RemoteNode"))
+        pending.complete(contacts)
+        yield()
+        assertEquals(1, source.contactReads)
+        assertSame(contacts, holder.state.value.directory.contacts)
+        val loaded = holder.state.value
+        holder.loadBlockContacts(target.radioId)
+        yield()
+        assertSame(loaded, holder.state.value)
+        assertEquals(1, source.contactReads)
+    }
+
+    @Test
+    fun `no-path messages defer and coalesce block directory reads until confirmation`() = runBlocking {
+        val source = FakeActionsSource()
+        val target = message(channelIndex = 0u, pathLength = 0u, pathNodes = null)
+        val pending = CompletableDeferred<List<ContactDTO>>()
+        source.contactRead = { pending.await() }
+        val holder = MessageActionsStateHolder(source, CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        holder.loadDetails(target)
+        assertEquals(0, source.contactReads)
+        holder.loadBlockContacts(target.radioId)
+        holder.loadBlockContacts(target.radioId)
+        assertEquals(1, source.contactReads)
+        val contacts = listOf(contact(0xAA, name = "RemoteNode"))
+        pending.complete(contacts)
+        yield()
+        assertSame(contacts, holder.state.value.directory.contacts)
+        val loaded = holder.state.value
+        holder.loadBlockContacts(target.radioId)
+        assertSame(loaded, holder.state.value)
+        assertEquals(1, source.contactReads)
+    }
+
     @Test
     fun `pending empty failure retry and cancellation remain distinct`() = runBlocking {
         val source = FakeActionsSource()
@@ -189,6 +303,8 @@ private class FakeActionsSource : MessageActionsDataSource {
     var repeats: List<MessageRepeatDTO> = emptyList()
     var reactions: List<ReactionDTO> = emptyList()
     var reactionRead: (suspend (UUID) -> List<ReactionDTO>)? = null
+    var contactRead: (suspend () -> List<ContactDTO>)? = null
+    var contactReads = 0
     var failure: Exception? = null
     var blockedSender: String? = null
     var blockedContacts: Set<UUID> = emptySet()
@@ -199,8 +315,9 @@ private class FakeActionsSource : MessageActionsDataSource {
     }
 
     override suspend fun contacts(radioId: RadioId): List<ContactDTO> {
+        contactReads++
         fail()
-        return contacts
+        return contactRead?.invoke() ?: contacts
     }
 
     override suspend fun discoveredNodes(radioId: RadioId): List<DiscoveredNodeDTO> {

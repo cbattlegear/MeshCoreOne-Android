@@ -28,6 +28,7 @@ object LoggingMessagingIssueReporter : MessagingIssueReporter {
         val operation = when (diagnostic) {
             is MessagingDiagnostic.Failure -> diagnostic.operation + ":" + diagnostic.cause.javaClass.simpleName
             is MessagingDiagnostic.StaleResult -> diagnostic.operation
+            is MessagingDiagnostic.UnmatchedAcknowledgement -> "unmatchedAcknowledgement:orphanSentRow=${diagnostic.orphanSentRow}"
             else -> diagnostic.javaClass.simpleName
         }
         logger.warning("generation=${diagnostic.token().generation.value} operation=$operation")
@@ -39,6 +40,7 @@ private fun MessagingDiagnostic.token(): SessionToken = when (this) {
     is MessagingDiagnostic.StaleResult -> token
     is MessagingDiagnostic.AckCodeMismatch -> token
     is MessagingDiagnostic.AckCodeCollision -> token
+    is MessagingDiagnostic.UnmatchedAcknowledgement -> token
 }
 
 internal class MessagingOwnership(

@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 interface MessageActionsDataSource {
     suspend fun contacts(radioId: RadioId): List<ContactDTO>
@@ -28,10 +30,14 @@ interface MessageActionsDataSource {
     suspend fun setMuted(contactId: UUID, muted: Boolean)
 }
 
+/** The sender block committed, but its historical message deletion failed. */
+class BlockedSenderHistoryDeletionException(cause: Exception) : Exception(cause)
+
 sealed interface MessageActionsFailure {
     data object DetailsLoadFailed : MessageActionsFailure
     data object ReactionsLoadFailed : MessageActionsFailure
     data object BlockFailed : MessageActionsFailure
+    data object BlockContactsLoadFailed : MessageActionsFailure
     data object MuteFailed : MessageActionsFailure
 }
 
@@ -54,6 +60,7 @@ data class MessageActionsState(
     val isLoadingReactions: Boolean = false,
     val reactionFailure: MessageActionsFailure.ReactionsLoadFailed? = null,
     val isReactionLoadCancelled: Boolean = false,
+    val blockContactsFailure: MessageActionsFailure.BlockContactsLoadFailed? = null,
 )
 
 class MessageActionsStateHolder(
@@ -64,18 +71,23 @@ class MessageActionsStateHolder(
     val state: StateFlow<MessageActionsState> = mutableState.asStateFlow()
     private var reactionJob: Job? = null
     private var reactionRequest = 0L
+    private var detailsJob: Job? = null
+    private var contactsRadioId: RadioId? = null
+    private val blockContactsLoad = Mutex()
 
     fun loadDetails(message: MessageDTO) {
         if (!MessageActionAvailability.forMessage(message).showsPathDetail) return
-        scope.launch {
+        detailsJob = scope.launch {
             mutableState.value = mutableState.value.copy(isLoadingDetails = true, failure = null)
             try {
                 val contacts = dataSource.contacts(message.radioId)
                 val discovered = dataSource.discoveredNodes(message.radioId)
                 val repeats = dataSource.repeats(message.id)
+                contactsRadioId = message.radioId
                 mutableState.value = mutableState.value.copy(
                     isLoadingDetails = false,
                     repeats = repeats,
+                    blockContactsFailure = null,
                     directory = MessagePathDirectory(
                         contacts,
                         contacts.filter { it.isRepeater },
@@ -140,17 +152,49 @@ class MessageActionsStateHolder(
         }
     }
 
+    fun loadBlockContacts(radioId: RadioId) {
+        scope.launch {
+            try {
+                detailsJob?.join()
+                blockContactsLoad.withLock {
+                    if (contactsRadioId == radioId) return@withLock
+                    val contacts = dataSource.contacts(radioId)
+                    contactsRadioId = radioId
+                    mutableState.value = mutableState.value.copy(
+                        blockContactsFailure = null,
+                        directory = mutableState.value.directory.copy(
+                            contacts = contacts,
+                            repeaters = contacts.filter { it.isRepeater },
+                        ),
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                mutableState.value = mutableState.value.copy(blockContactsFailure = MessageActionsFailure.BlockContactsLoadFailed)
+            }
+        }
+    }
+
     fun blockSender(message: MessageDTO, contactIds: Set<UUID>) {
         val sender = message.senderNodeName ?: return
         scope.launch {
             try {
-                dataSource.blockChannelSender(message.radioId, sender)
+                val historyDeleted = try {
+                    dataSource.blockChannelSender(message.radioId, sender)
+                    true
+                } catch (_: BlockedSenderHistoryDeletionException) {
+                    false
+                }
                 dataSource.blockContacts(contactIds)
-                mutableState.value = mutableState.value.copy(blockedSender = sender, failure = null)
+                mutableState.value = mutableState.value.copy(
+                    blockedSender = sender.takeIf { historyDeleted },
+                    failure = if (historyDeleted) null else MessageActionsFailure.BlockFailed,
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                mutableState.value = mutableState.value.copy(failure = MessageActionsFailure.BlockFailed)
+                mutableState.value = mutableState.value.copy(blockedSender = null, failure = MessageActionsFailure.BlockFailed)
             }
         }
     }

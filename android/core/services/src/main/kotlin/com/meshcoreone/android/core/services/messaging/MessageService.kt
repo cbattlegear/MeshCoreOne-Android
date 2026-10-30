@@ -201,12 +201,20 @@ class MessageService(
         }
         checkIdentity("acknowledgement")
         val tracking = synchronized(lock) {
-            val found = pendingAcks.values.firstOrNull { code in it.ackCodes && !it.isDelivered } ?: return
-            found.copy(isDelivered = true, acknowledgement = MeshAcknowledgement(code, tripTime)).also {
+            val found = pendingAcks.values.firstOrNull { code in it.ackCodes && !it.isDelivered }
+            found?.copy(isDelivered = true, acknowledgement = MeshAcknowledgement(code, tripTime))?.also {
                 pendingAcks[it.messageID] = it
                 activeDirectClaims[it.messageID]?.acknowledgement = it.acknowledgement
                 it.receipt.complete(requireNotNull(it.acknowledgement))
             }
+        }
+        if (tracking == null) {
+            bookkeeping("unmatchedAckDiagnostic") {
+                val orphanSentRow = dataStore.hasOutgoingSentDM(token.radioId, code.ackCodeUInt32)
+                ownership.check("unmatchedAcknowledgement.read")
+                ownership.reporter.report(MessagingDiagnostic.UnmatchedAcknowledgement(token, orphanSentRow))
+            }
+            return
         }
         reconcileAcknowledgement(tracking.messageID)
     }

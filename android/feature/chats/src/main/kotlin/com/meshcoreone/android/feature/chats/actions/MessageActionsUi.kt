@@ -56,6 +56,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -115,6 +117,7 @@ fun MessageActionsRoute(
         modifier,
         clock,
         localDeviceName,
+        onLoadBlockContacts = { holder.loadBlockContacts(message.radioId) },
     )
 }
 
@@ -133,6 +136,7 @@ fun MessageActionsContent(
     modifier: Modifier = Modifier,
     clock: Clock = Clock.systemDefaultZone(),
     localDeviceName: String? = localDevice?.name,
+    onLoadBlockContacts: (() -> Unit)? = null,
 ) {
     val availability = remember(message) { MessageActionAvailability.forMessage(message) }
     var selectedArrivalId by rememberSaveable(message.id) { mutableStateOf<UUID?>(null) }
@@ -140,6 +144,15 @@ fun MessageActionsContent(
     var showReactionDetails by rememberSaveable(message.id) { mutableStateOf(false) }
     var preferredReaction by rememberSaveable(message.id) { mutableStateOf<String?>(null) }
     var showBlockConfirmation by rememberSaveable { mutableStateOf(false) }
+    var confirmedBlockContactIds by rememberSaveable(message.id, message.radioId) {
+        mutableStateOf(emptySet<UUID>())
+    }
+    LaunchedEffect(message.id, message.radioId, state.blockedSender) {
+        if (state.blockedSender != null) confirmedBlockContactIds = emptySet()
+    }
+    LaunchedEffect(message.id, showBlockConfirmation) {
+        if (showBlockConfirmation) onLoadBlockContacts?.invoke()
+    }
     LaunchedEffect(message.id, showReactionDetails) {
         if (showReactionDetails) onLoadReactions(message.id, preferredReaction)
     }
@@ -187,6 +200,22 @@ fun MessageActionsContent(
                 }
                 MessageMetadata(message, arrivals.size)
                 if (availability.canBlockSender) {
+                    if (state.failure == MessageActionsFailure.BlockFailed) {
+                        Text(
+                            AppLocalizableStrings.errorPersistenceSaveFailed(
+                                LocalResources.current,
+                                stringResource(AppChatsStrings.chatsMessageActionBlockSender),
+                            ),
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                        TextButton(
+                            onClick = { showBlockConfirmation = true },
+                            modifier = Modifier.sharedTouchTarget(),
+                        ) {
+                            Text(stringResource(AppLocalizableStrings.commonTryAgain))
+                        }
+                    }
                     TextButton(
                         onClick = { showBlockConfirmation = true },
                         modifier = Modifier.sharedTouchTarget(),
@@ -253,7 +282,11 @@ fun MessageActionsContent(
         BlockSenderDialog(
             senderName = message.senderNodeName.orEmpty(),
             contacts = state.directory.contacts,
+            initialSelectedIds = confirmedBlockContactIds,
+            contactsLoadFailed = state.blockContactsFailure != null,
+            onRetryContacts = onLoadBlockContacts,
             onConfirm = {
+                confirmedBlockContactIds = it.toSet()
                 onBlockSender(message, it)
                 showBlockConfirmation = false
             },
@@ -786,11 +819,14 @@ internal fun reactionRelativeTime(date: Instant, now: Instant, locale: java.util
 private fun BlockSenderDialog(
     senderName: String,
     contacts: List<ContactDTO>,
+    initialSelectedIds: Set<UUID>,
+    contactsLoadFailed: Boolean,
+    onRetryContacts: (() -> Unit)?,
     onConfirm: (Set<UUID>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val resources = LocalResources.current
-    var selected by rememberSaveable { mutableStateOf(emptySet<UUID>()) }
+    var selected by rememberSaveable { mutableStateOf(initialSelectedIds.toSet()) }
     val matching = remember(contacts, senderName) {
         contacts.filter { !it.isBlocked && it.name.equals(senderName, ignoreCase = true) }
     }
@@ -800,6 +836,21 @@ private fun BlockSenderDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(stringResource(AppChatsStrings.chatsBlockSenderLimitation))
+                if (contactsLoadFailed) {
+                    Text(
+                        AppLocalizableStrings.errorPersistenceFetchFailed(
+                            resources,
+                            stringResource(AppChatsStrings.chatsBlockSenderMatchingContacts),
+                        ),
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                    onRetryContacts?.let { retry ->
+                        TextButton(onClick = retry, modifier = Modifier.sharedTouchTarget()) {
+                            Text(stringResource(AppLocalizableStrings.commonTryAgain))
+                        }
+                    }
+                }
                 if (matching.isNotEmpty()) {
                     Text(
                         stringResource(AppChatsStrings.chatsBlockSenderMatchingContacts),

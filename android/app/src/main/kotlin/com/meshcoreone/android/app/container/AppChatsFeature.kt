@@ -21,6 +21,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.feature.chats.composer.*
+import com.meshcoreone.android.feature.chats.actions.BlockedSenderHistoryDeletionException
 import com.meshcoreone.android.feature.chats.list.*
 import com.meshcoreone.android.feature.chats.timeline.*
 import com.meshcoreone.android.feature.chats.rooms.*
@@ -195,7 +196,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val connectionState get() = this@AppChatsFeature.connectionState
         override val currentRadioId = MutableStateFlow(radio)
         override val reloadRequests get() = changes
-        override val messageEvents: Flow<ChatListEvent> get() = events().map(::listEvent)
+        override val messageEvents: Flow<ChatListEvent> get() = events().mapNotNull(::listEvent)
         override val clock: Clock = Clock.systemUTC()
         override val diagnostics = ChatListDiagnostics { operation, failure -> report(operation, failure) }
         override fun conversationServices(): ChatConversationServices? {
@@ -241,15 +242,30 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override suspend fun blockChannelSender(radioId: RadioId, senderName: String) {
             store.saveBlockedChannelSender(BlockedChannelSenderDTO(name = senderName, radioId = radioId))
             container.sessions.current?.takeIf { it.token.radioId == radioId }?.syncCoordinator?.refreshBlockedContactsCache(radioId, store)
+            try {
+                store.deleteChannelMessages(senderName, radioId)
+            } catch (failure: PersistenceStoreException) {
+                throw BlockedSenderHistoryDeletionException(failure)
+            }
+            app.messageEventStream.send(MessageEvent.ChannelHistoryDeleted(radioId))
+            app.refreshConversations()
         }
         override suspend fun blockContacts(contactIds: Set<UUID>) {
+            var firstFailure: Exception? = null
             for (id in contactIds) {
-                val contact = store.fetchContact(EntityKey(radio, id))
-                    ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
-                store.saveContact(contact.copy(isBlocked = true))
+                try {
+                    val contact = store.fetchContact(EntityKey(radio, id))
+                        ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
+                    store.saveContact(contact.copy(isBlocked = true))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    if (firstFailure == null) firstFailure = failure else firstFailure.addSuppressed(failure)
+                }
             }
             container.sessions.current?.takeIf { it.token.radioId == radio }?.syncCoordinator?.refreshBlockedContactsCache(radio, store)
             app.bumpContactsVersion()
+            firstFailure?.let { throw it }
         }
         override suspend fun setMuted(contactId: UUID, muted: Boolean) {
             store.setContactMuted(EntityKey(radio, contactId), muted)
@@ -424,10 +440,16 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 is TimelineConversation.Channel -> enqueueChannel(radio, message.id, isResend = true)
             }
         }
-        override val events: Flow<TimelineEvent> get() = this@AppChatsFeature.events().transform { event ->
+        override val events: Flow<TimelineEvent> get() = this@AppChatsFeature.events().transform<MessageEvent, TimelineEvent> { event ->
             val ids = when (event) {
                 is MessageEvent.DirectMessageReceived -> listOf(event.message.id)
                 is MessageEvent.ChannelMessageReceived -> listOf(event.message.id)
+                is MessageEvent.ChannelHistoryDeleted -> {
+                    if (conversation is TimelineConversation.Channel && event.radioId == radio) {
+                        emit(TimelineEvent.HistoryChanged(conversation.id))
+                    }
+                    emptyList()
+                }
                 is MessageEvent.MessageStatusResolved -> listOf(event.messageID)
                 is MessageEvent.MessageResent -> listOf(event.messageID)
                 is MessageEvent.MessageFailed -> listOf(event.messageID)
@@ -620,7 +642,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     }
 }
 
-private fun listEvent(event: MessageEvent): ChatListEvent = when (event) {
+private fun listEvent(event: MessageEvent): ChatListEvent? = when (event) {
+    is MessageEvent.ChannelHistoryDeleted -> null
     is MessageEvent.DirectMessageReceived -> ChatListEvent.DIRECT_MESSAGE_RECEIVED
     is MessageEvent.ChannelMessageReceived -> ChatListEvent.CHANNEL_MESSAGE_RECEIVED
     is MessageEvent.RoomMessageReceived -> ChatListEvent.ROOM_MESSAGE_RECEIVED

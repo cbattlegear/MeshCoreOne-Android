@@ -70,6 +70,7 @@ sealed interface MessagingDiagnostic {
     data class StaleResult(val token: SessionToken, val operation: String) : MessagingDiagnostic
     data class AckCodeMismatch(val token: SessionToken, val messageID: UUID, val attempt: UByte) : MessagingDiagnostic
     data class AckCodeCollision(val token: SessionToken, val messageID: UUID, val otherMessageID: UUID) : MessagingDiagnostic
+    data class UnmatchedAcknowledgement(val token: SessionToken, val orphanSentRow: Boolean) : MessagingDiagnostic
 }
 
 fun interface MessagingIssueReporter {

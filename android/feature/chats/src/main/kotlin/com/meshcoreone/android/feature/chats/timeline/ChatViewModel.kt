@@ -276,8 +276,13 @@ class ChatViewModel(
     }
 
     private suspend fun handleEvent(event: TimelineEvent) {
+        if (event is TimelineEvent.HistoryChanged) {
+            refresh()
+            return
+        }
         operationMutex.withLock {
             when (event) {
+                is TimelineEvent.HistoryChanged -> error("History refresh must run outside the operation mutex")
                 is TimelineEvent.MessageReceived -> {
                     val message = event.message
                     if (mutableState.value.messages.any { it.id == message.id }) return

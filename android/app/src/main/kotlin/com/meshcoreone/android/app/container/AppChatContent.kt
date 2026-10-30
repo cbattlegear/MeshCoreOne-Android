@@ -158,6 +158,7 @@ class AppChatContent internal constructor(
         val state = when {
             !enabled -> PreviewLoadState.DISABLED
             recorded == PreviewLoadState.MALWARE_WARNING -> recorded
+            recorded == PreviewLoadState.NO_PREVIEW -> recorded
             !automatic(message.isChannelMessage) && recorded != PreviewLoadState.LOADED &&
                 recorded != PreviewLoadState.LOADING -> PreviewLoadState.DISABLED
             recorded == PreviewLoadState.LOADING -> recorded

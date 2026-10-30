@@ -289,8 +289,8 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     fun makeChatTimelinePrimerDependencies(): ChatTimelinePrimer.Dependencies = ChatTimelinePrimer.Dependencies(
         registry = ::ensureChatCoordinatorRegistry,
         dataStore = { offlineDataStore },
-        reactionService = { services?.reactionService },
-        connectedDeviceNodeName = { connectedDevice?.nodeName },
+        reactionService = { radio -> services?.takeIf { it.token.radioId == radio }?.reactionService },
+        connectedDeviceNodeName = { radio -> connectedDevice?.takeIf { it.radioId == radio }?.nodeName },
     )
 
     /** Records the view-environment values the background refresh bakes with and returns the inputs for [conversation]. */

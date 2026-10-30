@@ -36,7 +36,7 @@ internal fun rememberMessageBubbleLabels(
     contacts: List<ContactDTO>,
     currentUserName: String?,
     rendered: Map<java.util.UUID, MessageItem> = emptyMap(),
-    onEnvironment: ((EnvInputs) -> Unit)? = null,
+    onEnvironment: ((EnvInputs, Resources) -> Unit)? = null,
 ): ((MessageDTO) -> String)? {
     // An unbound, standalone graph retains the basic timeline label; never synthesize rendering preferences.
     if (content == null) return null
@@ -66,7 +66,7 @@ internal fun rememberMessageBubbleLabels(
     val nicknames = remember(contacts) {
         MessageBubbleConfiguration.buildNicknameLookup(contacts)
     }
-    SideEffect { onEnvironment?.invoke(env) }
+    SideEffect { onEnvironment?.invoke(env, resources) }
     return { message ->
         val resolution = bubbleSenderResolution(message, contacts, nicknames, resources)
         val item = rendered[message.id] ?: messageBubbleAccessibilityItem(message, resolution, env, resources)

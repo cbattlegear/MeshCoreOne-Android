@@ -77,6 +77,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     private val navigation get() = container.navigation
     private val logger = Logger.getLogger("com.mc1.AppChatsFeature")
     private val renderEnvironment = MutableStateFlow(EnvInputs.DEFAULT.copy(translationOffersEnabled = false))
+    private val renderResources = MutableStateFlow<android.content.res.Resources?>(null)
     internal val content get() = container.chatContent
     private val changes = merge(combine(
         app.servicesVersion, app.conversationsVersion, app.contactsVersion,
@@ -376,7 +377,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     private fun events(): Flow<MessageEvent> = flow { emitAll(app.messageEventStream.events()) }
 
-    internal fun updateRenderEnvironment(env: EnvInputs) {
+    internal fun updateRenderEnvironment(env: EnvInputs, resources: android.content.res.Resources? = null) {
+        if (resources != null) renderResources.value = resources
         renderEnvironment.value = env
         app.chatEnvInputs(null, ChatEnvSnapshot(env.themeID, env.isDark, env.isHighContrast, env.contentSizeCategory))
     }
@@ -404,7 +406,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         envOverride: EnvInputs? = null,
     ): CoordinatedTimelineState {
         val invalidations = merge(
-            changes, renderEnvironment.map { Unit },
+            changes, renderEnvironment.map { Unit }, renderResources.map { Unit },
             content?.renderInvalidations ?: emptyFlow(),
         )
         return CoordinatedTimelineState(
@@ -418,6 +420,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     renderEnvironment.value.themeID, renderEnvironment.value.isDark,
                     renderEnvironment.value.isHighContrast, renderEnvironment.value.contentSizeCategory,
                 ))
+                val resources = renderResources.value ?: content?.resources
                 val contacts = if (conversation is TimelineConversation.Channel) {
                     senderTables?.invoke()?.contacts ?: store.fetchContacts(conversation.id.radioId)
                 } else emptyList()
@@ -425,7 +428,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 val rowById = rows.filterIsInstance<TimelineRow.Message>().associateBy { it.message.id }
                 val unreadIds = rows.filterIsInstance<TimelineRow.UnreadDivider>().mapTo(HashSet()) { it.beforeMessageId }
                 val inputs = messages.map { message ->
-                    val resources = content?.resources
                     val resolution = if (resources == null) NodeNameResolution(
                         message.senderNodeName.orEmpty(), NodeNameMatchKind.UNRESOLVED,
                     ) else bubbleSenderResolution(message, contacts, nicknames, resources)
@@ -445,24 +447,35 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         indexing: ReactionIndexing?,
     ): List<MessageDTO> {
         if (indexing == null) return messages
+        val radio = when (val target = indexing.scope) {
+            is ReactionIndexScope.Direct -> target.contact.radioId
+            is ReactionIndexScope.Channel -> target.channel.radioId
+        }
+        check(messages.all { it.radioId == radio }) { "Reaction indexing crossed a conversation radio" }
         return messages.map { message ->
             val reactions = when (val target = indexing.scope) {
                 is ReactionIndexScope.Direct -> indexing.service.indexDMMessage(
                     message.id, target.contact.id, message.text, message.reactionTimestamp,
-                ).map { pending -> ReactionDTO(
-                    messageID = message.id, emoji = pending.parsed.emoji, senderName = pending.senderName,
-                    messageHash = pending.parsed.messageHash, rawText = pending.rawText,
-                    contactID = target.contact.id, radioId = target.contact.radioId,
-                ) }
+                ).map { pending ->
+                    check(pending.radioId == radio) { "Pending direct reaction belongs to another radio" }
+                    ReactionDTO(
+                        messageID = message.id, emoji = pending.parsed.emoji, senderName = pending.senderName,
+                        messageHash = pending.parsed.messageHash, rawText = pending.rawText,
+                        contactID = target.contact.id, radioId = pending.radioId,
+                    )
+                }
                 is ReactionIndexScope.Channel -> {
                     val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
                     if (name == null) emptyList() else indexing.service.indexMessage(
                         message.id, target.channel.index, name, message.text, message.timestamp,
-                    ).map { pending -> ReactionDTO(
-                        messageID = message.id, emoji = pending.parsed.emoji, senderName = pending.senderNodeName,
-                        messageHash = pending.parsed.messageHash, rawText = pending.rawText,
-                        channelIndex = pending.channelIndex, radioId = target.channel.radioId,
-                    ) }
+                    ).map { pending ->
+                        check(pending.radioId == radio) { "Pending channel reaction belongs to another radio" }
+                        ReactionDTO(
+                            messageID = message.id, emoji = pending.parsed.emoji, senderName = pending.senderNodeName,
+                            messageHash = pending.parsed.messageHash, rawText = pending.rawText,
+                            channelIndex = pending.channelIndex, radioId = pending.radioId,
+                        )
+                    }
                 }
             }
             var updated = message

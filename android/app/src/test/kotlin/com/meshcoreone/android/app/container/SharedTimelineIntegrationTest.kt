@@ -27,6 +27,93 @@ import kotlinx.coroutines.flow.first
 import org.junit.Test
 
 class SharedTimelineIntegrationTest : RoomProcessTest() {
+    @Test fun closedRadioPrimeCannotConsumeAnotherSessionsPendingReaction() = runTest {
+        val harness = ContainerHarness(this, store)
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("reaction fixture ready") {
+                harness.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
+            val live = assertNotNull(harness.sessions.current)
+            val oldRadio = RadioId(UUID.fromString("99999999-9999-9999-9999-999999999999"))
+            assertTrue(oldRadio != live.token.radioId)
+            store.saveDevice(DeviceDTO(radioId = oldRadio, publicKey = key(9), nodeName = "Old radio"))
+            store.saveChannel(oldRadio, com.meshcoreone.android.core.protocol.event.ChannelInfo(
+                0u, "old", com.meshcoreone.android.core.protocol.bytes.Bytes(ByteArray(16)),
+            ))
+            val channel = assertNotNull(store.fetchChannel(oldRadio, 0u))
+            val message = MessageDTO(radioId = oldRadio, channelIndex = 0u, text = "target",
+                timestamp = 1_700_000_000u, senderNodeName = "Sender",
+                direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED)
+            store.saveMessage(message)
+            val service = live.reactionService
+            val wire = service.buildReactionText("\uD83D\uDC4D", "Sender", message.text, message.timestamp)
+            service.queuePendingReaction(
+                assertNotNull(com.meshcoreone.android.core.services.reactions.ReactionParser.parse(wire)),
+                0u, "Reactor", wire, live.token.radioId,
+            )
+            val dependencies = harness.appState.makeChatTimelinePrimerDependencies()
+            assertNull(dependencies.reactionService(oldRadio))
+            assertNull(dependencies.connectedDeviceNodeName(oldRadio))
+            assertSame(service, dependencies.reactionService(live.token.radioId))
+            harness.appState.mountedChatCoordinator(TimelineConversation.Channel(channel).id)
+            com.meshcoreone.android.app.state.ChatTimelinePrimer(
+                dependencies, CoordinatedPrimeTimeline(harness.container.chatsFeature, harness.container.uiScope),
+            ).prime(com.meshcoreone.android.app.state.ChatConversationType.Channel(channel),
+                com.meshcoreone.android.core.services.rendering.EnvInputs.DEFAULT)
+            assertTrue(store.fetchReactions(
+                com.meshcoreone.android.core.contracts.domain.EntityKey(oldRadio, message.id),
+            ).isEmpty())
+            val retained = service.indexMessage(UUID.randomUUID(), 0u, "Sender", message.text, message.timestamp)
+            assertEquals(1, retained.size, "the old radio's prime did not drain the live session queue")
+            assertEquals(live.token.radioId, retained.single().radioId)
+            assertEquals(wire, retained.single().rawText)
+        } finally {
+            harness.container.close()
+        }
+    }
+
+    @Test fun mountedSharedSenderLabelsRebakeWithTheActualUiLocaleResources() = runTest {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        fun resources(locale: java.util.Locale) = context.createConfigurationContext(
+            android.content.res.Configuration(context.resources.configuration).apply { setLocale(locale) },
+        ).resources
+        val french = resources(java.util.Locale.FRENCH)
+        val german = resources(java.util.Locale.GERMAN)
+        val unknownKey = com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageSenderUnknown
+        kotlin.test.assertNotEquals(french.getString(unknownKey), german.getString(unknownKey))
+        val radio = RadioId(UUID.fromString("88888888-8888-8888-8888-888888888888"))
+        store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(8), nodeName = "Radio"))
+        store.saveChannel(radio, com.meshcoreone.android.core.protocol.event.ChannelInfo(
+            0u, "locale", com.meshcoreone.android.core.protocol.bytes.Bytes(ByteArray(16)),
+        ))
+        store.saveMessage(MessageDTO(radioId = radio, channelIndex = 0u, text = "original",
+            timestamp = 1_700_000_000u, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED))
+        val harness = ContainerHarness(this, store)
+        val conversation = TimelineConversation.Channel(assertNotNull(store.fetchChannel(radio, 0u)))
+        val feature = harness.container.chatsFeature
+        val env = com.meshcoreone.android.core.services.rendering.EnvInputs.DEFAULT
+        feature.updateRenderEnvironment(env.copy(preferredLanguageCode = "fr"), french)
+        val mounted = ChatViewModel(conversation, feature.timeline(conversation), CoroutineScope(currentCoroutineContext()))
+        try {
+            mounted.prime()
+            val coordinator = assertNotNull(harness.appState.chatCoordinatorRegistry).coordinator(conversation.id)
+            coordinator.renderStateFlow.first {
+                it.items.singleOrNull()?.envelope?.senderResolution?.displayName == french.getString(unknownKey)
+            }
+            feature.updateRenderEnvironment(env.copy(preferredLanguageCode = "de"), german)
+            coordinator.renderStateFlow.first {
+                it.items.singleOrNull()?.envelope?.senderResolution?.displayName == german.getString(unknownKey)
+            }
+            assertEquals(german.getString(unknownKey),
+                assertIs<CoordinatedRenderItem>(mounted.state.value.renderItems.single()).item.envelope.senderResolution.displayName)
+            assertEquals("original", mounted.state.value.messages.single().text)
+        } finally {
+            mounted.close()
+            harness.container.close()
+        }
+    }
+
     @Test fun mountedSiblingViewModelsShareRealRoomWindowPagingAndOwnership() = runTest {
         val radio = RadioId(UUID.fromString("11111111-1111-1111-1111-111111111111"))
         store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Radio"))

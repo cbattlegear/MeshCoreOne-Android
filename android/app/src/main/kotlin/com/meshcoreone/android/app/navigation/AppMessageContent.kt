@@ -71,6 +71,9 @@ internal fun AppMessageContent(
                     report("Preview image decode failed", problem)
                 })
             } else if (!autoResolve && !manualImage) {
+                SideEffect {
+                    if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.DISABLED)
+                }
                 TextButton(onClick = { manualImage = true }) { Text(stringResource(AppChatsStrings.chatsPreviewTapToLoad)) }
             } else if (image == null) {
                 val sharedAspect = if (url == media.firstOrNull()?.url) {

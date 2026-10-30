@@ -25,9 +25,9 @@ class ChatTimelinePrimer(
     class Dependencies(
         val registry: () -> ChatCoordinatorRegistry?,
         val dataStore: () -> PersistenceStoreProtocol?,
-        val reactionService: () -> ReactionService?,
+        val reactionService: (com.meshcoreone.android.core.model.RadioId) -> ReactionService?,
         /** Live connected device's node name, never a fallback; null skips outgoing channel indexing. */
-        val connectedDeviceNodeName: () -> String?,
+        val connectedDeviceNodeName: (com.meshcoreone.android.core.model.RadioId) -> String?,
     )
 
     private val logger: Logger = Logger.getLogger("com.mc1.ChatTimelinePrimer")
@@ -58,13 +58,14 @@ class ChatTimelinePrimer(
             is ChatConversationType.Channel -> fetchSenderTables(conversation.channel.radioId)
         }
 
-        val reactions = dependencies.reactionService()?.let { service ->
+        val reactions = dependencies.reactionService(conversation.coordinatorId.radioId)?.let { service ->
             ReactionIndexing(
                 service,
                 when (conversation) {
                     is ChatConversationType.Dm -> ReactionIndexScope.Direct(conversation.contact)
                     is ChatConversationType.Channel ->
-                        ReactionIndexScope.Channel(conversation.channel, dependencies.connectedDeviceNodeName())
+                        ReactionIndexScope.Channel(conversation.channel,
+                            dependencies.connectedDeviceNodeName(conversation.coordinatorId.radioId))
                 },
             )
         }

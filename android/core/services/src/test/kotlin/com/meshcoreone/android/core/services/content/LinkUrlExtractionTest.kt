@@ -140,6 +140,8 @@ class LinkUrlExtractionTest {
             LinkUrlExtraction.extractAllUrls("ftp://example.com/?next=https://other.com/path"),
         )
         assertNull(LinkUrlExtraction.extractFirstUrl("view-source:https://example.com"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("xmpp:rooms.example.org?join"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("sip:alice@example.org?subject=tracker.com"))
     }
 
     @Test

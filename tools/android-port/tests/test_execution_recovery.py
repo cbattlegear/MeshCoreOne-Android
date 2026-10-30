@@ -266,7 +266,9 @@ class ExecutionRecoveryTests(unittest.TestCase):
         self.assertEqual(self.ledger.hard_lock_records(), [])
 
     def test_adapter_supervisor_uses_existing_reviewed_direct_launch_path(self):
-        from local import check
+        local_path = Path(recovery.__file__).parents[1] / "local"
+        sys.path.insert(0, str(local_path))
+        import check
 
         with tempfile.TemporaryDirectory(prefix="adapter-recovery-") as directory:
             root = Path(directory)

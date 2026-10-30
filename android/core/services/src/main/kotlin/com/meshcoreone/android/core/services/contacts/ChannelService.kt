@@ -54,7 +54,11 @@ class ChannelService(
 
     /** Let the connection owner preserve a completed partial drain before ending this generation. */
     suspend fun awaitSyncAccounting() {
-        synchronized(lock) { syncAccounting }?.await()
+        val accounting = synchronized(lock) {
+            requiresFreshSession = true
+            syncAccounting
+        }
+        accounting?.await()
     }
 
     // region Sync
@@ -238,9 +242,9 @@ class ChannelService(
      * not found.
      */
     suspend fun fetchChannel(index: UByte): ChannelInfo? {
-        synchronized(lock) { if (requiresFreshSession) throw ChannelServiceError.NotConnected() }
         var lastError: MeshCoreException = MeshCoreException.Timeout()
         for (attempt in 1..FETCH_MAX_ATTEMPTS) {
+            synchronized(lock) { if (requiresFreshSession) throw ChannelServiceError.NotConnected() }
             try {
                 val info = session.getChannel(index)
                 if (info.index != index) {

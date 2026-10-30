@@ -144,11 +144,34 @@ class ChannelRecoveryIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun serialStallRetiresFurtherReadsAndRecoversOnlyOnFreshTransport() = runTest {
+        withRecovery(serial = true) { f ->
+            f.awaitPartialCommit()
+            val old = f.h.links.radios.single()
+            assertEquals(listOf(0, 1, 2), f.channelRequests(old), "neither timeout retry nor later slot may reach the retired session")
+            assertEquals(0, old.closes)
+            assertEquals(0, old.pipelinedReadChecks, "exercise actual serial service/controller path")
+            f.commitGate.complete(Unit)
+            f.awaitRecovered()
+            assertEquals(listOf("new0", "keep2", "keep3"), f.partialRows.map { it.name })
+            assertEquals(f.oldMissing, f.partialRows.single { it.index == 2.toUByte() })
+            assertEquals(1, old.closes)
+            assertEquals(0, old.readers)
+            val fresh = f.h.links.radios.last()
+            assertEquals(1, fresh.sent.count { it[0].toInt() == 1 })
+            assertEquals(listOf(0, 1, 2, 3), f.channelRequests(fresh))
+            assertEquals(0, fresh.pipelinedReadChecks)
+            assertEquals(listOf("new0", "recovered", "new3"), store.fetchChannels(f.radioId).map { it.name })
+            assertEquals(1, f.h.sessions.outstanding)
+        }
+    }
+
     private suspend fun TestScope.withRecovery(
         failReconnect: Boolean = false,
+        serial: Boolean = false,
         body: suspend TestScope.(Fixture) -> Unit,
     ) {
-        val f = Fixture(this, failReconnect)
+        val f = Fixture(this, failReconnect, serial)
         try {
             f.seed()
             f.connecting = backgroundScope.async { f.h.manager.connect(f.target) }
@@ -159,7 +182,7 @@ class ChannelRecoveryIntegrationTest : RoomProcessTest() {
         }
     }
 
-    private inner class Fixture(test: TestScope, failReconnect: Boolean) {
+    private inner class Fixture(test: TestScope, failReconnect: Boolean, private val serial: Boolean) {
         val radioId = RadioId(UUID.fromString("C3800000-0000-0000-0000-000000000001"))
         val deviceId = UUID.fromString("C3800000-0000-0000-0000-000000000002")
         val target = ConnectionTarget.WiFi("localhost", 5000u)
@@ -175,7 +198,7 @@ class ChannelRecoveryIntegrationTest : RoomProcessTest() {
                 unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
             ): SnapshotList<ChannelDTO> {
                 if (radioId == this@Fixture.radioId && commits++ == 0) {
-                    assertEquals(listOf<UByte>(0u, 3u), configured.map { it.index })
+                    assertEquals(if (serial) listOf<UByte>(0u) else listOf<UByte>(0u, 3u), configured.map { it.index })
                     assertEquals(listOf<UByte>(1u), unconfiguredIndices.toList())
                     commitEntered.complete(Unit)
                     commitGate.await()
@@ -200,14 +223,14 @@ class ChannelRecoveryIntegrationTest : RoomProcessTest() {
             harness.container.foreground.activityStarted()
             harness.links.configureRadio = { radio ->
                 val first = harness.links.radios.isEmpty()
-                radio.modelName = "Heltec V3"
+                radio.modelName = if (serial) "T1000-E" else "Heltec V3"
                 radio.pipelinedReadsSupported = true
                 if (!first && failReconnect) radio.connectFailure = IllegalStateException("fresh connection unavailable")
                 radio.respond = { command ->
                     when (command[0].toInt()) {
                         0x16 -> listOf(
                             Bytes.of(13, 9, 50, 4) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +
-                                Bytes.utf8("Heltec V3").paddedOrTruncated(40) +
+                                Bytes.utf8(radio.modelName).paddedOrTruncated(40) +
                                 Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(0),
                         )
                         0x1f -> {
@@ -240,7 +263,7 @@ class ChannelRecoveryIntegrationTest : RoomProcessTest() {
             radio.sent.filter { it[0].toInt() == 0x1f }.map { it[1].toInt() }
 
         fun awaitPartialCommit() = h.eventually(
-            "actual four-slot pipeline reaches partial Room commit", virtualBudgetMillis = 2_000, virtualStepMillis = 10,
+            "actual channel read reaches partial Room commit", virtualBudgetMillis = if (serial) 6_000 else 2_000, virtualStepMillis = 10,
         ) { commitEntered.isCompleted }
 
         fun awaitRecovered() = h.eventually(

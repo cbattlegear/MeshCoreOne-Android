@@ -22,7 +22,9 @@ The real App integration suite holds the first Room commit to prove the runtime
 cannot close early, inspects old/new transport command traces, checks persisted
 partial/missing rows, then checks the replacement graph and recovered row. It
 also exercises old callbacks/frames, caller cancellation, manual disconnect and
-fresh-connect failure. The firmware/transport is a test role; App services,
+fresh-connect failure. A serial-stall companion proves the recovery accounting
+handoff retires both the next timeout attempt and later serial slot reads before
+the new physical connection. The firmware/transport is a test role; App services,
 controller, protocol session and Room persistence are production implementations.
 
 ## Execution status

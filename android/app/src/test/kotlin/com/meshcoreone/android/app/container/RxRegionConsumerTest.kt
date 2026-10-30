@@ -198,51 +198,6 @@ class RxRegionConsumerTest : RoomProcessTest() {
                 store.addDeviceKnownRegion(radioId, region)
             }
 
-            @Test fun reconnectBetweenAcceptedEditAndRegistryLookupRejectsTheOriginalGeneration() = runTest {
-                val f = RxIngestionFixture(this, store)
-                val accepted = CompletableDeferred<SessionToken>()
-                val resumeCallback = CountDownLatch(1)
-                try {
-                    f.connect()
-                    val old = f.live
-                    val id = assertNotNull(f.harness.manager.connectedDevice).id
-                    val access = object : ConnectedDeviceAccess by f.harness.container.deviceAccess {
-                        override fun replaceConnectedDevice(device: DeviceDTO): SessionToken? {
-                            val token = f.harness.container.deviceAccess.replaceConnectedDevice(device)
-                            accepted.complete(assertNotNull(token))
-                            check(resumeCallback.await(10, TimeUnit.SECONDS)) { "Accepted-edit callback was not released" }
-                            return token
-                        }
-                    }
-                    val editor = ConnectedDeviceEditor(
-                        access, store, store, { null }, RadioPresetMatcher { _, _, _, _ -> emptySet() },
-                        backgroundScope, { EPOCH }, onKnownRegionsChanged = f.harness.container::knownRegionsChanged,
-                    )
-                    val edit = async(Dispatchers.Default) { editor.addKnownRegion("Germany") }
-                    f.harness.eventually("DTO accepted before callback lookup") { accepted.isCompleted }
-                    assertEquals(old.token, accepted.await())
-                    f.harness.manager.disconnect()
-                    f.harness.manager.connect(f.harness.target(id))
-                    f.harness.eventually("same-radio replacement handlers ready") {
-                        f.harness.sessions.current?.let {
-                            it !== old && it.messagePollingService.hasMessageHandlersWired
-                        } == true
-                    }
-                    f.live = assertNotNull(f.harness.sessions.current)
-                    assertEquals(old.token.radioId, f.radio)
-                    assertNotEquals(old.token, f.live.token)
-                    // A live packet also establishes that the replacement's initial cache load has finished.
-                    f.ingest(f.packet(Bytes.of(1, 2, 3, 4)))
-                    resumeCallback.countDown()
-                    assertNotNull(edit.await()).join()
-                    assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
-                    assertTrue(assertNotNull(f.harness.manager.connectedDevice).knownRegions.isEmpty())
-                    assertNull(f.ingest(f.packet(Bytes.of(5, 6, 7, 8), region = "Germany")).regionScope)
-                } finally {
-                    resumeCallback.countDown()
-                    f.harness.container.close()
-                }
-            }
         }
         val f = RxIngestionFixture(this, store, held)
         try {
@@ -269,6 +224,52 @@ class RxRegionConsumerTest : RoomProcessTest() {
             assertNull(f.ingest(packet).regionScope, "old edit must not retarget replacement service's cache")
         } finally {
             release.complete(Unit)
+            f.harness.container.close()
+        }
+    }
+
+    @Test fun reconnectBetweenAcceptedEditAndRegistryLookupRejectsTheOriginalGeneration() = runTest {
+        val f = RxIngestionFixture(this, store)
+        val accepted = CompletableDeferred<SessionToken>()
+        val resumeCallback = CountDownLatch(1)
+        try {
+            f.connect()
+            val old = f.live
+            val id = assertNotNull(f.harness.manager.connectedDevice).id
+            val access = object : ConnectedDeviceAccess by f.harness.container.deviceAccess {
+                override fun replaceConnectedDevice(device: DeviceDTO): SessionToken? {
+                    val token = f.harness.container.deviceAccess.replaceConnectedDevice(device)
+                    accepted.complete(assertNotNull(token))
+                    check(resumeCallback.await(10, TimeUnit.SECONDS)) { "Accepted-edit callback was not released" }
+                    return token
+                }
+            }
+            val editor = ConnectedDeviceEditor(
+                access, store, store, { null }, RadioPresetMatcher { _, _, _, _ -> emptySet() },
+                backgroundScope, { EPOCH }, onKnownRegionsChanged = f.harness.container::knownRegionsChanged,
+            )
+            val edit = async(Dispatchers.Default) { editor.addKnownRegion("Germany") }
+            f.harness.eventually("DTO accepted before callback lookup") { accepted.isCompleted }
+            assertEquals(old.token, accepted.await())
+            f.harness.manager.disconnect()
+            f.harness.manager.connect(f.harness.target(id))
+            f.harness.eventually("same-radio replacement handlers ready") {
+                f.harness.sessions.current?.let {
+                    it !== old && it.messagePollingService.hasMessageHandlersWired
+                } == true
+            }
+            f.live = assertNotNull(f.harness.sessions.current)
+            assertEquals(old.token.radioId, f.radio)
+            assertNotEquals(old.token, f.live.token)
+            // A live packet also establishes that the replacement's initial cache load has finished.
+            f.ingest(f.packet(Bytes.of(1, 2, 3, 4)))
+            resumeCallback.countDown()
+            assertNotNull(edit.await()).join()
+            assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
+            assertTrue(assertNotNull(f.harness.manager.connectedDevice).knownRegions.isEmpty())
+            assertNull(f.ingest(f.packet(Bytes.of(5, 6, 7, 8), region = "Germany")).regionScope)
+        } finally {
+            resumeCallback.countDown()
             f.harness.container.close()
         }
     }

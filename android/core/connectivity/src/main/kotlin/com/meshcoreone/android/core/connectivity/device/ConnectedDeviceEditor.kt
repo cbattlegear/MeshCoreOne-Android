@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.connectivity.device
 
 import com.meshcoreone.android.core.connectivity.ConnectivityDiagnostics
 import com.meshcoreone.android.core.connectivity.ConnectivityError
+import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
 import com.meshcoreone.android.core.model.ContactDTO
@@ -23,12 +24,12 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /**
- * The live connected-device value. The runtime exposes it read-only; replacing it is a missing
- * runtime seam that WP-303 must provide (see WP-206 coordinator notes).
+ * The live connected-device value. Accepted replacements return their connection, sequence and
+ * previous regions atomically; rejected replacements return null.
  */
 interface ConnectedDeviceAccess {
     val connectedDevice: DeviceDTO?
-    fun replaceConnectedDevice(device: DeviceDTO)
+    fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit?
 }
 
 /** The current session's contact service operations used by bulk node removal. */
@@ -61,7 +62,7 @@ class ConnectedDeviceEditor(
     private val scope: CoroutineScope,
     private val now: () -> Instant,
     private val diagnostics: ConnectivityDiagnostics = ConnectivityDiagnostics.NONE,
-    private val onKnownRegionsChanged: suspend (List<String>) -> Unit = {},
+    private val onKnownRegionsChanged: (ConnectedDeviceEdit, List<String>) -> Unit = { _, _ -> },
     private val clearDefaultFloodScope: suspend () -> Unit = {},
 ) {
     val connectedDevice: DeviceDTO? get() = access.connectedDevice
@@ -80,7 +81,12 @@ class ConnectedDeviceEditor(
         return replaceAndSave(updated, "updateDevice")
     }
 
-    fun updateDevice(device: DeviceDTO) = access.replaceConnectedDevice(device)
+    fun updateDevice(device: DeviceDTO) {
+        val edit = access.replaceConnectedDevice(device) ?: return
+        if (edit.previousKnownRegions != device.knownRegions) {
+            onKnownRegionsChanged(edit, device.knownRegions.toList())
+        }
+    }
 
     fun updateAutoAddConfig(config: AutoAddConfig): Job? = edit("autoAddConfig") {
         it.copy(autoAddConfig = config.bitmask, autoAddMaxHops = config.maxHops)
@@ -100,10 +106,9 @@ class ConnectedDeviceEditor(
         val device = access.connectedDevice ?: return null
         if (region in device.knownRegions) return null
         val updated = device.copy(knownRegions = (device.knownRegions + region).snapshot())
-        access.replaceConnectedDevice(updated)
+        updateDevice(updated)
         return scope.launch {
             report("addKnownRegion") { devices.addDeviceKnownRegion(updated.radioId, region) }
-            report("knownRegions") { onKnownRegionsChanged(updated.knownRegions.toList()) }
         }
     }
 
@@ -114,11 +119,10 @@ class ConnectedDeviceEditor(
             knownRegions = device.knownRegions.filterNot { it == region }.snapshot(),
             defaultFloodScopeName = if (wasDefault) null else device.defaultFloodScopeName,
         )
-        access.replaceConnectedDevice(updated)
+        updateDevice(updated)
         return scope.launch {
             report("removeKnownRegion") { devices.removeDeviceKnownRegion(updated.radioId, region) }
             if (wasDefault) report("clearDefaultFloodScope") { clearDefaultFloodScope() }
-            report("knownRegions") { onKnownRegionsChanged(updated.knownRegions.toList()) }
         }
     }
 
@@ -178,7 +182,7 @@ class ConnectedDeviceEditor(
     }
 
     private fun replaceAndSave(updated: DeviceDTO, operation: String): Job {
-        access.replaceConnectedDevice(updated)
+        updateDevice(updated)
         return scope.launch { report(operation) { devices.saveDevice(updated) } }
     }
 

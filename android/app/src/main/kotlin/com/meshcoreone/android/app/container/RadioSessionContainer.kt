@@ -77,6 +77,7 @@ import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
@@ -104,6 +105,8 @@ class RadioSessionContainer private constructor(
 ) : RuntimeServices, AppSession {
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
     private val lock = Any()
+    private val knownRegionLock = Any()
+    private var lastKnownRegionEdit = 0L
     private var closed = false
     internal val chatSendQueueProgress: ChatSendQueueProgress = env.chatSendQueueProgress
     private val session: MeshCoreSession = inputs.connection.session
@@ -136,6 +139,17 @@ class RadioSessionContainer private constructor(
         session, RxLogServiceStore.from(dataStore), HeardRepeatProcessingAdapter(heardRepeatsService), scope,
         diagnostics = persistentRxLogDiagnostics(),
     )
+
+    // The undispatched launch installs the cache before releasing this lock, so the sequence check cannot race it.
+    internal fun knownRegionsChanged(sequence: Long, regions: List<String>): Job? =
+        synchronized(knownRegionLock) {
+            if (sequence <= lastKnownRegionEdit) return@synchronized null
+            lastKnownRegionEdit = sequence
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                if (!isClosed) rxLogService.updateKnownRegions(regions)
+            }
+        }
+
     override val notificationService = NotificationService(
         radioId, env.notificationDelivery, env.notificationPreferences, env.appState,
         NotificationUnreadCounting {

@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
 import com.meshcoreone.android.core.connectivity.device.RemoveUnfavoritedResult
 import com.meshcoreone.android.core.connectivity.pairing.PairingCoordinator
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
+import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.ConnectionIntent
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
@@ -133,10 +134,11 @@ class ManagerDeviceAccess(private val manager: ConnectionManager) : ConnectedDev
     private val mutableChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
     internal val changes: kotlinx.coroutines.flow.StateFlow<Long> = mutableChanges
     override val connectedDevice: DeviceDTO? get() = manager.connectedDevice
-    override fun replaceConnectedDevice(device: DeviceDTO) {
-        manager.replaceConnectedDevice(device)
-        if (manager.connectedDevice == device) {
+    override fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? {
+        val edit = manager.replaceConnectedDevice(device)
+        if (edit != null) {
             mutableChanges.update { Math.incrementExact(it) }
         }
+        return edit
     }
 }

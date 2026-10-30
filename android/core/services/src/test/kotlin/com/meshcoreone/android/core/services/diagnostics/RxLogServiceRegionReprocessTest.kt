@@ -107,8 +107,7 @@ class RxLogServiceRegionReprocessTest {
                 h.store.saveRxLogEntry(entry)
 
                 h.service.startEventMonitoring(radioId)
-                // Wait for the secret load so knownRegions is ["Germany"] before clearing;
-                // updateKnownRegions([]) while still default-empty is a no-op.
+                // Wait for the secret load so this case exercises an actual cache transition.
                 rxLogSvcWaitUntil("known regions loaded from device") { h.service.knownRegions == listOf("Germany") }
 
                 h.service.updateKnownRegions(emptyList())
@@ -245,15 +244,23 @@ class RxLogServiceRegionReprocessTest {
                 h.store.beforeTransportFetch = { gate.await() }
                 val owner = h.scope.async { h.service.updateKnownRegions(listOf("Other")) }
                 rxLogSvcWaitUntil("owner pass is fetching") { h.store.transportCodeFetchLimits.size == 2 }
-                val waiterA = h.scope.async { h.service.updateKnownRegions(listOf("Elsewhere")) }
-                val waiterB = h.scope.async { h.service.updateKnownRegions(listOf("Germany")) }
-                // Let both waiters park before the owner's pass resumes.
-                rxLogSvcWaitUntil("both callers installed their caches") { h.service.knownRegions == listOf("Germany") }
-                kotlinx.coroutines.delay(100)
-                assertTrue(!waiterA.isCompleted && !waiterB.isCompleted, "callers park while the owner drains")
-                h.store.beforeTransportFetch = {}
-                gate.complete(Unit)
-                withTimeout(5_000) { owner.await(); waiterA.await(); waiterB.await() }
+                try {
+                    // Run each caller through cache installation to its parked await in the intended order.
+                    val waiterA = h.scope.async(start = CoroutineStart.UNDISPATCHED) {
+                        h.service.updateKnownRegions(listOf("Elsewhere"))
+                    }
+                    val waiterB = h.scope.async(start = CoroutineStart.UNDISPATCHED) {
+                        h.service.updateKnownRegions(listOf("Germany"))
+                    }
+                    assertEquals(listOf("Germany"), h.service.knownRegions)
+                    assertTrue(!waiterA.isCompleted && !waiterB.isCompleted, "callers park while the owner drains")
+                    h.store.beforeTransportFetch = {}
+                    gate.complete(Unit)
+                    withTimeout(5_000) { owner.await(); waiterA.await(); waiterB.await() }
+                } finally {
+                    h.store.beforeTransportFetch = {}
+                    gate.complete(Unit)
+                }
 
                 assertEquals(listOf("Germany"), h.service.knownRegions)
                 assertEquals("Germany", h.store.entry(entry.id)?.regionScope, "the final cache wins")
@@ -311,6 +318,49 @@ class RxLogServiceRegionReprocessTest {
                 gate.complete(Unit)
                 rxLogSvcWaitUntil("load finished and monitor subscribed") { h.session.subscriberCount == 1 }
                 assertEquals(listOf("Newer"), h.service.knownRegions, "the generation check discards the stale load")
+            }
+        },
+        case("WP-212::an empty update supersedes an in-flight nonempty device load") {
+            RxLogSvcHarness().use { h ->
+                val radioId = rxLogSvcRadio()
+                h.store.saveDevice(rxLogSvcDevice(radioId, listOf("Germany")))
+                val entry = transportCodedEntry(
+                    radioId, Bytes.of(0xAA, 0xBB, 0xCC), 1_704_000_100u, null, "Germany", listOf("Germany"),
+                )
+                h.store.saveRxLogEntry(entry)
+                val gate = CompletableDeferred<Unit>()
+                h.store.beforeDeviceFetch = { gate.await() }
+                try {
+                    h.service.startEventMonitoring(radioId)
+                    rxLogSvcWaitUntil("device load is in flight") { h.store.deviceFetchCount == 1 }
+                    assertEquals(emptyList(), h.service.knownRegions)
+                    h.service.updateKnownRegions(emptyList())
+                    gate.complete(Unit)
+                    rxLogSvcWaitUntil("stale load discarded and sticky label cleared") {
+                        h.session.subscriberCount == 1 && h.store.entry(entry.id)?.regionScope == null
+                    }
+                    assertEquals(emptyList(), h.service.knownRegions)
+                    assertEquals(emptyList(), assertNotNull(h.store.entry(entry.id)).regionScopeMatches)
+                } finally {
+                    gate.complete(Unit)
+                }
+            }
+        },
+        case("WP-212::an explicit empty update before monitoring supersedes the first device load") {
+            RxLogSvcHarness().use { h ->
+                val radioId = rxLogSvcRadio()
+                h.store.saveDevice(rxLogSvcDevice(radioId, listOf("Germany")))
+                val entry = transportCodedEntry(
+                    radioId, Bytes.of(0xAA, 0xBB, 0xCC), 1_704_000_100u, null, "Germany", listOf("Germany"),
+                )
+                h.store.saveRxLogEntry(entry)
+                h.service.updateKnownRegions(emptyList())
+                h.service.startEventMonitoring(radioId)
+                rxLogSvcWaitUntil("first load ignored and sticky label cleared") {
+                    h.session.subscriberCount == 1 && h.store.entry(entry.id)?.regionScope == null
+                }
+                assertEquals(emptyList(), h.service.knownRegions)
+                assertEquals(emptyList(), assertNotNull(h.store.entry(entry.id)).regionScopeMatches)
             }
         },
         case("WP-212::scope-key cache skips dollar-prefixed and blank region names") {

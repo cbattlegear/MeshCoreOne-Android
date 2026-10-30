@@ -27,6 +27,15 @@ import com.meshcoreone.android.feature.chats.composer.ui.LinkPreviewRoute
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
+internal suspend fun shareMountedImage(
+    content: AppChatContent,
+    image: ChatImage?,
+    share: suspend (ByteArray) -> Unit,
+) {
+    val mountedImage = requireNotNull(image as? ChatImage.Decoded) { "No mounted image is available to share" }
+    share(content.shareData(mountedImage))
+}
+
 @Composable
 internal fun AppMessageContent(
     content: AppChatContent,
@@ -142,8 +151,9 @@ internal fun AppMessageContent(
                             TextButton(onClick = {
                                 scope.launch {
                                     try {
-                                        val mountedImage = requireNotNull(loaded) { "No mounted image is available to share" }
-                                        com.meshcoreone.android.app.platform.shareImage(context, content.shareData(mountedImage))
+                                        shareMountedImage(content, loaded) { bytes ->
+                                            com.meshcoreone.android.app.platform.shareImage(context, bytes)
+                                        }
                                     }
                                     catch (cancelled: CancellationException) { throw cancelled }
                                     catch (problem: Exception) { report("Image sharing failed", problem); failure = problem }

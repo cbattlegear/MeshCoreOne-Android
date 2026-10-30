@@ -13,7 +13,11 @@ import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.LinkPreviewDataDTO
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
+import com.meshcoreone.android.feature.chats.composer.LinkPreviewCardState
 import com.meshcoreone.android.feature.chats.composer.LinkPreviewOutcome
+import com.meshcoreone.android.feature.chats.composer.LinkPreviewStateHolder
+import com.meshcoreone.android.feature.chats.composer.MalwareDomainPort
+import com.meshcoreone.android.feature.chats.composer.UrlSafetyPort
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -22,6 +26,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.junit.Rule
@@ -38,9 +43,10 @@ class CachedPreviewPolicyConsumerTest {
     @Test
     fun `persisted previews rehydrate for both conversation types while automatic fetch is disabled`() = runTest {
         val application = ApplicationProvider.getApplicationContext<Context>()
+        val noBackupDirectory = temporary.newFolder()
         val context = object : ContextWrapper(application) {
             override fun getApplicationContext(): Context = this
-            override fun getNoBackupFilesDir(): File = temporary.newFolder()
+            override fun getNoBackupFilesDir(): File = noBackupDirectory
         }
         val storage = MeshCoreStorage.get(context)
         val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
@@ -80,6 +86,19 @@ class CachedPreviewPolicyConsumerTest {
                 assertEquals(url, cached.url)
                 assertEquals("Persisted preview", cached.title)
                 assertEquals(LinkPreviewOutcome.Disabled, port.preview("https://new.example/article", isChannel))
+
+                val holder = LinkPreviewStateHolder(
+                    url,
+                    isChannel,
+                    port,
+                    UrlSafetyPort { false },
+                    MalwareDomainPort { false },
+                    backgroundScope,
+                )
+                holder.start()
+                runCurrent()
+                assertEquals(LinkPreviewCardState.Loaded(cached), holder.state.value)
+                holder.close()
             }
             assertEquals(0, fetchCalls)
         } finally {

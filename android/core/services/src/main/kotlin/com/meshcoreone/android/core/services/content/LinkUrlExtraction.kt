@@ -27,7 +27,7 @@ object LinkUrlExtraction {
     private val explicitHttpUrlPattern = Regex("""(?i)https?://\S+""")
     private val uriPattern = Regex("""(?i)\b[a-z][a-z0-9+.-]*://\S+""")
     private val emailPattern = Regex(
-        """(?i)[\w.!#$%&'*+/=?^_`{|}~-]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})""",
+        """(?i)[\w.!#$%&'*+=^_`{|}~-]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})""",
     )
     private val bareDomainPattern = Regex(
         """(?i)(?<![\w.@/-])(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9][a-z0-9-]{1,57}[a-z0-9])(?::\d{1,5})?(?:[/?#]\S*)?(?![\w@+%-])""",

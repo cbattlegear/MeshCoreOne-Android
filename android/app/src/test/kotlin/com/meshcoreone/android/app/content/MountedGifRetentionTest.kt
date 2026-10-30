@@ -7,6 +7,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.AppChatContent
 import com.meshcoreone.android.app.container.ChatImage
+import com.meshcoreone.android.app.navigation.shareMountedImage
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
@@ -96,7 +97,9 @@ class MountedGifRetentionTest {
             assertContentEquals(bytes, owner.shareData(mounted))
 
             owner.trimMemory()
-            assertContentEquals(bytes, owner.shareData(mounted))
+            var sharedBytes: ByteArray? = null
+            shareMountedImage(owner, mounted) { sharedBytes = it }
+            assertContentEquals(bytes, sharedBytes)
             assertEquals(1, fetchCalls)
         } finally {
             withContext(NonCancellable) {

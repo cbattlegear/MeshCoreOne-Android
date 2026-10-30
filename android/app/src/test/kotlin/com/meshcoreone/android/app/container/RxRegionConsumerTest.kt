@@ -10,7 +10,11 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.navigation.AppSettingsExternal
+import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceAccess
+import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
+import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
@@ -20,10 +24,14 @@ import com.meshcoreone.android.core.protocol.event.PayloadType
 import com.meshcoreone.android.core.protocol.event.RouteType
 import com.meshcoreone.android.feature.settings.device.SettingsExternalDestination
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -43,7 +51,8 @@ class RxRegionConsumerTest : RoomProcessTest() {
     @OriginalCase("RxLogServiceRegionReprocessTests::regionUpdateEvents yields message IDs after channel message reprocess()", "native-equivalent")
     @OriginalCase("RxLogServiceRegionReprocessTests::empty known regions clears sticky labels()", "native-equivalent")
     fun mountedRegionManagementAddAndDeleteReprocessTheLiveRxAndMessageExactlyOnceEach() = runTest {
-        val f = RxIngestionFixture(this, store)
+        var nextIdentity = 7
+        val f = RxIngestionFixture(this, store, identity = { key(nextIdentity++) })
         val storage = MeshCoreStorage.get(ApplicationProvider.getApplicationContext<Context>())
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         try {
@@ -104,6 +113,23 @@ class RxRegionConsumerTest : RoomProcessTest() {
                 compose.waitForIdle()
                 compose.onNodeWithText("France").assertDoesNotExist()
                 assertEquals(2, events.size, "unrelated discovery edits do not rewrite the Germany message")
+
+                assertNotNull(f.harness.container.deviceEditor.addKnownRegion("France")).join()
+                compose.waitForIdle()
+                compose.onNodeWithText("France").assertExists()
+                val oldRadio = f.radio
+                f.harness.manager.connect(f.harness.target())
+                f.harness.eventually("new radio and handlers ready") {
+                    f.harness.sessions.current?.let {
+                        it.token.radioId != oldRadio && it.messagePollingService.hasMessageHandlersWired &&
+                            f.harness.appState.canRunSettingsStartupReads
+                    } == true
+                }
+                f.live = assertNotNull(f.harness.sessions.current)
+                compose.waitForIdle()
+                compose.onNodeWithText("France").assertDoesNotExist()
+                assertEquals(listOf("France"), assertNotNull(store.fetchDevice(oldRadio)).knownRegions)
+                assertTrue(assertNotNull(store.fetchDevice(f.radio)).knownRegions.isEmpty())
             } finally { observer.cancelAndJoin() }
         } finally {
             host.pause().stop().destroy()
@@ -170,6 +196,52 @@ class RxRegionConsumerTest : RoomProcessTest() {
                 entered.complete(Unit)
                 release.await()
                 store.addDeviceKnownRegion(radioId, region)
+            }
+
+            @Test fun reconnectBetweenAcceptedEditAndRegistryLookupRejectsTheOriginalGeneration() = runTest {
+                val f = RxIngestionFixture(this, store)
+                val accepted = CompletableDeferred<SessionToken>()
+                val resumeCallback = CountDownLatch(1)
+                try {
+                    f.connect()
+                    val old = f.live
+                    val id = assertNotNull(f.harness.manager.connectedDevice).id
+                    val access = object : ConnectedDeviceAccess by f.harness.container.deviceAccess {
+                        override fun replaceConnectedDevice(device: DeviceDTO): SessionToken? {
+                            val token = f.harness.container.deviceAccess.replaceConnectedDevice(device)
+                            accepted.complete(assertNotNull(token))
+                            check(resumeCallback.await(10, TimeUnit.SECONDS)) { "Accepted-edit callback was not released" }
+                            return token
+                        }
+                    }
+                    val editor = ConnectedDeviceEditor(
+                        access, store, store, { null }, RadioPresetMatcher { _, _, _, _ -> emptySet() },
+                        backgroundScope, { EPOCH }, onKnownRegionsChanged = f.harness.container::knownRegionsChanged,
+                    )
+                    val edit = async(Dispatchers.Default) { editor.addKnownRegion("Germany") }
+                    f.harness.eventually("DTO accepted before callback lookup") { accepted.isCompleted }
+                    assertEquals(old.token, accepted.await())
+                    f.harness.manager.disconnect()
+                    f.harness.manager.connect(f.harness.target(id))
+                    f.harness.eventually("same-radio replacement handlers ready") {
+                        f.harness.sessions.current?.let {
+                            it !== old && it.messagePollingService.hasMessageHandlersWired
+                        } == true
+                    }
+                    f.live = assertNotNull(f.harness.sessions.current)
+                    assertEquals(old.token.radioId, f.radio)
+                    assertNotEquals(old.token, f.live.token)
+                    // A live packet also establishes that the replacement's initial cache load has finished.
+                    f.ingest(f.packet(Bytes.of(1, 2, 3, 4)))
+                    resumeCallback.countDown()
+                    assertNotNull(edit.await()).join()
+                    assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
+                    assertTrue(assertNotNull(f.harness.manager.connectedDevice).knownRegions.isEmpty())
+                    assertNull(f.ingest(f.packet(Bytes.of(5, 6, 7, 8), region = "Germany")).regionScope)
+                } finally {
+                    resumeCallback.countDown()
+                    f.harness.container.close()
+                }
             }
         }
         val f = RxIngestionFixture(this, store, held)

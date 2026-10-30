@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.connectivity.ConnectivityDiagnostics
 import com.meshcoreone.android.core.connectivity.ConnectivityError
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
@@ -23,12 +24,12 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /**
- * The live connected-device value. The runtime exposes it read-only; replacing it is a missing
- * runtime seam that WP-303 must provide (see WP-206 coordinator notes).
+ * The live connected-device value. Accepted replacements return their originating connection
+ * token atomically; rejected replacements return null.
  */
 interface ConnectedDeviceAccess {
     val connectedDevice: DeviceDTO?
-    fun replaceConnectedDevice(device: DeviceDTO)
+    fun replaceConnectedDevice(device: DeviceDTO): SessionToken?
 }
 
 /** The current session's contact service operations used by bulk node removal. */
@@ -61,7 +62,7 @@ class ConnectedDeviceEditor(
     private val scope: CoroutineScope,
     private val now: () -> Instant,
     private val diagnostics: ConnectivityDiagnostics = ConnectivityDiagnostics.NONE,
-    private val onKnownRegionsChanged: (DeviceDTO) -> Unit = {},
+    private val onKnownRegionsChanged: (SessionToken, List<String>) -> Unit = { _, _ -> },
     private val clearDefaultFloodScope: suspend () -> Unit = {},
 ) {
     val connectedDevice: DeviceDTO? get() = access.connectedDevice
@@ -82,10 +83,9 @@ class ConnectedDeviceEditor(
 
     fun updateDevice(device: DeviceDTO) {
         val previous = access.connectedDevice
-        access.replaceConnectedDevice(device)
-        if (access.connectedDevice == device && previous?.radioId == device.radioId &&
-            previous.knownRegions != device.knownRegions) {
-            onKnownRegionsChanged(device)
+        val token = access.replaceConnectedDevice(device) ?: return
+        if (previous?.radioId == device.radioId && previous.knownRegions != device.knownRegions) {
+            onKnownRegionsChanged(token, device.knownRegions.toList())
         }
     }
 

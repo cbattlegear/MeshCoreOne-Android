@@ -108,6 +108,7 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                         Text(region)
                         TextButton(enabled = !busy, onClick = { run {
                             val current = live()
+                            if (current.token != connection.token) throw SettingsNotConnectedException()
                             if (container.appState.connectedDevice?.defaultFloodScopeName == region) {
                                 current.settingsService.setDefaultFloodScopeVerified(null)
                                 if (live() !== current) throw SettingsNotConnectedException()
@@ -127,6 +128,7 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                 OutlinedTextField(name, { name = it }, label = { Text(stringResource(S.radioPresetLocation)) })
                 Button(enabled = name.isNotBlank() && !busy, onClick = { run {
                     val current = live()
+                    if (current.token != connection.token) throw SettingsNotConnectedException()
                     container.processStore.addDeviceKnownRegion(current.token.radioId, name.trim())
                     val updated = requireNotNull(container.processStore.fetchDevice(current.token.radioId))
                     if (live() !== current) throw SettingsNotConnectedException()

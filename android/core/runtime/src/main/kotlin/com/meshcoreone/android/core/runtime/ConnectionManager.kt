@@ -1490,14 +1490,14 @@ class ConnectionManager(
     fun clearSurfacedAuthenticationFailure() { synchronized(lock) { authFailureDevice = null } }
 
     /** Swift updateDevice(with:) after a device edit, limited to the current generation's radio. */
-    fun replaceConnectedDevice(device: DeviceDTO) {
-        synchronized(lock) {
-            val owner = active ?: return
-            val current = deviceValue ?: return
-            if (!isCurrent(owner) || current.id != device.id || current.radioId != device.radioId) return
-            deviceValue = device
-            owner.device = device
-        }
+    fun replaceConnectedDevice(device: DeviceDTO): SessionToken? = synchronized(lock) {
+        val owner = active ?: return@synchronized null
+        val current = deviceValue ?: return@synchronized null
+        if (!isCurrent(owner) || current.id != device.id || current.radioId != device.radioId) return@synchronized null
+        val token = owner.token ?: return@synchronized null
+        deviceValue = device
+        owner.device = device
+        token
     }
 
     private fun dispatch(

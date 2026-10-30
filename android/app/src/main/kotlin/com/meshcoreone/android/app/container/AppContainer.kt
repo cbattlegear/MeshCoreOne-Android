@@ -35,6 +35,7 @@ import com.meshcoreone.android.core.contracts.domain.MessagingIssueReporter
 import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.maps.OfflineMapController
@@ -241,11 +242,12 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             RadioPresets.matchingPresets(frequency, bandwidth, spreadingFactor, codingRate).map { it.id }.toSet()
         },
         processScope, { Instant.now() }, dependencies.connectivityDiagnostics,
-        onKnownRegionsChanged = { device ->
-            sessions.current?.takeIf { it.token.radioId == device.radioId }
-                ?.knownRegionsChanged(device.knownRegions.toList())
-        },
+        onKnownRegionsChanged = ::knownRegionsChanged,
     )
+
+    internal fun knownRegionsChanged(token: SessionToken, regions: List<String>) {
+        sessions.current?.takeIf { it.token == token }?.knownRegionsChanged(regions)
+    }
 
     val connectionPort = ConnectionManagerAppPort(
         connectionManager, platformAdapter, pairing, lastConnection, deviceEditor, dependencies.scans::stopBleScanning,

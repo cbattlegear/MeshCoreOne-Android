@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
 import com.meshcoreone.android.core.contracts.domain.ConnectionIntent
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DevicePlatform
 import com.meshcoreone.android.core.model.RadioId
@@ -133,10 +134,11 @@ class ManagerDeviceAccess(private val manager: ConnectionManager) : ConnectedDev
     private val mutableChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
     internal val changes: kotlinx.coroutines.flow.StateFlow<Long> = mutableChanges
     override val connectedDevice: DeviceDTO? get() = manager.connectedDevice
-    override fun replaceConnectedDevice(device: DeviceDTO) {
-        manager.replaceConnectedDevice(device)
-        if (manager.connectedDevice == device) {
+    override fun replaceConnectedDevice(device: DeviceDTO): SessionToken? {
+        val token = manager.replaceConnectedDevice(device)
+        if (token != null) {
             mutableChanges.update { Math.incrementExact(it) }
         }
+        return token
     }
 }

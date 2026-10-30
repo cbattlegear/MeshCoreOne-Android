@@ -35,8 +35,9 @@ internal class RxIngestionFixture(
     test: TestScope,
     val store: RoomPersistenceStore,
     persistence: com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol = store,
+    identity: (com.meshcoreone.android.core.contracts.domain.ConnectionTarget) -> Bytes = { key(7) },
 ) {
-    val harness = ContainerHarness(test, store, persistenceOverride = persistence)
+    val harness = ContainerHarness(test, store, identity = identity, persistenceOverride = persistence)
     lateinit var live: RadioSessionContainer
     val radio get() = live.token.radioId
     val secret = Bytes(ByteArray(16) { (it + 1).toByte() })

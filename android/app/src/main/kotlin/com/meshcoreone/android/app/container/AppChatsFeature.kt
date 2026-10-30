@@ -52,6 +52,8 @@ import com.meshcoreone.android.core.services.rendering.NodeNameResolution
 import com.meshcoreone.android.core.services.rendering.NodeNameMatchKind
 import com.meshcoreone.android.app.navigation.bubbleSenderResolution
 import com.meshcoreone.android.app.navigation.messageBubbleBuildInputs
+import com.meshcoreone.android.app.navigation.MessageBubbleConfiguration
+import com.meshcoreone.android.app.state.ChatConversationType
 import com.meshcoreone.android.app.state.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.InternalCoroutinesApi
@@ -419,7 +421,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 val contacts = if (conversation is TimelineConversation.Channel) {
                     senderTables?.invoke()?.contacts ?: store.fetchContacts(conversation.id.radioId)
                 } else emptyList()
-                val nicknames = com.meshcoreone.android.core.services.rendering.MessageBubbleConfiguration.buildNicknameLookup(contacts)
+                val nicknames = MessageBubbleConfiguration.buildNicknameLookup(contacts)
                 val rowById = rows.filterIsInstance<TimelineRow.Message>().associateBy { it.message.id }
                 val unreadIds = rows.filterIsInstance<TimelineRow.UnreadDivider>().mapTo(HashSet()) { it.beforeMessageId }
                 val inputs = messages.map { message ->

@@ -14,34 +14,25 @@
 // header comment for why this file owns that function's port).
 package com.meshcoreone.android.core.services.content
 
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
+import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class ImageHeaderDecoderTest {
-    private fun makePngHeader(width: Int, height: Int): ByteArray {
-        val signature = byteArrayOf(
-            0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-        )
-        val bytes = mutableListOf<Byte>()
-        bytes.addAll(signature.toList())
-        bytes.addAll(uInt32BigEndian(13)) // IHDR chunk length
-        bytes.addAll("IHDR".toByteArray(Charsets.US_ASCII).toList())
-        bytes.addAll(uInt32BigEndian(width))
-        bytes.addAll(uInt32BigEndian(height))
-        return bytes.toByteArray()
+    private fun makeCompletePng(width: Int, height: Int): ByteArray {
+        val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+        return ByteArrayOutputStream().use { output ->
+            check(ImageIO.write(image, "png", output))
+            output.toByteArray()
+        }
     }
-
-    private fun uInt32BigEndian(value: Int): List<Byte> = listOf(
-        (value ushr 24 and 0xFF).toByte(),
-        (value ushr 16 and 0xFF).toByte(),
-        (value ushr 8 and 0xFF).toByte(),
-        (value and 0xFF).toByte(),
-    )
 
     @Test
     fun `decodeDimensions returns pixel dims for a valid PNG`() {
-        val png = makePngHeader(width = 480, height = 270)
+        val png = makeCompletePng(width = 480, height = 270)
         val dims = ImageHeaderDecoder.decodeDimensions(png)
         assertEquals(480, dims?.first)
         assertEquals(270, dims?.second)

@@ -75,18 +75,25 @@ class RegionResolverTest {
     @Test
     fun `nil country code resolves to null`() = runTest {
         val location = LocationService(FakeLocationProducing())
-        val geocoder = FakeGeocoder(stub = null)
+        var geocodeCalls = 0
+        val geocoder = FakeGeocoder(
+            stub = GeocodeResult(countryCode = null, administrativeArea = null, subAdministrativeArea = null),
+            onReverseGeocode = { geocodeCalls++ },
+        )
         val result = resolver(location, geocoder).resolve()
         assertNull(result)
+        assertEquals(1, geocodeCalls, "the authorized path must reach the nil-country precondition")
     }
 
     // PortedFrom-case: "Unauthorized location → nil"
     @Test
     fun `unauthorized location resolves to null`() = runTest {
         val location = LocationService(FakeLocationProducing(LocationAuthorizationStatus.NOT_DETERMINED))
-        val geocoder = FakeGeocoder()
+        var geocodeCalls = 0
+        val geocoder = FakeGeocoder(onReverseGeocode = { geocodeCalls++ })
         val result = resolver(location, geocoder).resolve()
         assertNull(result)
+        assertEquals(0, geocodeCalls, "the unauthorized path must return before geocoding")
     }
 
     // WP-218 addition: the source's own `#expect(result == nil)` cases never exercise a

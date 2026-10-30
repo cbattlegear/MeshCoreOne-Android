@@ -20,6 +20,16 @@ class LinkUrlExtractionTest {
     }
 
     @Test
+    fun `extracts a bare web domain with inferred http scheme`() {
+        assertEquals("http://WCMesh.com", LinkUrlExtraction.extractFirstUrl("Visit WCMesh.com today"))
+    }
+
+    @Test
+    fun `extracts a www web domain as an absolute http url`() {
+        assertEquals("http://www.example.com", LinkUrlExtraction.extractFirstUrl("Visit www.example.com"))
+    }
+
+    @Test
     fun `returns null for text without urls`() {
         assertNull(LinkUrlExtraction.extractFirstUrl("Just some plain text without links"))
     }
@@ -32,7 +42,7 @@ class LinkUrlExtractionTest {
 
     @Test
     fun `ignores non-http schemes like tel and mailto`() {
-        val text = "Call me at tel:+1234567890 or mailto:test@example.com"
+        val text = "Call me at tel:+1234567890, mailto:test@example.com or ftp://example.com"
         assertNull(LinkUrlExtraction.extractFirstUrl(text))
     }
 
@@ -66,6 +76,11 @@ class LinkUrlExtractionTest {
     fun `ignores url-like text within mention brackets`() {
         val text = "Hey @[Ferret PocketMesh WCMesh.com], check this out!"
         assertNull(LinkUrlExtraction.extractFirstUrl(text))
+    }
+
+    @Test
+    fun `suppresses an explicit http url matched only inside a mention`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("Check @[https://docs.example.com/page] for details"))
     }
 
     @Test

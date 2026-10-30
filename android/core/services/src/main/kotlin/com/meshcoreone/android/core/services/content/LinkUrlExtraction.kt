@@ -5,13 +5,12 @@
 // equivalent and is a separate, still-pending native-adapter decision; the HTML
 // `og:image` scrape fallback is ported in `LinkPreviewHtmlMetadata.kt`/`LinkPreviewScraper.kt`.
 //
-// The Swift original detects links via `NSDataDetector(types: .link)` and then filters to
-// http/https schemes. There is no JVM equivalent of `NSDataDetector`'s heuristic link
-// detector (which also recognizes bare domains), so this port uses an explicit
-// `https?://` regex instead: every original test case exercises an explicit scheme, and a
-// scheme-less "bare domain" case is not part of this port's 154-item scope. If bare-domain
-// detection is later required, that is a new, explicitly scoped behavior addition, not a
-// silent gap in this port.
+// The Swift original detects links via `NSDataDetector(types: .link)`, filters to
+// http/https, then excludes matches overlapping mentions. The JVM adaptation recognizes
+// explicit HTTP(S) URLs and web-domain forms (including bare domains) so mention suppression
+// does not depend on the detector happening to reject the mention text first. Bare domains
+// receive the same inferred HTTP scheme as detector-produced web links; email addresses and
+// bare IP addresses are not treated as web links.
 //
 // The mention-range exclusion depends only on `MentionUtilities.mentionPattern`'s literal
 // regex string (`@\[([^\]]+)\]`), not the full `MentionUtilities` type (a separate,
@@ -23,7 +22,9 @@ package com.meshcoreone.android.core.services.content
 object LinkUrlExtraction {
     private val giphyShortCodePattern = Regex("^g:([A-Za-z0-9_-]+)$")
     private val mentionPattern = Regex("""@\[([^\]]+)\]""")
-    private val httpUrlPattern = Regex("""https?://\S+""")
+    private val httpUrlPattern = Regex(
+        """(?i)(?<![\w.@:/-])(?:https?://\S+|(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?(?:[/?#]\S*)?)""",
+    )
 
     /**
      * Extracts a Giphy GIF URL from meshcore-open `g:{id}` message format. The entire
@@ -53,7 +54,15 @@ object LinkUrlExtraction {
 
         return httpUrlPattern.findAll(text)
             .filter { match -> mentionRanges.none { it.overlaps(match.range) } }
-            .map { it.value }
+            .map { match ->
+                val value = match.value
+                if (value.startsWith("http://", ignoreCase = true) ||
+                    value.startsWith("https://", ignoreCase = true)) {
+                    value
+                } else {
+                    "http://$value"
+                }
+            }
             .toList()
     }
 

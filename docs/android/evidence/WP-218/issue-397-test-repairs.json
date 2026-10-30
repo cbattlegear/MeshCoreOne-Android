@@ -1,0 +1,69 @@
+{
+  "wp": "WP-218",
+  "issue": 397,
+  "pinned_source": "db14559b39d32322b06477c6ae676112f583db50",
+  "status": "source and test changes recorded; local product tests were not run",
+  "concerns": {
+    "DATA-22": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
+      "case": "cached previews rehydrate while automatic network fetch remains gated for both conversation types"
+    },
+    "DATA-23": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
+      "case": "both DM and channel cached results load without metadata network calls when automatic resolution is disabled"
+    },
+    "DATA-24": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
+      "case": "AppChatContent mounts a real two-frame GIF, retains share bytes, clears them through trimMemory, and refetches on remount"
+    },
+    "DATA-25": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/ImageHeaderDecoderTest.kt",
+      "case": "positive dimensions use a complete PNG produced by the host-JVM image writer"
+    },
+    "DATA-26": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/BitmapImageDecoderNativeTest.kt",
+      "case": "complete PNG/JPEG decode produces a native Bitmap allocation cost consumed by InlineImageCache"
+    },
+    "DATA-27": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/OkHttpContentFetchingTest.kt",
+      "case": "private redirect target listens and must receive zero connections"
+    },
+    "DATA-28": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/RegionResolverTest.kt",
+      "case": "authorized nil-country resolution reaches geocoder; unauthorized resolution does not"
+    },
+    "DATA-29": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/MalwareDomainFilterTest.kt",
+      "case": "legitimate-domain decisions use the bundled malware-domain snapshot"
+    },
+    "DATA-30": {
+      "evidence": "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtraction.kt; #403",
+      "case": "ASCII bare and www domains are recognized as HTTP(S) links; full NSDataDetector equivalence remains unclaimed and cross-work-group adjudication remains tracked by WP-308"
+    },
+    "DATA-31": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt",
+      "case": "original WCMesh.com mention input plus explicit URL mention suppression exercise overlap filtering"
+    },
+    "DATA-32": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/NativeLinkMetadataFetchingTest.kt",
+      "case": "actual metadata producer scrapes page metadata and passes the hero image through native Bitmap preview processing"
+    },
+    "DATA-33": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/BitmapImageDecoderNativeTest.kt; existing AnimatedGifImageDecoderTest.kt",
+      "case": "Robolectric native graphics exercises real bitmap/GIF decoder paths; no physical-device result is claimed"
+    }
+  },
+  "verification": {
+    "manifest_configured": false,
+    "declared_commands": [],
+    "local_test_execution": "not run; no approved WP-218 command is declared",
+    "hosted_exact_candidate": "the PR's exact-candidate hosted job and log are authoritative; they are not duplicated here",
+    "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
+  },
+  "limitations": [
+    "This worktree did not execute Gradle/JVM tests.",
+    "Robolectric native graphics is not physical-device verification.",
+    "WP-308 issue #403 still owns the broader NSDataDetector adaptation decision.",
+    "No complete WP-218 source-family acceptance is claimed."
+  ]
+}

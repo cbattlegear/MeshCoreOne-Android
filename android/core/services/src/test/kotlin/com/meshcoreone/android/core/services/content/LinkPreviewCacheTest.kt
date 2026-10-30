@@ -188,4 +188,38 @@ class LinkPreviewCacheTest {
         assertTrue(result is LinkPreviewResult.Disabled || result is LinkPreviewResult.NoPreviewAvailable)
         assertNull(cache.cachedPreview(url))
     }
+
+    @Test
+    fun `cached previews rehydrate while automatic network fetch remains gated for both conversation types`() = runTest {
+        var fetchCalls = 0
+        val service = LinkMetadataFetching {
+            fetchCalls++
+            LinkPreviewMetadata("Unexpected network result", null, null)
+        }
+
+        for (isChannel in listOf(false, true)) {
+            val source = InMemoryLinkPreviewPreferencesSource(
+                LinkPreviewPreferencesSnapshot(
+                    previewsEnabled = true,
+                    autoResolveDM = false,
+                    autoResolveChannels = false,
+                ),
+            )
+            val cache = LinkPreviewCache(service, LinkPreviewPreferences(source))
+            val dataStore = FakePersisting().apply {
+                seed(LinkPreviewDataDTO(url = "https://example.com/cached-$isChannel", title = "Cached"))
+            }
+            try {
+                val cached = cache.preview("https://example.com/cached-$isChannel", dataStore, isChannel)
+                assertTrue(cached is LinkPreviewResult.Loaded)
+                assertEquals("Cached", (cached as LinkPreviewResult.Loaded).data.title)
+
+                val uncached = cache.preview("https://example.com/new-$isChannel", dataStore, isChannel)
+                assertEquals(LinkPreviewResult.Disabled, uncached)
+                assertEquals(0, fetchCalls, "automatic network work must stay disabled")
+            } finally {
+                cache.close()
+            }
+        }
+    }
 }

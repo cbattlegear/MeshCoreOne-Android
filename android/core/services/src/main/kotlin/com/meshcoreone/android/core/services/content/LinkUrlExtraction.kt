@@ -24,16 +24,16 @@ import java.util.Locale
 object LinkUrlExtraction {
     private val giphyShortCodePattern = Regex("^g:([A-Za-z0-9_-]+)$")
     private val mentionPattern = Regex("""@\[([^\]]+)\]""")
-    private val explicitHttpUrlPattern = Regex("""(?i)https?://[^\s<>"']+""")
+    private val explicitHttpUrlPattern = Regex("""(?i)https?://[^\s<>"]+""")
     // Opaque wrappers are explicit so prose labels such as "Visit:" remain plain text.
     private val uriPattern = Regex(
-        """(?i)(?<![\w.-])(?![a-z0-9.-]+-https?://)(?:[a-z][a-z0-9+.-]*://|(?:mailto|view-source|file|data|javascript|tel|sms|geo|urn|xmpp|sip|sips):)[^\s<>"']*""",
+        """(?i)(?<![\w.-])(?![a-z0-9.-]+-https?://)(?:[a-z][a-z0-9+.-]*://|(?:mailto|view-source|file|data|javascript|tel|sms|geo|urn|xmpp|sip|sips):)[^\s<>"]*""",
     )
     private val emailPattern = Regex(
         """(?i)(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|[\w.!#$%&'*+/^_`{|}~-]+)@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})""",
     )
     private val bareDomainPattern = Regex(
-        """(?i)(?<![\w.@/\p{L}\p{M}\p{N}-])(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9][a-z0-9-]{1,57}[a-z0-9])(?::\d{1,5})?(?:[/?#][^\s<>"']*)?(?![\w@+%\p{L}\p{M}\p{N}-])""",
+        """(?i)(?<![\w.@/\p{L}\p{M}\p{N}-])(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9][a-z0-9-]{1,57}[a-z0-9])(?::\d{1,5})?(?:[/?#][^\s<>"]*)?(?![\w@+%\p{L}\p{M}\p{N}-])""",
     )
     private data class UrlMatch(val range: IntRange, val value: String, val explicitScheme: Boolean)
 

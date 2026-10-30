@@ -73,6 +73,30 @@ class LinkUrlExtractionTest {
     }
 
     @Test
+    fun `preserves apostrophes inside url paths and trims a trailing quote`() {
+        assertEquals(
+            "https://example.com/o'brien.png",
+            LinkUrlExtraction.extractFirstUrl("https://example.com/o'brien.png"),
+        )
+        assertEquals(
+            "https://example.com/o'brien.png",
+            LinkUrlExtraction.extractFirstUrl("example.com/o'brien.png"),
+        )
+        assertEquals(
+            "https://example.com/o'brien.png",
+            LinkUrlExtraction.extractFirstUrl("Visit https://example.com/o'brien.png'"),
+        )
+        assertEquals(
+            emptyList(),
+            LinkUrlExtraction.extractAllUrls("ftp://example.com/?next=other.example/o'brien.png"),
+        )
+        assertEquals(
+            emptyList(),
+            LinkUrlExtraction.extractAllUrls("mailto:o'brien@example.com?subject=tracker.example"),
+        )
+    }
+
+    @Test
     fun `ignores url-like text within mention brackets`() {
         val text = "Hey @[Ferret PocketMesh WCMesh.com], check this out!"
         assertNull(LinkUrlExtraction.extractFirstUrl(text))

@@ -53,22 +53,27 @@ internal fun AppMessageContent(
     val uri = LocalUriHandler.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val preferences by content.rendering.collectAsState()
+    val malwareRevision by content.malware.revision.collectAsState()
     val autoResolve = preferences[if (message.isChannelMessage) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM]
     (if (preferences[AppStorageKey.linkPreviewsEnabled]) media else emptyList()).forEach { entry ->
         val url = entry.url
         key(url, autoResolve) {
-            var image by remember(content, url, resolutions) {
-                mutableStateOf<ChatImage?>(content.cachedInline(url))
+            var image by remember(content, url) {
+                mutableStateOf<ChatImage?>(null)
             }
+            var verifiedMalwareRevision by remember(content, url) { mutableLongStateOf(Long.MIN_VALUE) }
             var failure by remember { mutableStateOf<Throwable?>(null) }
             var manualImage by remember { mutableStateOf(false) }
             var retry by remember { mutableIntStateOf(0) }
             var fullscreen by remember { mutableStateOf(false) }
+            val displayedImage = image.takeIf { verifiedMalwareRevision == malwareRevision }
             val inline = if (url == media.firstOrNull()?.url && rendered != null) {
                 rendered.content.any { it is MessageFragment.InlineImage }
             } else {
                 entry.isImage
             }
+            val hasMalwareWarning = rendered?.content?.any { it is MessageFragment.MalwareWarning } == true
+            val shouldCheckImage = entry.isImage && (inline || hasMalwareWarning)
             val holder = remember(content, url, message.isChannelMessage,
                 preferences[AppStorageKey.linkPreviewsEnabled],
                 preferences[AppStorageKey.linkPreviewsAutoResolveDM], preferences[AppStorageKey.linkPreviewsAutoResolveChannels]) {
@@ -77,7 +82,7 @@ internal fun AppMessageContent(
                     scope, ComposerDiagnostics(report))
             }
             DisposableEffect(holder) { onDispose { holder.close() } }
-            if (!inline || image == ChatImage.HtmlPage) {
+            if (!inline || displayedImage == ChatImage.HtmlPage) {
                 val preview by holder.state.collectAsState()
                 SideEffect {
                     if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, preview)
@@ -85,12 +90,12 @@ internal fun AppMessageContent(
                 LinkPreviewRoute(holder, content.images, uri::openUri, onImageError = { _, problem ->
                     report("Preview image decode failed", problem)
                 })
-            } else if (!autoResolve && !manualImage && image == null) {
+            } else if (!autoResolve && !manualImage && displayedImage == null) {
                 SideEffect {
                     if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.DISABLED)
                 }
                 TextButton(onClick = { manualImage = true }) { Text(stringResource(AppChatsStrings.chatsPreviewTapToLoad)) }
-            } else if (image == null) {
+            } else if (displayedImage == null) {
                 val sharedAspect = if (url == media.firstOrNull()?.url) {
                     rendered?.content?.filterIsInstance<MessageFragment.InlineImage>()?.firstOrNull()?.image?.cachedAspect
                 } else null
@@ -98,14 +103,47 @@ internal fun AppMessageContent(
                     Spacer(Modifier.widthIn(max = InlineImageMetrics.MAX_WIDTH_DP.dp).fillMaxWidth().aspectRatio(aspect.toFloat()))
                 }
             }
-            LaunchedEffect(content, url, autoResolve, manualImage, retry) {
-                if (!inline || (!autoResolve && !manualImage)) return@LaunchedEffect
-                image = null
-                failure = null
-                if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.LOADING)
+            LaunchedEffect(content, url, autoResolve, manualImage, retry, malwareRevision, shouldCheckImage) {
+                if (!shouldCheckImage) return@LaunchedEffect
                 try {
                     val host = LinkOpenPolicy.host(url) ?: error("Image link has no host")
-                    check(!content.malware.isBlocked(host)) { "Image host is blocked" }
+                    if (content.malware.isBlocked(host)) {
+                        image = null
+                        failure = null
+                        verifiedMalwareRevision = malwareRevision
+                        if (url == media.firstOrNull()?.url) {
+                            content.recordPreviewState(message.id, PreviewLoadState.MALWARE_WARNING)
+                        }
+                        return@LaunchedEffect
+                    }
+                    verifiedMalwareRevision = malwareRevision
+                    if (image is ChatImage.Decoded) {
+                        if (url == media.firstOrNull()?.url) {
+                            content.recordPreviewState(message.id, PreviewLoadState.LOADED)
+                        }
+                        return@LaunchedEffect
+                    }
+                    val cached = content.cachedInline(url)
+                    if (cached != null) {
+                        image = cached
+                        failure = null
+                        if (url == media.firstOrNull()?.url) {
+                            content.recordPreviewState(message.id, PreviewLoadState.LOADED)
+                        }
+                        return@LaunchedEffect
+                    }
+                    if (!autoResolve && !manualImage) {
+                        failure = null
+                        if (url == media.firstOrNull()?.url) {
+                            content.recordPreviewState(message.id, PreviewLoadState.DISABLED)
+                        }
+                        return@LaunchedEffect
+                    }
+                    image = null
+                    failure = null
+                    if (url == media.firstOrNull()?.url) {
+                        content.recordPreviewState(message.id, PreviewLoadState.LOADING)
+                    }
                     check(UrlSafetyChecker.isSafe(url)) { "Unsafe image URL" }
                     if (retry > 0) content.retryInline(url)
                     image = content.inline(url)
@@ -118,7 +156,7 @@ internal fun AppMessageContent(
                     if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.NO_PREVIEW)
                 }
             }
-            when (val loaded = image) {
+            when (val loaded = displayedImage) {
                 is ChatImage.Decoded -> {
                     val handle = loaded.handle
                     val size = InlineImageMetrics.displaySize(handle.width, handle.height)
@@ -152,7 +190,7 @@ internal fun AppMessageContent(
                 ChatImage.HtmlPage, null -> Unit
             }
             if (fullscreen) {
-                val loaded = image as? ChatImage.Decoded
+                val loaded = displayedImage as? ChatImage.Decoded
                 val bitmap = (loaded?.handle as? BitmapDecodedImageHandle)?.bitmap
                 androidx.compose.ui.window.Dialog(onDismissRequest = { fullscreen = false }) {
                     Surface {

@@ -213,6 +213,22 @@ class LinkPreviewCacheTest {
     }
 
     @Test
+    fun `persisted misses remain memoized across more than one hundred distinct urls`() = runTest {
+        val dataStore = FakePersisting()
+        val cache = previewsEnabledCache()
+        val urls = (0 until 201).map { "https://example.com/missing/$it" }
+        try {
+            urls.forEach { assertNull(cache.cachedPreview(it, dataStore)) }
+            assertEquals(urls.size, dataStore.fetchCallCount)
+
+            urls.forEach { assertNull(cache.cachedPreview(it, dataStore)) }
+            assertEquals(urls.size, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
     fun `failed persisted reads are not memoized as misses`() = runTest {
         val dataStore = FakePersisting().apply { shouldThrowOnFetch = true }
         val cache = previewsEnabledCache()

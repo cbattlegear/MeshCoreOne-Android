@@ -24,7 +24,8 @@ private object CacheConfig {
     const val MAX_ENTRY_COUNT = 100
     const val MAX_TOTAL_COST_BYTES = 50L * 1024 * 1024 // 50MB
     const val MAX_CONCURRENT_FETCHES = 3
-    const val MAX_PERSISTED_MISSES = 100
+    const val MAX_PERSISTED_MISSES = 10_000
+    const val MAX_PERSISTED_MISS_COST_BYTES = 4L * 1024 * 1024
 }
 
 /**
@@ -54,7 +55,8 @@ class LinkPreviewCache(
     private val fetchSemaphore = Semaphore(CacheConfig.MAX_CONCURRENT_FETCHES)
     private val mutex = Mutex()
     private val persistedLookupMutex = Mutex()
-    private val persistedMisses = linkedSetOf<String>()
+    private val persistedMisses = linkedMapOf<String, Long>()
+    private var persistedMissCostBytes = 0L
 
     /**
      * Shared fetch deferred per in-flight URL. Concurrent requests for the same URL await the
@@ -117,10 +119,19 @@ class LinkPreviewCache(
             if (url in persistedMisses) return@withLock null
             try {
                 dataStore.fetchLinkPreview(url)?.also { memoryCache.put(url, it) } ?: run {
-                    if (persistedMisses.size == CacheConfig.MAX_PERSISTED_MISSES) {
-                        persistedMisses.remove(persistedMisses.first())
+                    val cost = url.length.toLong() * 2 + 64
+                    if (cost <= CacheConfig.MAX_PERSISTED_MISS_COST_BYTES) {
+                        while (
+                            persistedMisses.size >= CacheConfig.MAX_PERSISTED_MISSES ||
+                            persistedMissCostBytes > CacheConfig.MAX_PERSISTED_MISS_COST_BYTES - cost
+                        ) {
+                            val oldest = persistedMisses.entries.iterator().next()
+                            persistedMisses.remove(oldest.key)
+                            persistedMissCostBytes -= oldest.value
+                        }
+                        persistedMisses[url] = cost
+                        persistedMissCostBytes += cost
                     }
-                    persistedMisses.add(url)
                     null
                 }
             } catch (cancellation: CancellationException) {
@@ -188,7 +199,9 @@ class LinkPreviewCache(
             // Persist to database.
             try {
                 dataStore.saveLinkPreview(dto)
-                persistedLookupMutex.withLock { persistedMisses.remove(url) }
+                persistedLookupMutex.withLock {
+                    persistedMisses.remove(url)?.let { persistedMissCostBytes -= it }
+                }
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Exception) {

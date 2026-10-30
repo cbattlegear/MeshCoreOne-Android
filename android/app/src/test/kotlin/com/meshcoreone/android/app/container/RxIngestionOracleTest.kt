@@ -159,7 +159,7 @@ class RxIngestionOracleTest : RoomProcessTest() {
                 assertEquals(stimulus.expectedHops, saved.inboundHopCount, stimulus.toString())
                 assertEquals(stimulus.expectedStamp, saved.inboundHopAdvertTimestamp, stimulus.toString())
                 assertEquals(publicKey, saved.publicKey)
-                db.discoveredNodes().delete(f.radio.value, saved.id)
+                store.deleteDiscoveredNode(EntityKey(f.radio, saved.id))
             }
         }
     }
@@ -170,8 +170,10 @@ class RxIngestionOracleTest : RoomProcessTest() {
     @OriginalCase("SyncCoordinatorMessageHandlerTests::refreshBlockedContactsCache replaces previous cache()", "native-equivalent")
     fun blockedNameCacheReadsAndReplacesActualRoomContacts() = runTest {
         withFixture { f ->
-            val blocked = ContactDTO(radioId = f.radio, publicKey = key(1), name = "BlockedPerson", isBlocked = true)
-            val normal = ContactDTO(radioId = f.radio, publicKey = key(2), name = "NormalPerson")
+            val blocked = ContactDTO(
+                radioId = f.radio, publicKey = key(1), name = "BlockedPerson", isBlocked = true, lastHeardTimestamp = 0u,
+            )
+            val normal = ContactDTO(radioId = f.radio, publicKey = key(2), name = "NormalPerson", lastHeardTimestamp = 0u)
             store.saveContact(blocked)
             store.saveContact(normal)
             f.live.syncCoordinator.refreshBlockedContactsCache(f.radio, store)

@@ -98,7 +98,9 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
             SettingsExternalDestination.RegionManagement -> {
                 var name by remember { mutableStateOf("") }
                 var known by remember { mutableStateOf(emptyList<String>()) }
-                LaunchedEffect(version, container.appState.currentRadioId) {
+                val connection by container.connectionManager.snapshot.collectAsState()
+                val deviceRevision by container.deviceAccess.changes.collectAsState()
+                LaunchedEffect(version, connection, deviceRevision) {
                     known = container.appState.connectedDevice?.knownRegions.orEmpty()
                 }
                 known.forEach { region ->

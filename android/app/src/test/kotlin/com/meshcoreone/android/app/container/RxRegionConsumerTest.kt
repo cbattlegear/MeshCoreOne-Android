@@ -96,6 +96,14 @@ class RxRegionConsumerTest : RoomProcessTest() {
                 assertTrue(cleared.regionScopeMatches.isEmpty())
                 assertNull(assertNotNull(store.fetchMessage(com.meshcoreone.android.core.contracts.domain.EntityKey(f.radio, message.id))).regionScope)
                 assertNull(feature.failure.value)
+
+                assertNotNull(f.harness.container.deviceEditor.addKnownRegion("France")).join()
+                compose.waitForIdle()
+                compose.onNodeWithText("France").assertExists()
+                assertNotNull(f.harness.container.deviceEditor.removeKnownRegion("France")).join()
+                compose.waitForIdle()
+                compose.onNodeWithText("France").assertDoesNotExist()
+                assertEquals(2, events.size, "unrelated discovery edits do not rewrite the Germany message")
             } finally { observer.cancelAndJoin() }
         } finally {
             host.pause().stop().destroy()

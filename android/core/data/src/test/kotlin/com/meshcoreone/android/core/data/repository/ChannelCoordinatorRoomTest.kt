@@ -1,6 +1,5 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/ChannelServicePipelineTests.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/ChannelServiceTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-209 Approved fresh-session recovery adaptation; all persistence is actual Room.
 package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.ChannelSyncErrorType

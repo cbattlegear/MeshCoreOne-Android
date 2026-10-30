@@ -35,6 +35,13 @@ expected same-link reconciliation. Those companions now assert the approved
 reconnect-required outcomes while retaining real Room row/history/cache checks.
 This is a candidate correction, not a passing execution claim.
 
+Run `41081868192` at `1fab49e3d` stopped before Android execution because the
+Room companion header incorrectly combined PortedFrom and AndroidOnly
+dispositions. Removing the redundant AndroidOnly header preserves both pinned
+source mappings. `python -B -m unittest test_ci_environment -q` then passed
+all 19 controller fixtures, including source-disposition validation; this is
+not Android execution evidence.
+
 After archive/restore relocated this worktree, the user explicitly directed
 correction of its stale reservation path. An exact identity/revision/path CAS
 changed only the worktree column; all other columns were asserted unchanged.

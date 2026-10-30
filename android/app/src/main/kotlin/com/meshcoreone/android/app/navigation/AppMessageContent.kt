@@ -24,6 +24,9 @@ import com.meshcoreone.android.core.datastore.AppStorageKey
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.composer.ui.LinkPreviewRoute
+import com.meshcoreone.android.core.services.rendering.MessageFragment
+import com.meshcoreone.android.core.services.rendering.MessageItem
+import com.meshcoreone.android.core.services.rendering.PreviewLoadState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -33,6 +36,7 @@ internal fun AppMessageContent(
     message: MessageDTO,
     report: (String, Throwable?) -> Unit,
     onMap: (String) -> Unit,
+    rendered: MessageItem? = null,
 ) {
     val resolutions by content.resolutions.collectAsState()
     val media = remember(content, message.text, resolutions) { content.media(message.text) }
@@ -59,13 +63,20 @@ internal fun AppMessageContent(
             }
             DisposableEffect(holder) { onDispose { holder.close() } }
             if (!inline || image == ChatImage.HtmlPage) {
+                val preview by holder.state.collectAsState()
+                SideEffect {
+                    if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, preview)
+                }
                 LinkPreviewRoute(holder, content.images, uri::openUri, onImageError = { _, problem ->
                     report("Preview image decode failed", problem)
                 })
             } else if (!autoResolve && !manualImage) {
                 TextButton(onClick = { manualImage = true }) { Text(stringResource(AppChatsStrings.chatsPreviewTapToLoad)) }
             } else if (image == null) {
-                entry.aspect?.takeIf { it.isFinite() && it > 0 }?.let { aspect ->
+                val sharedAspect = if (url == media.firstOrNull()?.url) {
+                    rendered?.content?.filterIsInstance<MessageFragment.InlineImage>()?.firstOrNull()?.image?.cachedAspect
+                } else null
+                (sharedAspect ?: entry.aspect)?.takeIf { it.isFinite() && it > 0 }?.let { aspect ->
                     Spacer(Modifier.widthIn(max = InlineImageMetrics.MAX_WIDTH_DP.dp).fillMaxWidth().aspectRatio(aspect.toFloat()))
                 }
             }
@@ -73,15 +84,21 @@ internal fun AppMessageContent(
                 if (!inline || (!autoResolve && !manualImage)) return@LaunchedEffect
                 image = null
                 failure = null
+                if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.LOADING)
                 try {
                     val host = LinkOpenPolicy.host(url) ?: error("Image link has no host")
                     check(!content.malware.isBlocked(host)) { "Image host is blocked" }
                     check(UrlSafetyChecker.isSafe(url)) { "Unsafe image URL" }
                     if (retry > 0) content.retryInline(url)
                     image = content.inline(url)
+                    if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.LOADED)
                 }
                 catch (cancelled: CancellationException) { throw cancelled }
-                catch (problem: Exception) { report("Inline image failed", problem); failure = problem }
+                catch (problem: Exception) {
+                    report("Inline image failed", problem)
+                    failure = problem
+                    if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.NO_PREVIEW)
+                }
             }
             when (val loaded = image) {
                 is ChatImage.Decoded -> {
@@ -156,8 +173,11 @@ internal fun AppMessageContent(
             }
         }
     }
-    val coordinate = remember(message.text, preferences[AppStorageKey.showMapPreviewThumbnails]) {
-        chatMapPreviewCoordinate(message.text, preferences[AppStorageKey.showMapPreviewThumbnails])
+    val coordinate = remember(message.text, preferences[AppStorageKey.showMapPreviewThumbnails], rendered) {
+        val shared = rendered?.content?.filterIsInstance<MessageFragment.MapPreview>()?.firstOrNull()?.state
+        if (shared != null && preferences[AppStorageKey.showMapPreviewThumbnails]) {
+            com.meshcoreone.android.core.model.Coordinate(shared.latitude, shared.longitude)
+        } else chatMapPreviewCoordinate(message.text, preferences[AppStorageKey.showMapPreviewThumbnails])
     }
     coordinate?.let { AppChatMapPreview(content.mapPreviews, it, onMap) }
 }

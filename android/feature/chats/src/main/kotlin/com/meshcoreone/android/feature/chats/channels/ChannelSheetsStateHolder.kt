@@ -196,10 +196,12 @@ class ChannelSheetsStateHolder(
         }
 
         fun sanitizeHashtag(value: String): String = value.lowercase(Locale.ROOT)
-            .filter { it.isLetterOrDigit() || it == '-' }.trimStart('-')
+            .filter { it.isAsciiAlphanumeric() || it == '-' }.trimStart('-')
 
         fun isValidHashtag(value: String): Boolean =
-            value.isNotEmpty() && value.first().isLetterOrDigit() && value.all { it.isLetterOrDigit() || it == '-' }
+            value.isNotEmpty() && value.first().isAsciiAlphanumeric() && value.all { it.isAsciiAlphanumeric() || it == '-' }
+
+        private fun Char.isAsciiAlphanumeric() = this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'
 
         fun utf8Prefix(value: String, maxBytes: Int): String {
             var bytes = 0

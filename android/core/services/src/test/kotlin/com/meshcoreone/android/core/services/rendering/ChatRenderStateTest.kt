@@ -55,10 +55,10 @@ private fun makeFakeMessageItem(id: UUID, senderName: String): MessageItem = Mes
 )
 
 /**
- * Adaptation: `ChatViewModel` (WP-307) is not ported. Its `buildItems()` is reproduced by binding an
- * interactive writer on a fresh coordinator, seeding through `replaceAllForTesting`, and scheduling
- * `rebuildItems` with one input per message; the view model's `renderState` accessors become the
- * coordinator's `renderState` and its observation surface `renderStateFlow`.
+ * These are core snapshot/builder unit oracles, not proof about a mounted ViewModel. The original
+ * accessor family's real five-field mounted assertions live in App's SharedTimelineIntegrationTest.
+ * The historical coordinator/StateFlow smoke assertions below are retained without transferring
+ * their coverage to the UI consumer.
  */
 class ChatRenderStateTest {
     private suspend fun CoroutineScope.makeChatSetup(messages: List<MessageDTO>): ChatCoordinator {

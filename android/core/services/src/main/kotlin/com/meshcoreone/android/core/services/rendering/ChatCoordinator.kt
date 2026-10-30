@@ -99,6 +99,11 @@ class ChatCoordinator internal constructor(
      */
     val renderStateID: ULong get() = synchronized(lock) { renderStateIDValue }
 
+    /** One coherent read for consumers assembling DTO and render projections across threads. */
+    fun snapshot(): ChatTimelineSnapshot = synchronized(lock) {
+        ChatTimelineSnapshot(messages, renderState, renderStateIDValue)
+    }
+
     /** In-flight off-thread batch build, cancelled before each new [rebuildItems]. */
     val buildItemsTask: Job? get() = synchronized(lock) { buildItemsTaskValue }
 
@@ -153,6 +158,12 @@ class ChatCoordinator internal constructor(
         } catch (error: Exception) {
             logger.severe("$name callback failed: $error")
         }
+
+        data class ChatTimelineSnapshot(
+            val messages: SnapshotList<MessageDTO>,
+            val renderState: ChatRenderState,
+            val revision: ULong,
+        )
     }
 
     /** Debug seam (Swift `#if DEBUG`): when set, populate throws this after the entry spinner clear. */
@@ -185,6 +196,9 @@ class ChatCoordinator internal constructor(
                 null
             } else {
                 writerGenerationValue += 1UL
+                renderStateIDValue += 1UL
+                buildItemsTaskValue?.cancel()
+                buildItemsTaskValue = null
                 writerOwner = WeakReference(owner)
                 writerRole = role
                 renderItemRebuilderValue = renderItemRebuilder

@@ -43,6 +43,14 @@ class ChatTimelinePrimer(
         val bound = timeline.bind(coordinator) { senderTables }
         if (!bound) return
 
+        try {
+            primeBound(conversation)
+        } finally {
+            timeline.close()
+        }
+    }
+
+    private suspend fun primeBound(conversation: ChatConversationType) {
         senderTables = when (conversation) {
             // DM bubbles never show the sender row.
             is ChatConversationType.Dm -> ChatSenderTables.EMPTY

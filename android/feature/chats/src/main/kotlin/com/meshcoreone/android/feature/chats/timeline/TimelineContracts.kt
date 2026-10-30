@@ -108,9 +108,13 @@ class StandaloneTimelineStateStore(initial: ChatTimelineState) : TimelineStateSt
     private val mutable = MutableStateFlow(initial)
     override val state: StateFlow<ChatTimelineState> = mutable
     private val window = Mutex()
-    override fun update(transform: (ChatTimelineState) -> ChatTimelineState) = mutable.update(transform)
+    private var closed = false
+    override val isCurrent get() = !closed
+    override fun update(transform: (ChatTimelineState) -> ChatTimelineState) {
+        if (!closed) mutable.update(transform)
+    }
     override suspend fun <T> performWindowOperation(operation: suspend () -> T): T = window.withLock { operation() }
-    override fun close() = Unit
+    override fun close() { closed = true }
 }
 
 interface ChatTimelineDependencies {
@@ -120,6 +124,8 @@ interface ChatTimelineDependencies {
     val events: Flow<TimelineEvent>
     val diagnostics: TimelineDiagnostics get() = TimelineDiagnostics { _, _ -> }
     val content: TimelineContent? get() = null
+    /** Index a fetched page through the same session reaction service before committing its DTOs. */
+    suspend fun prepareMessages(messages: List<MessageDTO>): List<MessageDTO> = messages
     fun bindTimeline(
         owner: Any,
         scope: CoroutineScope,

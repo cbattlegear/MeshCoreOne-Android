@@ -99,8 +99,13 @@ internal fun AppChatConversationScreen(
                 incomingAvatar = incomingAvatar,
                 messageAccessibilityLabel = messageAccessibilityLabel,
                 messageBody = { message, outgoing ->
+                    val item = state.renderItems.filterIsInstance<com.meshcoreone.android.app.container.CoordinatedRenderItem>()
+                        .firstOrNull { it.id == message.id }?.item
+                    val text = item?.content?.filterIsInstance<com.meshcoreone.android.core.services.rendering.MessageFragment.Text>()
+                        ?.firstOrNull()?.payload
                     Column {
-                        MessageBody(message.text, outgoing, currentUserName, onLink = { dispatcher.dispatch(it) })
+                        MessageBody(text?.raw ?: message.text, outgoing, text?.currentUserName ?: currentUserName,
+                            onLink = { dispatcher.dispatch(it) })
                         attachments(message, outgoing)
                     }
                 },

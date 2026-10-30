@@ -66,13 +66,19 @@ class ChatViewModel(
         }
     }
 
-    suspend fun open() {
+    suspend fun open() = open(markRead = true)
+
+    /** Populate the same shared window without interactive unread or radio side effects. */
+    suspend fun prime() = open(markRead = false)
+
+    private suspend fun open(markRead: Boolean) {
         if (!mutableState.isCurrent) return
         val generation = ++openGeneration
         var didLoad = false
         mutableState.update { it.copy(isLoading = true, loadError = null, passiveError = null) }
         try {
             mutableState.performWindowOperation {
+                if (!mutableState.isCurrent) return@performWindowOperation
                 val limit = initialPageSize(conversation.unreadCount)
                 val fetched = dependencies.data.fetchMessages(conversation, limit + 1, 0)
                 val page = fetched.takeLast(limit)
@@ -82,7 +88,8 @@ class ChatViewModel(
                     null
                 }
                 if (generation != openGeneration || !mutableState.isCurrent) return@performWindowOperation
-                val ordered = normalize(visible(page))
+                val ordered = normalize(visible(dependencies.prepareMessages(page)))
+                if (generation != openGeneration || !mutableState.isCurrent) return@performWindowOperation
                 val anchor = persistedAnchor
                     ?.takeIf { candidate -> ordered.any { it.id == candidate } }
                     ?: ordered.firstOrNull()?.id?.takeIf { conversation.unreadCount > 0 }
@@ -112,6 +119,7 @@ class ChatViewModel(
         }
         if (generation != openGeneration || !mutableState.isCurrent) return
         currentCoroutineContext().ensureActive()
+        if (!markRead) return
         if (conversation is TimelineConversation.Channel) {
             try {
                 dependencies.syncChannelFloodScope(conversation.channel)
@@ -146,13 +154,14 @@ class ChatViewModel(
         mutableState.update { it.copy(passiveError = null) }
         try {
             mutableState.performWindowOperation {
+                if (!mutableState.isCurrent) return@performWindowOperation
                 val anchorSortDate = mutableState.value.messages.minOfOrNull { it.sortDate }
                 val window = dependencies.data.fetchMessageWindow(
                     conversation,
                     anchorSortDate,
                     initialPageSize(conversation.unreadCount),
                 )
-                val ordered = normalize(visible(window.messages))
+                val ordered = normalize(visible(dependencies.prepareMessages(window.messages)))
                 mutableState.update {
                     it.copy(
                         messages = ordered,
@@ -177,6 +186,7 @@ class ChatViewModel(
         mutableState.update { it.copy(isLoadingOlder = true, passiveError = null) }
         try {
             mutableState.performWindowOperation {
+                if (!mutableState.isCurrent) return@performWindowOperation
                 val before = mutableState.value
                 if (!before.hasMoreMessages) {
                     mutableState.update { it.copy(isLoadingOlder = false) }
@@ -185,7 +195,7 @@ class ChatViewModel(
                 val fetched = dependencies.data.fetchMessages(conversation, PAGE_SIZE + 1, before.totalFetchedCount)
                 val page = fetched.takeLast(PAGE_SIZE)
                 val existingIds = before.messages.asSequence().map(MessageDTO::id).toHashSet()
-                val older = page.filterNot { it.id in existingIds }
+                val older = dependencies.prepareMessages(page).filterNot { it.id in existingIds }
                 val merged = normalize(visible(older) + before.messages)
                 mutableState.update {
                     it.copy(

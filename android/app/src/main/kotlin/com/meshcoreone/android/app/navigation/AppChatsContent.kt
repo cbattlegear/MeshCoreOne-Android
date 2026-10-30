@@ -202,7 +202,6 @@ private fun AppChatConversation(
         val environment = remember(feature, target, scope) { feature.environment(target, scope, location) }
         val mentionContacts by environment.mentionContacts.collectAsStateWithLifecycle()
         val composerDevice by environment.device.collectAsStateWithLifecycle()
-        val bubbleLabels = rememberMessageBubbleLabels(feature.content, mentionContacts, composerDevice?.nodeName)
         val avatarTable = rememberChannelAvatars(
             if (conversation is TimelineConversation.Channel) mentionContacts else emptyList(),
         )
@@ -211,6 +210,14 @@ private fun AppChatConversation(
         val timeline = remember(feature, conversation) {
             ChatViewModel(conversation, feature.timeline(conversation), scope)
         }
+        val timelineState by timeline.state.collectAsStateWithLifecycle()
+        val rendered = remember(timelineState.renderItems) {
+            timelineState.renderItems.filterIsInstance<com.meshcoreone.android.app.container.CoordinatedRenderItem>()
+                .associate { it.id to it.item }
+        }
+        val bubbleLabels = rememberMessageBubbleLabels(
+            feature.content, mentionContacts, composerDevice?.nodeName, rendered, feature::updateRenderEnvironment,
+        )
         var replyTo by remember(conversation.id) { mutableStateOf<java.util.UUID?>(null) }
         val sender = remember(feature, target) {
             val underlying = feature.sender(conversation.id.radioId)
@@ -314,7 +321,8 @@ private fun AppChatConversation(
                 }
             },
             attachments = { message, outgoing ->
-                feature.content?.let { AppMessageContent(it, message, feature::report, onMap = { url -> links.route(url) }) }
+                feature.content?.let { AppMessageContent(it, message, feature::report,
+                    onMap = { url -> links.route(url) }, rendered = rendered[message.id]) }
                 androidx.compose.material3.TextButton(onClick = { actionMessage = message }) {
                     androidx.compose.material3.Text(stringResource(AppChatsStrings.chatsMessageActionDetails))
                 }

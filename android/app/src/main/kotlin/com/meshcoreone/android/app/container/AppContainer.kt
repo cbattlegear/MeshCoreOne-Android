@@ -113,7 +113,7 @@ class AppContainerDependencies(
     val platform: AppStatePlatform = AppStatePlatform.NONE,
     val regionStore: RegionSelectionStore? = null,
     val stalePreferences: StaleCleanupPreferences? = null,
-    val primerFactory: ChatPrimerFactory = ChatPrimerFactory { null },
+    val primerFactory: ChatPrimerFactory? = null,
     val syncClock: SyncClock = SyncClock.SYSTEM,
     val logSink: SyncLogSink = SyncLogSink.NONE,
     val messagingReporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
@@ -260,7 +260,15 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             registryFactory = { store ->
                 ChatCoordinatorRegistry(store, dependencies.mainScope)
             },
-            primerFactory = dependencies.primerFactory,
+            primerFactory = dependencies.primerFactory ?: ChatPrimerFactory { primerDependencies ->
+                com.meshcoreone.android.app.state.ChatTimelinePrimer(
+                    primerDependencies, CoordinatedPrimeTimeline(chatsFeature, uiScope),
+                    dependencies.chatContent?.primerWarmer,
+                    dependencies.chatContent?.primerPreferences
+                        ?: com.meshcoreone.android.app.state.LinkPreviewPreferences { false },
+                )
+            },
+            chatEnvInputsFactory = { kind, snapshot -> chatsFeature.envInputs(kind, snapshot) },
             navigation = navigation,
             platform = ContainerAppStatePlatform(dependencies.platform),
             regionStore = dependencies.regionStore,

@@ -50,7 +50,7 @@ sealed interface TimelineOpenOutcome {
  * The prime-role `ChatTimeline` the primer drives (WP-307 supplies the production implementation).
  * [bind] claims a PRIME writer on the coordinator and returns false when an interactive owner holds it.
  */
-interface PrimeTimeline {
+interface PrimeTimeline : AutoCloseable {
     var envInputs: EnvInputs
     val messages: SnapshotList<MessageDTO>
     val conversation: ChatConversationType?
@@ -60,6 +60,7 @@ interface PrimeTimeline {
         reactions: ReactionIndexing?,
         populateMode: PopulateMode,
     ): TimelineOpenOutcome
+    override fun close() = Unit
 }
 
 /** Warms link-preview metadata and inline-image dimensions for primed rows (`InlineImagePrefetcher`). */

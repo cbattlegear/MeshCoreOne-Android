@@ -188,4 +188,90 @@ class LinkPreviewCacheTest {
         assertTrue(result is LinkPreviewResult.Disabled || result is LinkPreviewResult.NoPreviewAvailable)
         assertNull(cache.cachedPreview(url))
     }
+
+    @Test
+    fun `persisted misses are memoized but a preview write invalidates the miss`() = runTest {
+        val dataStore = FakePersisting()
+        val url = "https://example.com/after-miss"
+        val service = LinkMetadataFetching {
+            LinkPreviewMetadata("Written preview", null, null)
+        }
+        val cache = previewsEnabledCache(service)
+        try {
+            assertNull(cache.cachedPreview(url, dataStore))
+            assertNull(cache.cachedPreview(url, dataStore))
+            assertEquals(1, dataStore.fetchCallCount)
+
+            assertTrue(cache.manualFetch(url, dataStore) is LinkPreviewResult.Loaded)
+            cache.clearMemory()
+
+            assertEquals("Written preview", cache.cachedPreview(url, dataStore)?.title)
+            assertEquals(2, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
+    fun `persisted misses remain memoized across more than one hundred distinct urls`() = runTest {
+        val dataStore = FakePersisting()
+        val cache = previewsEnabledCache()
+        val urls = (0 until 201).map { "https://example.com/missing/$it" }
+        try {
+            urls.forEach { assertNull(cache.cachedPreview(it, dataStore)) }
+            assertEquals(urls.size, dataStore.fetchCallCount)
+
+            urls.forEach { assertNull(cache.cachedPreview(it, dataStore)) }
+            assertEquals(urls.size, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
+    fun `failed persisted reads are not memoized as misses`() = runTest {
+        val dataStore = FakePersisting().apply { shouldThrowOnFetch = true }
+        val cache = previewsEnabledCache()
+        try {
+            assertNull(cache.cachedPreview("https://example.com/read-failure", dataStore))
+            assertNull(cache.cachedPreview("https://example.com/read-failure", dataStore))
+            assertEquals(2, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
+    fun `cached previews rehydrate while automatic network fetch remains gated for both conversation types`() = runTest {
+        var fetchCalls = 0
+        val service = LinkMetadataFetching {
+            fetchCalls++
+            LinkPreviewMetadata("Unexpected network result", null, null)
+        }
+
+        for (isChannel in listOf(false, true)) {
+            val source = InMemoryLinkPreviewPreferencesSource(
+                LinkPreviewPreferencesSnapshot(
+                    previewsEnabled = true,
+                    autoResolveDM = false,
+                    autoResolveChannels = false,
+                ),
+            )
+            val cache = LinkPreviewCache(service, LinkPreviewPreferences(source))
+            val dataStore = FakePersisting().apply {
+                seed(LinkPreviewDataDTO(url = "https://example.com/cached-$isChannel", title = "Cached"))
+            }
+            try {
+                val cached = cache.preview("https://example.com/cached-$isChannel", dataStore, isChannel)
+                assertTrue(cached is LinkPreviewResult.Loaded)
+                assertEquals("Cached", (cached as LinkPreviewResult.Loaded).data.title)
+
+                val uncached = cache.preview("https://example.com/new-$isChannel", dataStore, isChannel)
+                assertEquals(LinkPreviewResult.Disabled, uncached)
+                assertEquals(0, fetchCalls, "automatic network work must stay disabled")
+            } finally {
+                cache.close()
+            }
+        }
+    }
 }

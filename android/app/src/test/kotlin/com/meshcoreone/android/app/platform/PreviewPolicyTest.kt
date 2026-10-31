@@ -21,7 +21,7 @@ class PreviewPolicyTest {
         }, { enabled }, { automatic })
         assertEquals(data, policy.cachedPreview(data.url))
         automatic = false
-        assertNull(policy.cachedPreview(data.url))
+        assertEquals(data, policy.cachedPreview(data.url))
         assertEquals(LinkPreviewOutcome.Disabled, policy.preview(data.url, true))
         assertEquals(0, fetches)
         assertEquals(LinkPreviewOutcome.Loaded(data), policy.manualFetch(data.url))
@@ -31,6 +31,6 @@ class PreviewPolicyTest {
         assertEquals(LinkPreviewOutcome.NoPreviewAvailable, policy.preview(data.url, false))
         assertEquals(LinkPreviewOutcome.NoPreviewAvailable, policy.manualFetch(data.url))
         assertEquals(1, fetches)
-        assertEquals(1, cacheReads)
+        assertEquals(2, cacheReads)
     }
 }

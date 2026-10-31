@@ -24,6 +24,8 @@ private object CacheConfig {
     const val MAX_ENTRY_COUNT = 100
     const val MAX_TOTAL_COST_BYTES = 50L * 1024 * 1024 // 50MB
     const val MAX_CONCURRENT_FETCHES = 3
+    const val MAX_PERSISTED_MISSES = 10_000
+    const val MAX_PERSISTED_MISS_COST_BYTES = 4L * 1024 * 1024
 }
 
 /**
@@ -52,6 +54,9 @@ class LinkPreviewCache(
     )
     private val fetchSemaphore = Semaphore(CacheConfig.MAX_CONCURRENT_FETCHES)
     private val mutex = Mutex()
+    private val persistedLookupMutex = Mutex()
+    private val persistedMisses = linkedMapOf<String, Long>()
+    private var persistedMissCostBytes = 0L
 
     /**
      * Shared fetch deferred per in-flight URL. Concurrent requests for the same URL await the
@@ -97,6 +102,9 @@ class LinkPreviewCache(
 
     override suspend fun cachedPreview(url: String): LinkPreviewDataDTO? = memoryCache.get(url)
 
+    suspend fun cachedPreview(url: String, dataStore: LinkPreviewPersisting): LinkPreviewDataDTO? =
+        checkCaches(url, dataStore)
+
     /**
      * Checks memory cache and database for existing preview data. Returns the DTO if found, and
      * caches it in memory if it was loaded from the database.
@@ -106,16 +114,35 @@ class LinkPreviewCache(
         memoryCache.get(url)?.let { return it }
 
         // Tier 2: Database lookup.
-        return try {
-            dataStore.fetchLinkPreview(url)?.also { memoryCache.put(url, it) }
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (error: Exception) {
-            // Matches the Swift original's log-and-continue behavior: a database read failure is
-            // treated as a cache miss, not a fetch failure - the caller still falls through to a
-            // genuine network fetch attempt, it is not a fabricated success.
-            Logger.getLogger("MeshCore.LinkPreviewCache").fine("Preview database read failed: ${error.javaClass.simpleName}")
-            null
+        return persistedLookupMutex.withLock {
+            memoryCache.get(url)?.let { return@withLock it }
+            if (url in persistedMisses) return@withLock null
+            try {
+                dataStore.fetchLinkPreview(url)?.also { memoryCache.put(url, it) } ?: run {
+                    val cost = url.length.toLong() * 2 + 64
+                    if (cost <= CacheConfig.MAX_PERSISTED_MISS_COST_BYTES) {
+                        while (
+                            persistedMisses.size >= CacheConfig.MAX_PERSISTED_MISSES ||
+                            persistedMissCostBytes > CacheConfig.MAX_PERSISTED_MISS_COST_BYTES - cost
+                        ) {
+                            val oldest = persistedMisses.entries.iterator().next()
+                            persistedMisses.remove(oldest.key)
+                            persistedMissCostBytes -= oldest.value
+                        }
+                        persistedMisses[url] = cost
+                        persistedMissCostBytes += cost
+                    }
+                    null
+                }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
+                // Matches the Swift original's log-and-continue behavior: a database read failure is
+                // treated as a cache miss, not a fetch failure - the caller still falls through to a
+                // genuine network fetch attempt, it is not a fabricated success.
+                Logger.getLogger("MeshCore.LinkPreviewCache").fine("Preview database read failed: ${error.javaClass.simpleName}")
+                null
+            }
         }
     }
 
@@ -172,6 +199,9 @@ class LinkPreviewCache(
             // Persist to database.
             try {
                 dataStore.saveLinkPreview(dto)
+                persistedLookupMutex.withLock {
+                    persistedMisses.remove(url)?.let { persistedMissCostBytes -= it }
+                }
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Exception) {

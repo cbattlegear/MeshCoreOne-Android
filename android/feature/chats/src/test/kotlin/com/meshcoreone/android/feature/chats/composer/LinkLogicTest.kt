@@ -19,7 +19,7 @@ class LinkLogicTest {
         fun urls(text: String) = LinkDetection.detectUrls(text).map { text.substring(it.start, it.end) to it.url }
         assertEquals(listOf("https://a.com/x" to "https://a.com/x"), urls("https://a.com/x."))
         assertEquals(listOf("https://a.com/x?y=1&z=2" to "https://a.com/x?y=1&z=2"), urls("https://a.com/x?y=1&z=2!"))
-        assertEquals(listOf("www.example.com" to "http://www.example.com"), urls("go www.example.com, ok"))
+        assertEquals(listOf("www.example.com" to "https://www.example.com"), urls("go www.example.com, ok"))
         assertEquals(listOf("https://a.com/b_(c)" to "https://a.com/b_(c)"), urls("(https://a.com/b_(c))"))
         assertEquals(emptyList(), urls("visit example.com now or mail me@x.com"))
         assertEquals(emptyList(), urls("https://. and www."))
@@ -158,6 +158,14 @@ class LinkLogicTest {
         val auto = LinkPreviewStateHolder(data.url, true, port, { true }, { false }, scope).also { it.start() }
         assertEquals(LinkPreviewCardState.Loaded(data), auto.state.value)
         assertEquals(listOf("preview:true"), port.calls)
+    }
+
+    @Test
+    fun `persisted cached preview is visible when DNS safety lookup is unavailable`() = scenario {
+        val port = FakePreviewPort().apply { cached = data }
+        val holder = LinkPreviewStateHolder(data.url, false, port, { false }, { false }, scope).also { it.start() }
+        assertEquals(LinkPreviewCardState.Loaded(data), holder.state.value)
+        assertTrue(port.calls.isEmpty(), "cached content does not initiate network work")
     }
 
     @Test

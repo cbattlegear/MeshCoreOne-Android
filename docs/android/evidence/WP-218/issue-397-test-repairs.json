@@ -1,0 +1,78 @@
+{
+  "wp": "WP-218",
+  "issue": 397,
+  "pinned_source": "db14559b39d32322b06477c6ae676112f583db50",
+  "status": "findings from the latest Copilot review have focused code and regression-test repairs; the newest exact-head CI and approval review are pending",
+  "concerns": {
+    "DATA-22": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
+      "case": "persisted previews rehydrate through the app policy port and LinkPreviewStateHolder for DM and channel consumers; image-extension HTML previews select the card route after a cold AppChatContent start; hero and icon bytes reload from persistent storage without live DNS; repeated AppChatContent renderContent calls for the same persisted miss issue a single Room lookup; mounted inline image state is retained across unrelated media-resolution updates"
+    },
+    "DATA-23": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/platform/PreviewPolicyTest.kt; android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/composer/LinkLogicTest.kt",
+      "case": "cached results remain visible through the state-holder with auto-resolve disabled and unavailable DNS; bounded persisted misses are reused and invalidated after preview writes, read failures are not memoized, 201 distinct URL misses remain memoized across repeated timeline reads, and repeated AppChatContent rendering queries a missing preview only once; globally disabled previews skip persistent lookup; cached inline image bytes mount before automatic-fetch gating and without DNS/network work"
+    },
+    "DATA-24": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
+      "case": "AppChatContent produces a real two-frame GIF, the actual AppMessageContent Compose consumer mounts it, and after trimMemory the mounted viewer's Share control sends the original encoded bytes without refetch"
+    },
+    "DATA-25": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/ImageHeaderDecoderTest.kt",
+      "case": "positive dimensions use a complete PNG produced by the host-JVM image writer"
+    },
+    "DATA-26": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/BitmapImageDecoderNativeTest.kt",
+      "case": "complete PNG/JPEG decode produces a native Bitmap allocation cost consumed by InlineImageCache"
+    },
+    "DATA-27": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/OkHttpContentFetchingTest.kt",
+      "case": "private redirect target reaches the private-address predicate and listens but must receive zero connections"
+    },
+    "DATA-28": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/RegionResolverTest.kt",
+      "case": "authorized nil-country resolution reaches geocoder; unauthorized resolution does not"
+    },
+    "DATA-29": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/MalwareDomainFilterTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/content/AndroidMalwareDomainFilterTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedInlineMalwareWarningTest.kt",
+      "case": "legitimate-domain decisions use the bundled malware-domain snapshot; loaded and refreshed domains plus queried hosts are normalized case-insensitively; successful network refreshes publish a policy revision so mounted cached images are rechecked"
+    },
+    "DATA-30": {
+      "evidence": "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtraction.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt; #403",
+      "case": "explicit schemes are normalized and stop at adjacent angle-bracketed links; bare and www domains use HTTPS; punctuation and unmatched delimiters are bounded; interior apostrophes survive in explicit, bare-domain and opaque URI spans while trailing quote punctuation is trimmed; quoted email local parts including escaped characters and Unicode-adjacent partial ASCII hosts are excluded; hierarchical and opaque non-HTTP URIs, including unknown nested scheme payloads and ftp:files.example.com/did:web:example.com, URL-like email local parts and nested candidates are suppressed without discarding outer query URLs or links after Link:/Visit: labels; punycode TLDs are complete, malware hosts are checked case-insensitively, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
+    },
+    "DATA-31": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt",
+      "case": "original WCMesh.com mention input plus explicit URL mention suppression exercise overlap filtering"
+    },
+    "DATA-32": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/NativeLinkMetadataFetchingTest.kt",
+      "case": "actual metadata producer scrapes page metadata and passes the hero image through native Bitmap preview processing"
+    },
+    "DATA-33": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/BitmapImageDecoderNativeTest.kt; existing AnimatedGifImageDecoderTest.kt",
+      "case": "Robolectric native graphics exercises real bitmap/GIF decoder paths; no physical-device result is claimed"
+    }
+  },
+  "latest_review_repairs": {
+    "cached_inline_images": "Check the current malware policy first, then hydrate an encoded cached image before any DNS safety check; perform URL DNS safety only for an actual network fetch, including when auto-resolve is disabled.",
+    "mounted_image_lifecycle": "Keep the Compose-mounted image keyed to content and URL rather than the global media-resolution counter, preserving the original decoded handle and share bytes across unrelated rebuilds.",
+    "malware_refresh": "Publish an observable revision after replacing the malware list; mounted images are hidden until rechecked and each blocked image entry routes through the localized malware warning, including non-first URLs. A Robolectric Compose regression covers a blocked second image.",
+    "timeline_miss_cache": "Bound negative persisted-lookup memory by both 10,000 entries and an estimated 4 MiB while retaining cache writes as miss invalidations.",
+    "url_apostrophes": "Allow apostrophes within explicit, bare-domain and URI candidate spans while retaining the existing trailing-quote trimming policy.",
+    "unsupported_uri_prefetch": "Suppress embedded domains for known and unknown non-HTTP opaque URI schemes while retaining Link:/Visit: prose-label extraction; retain hierarchical-scheme suppression for all `scheme://` URIs.",
+    "mounted_gif": "Exercise the actual Compose AppMessageContent image mount with an injected deterministic safe-malware decision, while the separate mounted malware warning test verifies the real filter; retain the visible GIF and original share bytes through the mounted viewer's Share control across process memory trim. The real-filter adapter test now waits for persisted refresh completion after observing its policy revision, preventing its worker from writing after the test closes storage."
+  },
+  "verification": {
+    "manifest_configured": false,
+    "declared_commands": [],
+    "local_test_execution": "not run; no approved WP-218 command is declared",
+    "hosted_exact_candidate": "Historical exact workflow 41118672455 passed on 0b9a53541623971b1ba8cfbbdb9b64a3a5cd33dc. Candidate 21c0ba4909f0114a6866ae0bc3eb6e7babadae29 passed scope classification, controller/workflow policy, and the PR checklist, but Android candidate CI 41137058872 failed :app:testDebugUnitTest (1819 discovered, 1816 passed, 3 failed): MountedGifRetentionTest timed out because the Compose wait did not advance malware-policy work, with a resulting test-isolation failure. Candidate bb80bcc86e8ee54d76cb2a23562e82cdb43560de added the viewer Share assertion but missed Compose action imports; candidate c5f3e56fd4b3e84258e168695fe8665c24c16762 compiled, but the mounted image wait still timed out on SDK 31 and 37. Candidates 0bf68f5f80f7931375d2d3d1c852d7d026a5951d and 4d969ba0daef0e83c1c238645febc5308c93965a still timed out in MountedGifRetentionTest, with a malware refresh racing test storage teardown. Candidate dcc99ef2891bbaeabcf35d0d96f177de3affabd1 passed both MountedGifRetentionTest API variants and MountedInlineMalwareWarningTest API variants, but failed one unrelated BitmapImageDecoderTest API-31 case because AndroidMalwareDomainFilterTest observed revision before its asynchronous refresh had finished persisting LAST_REFRESH; the suppressed storage-closed write occurred after test teardown. The current change waits for that persistence boundary before closing the adapter test's storage. Copilot review on dcc99ef reported no open inline issues but returned Needs a closer look, not approval. The candidate also injects a deterministic malware decision into the GIF mount test and labels the actual image node for accessibility; the separate mounted malware-warning test continues to exercise the real filter. Unknown opaque scheme hosts remain suppressed with regression coverage, and the viewer Share assertion verifies exact bytes after memory trim without refetch. Exact-head hosted validation is pending. No local Kotlin/Gradle tests were run because WP-218 declares no commands; no physical-device/iOS result is claimed.",
+    "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
+  },
+  "limitations": [
+    "This worktree did not execute Gradle/JVM tests.",
+    "Robolectric native graphics is not physical-device verification.",
+    "WP-308 issue #403 still owns the broader NSDataDetector adaptation decision.",
+    "No complete WP-218 source-family acceptance is claimed."
+  ]
+}

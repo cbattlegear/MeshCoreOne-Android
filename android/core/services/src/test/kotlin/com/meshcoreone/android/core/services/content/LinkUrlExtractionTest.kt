@@ -20,6 +20,16 @@ class LinkUrlExtractionTest {
     }
 
     @Test
+    fun `extracts a bare web domain with inferred https scheme`() {
+        assertEquals("https://WCMesh.com", LinkUrlExtraction.extractFirstUrl("Visit WCMesh.com today"))
+    }
+
+    @Test
+    fun `extracts a www web domain as an absolute https url`() {
+        assertEquals("https://www.example.com", LinkUrlExtraction.extractFirstUrl("Visit www.example.com"))
+    }
+
+    @Test
     fun `returns null for text without urls`() {
         assertNull(LinkUrlExtraction.extractFirstUrl("Just some plain text without links"))
     }
@@ -32,7 +42,7 @@ class LinkUrlExtractionTest {
 
     @Test
     fun `ignores non-http schemes like tel and mailto`() {
-        val text = "Call me at tel:+1234567890 or mailto:test@example.com"
+        val text = "Call me at tel:+1234567890, mailto:test@example.com or ftp://example.com"
         assertNull(LinkUrlExtraction.extractFirstUrl(text))
     }
 
@@ -63,9 +73,38 @@ class LinkUrlExtractionTest {
     }
 
     @Test
+    fun `preserves apostrophes inside url paths and trims a trailing quote`() {
+        assertEquals(
+            "https://example.com/o'brien.png",
+            LinkUrlExtraction.extractFirstUrl("https://example.com/o'brien.png"),
+        )
+        assertEquals(
+            "https://example.com/o'brien.png",
+            LinkUrlExtraction.extractFirstUrl("example.com/o'brien.png"),
+        )
+        assertEquals(
+            "https://example.com/o'brien.png",
+            LinkUrlExtraction.extractFirstUrl("Visit https://example.com/o'brien.png'"),
+        )
+        assertEquals(
+            emptyList(),
+            LinkUrlExtraction.extractAllUrls("ftp://example.com/?next=other.example/o'brien.png"),
+        )
+        assertEquals(
+            emptyList(),
+            LinkUrlExtraction.extractAllUrls("mailto:o'brien@example.com?subject=tracker.example"),
+        )
+    }
+
+    @Test
     fun `ignores url-like text within mention brackets`() {
         val text = "Hey @[Ferret PocketMesh WCMesh.com], check this out!"
         assertNull(LinkUrlExtraction.extractFirstUrl(text))
+    }
+
+    @Test
+    fun `suppresses an explicit http url matched only inside a mention`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("Check @[https://docs.example.com/page] for details"))
     }
 
     @Test
@@ -83,6 +122,139 @@ class LinkUrlExtractionTest {
     fun `extracts url when no mentions present`() {
         val text = "Just a normal message with https://example.com link"
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl(text))
+    }
+
+    @Test
+    fun `trims trailing punctuation and only unmatched closing delimiters`() {
+        assertEquals(
+            listOf("https://example.com", "https://www.example.org/path(a)"),
+            LinkUrlExtraction.extractAllUrls("Visit example.com, then (www.example.org/path(a))."),
+        )
+        assertEquals("https://example.com/a(b)", LinkUrlExtraction.extractFirstUrl("Link:https://example.com/a(b)."))
+    }
+
+    @Test
+    fun `matches a complete punycode top-level domain`() {
+        assertEquals("https://site.xn--p1ai/path", LinkUrlExtraction.extractFirstUrl("Visit site.xn--p1ai/path"))
+    }
+
+    @Test
+    fun `does not extract dotted email addresses as domains`() {
+        assertNull(
+            LinkUrlExtraction.extractFirstUrl(
+                "Email first.last@example.com or first.last+tag@example.net or name.with.dots@sub.example.org",
+            ),
+        )
+    }
+
+    @Test
+    fun `does not extract domains inside quoted email local parts`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("\"example.com\"@mail.org"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("\"example.com\\\"suffix\"@mail.org"))
+    }
+
+    @Test
+    fun `does not extract web domains embedded in opaque URI schemes`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("magnet:?xt=urn:btih:tracker.example"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("ipfs:tracker.example/path"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("ftp:files.example.com"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("did:web:example.com"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("custom:payload:tracker.example/path"))
+        assertEquals(
+            "https://Example.COM/Page",
+            LinkUrlExtraction.extractFirstUrl("Link:HTTPS://Example.COM/Page"),
+        )
+    }
+
+    @Test
+    fun `does not extract URL-like email local parts as web links`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("Contact project.com/sales@example.com"))
+        assertEquals(
+            listOf("https://example.com/contact?email=foo@example.org"),
+            LinkUrlExtraction.extractAllUrls("example.com/contact?email=foo@example.org"),
+        )
+    }
+
+    @Test
+    fun `does not extract partial ASCII domains adjacent to Unicode letters marks or numbers`() {
+        val messages = listOf(
+            "bücher.de",
+            "www.exämple.com",
+            "\u0301example.com",
+            "２example.com",
+            "example.comé",
+            "example.com\u0301",
+            "example.com２",
+        )
+        messages.forEach { assertNull(LinkUrlExtraction.extractFirstUrl(it), it) }
+    }
+
+    @Test
+    fun `does not extract domains embedded in non-hierarchical or unsupported URI values`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("mailto:alice@example.org?subject=tracker.com"))
+        assertEquals(
+            emptyList(),
+            LinkUrlExtraction.extractAllUrls("ftp://example.com/?next=https://other.com/path"),
+        )
+        assertNull(LinkUrlExtraction.extractFirstUrl("view-source:https://example.com"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("xmpp:rooms.example.org?join"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("sip:alice@example.org?subject=tracker.com"))
+    }
+
+    @Test
+    fun `extracts links after prose labels without treating labels as URI schemes`() {
+        assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Link:(https://example.com)"))
+        assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Visit:example.com"))
+    }
+
+    @Test
+    fun `trims surrounding quotes and angle brackets from bare URL suffixes`() {
+        assertEquals("https://example.com/path", LinkUrlExtraction.extractFirstUrl("Visit \"example.com/path\""))
+        assertEquals("https://example.com/path", LinkUrlExtraction.extractFirstUrl("Visit <example.com/path>"))
+    }
+
+    @Test
+    fun `extracts adjacent explicit and bare URLs wrapped in angle brackets`() {
+        assertEquals(
+            listOf("https://one.example", "https://two.example"),
+            LinkUrlExtraction.extractAllUrls("<https://one.example><two.example>"),
+        )
+    }
+
+    @Test
+    fun `preserves mixed-case hostnames for shared case-insensitive malware checking`() {
+        assertEquals("https://Blocked.Example/path", LinkUrlExtraction.extractFirstUrl("Blocked.Example/path"))
+        assertEquals("https://BLOCKED.EXAMPLE/path", LinkUrlExtraction.extractFirstUrl("HTTPS://BLOCKED.EXAMPLE/path"))
+    }
+
+    @Test
+    fun `normalizes uppercase explicit schemes without changing the rest of the url`() {
+        assertEquals("https://Example.COM/Page", LinkUrlExtraction.extractFirstUrl("Link:HTTPS://Example.COM/Page"))
+        assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("See-https://example.com"))
+    }
+
+    @Test
+    fun `does not extract bare domains embedded in supported or unsupported uri urls`() {
+        assertEquals(
+            listOf("https://example.com/?next=tracker.com"),
+            LinkUrlExtraction.extractAllUrls("https://example.com/?next=tracker.com"),
+        )
+        assertEquals(
+            emptyList(),
+            LinkUrlExtraction.extractAllUrls("ftp://example.com/?next=tracker.com"),
+        )
+    }
+
+    @Test
+    fun `keeps outer bare links when email or nested uri appears in their query`() {
+        assertEquals(
+            listOf("https://example.com/contact?email=foo@example.org"),
+            LinkUrlExtraction.extractAllUrls("example.com/contact?email=foo@example.org"),
+        )
+        assertEquals(
+            listOf("https://example.com/?next=https://other.com/path"),
+            LinkUrlExtraction.extractAllUrls("example.com/?next=https://other.com/path"),
+        )
     }
 
     @Test

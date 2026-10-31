@@ -11,6 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.meshcoreone.android.app.container.AppChatContent
@@ -47,6 +49,7 @@ internal fun AppMessageContent(
     onMap: (String) -> Unit,
     rendered: MessageItem? = null,
     onShareImage: (suspend (ByteArray) -> Unit)? = null,
+    malwareCheck: suspend (String) -> Boolean = content.malware::isBlocked,
 ) {
     val resolutions by content.resolutions.collectAsState()
     val media = remember(content, message.text, resolutions) { content.media(message.text) }
@@ -80,10 +83,11 @@ internal fun AppMessageContent(
             val hasMalwareWarning = rendered?.content?.any { it is MessageFragment.MalwareWarning } == true
             val shouldCheckImage = entry.isImage && (inline || hasMalwareWarning)
             val holder = remember(content, url, message.isChannelMessage,
+                malwareCheck,
                 preferences[AppStorageKey.linkPreviewsEnabled],
                 preferences[AppStorageKey.linkPreviewsAutoResolveDM], preferences[AppStorageKey.linkPreviewsAutoResolveChannels]) {
                 LinkPreviewStateHolder(url, message.isChannelMessage, content.previews(message.isChannelMessage),
-                    UrlSafetyPort { UrlSafetyChecker.isSafe(it) }, MalwareDomainPort(content.malware::isBlocked),
+                    UrlSafetyPort { UrlSafetyChecker.isSafe(it) }, MalwareDomainPort(malwareCheck),
                     scope, ComposerDiagnostics(report))
             }
             DisposableEffect(holder) { onDispose { holder.close() } }
@@ -112,7 +116,7 @@ internal fun AppMessageContent(
                 if (!shouldCheckImage) return@LaunchedEffect
                 try {
                     val host = LinkOpenPolicy.host(url) ?: error("Image link has no host")
-                    if (content.malware.isBlocked(host)) {
+                    if (malwareCheck(host)) {
                         image = null
                         imageBlocked = true
                         failure = null
@@ -167,7 +171,9 @@ internal fun AppMessageContent(
                 is ChatImage.Decoded -> {
                     val handle = loaded.handle
                     val size = InlineImageMetrics.displaySize(handle.width, handle.height)
-                    val modifier = Modifier.widthIn(max = size.width.dp).height(size.height.dp).clickable { fullscreen = true }
+                    val modifier = Modifier.widthIn(max = size.width.dp).height(size.height.dp)
+                        .clickable { fullscreen = true }
+                        .semantics { contentDescription = url }
                     when (handle) {
                         is BitmapDecodedImageHandle -> Image(handle.bitmap.asImageBitmap(), url, modifier)
                         is GifDecodedImageHandle -> {

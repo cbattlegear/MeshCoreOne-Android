@@ -20,7 +20,6 @@ import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
-import com.meshcoreone.android.core.datastore.PreferenceKey
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.MessageDTO
@@ -108,10 +107,6 @@ class MountedGifRetentionTest {
         try {
             storage.preferences.set(AppStorageKey.linkPreviewsEnabled, true)
             storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveDM, false)
-            storage.preferences.set(
-                PreferenceKey.DecimalKey("MalwareDomainFilter.lastRefresh", 0.0),
-                System.currentTimeMillis() / 1000.0,
-            )
             val preferences = DataStoreLinkPreviewPreferencesSource.create(storage.preferences, scope)
             val owner = AppChatContent(
                 context = context,
@@ -150,7 +145,7 @@ class MountedGifRetentionTest {
                         }, onMap = {}, onShareImage = {
                             sharedBytes.complete(it)
                             Unit
-                        })
+                        }, malwareCheck = { false })
                     }
                 }
             }

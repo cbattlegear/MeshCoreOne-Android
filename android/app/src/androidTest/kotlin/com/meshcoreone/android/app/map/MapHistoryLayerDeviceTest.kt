@@ -5,6 +5,7 @@ package com.meshcoreone.android.app.map
 
 import android.view.View
 import android.view.ViewGroup
+import android.graphics.Color
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -34,9 +35,15 @@ import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
+import org.maplibre.android.style.layers.BackgroundLayer
+import org.maplibre.android.style.layers.FillLayer
+import org.maplibre.android.style.layers.FillExtrusionLayer
+import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.LineString
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 @RunWith(AndroidJUnit4::class)
 class MapHistoryLayerDeviceTest {
@@ -55,6 +62,9 @@ class MapHistoryLayerDeviceTest {
         )
         val presentation = mutableStateOf(initial)
         val nativeMap = AtomicReference<MapLibreMap?>()
+        var lightBackground: Int? = null
+        var lightWater: Int? = null
+        var lightMotorwayExpression: String? = null
         compose.runOnUiThread {
             compose.activity.setContent {
                 MeshCoreTheme(motionScale = 0f) {
@@ -82,6 +92,12 @@ class MapHistoryLayerDeviceTest {
         }
         compose.runOnUiThread {
             val style = checkNotNull(nativeMap.get()?.style)
+            lightBackground = checkNotNull(style.getLayerAs<BackgroundLayer>("background")).backgroundColor.colorInt
+            lightWater = checkNotNull(style.getLayerAs<FillLayer>("water")).fillColor.colorInt
+            lightMotorwayExpression = checkNotNull(style.getLayerAs<LineLayer>("road_motorway")).lineColor.expression?.toString()
+            assertNotNull(lightBackground)
+            assertNotNull(lightWater)
+            assertNotNull("Keep Liberty's zoom-dependent light motorway colors", lightMotorwayExpression)
             val casing = checkNotNull(style.getLayerAs<LineLayer>("mesh-location-trail-casing"))
             val trail = checkNotNull(style.getLayerAs<LineLayer>("mesh-location-trail"))
             val untraced = checkNotNull(style.getLayerAs<LineLayer>("mesh-untraced-lines"))
@@ -130,11 +146,58 @@ class MapHistoryLayerDeviceTest {
             updated
         }
         compose.runOnUiThread {
-            val dots = checkNotNull(nativeMap.get()?.style?.getSourceAs<GeoJsonSource>("mesh-fixed"))
+            val style = checkNotNull(nativeMap.get()?.style)
+            assertEquals(Color.parseColor("#182028"), checkNotNull(style.getLayerAs<BackgroundLayer>("background")).backgroundColor.colorInt)
+            assertEquals(Color.parseColor("#172F42"), checkNotNull(style.getLayerAs<FillLayer>("water")).fillColor.colorInt)
+            assertEquals(Color.parseColor("#3D444B"), checkNotNull(style.getLayerAs<FillExtrusionLayer>("building-3d")).fillExtrusionColor.colorInt)
+            assertEquals(Color.parseColor("#D9E1E8"), checkNotNull(style.getLayerAs<SymbolLayer>("label_city")).textColor.colorInt)
+            val dots = checkNotNull(style.getSourceAs<GeoJsonSource>("mesh-fixed"))
                 .querySourceFeatures(Expression.literal(true))
             assertEquals(initial.points.map { it.id.toString() }.toSet(), dots.map { it.id() }.toSet())
             assertEquals("#FF375F", dots.single { it.id() == initial.points.last().id.toString() }.getStringProperty("color"))
+        }
+        compose.runOnUiThread { presentation.value = initial }
+        compose.waitUntil(30_000) {
+            var restored = false
+            compose.runOnUiThread {
+                val style = nativeMap.get()?.style
+                restored = style?.getLayerAs<BackgroundLayer>("background")?.backgroundColor?.colorInt == lightBackground &&
+                    style?.getLayerAs<FillLayer>("water")?.fillColor?.colorInt == lightWater &&
+                    style?.getLayerAs<LineLayer>("road_motorway")?.lineColor?.expression?.toString() == lightMotorwayExpression
+            }
+            restored
+        }
+        compose.runOnUiThread {
+            val dots = checkNotNull(nativeMap.get()?.style?.getSourceAs<GeoJsonSource>("mesh-fixed"))
+                .querySourceFeatures(Expression.literal(true))
+            assertEquals("#A19687", dots.single { it.id() == initial.points.first().id.toString() }.getStringProperty("color"))
             compose.activity.setContent {}
+        }
+    }
+
+    @Test fun actualSnapshotPixelsUseTheSameDarkWaterPaintWithoutPostprocessingTheBitmap() = runBlocking {
+        assertTrue("Native snapshotter requires a supported 64-bit process", MapLibreRuntime.isSupported)
+        val renderer = MapLibreSnapshotRenderer(compose.activity, 320, 200)
+        val light = checkNotNull(withTimeout(30_000) {
+            renderer.render(MapSnapshotRequest(0.0, -140.0, isDark = false, isOffline = false))
+        }) { "The actual provider snapshot did not resolve; no dark/light evidence" }
+        try {
+            val dark = checkNotNull(withTimeout(30_000) {
+                renderer.render(MapSnapshotRequest(0.0, -140.0, isDark = true, isOffline = false))
+            }) { "The actual dark provider snapshot did not resolve" }
+            try {
+                val darkPixel = dark.getPixel(160, 80)
+                val lightPixel = light.getPixel(160, 80)
+                val expected = Color.parseColor("#172F42")
+                assertEquals(Color.red(expected).toDouble(), Color.red(darkPixel).toDouble(), 2.0)
+                assertEquals(Color.green(expected).toDouble(), Color.green(darkPixel).toDouble(), 2.0)
+                assertEquals(Color.blue(expected).toDouble(), Color.blue(darkPixel).toDouble(), 2.0)
+                assertNotEquals(lightPixel, darkPixel)
+            } finally {
+                dark.recycle()
+            }
+        } finally {
+            light.recycle()
         }
     }
 

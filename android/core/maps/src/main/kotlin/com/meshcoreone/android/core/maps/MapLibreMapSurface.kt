@@ -126,6 +126,7 @@ private class MapLibreSurfaceController(
     var callbacks = MapLibreSurfaceCallbacks(camera, marker)
     private var map: MapLibreMap? = null
     private var loadedStyle: Style? = null
+    private var styleAppearance: MapLibreStyleAppearance? = null
     private var pending: Triple<MapPresentationState, Boolean, Boolean>? = null
     private var pointsById = emptyMap<String, MapMarker>()
     private var lastReportedCamera: MapCamera? = null
@@ -171,6 +172,7 @@ private class MapLibreSurfaceController(
         projectionHandle = null
         map = null
         loadedStyle = null
+        styleAppearance = null
         mapView.onDestroy()
     }
 
@@ -303,6 +305,8 @@ private class MapLibreSurfaceController(
 
     private fun applyState(state: MapPresentationState, clusters: Boolean, labels: Boolean) {
         val style = loadedStyle ?: return
+        if (styleAppearance == null) styleAppearance = MapLibreStyleAppearance(style::getLayer)
+        styleAppearance?.apply(state.isDark)
         map?.uiSettings?.let {
             it.isScrollGesturesEnabled = state.isInteractive
             it.isZoomGesturesEnabled = state.isInteractive

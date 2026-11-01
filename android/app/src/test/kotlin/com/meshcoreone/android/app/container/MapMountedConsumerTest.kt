@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
@@ -133,12 +135,93 @@ class MapMountedConsumerTest {
         assertEquals(MapLibreOpenFreeMap.attribution.map { it.legalUri }, opened)
     }
 
-    private fun mount(dependencies: MapFeatureDependencies) {
+    @Test fun pendingFocusNeverDispatchesSavedCameraAndDoneRemovesItsPin() {
+        val saved = MapCamera(GeoPoint(51.0, 0.0), 0.5, 0.5)
+        host.get().getSharedPreferences("shared-map", 0).edit()
+            .putString("camera-v1", saved.encode()).commit()
+        val focus = GeoPoint(10.0, 20.0)
+        val dispatched = mutableListOf<MapPresentationState>()
+        var consumed = 0
+        mount(
+            MapFeatureDependencies(source { content() }, offline()),
+            focus = { focus },
+            onFocusConsumed = { consumed++ },
+            onPresentation = { dispatched += it },
+        )
+        assertTrue(dispatched.isNotEmpty())
+        assertTrue(dispatched.none { it.camera == saved })
+        assertEquals(MapCamera(focus, 0.01, 0.01), dispatched.last().camera)
+        assertEquals(1, consumed)
+        val pin = dispatched.last().points.single { it.style == MapPinStyle.DROPPED_PIN }
+        assertFalse(pin.clusterable)
+        compose.onNodeWithTag("pick:${pin.id}").performClick()
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
+        assertTrue(dispatched.last().points.none { it.style == MapPinStyle.DROPPED_PIN })
+        assertEquals(MapCamera(focus, 0.01, 0.01), dispatched.last().camera)
+    }
+
+    @Test fun newFocusReplacesTheSingleStablePinAndReloadPreservesIt() {
+        val focus = mutableStateOf<GeoPoint?>(GeoPoint(10.0, 20.0))
+        val updates = MutableSharedFlow<MapFeatureUpdate>(extraBufferCapacity = 10)
+        var latest: MapPresentationState? = null
+        mount(
+            MapFeatureDependencies(source { content() }, offline(), updates),
+            focus = { focus.value },
+            onPresentation = { latest = it },
+        )
+        val id = requireNotNull(latest).points.single { it.style == MapPinStyle.DROPPED_PIN }.id
+        compose.runOnIdle { focus.value = GeoPoint(30.0, 40.0) }
+        compose.waitForIdle()
+        val replaced = requireNotNull(latest).points.single { it.style == MapPinStyle.DROPPED_PIN }
+        assertEquals(id, replaced.id)
+        assertEquals(GeoPoint(30.0, 40.0), replaced.position)
+        assertEquals(MapCamera(replaced.position, 0.01, 0.01), requireNotNull(latest).camera)
+        compose.runOnIdle { assertTrue(updates.tryEmit(MapFeatureUpdate("radio"))) }
+        compose.waitUntil(5_000) { requireNotNull(latest).points.any { it.id == contact.id } }
+        assertEquals(replaced, requireNotNull(latest).points.single { it.style == MapPinStyle.DROPPED_PIN })
+    }
+
+    @Test fun initialAndExplicitFramingUseOnlyVisiblePinsAndEmptyMapDisablesCenterAll() {
+        host.get().getSharedPreferences("shared-map", 0).edit().putString(
+            "filter-v1", MapFilterState(favoritesOnly = true).encode(),
+        ).commit()
+        val favorite = content().markers.first().copy(isFavorite = true)
+        var latest: MapPresentationState? = null
+        mount(
+            MapFeatureDependencies(source { MapFeatureContent(listOf(favorite, content().markers.last())) }, offline()),
+            onPresentation = { latest = it },
+        )
+        assertEquals(listOf(contact.id), requireNotNull(latest).points.map { it.id })
+        assertEquals(listOf(favorite.marker.position).boundingCamera(), requireNotNull(latest).camera)
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).assertIsEnabled().performClick()
+        assertEquals(listOf(favorite.marker.position).boundingCamera(), requireNotNull(latest).camera)
+    }
+
+    @Test fun emptyMapHasNoCameraAndCannotCenter() {
+        var latest: MapPresentationState? = null
+        mount(
+            MapFeatureDependencies(source { MapFeatureContent() }, offline()),
+            onPresentation = { latest = it },
+        )
+        assertNull(requireNotNull(latest).camera)
+        assertTrue(requireNotNull(latest).points.isEmpty())
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).assertIsNotEnabled()
+    }
+
+    private fun mount(
+        dependencies: MapFeatureDependencies,
+        focus: () -> GeoPoint? = { null },
+        onFocusConsumed: () -> Unit = {},
+        onPresentation: (MapPresentationState) -> Unit = {},
+    ) {
         host.get().setContent {
             MeshCoreTheme(motionScale = 0f) {
                 MapEntry(
                     FeatureRoute(FeatureId.MAP), { error("No generic navigation") }, dependencies,
+                    focus = focus(),
+                    onFocusConsumed = onFocusConsumed,
                     mapSurface = { state, _, _, _, select, overlay ->
+                        SideEffect { onPresentation(state) }
                         Box(Modifier.fillMaxSize()) {
                             Column(Modifier.align(androidx.compose.ui.Alignment.Center).testTag("test-renderer")) {
                                 state.points.forEach { marker ->

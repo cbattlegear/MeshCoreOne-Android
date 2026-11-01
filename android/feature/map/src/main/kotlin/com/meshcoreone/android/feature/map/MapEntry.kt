@@ -166,22 +166,25 @@ private fun MapContent(
     DisposableEffect(holder) { onDispose { holder.close() } }
     var listVisible by remember { mutableStateOf(false) }
     var focusedPoint by remember { mutableStateOf(focus) }
+    val focusedPinId = remember { UUID.randomUUID() }
     var selectedFocus by remember { mutableStateOf<MapMarker?>(null) }
     var offlineVisible by remember { mutableStateOf(false) }
     var camera by remember {
-        mutableStateOf(preferences.getString(CAMERA_KEY, null)?.let(MapCamera::decode))
+        mutableStateOf(
+            if (focus == null) preferences.getString(CAMERA_KEY, null)?.let(MapCamera::decode) else null,
+        )
     }
 
-    LaunchedEffect(feature.content) {
+    LaunchedEffect(feature.visibleMarkers, feature.loading) {
         if (camera == null && focusedPoint == null) {
-            camera = feature.content.markers.map { it.marker.position }.boundingCamera()
+            camera = feature.visibleMarkers.map { it.marker.position }.boundingCamera()
         }
     }
     LaunchedEffect(focus) {
         if (focus != null) {
             focusedPoint = focus
             selectedFocus = null
-            camera = MapCamera(focus, 0.05, 0.05)
+            camera = MapCamera(focus, 0.01, 0.01)
             onFocusConsumed()
         }
     }
@@ -189,7 +192,7 @@ private fun MapContent(
     val filtered = feature.visibleMarkers.map { it.marker }.toMutableList()
     focusedPoint?.let {
         filtered += MapMarker(
-            id = UUID(it.latitude.toBits(), it.longitude.toBits()),
+            id = focusedPinId,
             position = it,
             style = MapPinStyle.DROPPED_PIN,
             label = stringResource(R.string.l10n_app_map_map_callout_message),
@@ -238,6 +241,8 @@ private fun MapContent(
             onListVisible = { listVisible = it },
             onRefresh = holder::refresh,
             onOffline = { offlineVisible = !offlineVisible },
+            canCenterAll = filtered.isNotEmpty(),
+            onCenterAll = { camera = filtered.map { it.position }.boundingCamera() },
             modifier = Modifier.align(Alignment.TopCenter),
         )
         if (feature.loading && feature.error == null) {
@@ -290,7 +295,11 @@ private fun MapContent(
                         }
                         null -> Unit
                     }
-                    TextButton(onClick = { holder.select(null); selectedFocus = null }) {
+                    TextButton(onClick = {
+                        holder.select(null)
+                        selectedFocus = null
+                        focusedPoint = null
+                    }) {
                         Text(stringResource(R.string.l10n_app_map_map_common_done))
                     }
                 }
@@ -339,6 +348,8 @@ private fun MapControls(
     onListVisible: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onOffline: () -> Unit,
+    canCenterAll: Boolean,
+    onCenterAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val controlModifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
@@ -348,6 +359,12 @@ private fun MapControls(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                AssistChip(
+                    onClick = onCenterAll,
+                    enabled = canCenterAll,
+                    modifier = controlModifier,
+                    label = { Text(stringResource(R.string.l10n_app_map_map_controls_centerall)) },
+                )
                 AssistChip(
                     onClick = onRefresh,
                     modifier = controlModifier,

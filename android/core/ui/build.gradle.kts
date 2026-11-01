@@ -3,6 +3,8 @@ import org.gradle.api.artifacts.result.UnresolvedDependencyResult
 import org.gradle.api.artifacts.result.ResolvedDependencyResult
 import org.gradle.api.artifacts.component.ModuleComponentSelector
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedComponentResult
 import org.gradle.api.file.Directory
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.InputDirectory
@@ -115,6 +117,51 @@ val verifySharedUiTests by tasks.registering {
     group = "verification"
     description = "Run the actual shared UI test suite."
     dependsOn("testDebugUnitTest")
+}
+
+// Resolve the existing locked API variant, then give the compiler only the contracts
+// dependency's reachable artifacts, not the UI's direct dependencies or test classpath.
+val protocolConsumerClasspath = providers.provider {
+    val configuration = configurations.getByName("debugCompileClasspath")
+    val graph = configuration.incoming.resolutionResult
+    val contracts = graph.rootComponent.get().dependencies.filterIsInstance<ResolvedDependencyResult>()
+        .single { (it.selected.id as? ProjectComponentIdentifier)?.projectPath == ":core:contracts" }
+    val reachable = linkedMapOf<org.gradle.api.artifacts.component.ComponentIdentifier, ResolvedComponentResult>()
+    fun visit(component: ResolvedComponentResult) {
+        if (reachable.putIfAbsent(component.id, component) != null) return
+        check(component.dependencies.none { it is UnresolvedDependencyResult }) {
+            "The isolated contracts API dependency graph is unresolved"
+        }
+        component.dependencies.filterIsInstance<ResolvedDependencyResult>().forEach { visit(it.selected) }
+    }
+    visit(contracts.selected)
+    val projects = reachable.keys.filterIsInstance<ProjectComponentIdentifier>().map { it.projectPath }.toSet()
+    check(projects == setOf(":core:contracts", ":core:model", ":core:protocol")) {
+        "Unexpected projects in the isolated contracts API: $projects"
+    }
+    configuration.incoming.artifactView { componentFilter { it in reachable } }.files
+}
+val compileProtocolApiConsumer by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Compile a Kotlin consumer using only the contracts API's locked transitive artifacts."
+    notCompatibleWithConfigurationCache("Selects the contracts API subgraph from the existing locked compile graph")
+    dependsOn(configurations.named("debugCompileClasspath"))
+    classpath = configurations.getByName("kotlinCompilerClasspath")
+    mainClass.set("org.jetbrains.kotlin.cli.jvm.K2JVMCompiler")
+    val source = layout.projectDirectory.file("verification/protocol-api-consumer/ProtocolApiConsumer.kt")
+    val destination = layout.buildDirectory.dir("protocol-api-consumer")
+    inputs.file(source)
+    inputs.files(protocolConsumerClasspath)
+    outputs.dir(destination)
+    doFirst {
+        args("-no-stdlib", "-no-reflect", "-Xjdk-release=17", "-jvm-target", "17",
+            "-classpath", protocolConsumerClasspath.get().asPath,
+            "-d", destination.get().asFile.absolutePath, source.asFile.absolutePath)
+    }
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(compileProtocolApiConsumer)
+    systemProperty("protocolApiConsumerDirectory", layout.buildDirectory.dir("protocol-api-consumer").get().asFile.absolutePath)
 }
 rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifySharedUiTests) }
 tasks.named("check") { dependsOn(verifySharedUiTests) }

@@ -64,6 +64,10 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.designsystem.ColorScheme
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -92,6 +96,10 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
+import com.meshcoreone.android.core.protocol.model.BatteryInfo
+import com.meshcoreone.android.core.services.contacts.AdvertisementError
+import com.meshcoreone.android.core.services.remote.BinaryProtocolError
+import com.meshcoreone.android.core.services.remote.RoomServerError
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
@@ -339,6 +347,49 @@ class SharedUiComposeTest {
         capture("failure-retry", dialog = true)
         retry.performClick()
         compose.runOnIdle { assertEquals(listOf("dismiss", "retry"), order) }
+    }
+
+    @Test fun selectedTypedErrorsRenderIndependentFrozenCopyInTheActualMaterialDialog() {
+        val error = mutableStateOf<PresentedUiError?>(null)
+        content {
+            MeshCoreTheme(motionScale = 0f) {
+                PresentedErrorAlert(error.value, { error.value = null }, UiErrorActions())
+            }
+        }
+        val cases = listOf(
+            AdvertisementError.NotConnected() to "Not connected to device.",
+            RoomServerError.PermissionDenied() to "Permission denied.",
+            BinaryProtocolError.Timeout() to "Request timed out.",
+            PersistenceStoreException(PersistenceStoreError.ContactNotFound) to "Contact not found.",
+            SettingsServiceException(SettingsServiceError.SessionError(MeshCoreException.NotConnected())) to "Not connected to device.",
+        )
+        for ((failure, expected) in cases) {
+            compose.runOnIdle { error.value = UiErrorMapper().present(failure) }
+            compose.onNode(hasText(expected) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+            compose.runOnIdle { assertSame(failure, assertNotNull(error.value).originalFailure) }
+            compose.onNode(hasText("OK") and hasAnyAncestor(isDialog())).performClick()
+            compose.runOnIdle { assertNull(error.value) }
+        }
+    }
+
+    @Test fun actualRadioMenuUsesTheCurrentOcvBatteryReadingAndSharedNativeGlyph() {
+        val radio = mutableStateOf(RadioStatusState(DeviceConnectionState.READY, device, BatteryInfo(3100)))
+        content {
+            MeshCoreTheme(motionScale = 0f) {
+                BLEStatusIndicatorView(radio.value, RadioStatusActions({}, {}, {}, {}))
+            }
+        }
+        resize(360)
+        compose.onNodeWithContentDescription(resources.getString(S.bleStatusAccessibilityLabel)).performClick()
+        for ((voltage, expected) in listOf(
+            3100L to "0% (3.10v)", 3475L to "25% (3.48v)", 3720L to "50% (3.72v)",
+            3940L to "75% (3.94v)", 4190L to "100% (4.19v)",
+        )) {
+            compose.runOnIdle { radio.value = radio.value.copy(battery = BatteryInfo(voltage)) }
+            compose.onNodeWithText(expected).assertIsDisplayed()
+            val row = compose.onNodeWithContentDescription("Battery: $expected", useUnmergedTree = true).fetchSemanticsNode()
+            assertEquals(1, row.children.count { it.config.contains(SharedEmittedForeground) })
+        }
     }
 
     @Test fun nativeRegionDialogKeepsInvalidInputFocusAndBackCancelsWithoutAnAction() {

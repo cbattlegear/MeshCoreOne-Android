@@ -105,7 +105,8 @@ class ErrorLocalizationTest : SourceCaseProof() {
         val failure = SettingsServiceException(SettingsServiceError.SessionError(underlying))
         assertSame(underlying, failure.cause)
         val description = mapper.message(failure).resolve(resources)
-        assertEquals(mapper.message(underlying).resolve(resources), description)
+        assertEquals("Not connected to device.", description)
+        assertEquals("Not connected to device.", underlying.sourceEnglishDescription())
         assertFalse(description.contains("Session error:"))
     }
     @OriginalCase("ErrorLocalizationTests::SettingsServiceError.deviceGPSVerificationFailed is human-readable()")
@@ -132,19 +133,22 @@ class ErrorLocalizationTest : SourceCaseProof() {
     @OriginalCase("ErrorLocalizationTests::AdvertisementError.notConnected produces readable description()")
     @Test fun actualAdvertisementNotConnectedHasReadableLocalizedCopy() = prove {
         val failure = AdvertisementError.NotConnected()
-        assertEquals(resources.getString(L.errorAdvertisementNotConnected), mapper.message(failure).resolve(resources))
+        assertEquals("Not connected to device.", mapper.message(failure).resolve(resources))
+        assertEquals("Not connected to device.", failure.sourceEnglishDescription())
         assertSame(failure, mapper.present(failure).originalFailure)
     }
     @OriginalCase("ErrorLocalizationTests::RoomServerError.permissionDenied produces readable description()")
     @Test fun actualRoomPermissionFailureHasReadableLocalizedCopy() = prove {
         val failure = RoomServerError.PermissionDenied()
-        assertEquals(resources.getString(L.errorRoomServerPermissionDenied), mapper.message(failure).resolve(resources))
+        assertEquals("Permission denied.", mapper.message(failure).resolve(resources))
+        assertEquals("Permission denied.", failure.sourceEnglishDescription())
         assertSame(failure, mapper.present(failure).originalFailure)
     }
     @OriginalCase("ErrorLocalizationTests::BinaryProtocolError.timeout produces readable description()")
     @Test fun actualBinaryTimeoutHasReadableLocalizedCopy() = prove {
         val failure = BinaryProtocolError.Timeout()
-        assertEquals(resources.getString(L.errorBinaryProtocolTimeout), mapper.message(failure).resolve(resources))
+        assertEquals("Request timed out.", mapper.message(failure).resolve(resources))
+        assertEquals("Request timed out.", failure.sourceEnglishDescription())
         assertSame(failure, mapper.present(failure).originalFailure)
     }
     @OriginalCase("ErrorLocalizationTests::SyncCoordinatorError.alreadySyncing produces readable description()")
@@ -157,6 +161,8 @@ class ErrorLocalizationTest : SourceCaseProof() {
     @OriginalCase("ErrorLocalizationTests::PersistenceStoreError.contactNotFound produces readable description()")
     @Test fun persistenceDescription() = prove {
         val failure = PersistenceStoreException(PersistenceStoreError.ContactNotFound)
-        assertEquals(resources.getString(L.errorPersistenceContactNotFound), mapper.message(failure).resolve(resources))
+        assertEquals("Contact not found.", mapper.message(failure).resolve(resources))
+        assertEquals("ContactNotFound", failure.message)
+        assertSame(failure, mapper.present(failure).originalFailure)
     }
 }

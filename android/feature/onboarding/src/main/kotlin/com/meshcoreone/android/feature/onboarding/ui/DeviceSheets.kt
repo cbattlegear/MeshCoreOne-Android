@@ -36,6 +36,7 @@ import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.ui.RSSITuning
+import com.meshcoreone.android.core.ui.SignalBars
 import com.meshcoreone.android.feature.onboarding.OnboardingScanDiscovery
 import com.meshcoreone.android.feature.onboarding.PermissionStatus
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionSnapshot
@@ -172,6 +173,7 @@ private fun ScannerRow(name: String, tier: RSSITuning.SignalTier, onClick: () ->
     ) {
         Icon(MeshSymbol.RADIO.vector, null, tint = MaterialTheme.colorScheme.primary)
         Text(name, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+        SignalBars(tier)
         Text(signal, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

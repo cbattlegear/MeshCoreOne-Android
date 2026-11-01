@@ -23,6 +23,16 @@ class RSSITuningTest : SourceCaseProof() {
     @Test fun firstSample() = prove { assertEquals(-50L, RSSITuning.smooth(-50, null)) }
     @OriginalCase("RSSITuningTests::smooth weights the newest sample at 0.2 against the previous smoothed value()")
     @Test fun smoothing() = prove { assertEquals(-66L, RSSITuning.smooth(-50, -70)) }
+
+    @Test fun additionalUnequalSamplesPinTheWeightAndTruncationIndependently() {
+        for ((new, previous, expected) in listOf(
+            Triple(-55L, -50L, -51L),
+            Triple(-41L, -80L, -72L),
+            Triple(-80L, -41L, -48L),
+        )) {
+            assertEquals(expected, RSSITuning.smooth(new, previous))
+        }
+    }
     @OriginalCase("RSSITuningTests::first reading maps directly at the tier thresholds(rssi : Int , expected : RSSITuning . SignalTier)", 3)
     @Test fun firstTier() = prove(3) {
         for ((rssi, expected) in listOf(-60L to RSSITuning.SignalTier.STRONG,

@@ -543,9 +543,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             firmware.respond = { frame -> if (frame[0].toInt() == 0x09) listOf(Bytes.of(0)) else null }
             if (replacing) {
                 firmware.connectGate = replacementHandshake
-                firmware.knownContacts += contactFrame(importedKey, importedName).copy(
-                    type = ContactType.REPEATER, typeRawValue = ContactType.REPEATER.rawValue,
-                )
+                firmware.knownContacts += contactFrame(importedKey, importedName)
             }
         }
         try {
@@ -555,7 +553,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val selected = assertNotNull(store.fetchContact(radio, key(21)))
             n.navigateToContactDetail(selected)
             mount(h)
-            n.stageContactLink(ContactLinkRequest(importedName, importedKey, ContactType.REPEATER))
+            n.stageContactLink(ContactLinkRequest(importedName, importedKey, ContactType.CHAT))
             val pending = assertNotNull(n.state.value.pendingContactLink)
             await(h) { confirmationEnabled() }
             holdLookup = true

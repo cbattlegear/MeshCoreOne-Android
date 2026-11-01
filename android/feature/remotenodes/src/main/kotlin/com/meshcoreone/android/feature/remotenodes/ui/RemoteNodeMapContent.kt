@@ -40,6 +40,7 @@ val NativeRemoteNodesMapSurface: RemoteNodesMapSurface = { state, clusters, labe
 }
 
 internal val LocalRemoteMapPreferences = staticCompositionLocalOf<MapPreferenceStore?> { null }
+internal val LocalRemoteMapUserLocation = staticCompositionLocalOf<com.meshcoreone.android.core.model.Coordinate?> { null }
 
 @Composable
 internal fun RemoteMapPreferencesContent(

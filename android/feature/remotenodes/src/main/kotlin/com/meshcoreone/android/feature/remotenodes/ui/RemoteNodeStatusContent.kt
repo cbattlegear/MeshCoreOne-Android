@@ -58,15 +58,16 @@ internal fun RemoteNodeStatusContent(
             if (map == "neighbors" && repeaterState != null) {
                 RemoteMapPreferencesContent(com.meshcoreone.android.core.maps.MapFilterHost.NEIGHBOR_SNR) { preferences, save ->
                     val storedFilter = preferences.filter
+                    val userLocation = LocalRemoteMapUserLocation.current
                     val filter = MapFilterState(
                         storedFilter.favoritesOnly, storedFilter.showDiscovered, storedFilter.showChat,
                         storedFilter.showRepeater, storedFilter.showRoom,
                     )
-                    val holder = remember(session, repeaterState.neighbors, catalog, repeaterState.neighborKeyDisplayByteCount, locale) {
+                    val holder = remember(session, repeaterState.neighbors, catalog, repeaterState.neighborKeyDisplayByteCount, locale, userLocation) {
                         NeighborSNRMapStateHolder(
                             NeighborSNRMapInputs(
                                 session, repeaterState.neighbors, catalog.contacts, catalog.discoveredNodes,
-                                null, repeaterState.neighborKeyDisplayByteCount,
+                                userLocation, repeaterState.neighborKeyDisplayByteCount,
                             ), filter, locale,
                         )
                     }

@@ -45,7 +45,10 @@ fun RemoteNodesEntry(
     onDismiss: () -> Unit = {},
     onJoinRoom: (RemoteNodeSessionDTO) -> Unit = {},
 ) {
-    CompositionLocalProvider(LocalRemoteMapPreferences provides dependencies?.mapPreferences) {
+    CompositionLocalProvider(
+        LocalRemoteMapPreferences provides dependencies?.mapPreferences,
+        LocalRemoteMapUserLocation provides dependencies?.bestAvailableLocation,
+    ) {
         RemoteNodesEntryContent(
             route, onNavigate, dependencies, cliContent, mapSurface, launch, onDismiss, onJoinRoom,
         )

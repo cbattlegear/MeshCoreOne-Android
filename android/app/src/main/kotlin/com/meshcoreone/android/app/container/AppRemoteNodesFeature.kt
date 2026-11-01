@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.combine
 internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiDependencies =
     object : RemoteNodesUiDependencies {
         override val mapPreferences = this@createRemoteNodesFeatureDependencies.mapPreferences
+        override val bestAvailableLocation get() = this@createRemoteNodesFeatureDependencies.bestAvailableLocation
         override val radioOptions = RemoteRadioOptions(
             RadioOptions.bandwidthsKHz, RadioOptions.spreadingFactors.toList(), RadioOptions.codingRates.toList(),
         )

@@ -1,17 +1,19 @@
-// AndroidOnly: WP-217 synchronous boolean preference port standing in for UserDefaults; WP-303 binds core:datastore.
+// AndroidOnly: WP-217 boolean preference port standing in for UserDefaults; WP-303 binds core:datastore.
 package com.meshcoreone.android.core.services.simulator
 
+import kotlinx.coroutines.ensureActive
+
 /**
- * The two `UserDefaults` calls `DemoModeManager` makes. Both are synchronous, as in Swift: the manager reads
- * its initial values in its constructor and writes through on every assignment. The production binding must
- * therefore serve reads from an already-loaded snapshot and may persist writes asynchronously.
+ * The manager reads an already-loaded snapshot synchronously. A mutation completes only after all of its
+ * values have been committed together; failures and cancellation must reach its caller.
  */
 interface DemoModeDefaults {
     /** `UserDefaults.bool(forKey:)`: the stored value, or `false` when the key is absent. */
     fun bool(forKey: String): Boolean
 
-    /** `UserDefaults.set(_:forKey:)` for a `Bool`. */
-    fun set(value: Boolean, forKey: String)
+    suspend fun setAll(values: Map<String, Boolean>)
+
+    suspend fun set(value: Boolean, forKey: String) = setAll(mapOf(forKey to value))
 }
 
 /**
@@ -24,8 +26,9 @@ class InMemoryDemoModeDefaults(initial: Map<String, Boolean> = emptyMap()) : Dem
 
     override fun bool(forKey: String): Boolean = synchronized(lock) { values[forKey] ?: false }
 
-    override fun set(value: Boolean, forKey: String) {
-        synchronized(lock) { values = values + (forKey to value) }
+    override suspend fun setAll(values: Map<String, Boolean>) {
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        synchronized(lock) { this.values = this.values + values }
     }
 
     /** Whether [key] has ever been written, distinguishing an explicit `false` from absence. */

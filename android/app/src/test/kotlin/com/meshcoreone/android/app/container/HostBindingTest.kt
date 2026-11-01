@@ -45,6 +45,7 @@ class HostBindingTest {
         override var reconnectInProgress = false
         override var lastConnectedDeviceId: UUID? = null
         override var lanOnly = false
+        override var isSimulator = false
     }
 
     private class Effects : PresenceEffects {
@@ -126,6 +127,23 @@ class HostBindingTest {
         rig.binding.start()
         runCurrent()
         assertEquals(0, rig.starter.starts)
+        rig.binding.close()
+    }
+
+    @Test
+    fun simulatorNeverStartsRadioHostingOrActsOnPresence() = runTest {
+        val rig = Rig(this, MutableStateFlow(snapshot(DeviceConnectionState.CONNECTING)))
+        val simulatorId = UUID.randomUUID()
+        rig.environment.isSimulator = true
+        rig.environment.lastConnectedDeviceId = simulatorId
+        rig.environment.connectPermissionGranted = false
+        rig.binding.start()
+        runCurrent()
+        assertEquals(0, rig.starter.starts)
+        rig.connection.value = snapshot(DeviceConnectionState.DISCONNECTED)
+        CompanionPresenceDispatcher.dispatch(PresenceEvent.Appeared(simulatorId))
+        runCurrent()
+        assertTrue(rig.effects.calls.isEmpty(), "a simulator is not a companion Bluetooth device")
         rig.binding.close()
     }
 

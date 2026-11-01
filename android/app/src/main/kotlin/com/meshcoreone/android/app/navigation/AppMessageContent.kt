@@ -27,6 +27,7 @@ import com.meshcoreone.android.feature.chats.composer.ui.LinkPreviewRoute
 import com.meshcoreone.android.core.services.rendering.MessageFragment
 import com.meshcoreone.android.core.services.rendering.MessageItem
 import com.meshcoreone.android.core.services.rendering.PreviewLoadState
+import com.meshcoreone.android.core.services.simulator.DemoOfflineContent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -39,7 +40,7 @@ internal fun AppMessageContent(
     rendered: MessageItem? = null,
 ) {
     val resolutions by content.resolutions.collectAsState()
-    val media = remember(content, message.text, resolutions) { content.media(message.text) }
+    val media = remember(content, message.radioId, message.id, message.text, resolutions) { content.media(message) }
     val scope = rememberCoroutineScope()
     val uri = LocalUriHandler.current
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -47,18 +48,22 @@ internal fun AppMessageContent(
     val autoResolve = preferences[if (message.isChannelMessage) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM]
     (if (preferences[AppStorageKey.linkPreviewsEnabled]) media else emptyList()).forEach { entry ->
         val url = entry.url
-        key(url, autoResolve) {
+        val bundledPreview = DemoOfflineContent.preview(message, url) != null
+        val bundledImage = DemoOfflineContent.isInlineImage(message, url)
+        if (DemoOfflineContent.isSimulatorMessage(message) && !bundledPreview && !bundledImage) return@forEach
+        key(message.radioId, message.id, url, autoResolve) {
             var image by remember { mutableStateOf<ChatImage?>(null) }
             var failure by remember { mutableStateOf<Throwable?>(null) }
             var manualImage by remember { mutableStateOf(false) }
             var retry by remember { mutableIntStateOf(0) }
             var fullscreen by remember { mutableStateOf(false) }
-            val inline = entry.isImage
-            val holder = remember(content, url, message.isChannelMessage,
+            val inline = bundledImage || entry.isImage
+            val holder = remember(content, message.radioId, message.id, message.text, url, message.isChannelMessage,
                 preferences[AppStorageKey.linkPreviewsEnabled],
                 preferences[AppStorageKey.linkPreviewsAutoResolveDM], preferences[AppStorageKey.linkPreviewsAutoResolveChannels]) {
-                LinkPreviewStateHolder(url, message.isChannelMessage, content.previews(message.isChannelMessage),
-                    UrlSafetyPort { UrlSafetyChecker.isSafe(it) }, MalwareDomainPort(content.malware::isBlocked),
+                LinkPreviewStateHolder(url, message.isChannelMessage, content.previews(message, url),
+                    UrlSafetyPort { bundledPreview || UrlSafetyChecker.isSafe(it) },
+                    MalwareDomainPort { if (bundledPreview) false else content.malware.isBlocked(it) },
                     scope, ComposerDiagnostics(report))
             }
             DisposableEffect(holder) { onDispose { holder.close() } }
@@ -83,17 +88,21 @@ internal fun AppMessageContent(
                     Spacer(Modifier.widthIn(max = InlineImageMetrics.MAX_WIDTH_DP.dp).fillMaxWidth().aspectRatio(aspect.toFloat()))
                 }
             }
-            LaunchedEffect(content, url, autoResolve, manualImage, retry) {
+            LaunchedEffect(content, message.radioId, message.id, message.text, url, autoResolve, manualImage, retry) {
                 if (!inline || (!autoResolve && !manualImage)) return@LaunchedEffect
                 image = null
                 failure = null
                 if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.LOADING)
                 try {
-                    val host = LinkOpenPolicy.host(url) ?: error("Image link has no host")
-                    check(!content.malware.isBlocked(host)) { "Image host is blocked" }
-                    check(UrlSafetyChecker.isSafe(url)) { "Unsafe image URL" }
-                    if (retry > 0) content.retryInline(url)
-                    image = content.inline(url)
+                    image = if (bundledImage) {
+                        content.bundledInlineImage(message, url)
+                    } else {
+                        val host = LinkOpenPolicy.host(url) ?: error("Image link has no host")
+                        check(!content.malware.isBlocked(host)) { "Image host is blocked" }
+                        check(UrlSafetyChecker.isSafe(url)) { "Unsafe image URL" }
+                        if (retry > 0) content.retryInline(url)
+                        content.inline(url)
+                    }
                     if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.LOADED)
                 }
                 catch (cancelled: CancellationException) { throw cancelled }
@@ -161,7 +170,7 @@ internal fun AppMessageContent(
                             }
                             TextButton(onClick = {
                                 scope.launch {
-                                    try { com.meshcoreone.android.app.platform.shareImage(context, content.shareData(url)) }
+                                    try { com.meshcoreone.android.app.platform.shareImage(context, content.shareData(url, message)) }
                                     catch (cancelled: CancellationException) { throw cancelled }
                                     catch (problem: Exception) { report("Image sharing failed", problem); failure = problem }
                                 }
@@ -182,5 +191,6 @@ internal fun AppMessageContent(
             com.meshcoreone.android.core.model.Coordinate(shared.latitude, shared.longitude)
         } else chatMapPreviewCoordinate(message.text, preferences[AppStorageKey.showMapPreviewThumbnails])
     }
-    coordinate?.let { AppChatMapPreview(content.mapPreviews, it, onMap) }
+    coordinate?.let { AppChatMapPreview(content.mapPreviews, it, onMap,
+        forceOffline = DemoOfflineContent.isSimulatorMessage(message)) }
 }

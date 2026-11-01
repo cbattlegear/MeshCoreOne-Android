@@ -24,6 +24,7 @@ import com.meshcoreone.android.core.connectivity.pairing.BluetoothScanPairingSer
 import com.meshcoreone.android.core.connectivity.permissions.AndroidPermissionState
 import com.meshcoreone.android.core.connectivity.permissions.PermissionSnapshot
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.app.content.LocationPermissionResultReporting
 import com.meshcoreone.android.core.services.content.RegionResolver
 import com.meshcoreone.android.core.services.device.RadioPreset
@@ -91,6 +92,7 @@ class AppStateOnboardingHost(private val container: AppContainer) : OnboardingCo
     override val isPairingActive: Boolean get() = container.connectionPort.isPairingFlowActive
     override val registeredAccessoryCount: Int get() = container.pairing.pairing.registeredDeviceCount
     override val hasLastConnectedDevice: Boolean get() = container.connectionPort.lastConnectedDeviceId != null
+    override val isDemoDevice: Boolean get() = container.connectionManager.isSimulatorConnection
 
     override suspend fun startPairing(): com.meshcoreone.android.feature.onboarding.OnboardingConnectOutcome {
         val completed = appState.startDeviceScanAndAwait()
@@ -122,7 +124,7 @@ class AppStateOnboardingHost(private val container: AppContainer) : OnboardingCo
 class AppStateRadioConfigurator(private val container: AppContainer) : OnboardingRadioConfigurator {
     override fun connectionStates(): Flow<DeviceConnectionState> =
         container.connectionManager.snapshot.map { it.state }.distinctUntilChanged()
-    override val isDemoRadio: Boolean get() = false
+    override val isDemoRadio: Boolean get() = container.connectionManager.isSimulatorConnection
 
     override suspend fun applyPreset(preset: RadioPreset) {
         val session = container.appState.services ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
@@ -204,7 +206,10 @@ class AppOnboarding(
 
 object AppOnboardingFactory {
     /** Binds every onboarding port to [container]; [scope] owns the derived state flows (process lifetime). */
-    fun create(container: AppContainer, platform: OnboardingPlatform, scope: CoroutineScope): AppOnboarding {
+    fun create(
+        container: AppContainer, platform: OnboardingPlatform, scope: CoroutineScope,
+        demoManager: DemoModeManager = DemoModeManager.shared,
+    ): AppOnboarding {
         val host = AppStateOnboardingHost(container)
         val service = container.pairing.pairing as? BluetoothScanPairingService
         val scanFallback = service?.let { svc -> platform.scans?.let { ScanFallbackPort(svc, it) } }
@@ -216,7 +221,9 @@ object AppOnboardingFactory {
             permissions = permissions,
             pairing = AppOnboardingPairingPort(host, scope, scanFallback),
             wifi = AppOnboardingWiFiPort(host),
-            demo = AppOnboardingDemoPort(DemoModeManager.shared, scope),
+            demo = AppOnboardingDemoPort(demoManager, scope) {
+                container.connectionManager.connect(ConnectionTarget.Simulator)
+            },
             region = AppOnboardingRegionPort(
                 ServicesRegionCatalog(resources = platform.regionResources), container.appState.regionSelectionFlow,
                 { container.appState.regionSelection = it }, platform.regionResolver?.let { resolver -> suspend { resolver.resolve() } },

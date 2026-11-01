@@ -32,6 +32,7 @@ interface HostEnvironment {
     val reconnectInProgress: Boolean
     val lastConnectedDeviceId: UUID?
     val lanOnly: Boolean
+    val isSimulator: Boolean get() = false
 }
 
 /** Effects a presence decision can request. */
@@ -84,9 +85,9 @@ class ConnectedDeviceHostBinding(
         try {
             controller.update(
                 HostingInput(
-                    intent = snapshot.intent,
+                    intent = if (environment.isSimulator) ConnectionIntent.None else snapshot.intent,
                     state = snapshot.state,
-                    reconnectInProgress = environment.reconnectInProgress,
+                    reconnectInProgress = !environment.isSimulator && environment.reconnectInProgress,
                     appInForeground = inForeground,
                     connectPermissionGranted = environment.connectPermissionGranted,
                     lanOnly = environment.lanOnly,
@@ -99,6 +100,7 @@ class ConnectedDeviceHostBinding(
     }
 
     private fun handlePresence(event: PresenceEvent) {
+        if (event is PresenceEvent.Appeared && environment.isSimulator) return
         val snapshot = snapshotNow()
         val action = PresenceReconnectPolicy.decide(
             event,
@@ -116,7 +118,7 @@ class ConnectedDeviceHostBinding(
         scope.launch {
             try {
                 when (action) {
-                    is PresenceAction.Reconnect -> effects.reconnect(action.deviceId)
+                    is PresenceAction.Reconnect -> if (!environment.isSimulator) effects.reconnect(action.deviceId)
                     is PresenceAction.DeferUntilUnlock -> effects.deferredUntilUnlock(action.deviceId)
                     is PresenceAction.PermissionRevoked -> effects.permissionRevoked(action.capability)
                     is PresenceAction.ForgetAssociation -> effects.forgetAssociation(action.deviceId)

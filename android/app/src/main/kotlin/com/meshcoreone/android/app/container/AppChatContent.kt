@@ -200,7 +200,7 @@ class AppChatContent internal constructor(
             demoPreview != null && (automatic(message.isChannelMessage) || recorded == PreviewLoadState.LOADED) ->
                 bundledPreview(message, url)
             DemoOfflineContent.isSimulatorMessage(message) -> null
-            else -> previewCache.cachedPreview(url)
+            else -> previewCache.cachedPreview(url, store)
         }
         val state = when {
             !enabled -> PreviewLoadState.DISABLED

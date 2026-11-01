@@ -31,6 +31,7 @@ import com.meshcoreone.android.core.services.rendering.MessageItem
 import com.meshcoreone.android.core.services.rendering.PreviewLoadState
 import com.meshcoreone.android.core.services.simulator.DemoOfflineContent
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 internal suspend fun shareMountedImage(
@@ -51,6 +52,7 @@ internal fun AppMessageContent(
     rendered: MessageItem? = null,
     onShareImage: (suspend (ByteArray) -> Unit)? = null,
     malwareCheck: suspend (String) -> Boolean = content.malware::isBlocked,
+    malwareRevisionSource: StateFlow<Long> = content.malware.revision,
 ) {
     val resolutions by content.resolutions.collectAsState()
     val media = remember(content, message.radioId, message.id, message.text, resolutions) { content.media(message) }
@@ -61,7 +63,7 @@ internal fun AppMessageContent(
         com.meshcoreone.android.app.platform.shareImage(context, bytes)
     }
     val preferences by content.rendering.collectAsState()
-    val malwareRevision by content.malware.revision.collectAsState()
+    val malwareRevision by malwareRevisionSource.collectAsState()
     val autoResolve = preferences[if (message.isChannelMessage) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM]
     (if (preferences[AppStorageKey.linkPreviewsEnabled]) media else emptyList()).forEach { entry ->
         val url = entry.url
@@ -77,12 +79,15 @@ internal fun AppMessageContent(
             var retry by remember { mutableIntStateOf(0) }
             var fullscreen by remember { mutableStateOf(false) }
             val displayedImage = image.takeIf { verifiedMalwareRevision == malwareRevision }
+            val hasMalwareWarning = rendered?.content?.any {
+                it is MessageFragment.MalwareWarning && it.url.absoluteString == url
+            } == true
             val inline = if (url == media.firstOrNull()?.url && rendered != null) {
-                bundledImage || rendered.content.any { it is MessageFragment.InlineImage }
+                bundledImage || rendered.content.any { it is MessageFragment.InlineImage } ||
+                    (entry.isImage && hasMalwareWarning)
             } else {
-                bundledImage || entry.isImage
+                bundledImage || entry.isImage || hasMalwareWarning
             }
-            val hasMalwareWarning = rendered?.content?.any { it is MessageFragment.MalwareWarning } == true
             val shouldCheckImage = !bundledPreview && !bundledImage && entry.isImage && (inline || hasMalwareWarning)
             val holder = remember(
                 content,
@@ -90,6 +95,7 @@ internal fun AppMessageContent(
                 message.id,
                 message.text,
                 url,
+                malwareRevision,
                 message.isChannelMessage,
                 malwareCheck,
                 preferences[AppStorageKey.linkPreviewsEnabled],
@@ -137,6 +143,8 @@ internal fun AppMessageContent(
                 retry,
                 malwareRevision,
                 shouldCheckImage,
+                hasMalwareWarning,
+                inline,
                 bundledImage,
             ) {
                 if (!inline) return@LaunchedEffect
@@ -163,9 +171,8 @@ internal fun AppMessageContent(
                             }
                             return@LaunchedEffect
                         }
-                    } else {
-                        imageBlocked = false
                     }
+                    imageBlocked = false
                     verifiedMalwareRevision = malwareRevision
                     if (image is ChatImage.Decoded) {
                         if (url == media.firstOrNull()?.url) {

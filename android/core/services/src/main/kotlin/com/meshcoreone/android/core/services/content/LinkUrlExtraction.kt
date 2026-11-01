@@ -26,8 +26,8 @@ object LinkUrlExtraction {
     private val mentionPattern = Regex("""@\[([^\]]+)\]""")
     private val explicitHttpUrlPattern = Regex("""(?i)https?://[^\s<>"]+""")
     // Suppress opaque scheme payloads without treating common prose labels as URI schemes.
-    private val uriPattern = Regex(
-        """(?i)(?<![\w.-])(?![a-z0-9.-]+-https?://)(?:[a-z][a-z0-9+.-]*://|(?:mailto|view-source|file|data|javascript|tel|sms|geo|urn|xmpp|sip|sips|magnet|bitcoin|ipfs|ipns|ftp|ftps|did):|(?!(?:link|visit):)[a-z][a-z0-9+.-]*:(?:[a-z][a-z0-9+.-]*:)*(?=[a-z0-9.-]+\.[a-z0-9.-]+))[^\s<>"]*""",
+    private val uriSchemePattern = Regex(
+        """(?i)(?<![\w.-])(?!see-https?://)(?:[a-z][a-z0-9+.-]*://|(?:mailto|view-source|file|data|javascript|tel|sms|geo|urn|xmpp|sip|sips|magnet|bitcoin|ipfs|ipns|ftp|ftps|did):|(?!(?:link|visit):)[a-z][a-z0-9+.-]*:(?=[^\s<>"]*[a-z0-9.-]+\.[a-z0-9-]+))""",
     )
     private val emailPattern = Regex(
         """(?i)(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|[\w.!#$%&'*+/^_`{|}~-]+)@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})""",
@@ -62,7 +62,9 @@ object LinkUrlExtraction {
         extractGiphyGifUrl(text)?.let { return listOf(it) }
 
         val mentionRanges = mentionPattern.findAll(text).map { it.range }.toList()
-        val embeddedLinkRanges = uriPattern.findAll(text).map { it.range }.toList()
+        val embeddedLinkRanges = uriSchemePattern.findAll(text).mapNotNull { match ->
+            uriRange(text, match.range.first)
+        }.toList()
         val emailRanges = emailPattern.findAll(text).map { it.range }.toList()
 
         val matches = buildList {
@@ -113,6 +115,28 @@ object LinkUrlExtraction {
             candidate = candidate.dropLast(1)
         }
         return candidate
+    }
+
+    private fun uriRange(text: String, start: Int): IntRange? {
+        val delimiters = mutableListOf<Char>()
+        var index = start
+        while (index < text.length) {
+            when (val character = text[index]) {
+                ' ', '\t', '\n', '\r', '<', '>', '"' -> break
+                '(', '[', '{' -> delimiters.add(character)
+                ')', ']', '}' -> {
+                    val expected = when (character) {
+                        ')' -> '('
+                        ']' -> '['
+                        else -> '{'
+                    }
+                    if (delimiters.lastOrNull() != expected) break
+                    delimiters.removeAt(delimiters.lastIndex)
+                }
+            }
+            index++
+        }
+        return (start until index).takeIf { !it.isEmpty() }
     }
 
     private fun IntRange.overlaps(other: IntRange): Boolean =

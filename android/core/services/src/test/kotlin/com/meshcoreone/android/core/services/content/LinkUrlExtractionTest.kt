@@ -202,6 +202,21 @@ class LinkUrlExtractionTest {
     }
 
     @Test
+    fun `extracts a web link after an unsupported URI closes`() {
+        assertEquals(
+            "https://new.example/path",
+            LinkUrlExtraction.extractFirstUrl("(ftp://old.example),https://new.example/path"),
+        )
+    }
+
+    @Test
+    fun `suppresses domains in opaque payloads without consuming prose labels`() {
+        assertNull(LinkUrlExtraction.extractFirstUrl("custom:payload=tracker.example"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("custom:https://example.com/path"))
+        assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Visit:example.com"))
+    }
+
+    @Test
     fun `extracts links after prose labels without treating labels as URI schemes`() {
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Link:(https://example.com)"))
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Visit:example.com"))
@@ -231,6 +246,7 @@ class LinkUrlExtractionTest {
     fun `normalizes uppercase explicit schemes without changing the rest of the url`() {
         assertEquals("https://Example.COM/Page", LinkUrlExtraction.extractFirstUrl("Link:HTTPS://Example.COM/Page"))
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("See-https://example.com"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("feed-https://example.com/path"))
     }
 
     @Test

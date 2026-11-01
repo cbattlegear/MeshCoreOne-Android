@@ -5,6 +5,8 @@ import com.meshcoreone.android.core.model.MC1ServicesVersion
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.event.MeshEvent
 import com.meshcoreone.android.core.protocol.parser.PacketParser
+import java.io.File
+import java.net.URLClassLoader
 import kotlin.test.*
 import org.junit.Test
 
@@ -17,5 +19,14 @@ class ServicesBasicTest : SourceCaseProof() {
         assertEquals("MeshEvent", MeshEvent::class.simpleName)
         assertEquals("PacketBuilder", PacketBuilder::class.simpleName)
         assertEquals("PacketParser", PacketParser::class.simpleName)
+        val output = File(requireNotNull(System.getProperty("protocolApiConsumerDirectory")) {
+            "The dependency-isolated Kotlin compile task must execute before the consumer test"
+        })
+        assertTrue(File(output, "com/meshcoreone/android/verification/ProtocolApiConsumer.class").isFile)
+        URLClassLoader(arrayOf(output.toURI().toURL()), javaClass.classLoader).use { loader ->
+            val consumer = Class.forName("com.meshcoreone.android.verification.ProtocolApiConsumer", true, loader)
+            assertContentEquals(byteArrayOf(0x14), consumer.getMethod("request").invoke(null) as ByteArray)
+            assertEquals(MeshEvent.Ok(null), consumer.getMethod("decode").invoke(null))
+        }
     }
 }

@@ -337,15 +337,15 @@ class StateTests(unittest.TestCase):
             with self.assertRaisesRegex(PortError, "approved bounded split"):
                 self.controller.require_ready("WP-202")
 
-    def test_inventory_nonmodule_and_release_wps_do_not_inherit_the_android_module_contract(self):
-        for wp_id in ("WP-004", "WP-006", "WP-503", "WP-505", "WP-506"):
-            with self.subTest(wp_id=wp_id), self.assertRaisesRegex(PortError, "verification contract"):
-                self.controller.require_ready(wp_id)
-
-    def test_shared_contract_rejects_empty_source_ownership_and_admits_protocol(self):
-        with self.assertRaisesRegex(PortError, "no primary-owned source"):
-            self.controller.require_ready("WP-407")
+    def test_empty_verification_does_not_block_work_before_actual_dependency_checks(self):
         with patch.object(self.controller, "completed"):
+            for wp_id in ("WP-004", "WP-006", "WP-503", "WP-505", "WP-506"):
+                with self.subTest(wp_id=wp_id):
+                    self.assertEqual(self.controller.require_ready(wp_id)["id"], wp_id)
+
+    def test_empty_source_ownership_does_not_create_a_separate_dispatch_gate(self):
+        with patch.object(self.controller, "completed"):
+            self.assertEqual(self.controller.require_ready("WP-407")["id"], "WP-407")
             self.assertEqual(self.controller.require_ready("WP-102")["id"], "WP-102")
 
     def test_missing_dependency_is_not_replaced_by_closed_issue(self):
@@ -639,6 +639,84 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.controller.completed("WP-101"), proof)
         self.controller.authority = FakeAuthority({"WP-101": replace(value, pr={**value.pr, "merged": False})})
         with self.assertRaises(PortError):
+            self.controller.completed("WP-101")
+
+    def test_accepted_implementation_does_not_release_active_or_ambiguous_repair(self):
+        identity = self.running()
+        binding = {**self.controller.binding("WP-101", BASE), "head_sha": HEAD}
+        proof = {
+            "kind": "merged-implementation", "binding": binding, "pr_number": 122,
+            "merge_commit_sha": MERGE, "merge_parent_sha": BASE,
+            "ci": {"run_id": 1, "run_attempt": 1, "check_id": 100},
+            "ci_run_ids": [1], "review_ids": [], "approval_id": None,
+        }
+        self.assertEqual(self.ledger.remember_completion("WP-101", proof, True), proof)
+        authority = Mock()
+        authority.confirm_merged.return_value = proof
+        repair = {**proof, "kind": "merged-scope", "pr_number": 123}
+        authority.merged_scope.return_value = repair
+        self.controller.authority = authority
+        self.assertEqual(self.controller.completed("WP-101"), proof)
+        for observation in (
+            Observation(identity, "in_progress", True, True),
+            Observation(identity, "completed", False, True, ambiguous=True),
+            Observation(identity, "completed", True, True),
+        ):
+            self.backend.observation = observation
+            with self.subTest(observation=observation), self.assertRaises(PortError):
+                self.controller.record_completion("WP-101")
+            self.assertEqual(self.ledger.get("WP-101")["state"], "running")
+            self.assertEqual(self.ledger.accepted_completion("WP-101"), proof)
+        authority.merged_scope.assert_not_called()
+        self.backend.observation = Observation(identity, "completed", False, True)
+        self.assertEqual(self.controller.record_completion("WP-101"), proof)
+        self.assertEqual(self.ledger.get("WP-101")["state"], "pending")
+        self.assertEqual(self.ledger.accepted_completion("WP-101"), proof)
+        authority.merged_scope.assert_called_once_with("WP-101", identity)
+
+    def test_accepted_completion_rejects_malformed_or_conflicting_proofs(self):
+        binding = {**self.controller.binding("WP-101", BASE), "head_sha": HEAD}
+        proof = {
+            "kind": "merged-implementation", "binding": binding, "pr_number": 123,
+            "merge_commit_sha": MERGE, "merge_parent_sha": BASE,
+            "ci": {"run_id": 1, "run_attempt": 1, "check_id": 100},
+            "ci_run_ids": [1], "review_ids": [], "approval_id": None,
+        }
+        for invalid in (
+            {**proof, "kind": "merged-scope"}, {**proof, "merge_parent_sha": "main"},
+            {**proof, "ci": {"run_id": True, "run_attempt": 1, "check_id": 100}},
+            {**proof, "ci_run_ids": [2]}, {**proof, "approval_id": 100},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(PortError):
+                self.ledger.remember_completion("WP-101", invalid, True)
+        self.ledger.remember_completion("WP-101", proof, True)
+        self.assertEqual(self.ledger.remember_completion("WP-101", proof, True), proof)
+        with self.assertRaisesRegex(PortError, "Conflicting"):
+            self.ledger.remember_completion("WP-101", {**proof, "pr_number": 124}, True)
+        reopened = Ledger(self.path, self.policy["repository"])
+        self.assertEqual(reopened.accepted_completion("WP-101"), proof)
+        with reopened.transaction() as connection:
+            connection.execute(
+                "UPDATE accepted_completions SET proof=? WHERE repository=? AND wp=?",
+                (json.dumps({**proof, "ci_run_ids": []}), self.policy["repository"], "WP-101"),
+            )
+        with self.assertRaises(PortError):
+            reopened.accepted_completion("WP-101")
+
+    def test_conflicting_previously_accepted_implementations_are_not_silently_selected(self):
+        binding = {**self.controller.binding("WP-101", BASE), "head_sha": HEAD}
+        proof = {
+            "kind": "merged-implementation", "binding": binding, "pr_number": 123,
+            "merge_commit_sha": MERGE, "merge_parent_sha": BASE,
+            "ci": {"run_id": 1, "run_attempt": 1, "check_id": 100},
+            "ci_run_ids": [1], "review_ids": [], "approval_id": None,
+        }
+        self.ledger.remember_completion("WP-101", proof, True)
+        self.controller.authority = Mock()
+        self.controller.authority.confirm_merged.side_effect = lambda _, value: value
+        with patch.object(self.ledger, "historical_records", return_value=[
+            {"completion": {**proof, "pr_number": 124}},
+        ]), self.assertRaisesRegex(PortError, "conflicting previously accepted"):
             self.controller.completed("WP-101")
 
     def test_supervised_receipt_import_is_explicit_idempotent_and_not_a_launch(self):

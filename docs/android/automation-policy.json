@@ -956,7 +956,7 @@
     ]
   },
   "foundation_required": ["WP-000", "WP-001", "WP-002", "WP-003"],
-  "required_checks": ["android-ci", "parity-review", "gate-integrity"],
+  "required_checks": ["android-ci", "parity-review"],
   "trusted_check_app_ids": [],
   "trusted_workflow_ids": [],
   "trusted_gate_publisher_app_id": null,

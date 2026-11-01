@@ -17,8 +17,9 @@ from controller.engine import Controller
 from controller.errors import PortError
 from controller.gates import Binding, verify_completion
 from controller.ledger import Identity, Ledger
-from controller.model import load_manifest
+from controller.model import git, load_manifest
 from controller.render import cloud_payload, input_page, issue_payload, local_payload, render
+from controller.runtime_inputs import verify_committed_inputs
 from controller.schema import decode_json, load_json
 from controller.settings import Settings
 
@@ -39,6 +40,17 @@ def ledger_snapshot(settings, repository):
         return {row["wp"]: Ledger.unpack(row) for row in rows}
 
 
+def require_trusted_controller(repo, cloud):
+    repo = repo.resolve()
+    if repo != Path(__file__).resolve().parents[3]:
+        raise PortError("Live controller must execute from its own trusted repository checkout")
+    base = cloud.current_base()
+    if git(repo, "rev-parse", "HEAD").decode("ascii").strip() != base:
+        raise PortError("Live controller must run from the current default-branch commit")
+    verify_committed_inputs(repo, base)
+    return base
+
+
 def live_controller(manifest, policy, settings, backend):
     settings.require_live(policy, backend, backend == "cloud")
     if backend == "local":
@@ -48,6 +60,7 @@ def live_controller(manifest, policy, settings, backend):
         )
     api = GitHubApi(settings.token, allow_mutation=True)
     cloud = CloudBackend(api, manifest, policy, settings)
+    require_trusted_controller(manifest.repo, cloud)
     ledger = Ledger(settings.ledger_path, policy["repository"])
     return Controller(manifest, policy, settings, ledger, cloud, GitHubGateAuthority(cloud, manifest, policy))
 
@@ -91,8 +104,11 @@ def build_parser():
     report.add_argument("--approvals", type=Path)
     report.add_argument("--catalog", type=Path)
     report.add_argument("--pr-number", type=int)
-    report.add_argument("--import-supervised", action="store_true",
-                        help="Explicit trusted merged-PR import for manual WPs000-003 only, never a launch")
+    reporting = report.add_mutually_exclusive_group()
+    reporting.add_argument("--import-supervised", action="store_true",
+                           help="Explicit trusted merged-PR import for manual WPs000-003 only, never a launch")
+    reporting.add_argument("--inspect-merged", action="store_true",
+                           help="Read authenticated merged-PR facts without dispatching or changing the ledger")
     return parser
 
 
@@ -131,6 +147,7 @@ def main(argv=None, environment=None):
                         "supervised": wp["supervised"],
                         "execution_state": records.get(wp["id"], {}).get("state", "pending"),
                         "completion_reconciled": False,
+                        "completion_status": "not-checked",
                         "dependencies": wp["depends_on"],
                         "primary_input_count": len(manifest.inputs(wp["id"], False)),
                     } for wp in manifest.work_packages.values()
@@ -171,7 +188,31 @@ def main(argv=None, environment=None):
             result = factories[args.format]()
         elif args.command == "report":
             paths = (args.binding, args.pr, args.evidence, args.review, args.approvals)
-            if args.live:
+            if args.inspect_merged:
+                if not args.live or not args.wp or any(paths):
+                    raise PortError("Merged inspection requires --live and --wp without offline evidence files")
+                if not settings.token:
+                    raise PortError("Merged inspection requires an explicit authenticated GitHub credential")
+                from controller.merged_acceptance import BoundedRepair, MergedAcceptance
+
+                cloud = CloudBackend(GitHubApi(settings.token), manifest, policy, settings)
+                base = require_trusted_controller(args.repo, cloud)
+                reader = MergedAcceptance(cloud, manifest, policy)
+                number = args.pr_number if args.pr_number is not None else reader.discover_implementation(args.wp)
+                try:
+                    proof = reader.evaluate(args.wp, number, merged=True)
+                    accepted_scope = None
+                except BoundedRepair:
+                    if args.pr_number is None:
+                        raise
+                    accepted_scope = reader.evaluate(args.wp, number, merged=True, completion=False)
+                    proof = None
+                if cloud.current_base() != base:
+                    raise PortError("Default branch advanced during merged inspection; retry from its trusted commit")
+                result = {"authoritative": True, "completion_recorded": False, "side_effects": False,
+                          "completion": proof, "accepted_scope": accepted_scope,
+                          "dependency_unlock": proof is not None}
+            elif args.live:
                 if not args.wp or args.pr_number is None:
                     raise PortError("Live report requires an existing WP/PR identity and trusted API evidence")
                 if args.import_supervised:
@@ -179,6 +220,7 @@ def main(argv=None, environment=None):
                         raise PortError("Supervised receipt import requires explicit authenticated user and durable ledger")
                     cloud = CloudBackend(GitHubApi(settings.token), manifest, policy, settings)
                     cloud.authenticate()
+                    require_trusted_controller(args.repo, cloud)
                     controller = Controller(
                         manifest, policy, settings, Ledger(settings.ledger_path, policy["repository"]), cloud,
                         GitHubGateAuthority(cloud, manifest, policy),

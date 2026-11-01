@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .errors import PortError
-from .model import SHA
+from .model import REFERENCE_SHA, SHA
 from .paths import conflicts, git_path
 from .schema import decode_json, digest, nonempty, positive_integer
 
@@ -37,6 +37,39 @@ HARD_LOCK_RESOURCES = {
 }
 EXECUTION_INTERLOCK_VERSION = 2
 EXECUTION_RESOURCES = {"native-execution", "gradle-execution"}
+
+
+def validate_merged_implementation(repository: str, wp: str, proof: dict):
+    from .gates import Binding
+    from .schema import fields
+
+    fields(proof, {
+        "kind", "binding", "pr_number", "merge_commit_sha", "merge_parent_sha",
+        "ci", "ci_run_ids", "review_ids", "approval_id",
+    }, label="merged implementation completion")
+    binding = Binding.parse(proof["binding"])
+    ci = proof["ci"]
+    if (
+        proof["kind"] != "merged-implementation"
+        or binding.repository != repository or binding.work_package != wp
+        or binding.source_sha != REFERENCE_SHA
+        or type(proof["pr_number"]) is not int or proof["pr_number"] < 1
+        or not isinstance(proof["merge_commit_sha"], str)
+        or SHA.fullmatch(proof["merge_commit_sha"]) is None
+        or not isinstance(proof["merge_parent_sha"], str)
+        or SHA.fullmatch(proof["merge_parent_sha"]) is None
+        or not isinstance(ci, dict) or set(ci) != {"run_id", "run_attempt", "check_id"}
+        or any(type(ci.get(key)) is not int or ci[key] < 1 for key in ci)
+        or proof["ci_run_ids"] != [ci["run_id"]]
+        or not isinstance(proof["review_ids"], list)
+        or any(type(value) is not int or value < 1 for value in proof["review_ids"])
+        or len(set(proof["review_ids"])) != len(proof["review_ids"])
+        or proof["approval_id"] is not None and (
+            type(proof["approval_id"]) is not int or proof["approval_id"] < 1 or not proof["review_ids"]
+        )
+    ):
+        raise PortError("Malformed merged implementation completion")
+    return proof
 
 
 @dataclass(frozen=True)
@@ -100,6 +133,12 @@ class Ledger:
                     repository TEXT NOT NULL, key TEXT NOT NULL, state TEXT NOT NULL,
                     payload_hash TEXT NOT NULL, identity TEXT,
                     PRIMARY KEY (repository, key)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS accepted_completions (
+                    repository TEXT NOT NULL, wp TEXT NOT NULL, proof TEXT NOT NULL,
+                    PRIMARY KEY (repository, wp)
                 )
             """)
             columns = {
@@ -1067,6 +1106,34 @@ class Ledger:
                 "UPDATE leases SET state='pending',reservation=0,completion=NULL WHERE repository=? AND wp=?",
                 (self.repository, wp),
             )
+
+    def accepted_completion(self, wp: str):
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT proof FROM accepted_completions WHERE repository=? AND wp=?",
+                (self.repository, wp),
+            ).fetchone()
+            return validate_merged_implementation(self.repository, wp, decode_json(row["proof"])) if row else None
+
+    def remember_completion(self, wp: str, proof: dict, authoritative: bool):
+        if authoritative is not True or not isinstance(proof, dict):
+            raise PortError("Completion requires authenticated merged-PR facts")
+        validate_merged_implementation(self.repository, wp, proof)
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT proof FROM accepted_completions WHERE repository=? AND wp=?",
+                (self.repository, wp),
+            ).fetchone()
+            if row:
+                previous = decode_json(row["proof"])
+                if previous != proof:
+                    raise PortError("Conflicting accepted implementation PR; reconcile the actual identities")
+                return previous
+            connection.execute(
+                "INSERT INTO accepted_completions (repository, wp, proof) VALUES (?, ?, ?)",
+                (self.repository, wp, json.dumps(proof)),
+            )
+            return proof
 
     def complete(self, wp: str, attempt: str, proof: dict, authoritative: bool):
         if authoritative is not True:

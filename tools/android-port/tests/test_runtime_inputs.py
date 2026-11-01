@@ -11,11 +11,21 @@ from controller.runtime_inputs import required_inputs, verify_committed_inputs, 
 
 
 class RuntimeInputTests(unittest.TestCase):
+    def test_merged_acceptance_reader_and_tests_are_required(self):
+        entries = {path: "a" * 40 for path in required_inputs()}
+        verify_tree_entries(entries)
+        for path in ("tools/android-port/controller/merged_acceptance.py",
+                     "tools/android-port/tests/test_merged_acceptance.py"):
+            with self.subTest(path=path), self.assertRaisesRegex(PortError, "committed Git tree"):
+                verify_tree_entries({name: blob for name, blob in entries.items() if name != path})
+
     def test_every_required_input_exists_in_the_exact_committed_head(self):
         result = verify_committed_inputs(REPO)
         self.assertEqual(result["result"], "valid")
         self.assertTrue(result["checkout_matches_committed_inputs"])
         self.assertIn("tools/android-port/controller/toolchain-pins.json", required_inputs())
+        self.assertIn("tools/android-port/controller/merged_acceptance.py", required_inputs())
+        self.assertIn("tools/android-port/tests/test_merged_acceptance.py", required_inputs())
         self.assertIn("docs/android/evidence/WP-201/collect_evidence.py", required_inputs())
         self.assertIn("tools/android-port/tests/test_domain_room_evidence.py", required_inputs())
 
@@ -25,9 +35,11 @@ class RuntimeInputTests(unittest.TestCase):
         for path in ("tools/android-port/controller/toolchain-pins.json",
                      "tools/android-port/controller/requirements-ci.txt",
                      "tools/android-port/controller/ci_evidence.py",
+                     "tools/android-port/controller/merged_acceptance.py",
                      "tools/android-port/controller/disposable.py",
                      "tools/android-port/controller/windows_guest.py",
                      "tools/android-port/tests/test_disposable.py",
+                     "tools/android-port/tests/test_merged_acceptance.py",
                      "tools/android-port/tests/test_windows_guest.py",
                      "tools/android-port/tests/test_runner.py",
                      "docs/android/evidence/WP-201/collect_evidence.py",

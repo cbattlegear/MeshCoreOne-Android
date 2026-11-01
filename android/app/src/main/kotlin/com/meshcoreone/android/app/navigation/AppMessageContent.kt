@@ -63,6 +63,7 @@ internal fun AppMessageContent(
         com.meshcoreone.android.app.platform.shareImage(context, bytes)
     }
     val preferences by content.rendering.collectAsState()
+    val previewAvailability by content.previewAvailability.collectAsState()
     val malwareRevision by malwareRevisionSource.collectAsState()
     val autoResolve = preferences[if (message.isChannelMessage) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM]
     (if (preferences[AppStorageKey.linkPreviewsEnabled]) media else emptyList()).forEach { entry ->
@@ -102,6 +103,7 @@ internal fun AppMessageContent(
                 preferences[AppStorageKey.linkPreviewsEnabled],
                 preferences[AppStorageKey.linkPreviewsAutoResolveDM],
                 preferences[AppStorageKey.linkPreviewsAutoResolveChannels],
+                previewAvailability,
             ) {
                 LinkPreviewStateHolder(
                     url,

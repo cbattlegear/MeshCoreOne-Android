@@ -56,6 +56,7 @@ class AppChatContent internal constructor(
         throw failure
     }.stateIn(scope, SharingStarted.Eagerly, initialPreferences)
     private val previewCache = LinkPreviewCache(NativeLinkMetadataFetching(http), LinkPreviewPreferences(preferences), scope)
+    internal val previewAvailability: StateFlow<Long> = previewCache.previewAvailability
     private val imageCache = InlineImageCache(http, isUrlSafe = imageSafety)
     private val dimensions = inlineImageDimensionsStore(context).also(imageCache::attachDimensionsStore)
     private val mutableResolutions = MutableStateFlow(0L)
@@ -188,7 +189,9 @@ class AppChatContent internal constructor(
         val media = mediaEntries.firstOrNull()
         val url = media?.url
         val cachedPreviews = if (enabled && !DemoOfflineContent.isSimulatorMessage(message)) {
-            mediaEntries.associate { entry -> entry.url to previewCache.cachedPreview(entry.url, store) }
+            mediaEntries
+                .filter { entry -> entry.url == url || !previewCache.hasCachedPreview(entry.url) }
+                .associate { entry -> entry.url to previewCache.cachedPreview(entry.url, store) }
         } else emptyMap()
         val decoded = url?.let {
             when {

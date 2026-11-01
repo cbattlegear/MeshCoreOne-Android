@@ -50,6 +50,76 @@ class CachedPreviewPolicyConsumerTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
+    fun `timeline keeps persisted preview lookups warm for two media urls across two hundred one messages`() = runTest {
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val noBackupDirectory = temporary.newFolder()
+        val context = object : ContextWrapper(application) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File = noBackupDirectory
+        }
+        val storage = MeshCoreStorage.get(context)
+        val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .allowMainThreadQueries().build()
+        val store = RoomPersistenceStore(database, backgroundScope)
+        var previewReads = 0
+        val countedStore = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchLinkPreview(url: String): LinkPreviewDataDTO? {
+                previewReads++
+                return store.fetchLinkPreview(url)
+            }
+        }
+        val lifetime = SupervisorJob(requireNotNull(backgroundScope.coroutineContext[Job]))
+        val scope = CoroutineScope(backgroundScope.coroutineContext + lifetime)
+        val urls = (0 until 402).map { "https://cached.example/timeline/$it" }
+        val messages = (0 until 201).map { index ->
+            MessageDTO(
+                radioId = RadioId(java.util.UUID.randomUUID()),
+                text = "${urls[index * 2]} ${urls[index * 2 + 1]}",
+                timestamp = (index + 1).toUInt(),
+            )
+        }
+        var fetchCalls = 0
+        val http = object : BoundedHttpFetching {
+            override suspend fun fetch(url: String, timeoutMs: Long, rangeHeader: String?): HttpFetchAttempt {
+                fetchCalls++
+                return HttpFetchAttempt.Failed("Persisted timeline previews must not fetch")
+            }
+        }
+        var owner: AppChatContent? = null
+        try {
+            storage.preferences.set(AppStorageKey.linkPreviewsEnabled, true)
+            storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveDM, false)
+            urls.forEach { store.saveLinkPreview(LinkPreviewDataDTO(it, title = "Cached")) }
+            val content = newContent(context, countedStore, http, storage, scope)
+            owner = content
+
+            messages.forEach { content.renderContent(it, EnvInputs.DEFAULT) }
+            assertEquals(402, previewReads)
+
+            messages.forEach { content.renderContent(it, EnvInputs.DEFAULT) }
+            assertEquals(402, previewReads)
+            assertEquals(0, fetchCalls)
+        } finally {
+            withContext(NonCancellable) {
+                lifetime.cancelAndJoin()
+                try {
+                    owner?.close()
+                } finally {
+                    try {
+                        store.close()
+                    } finally {
+                        try {
+                            database.close()
+                        } finally {
+                            storage.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun `persisted previews rehydrate for both conversation types while automatic fetch is disabled`() = runTest {
         val application = ApplicationProvider.getApplicationContext<Context>()
         val noBackupDirectory = temporary.newFolder()

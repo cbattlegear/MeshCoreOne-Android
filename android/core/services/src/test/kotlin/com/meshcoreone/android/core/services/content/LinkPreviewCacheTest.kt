@@ -204,9 +204,11 @@ class LinkPreviewCacheTest {
 
             assertTrue(cache.manualFetch(url, dataStore) is LinkPreviewResult.Loaded)
             cache.clearMemory()
+            val availabilityBeforeReload = cache.previewAvailability.value
 
             assertEquals("Written preview", cache.cachedPreview(url, dataStore)?.title)
             assertEquals(2, dataStore.fetchCallCount)
+            assertTrue(cache.previewAvailability.value > availabilityBeforeReload)
         } finally {
             cache.close()
         }
@@ -225,11 +227,13 @@ class LinkPreviewCacheTest {
         )
         try {
             assertNull(cache.cachedPreview(url, dataStore))
+            val availabilityBeforeReload = cache.previewAvailability.value
             dataStore.seed(LinkPreviewDataDTO(url = url, title = "Externally written"))
             now = 120_000_000_000L
 
             assertEquals("Externally written", cache.cachedPreview(url, dataStore)?.title)
             assertEquals(2, dataStore.fetchCallCount)
+            assertTrue(cache.previewAvailability.value > availabilityBeforeReload)
         } finally {
             cache.close()
         }
@@ -253,9 +257,9 @@ class LinkPreviewCacheTest {
     }
 
     @Test
-    fun `positive cache retains one two-hundred-message preview window`() = runTest {
+    fun `positive cache retains two hundred messages with two media urls each`() = runTest {
         val dataStore = FakePersisting()
-        val urls = (0 until 201).map { "https://example.com/cached/$it" }
+        val urls = (0 until 402).map { "https://example.com/cached/$it" }
         urls.forEach { dataStore.seed(LinkPreviewDataDTO(url = it, title = "Cached")) }
         val cache = previewsEnabledCache()
         try {
@@ -264,6 +268,25 @@ class LinkPreviewCacheTest {
 
             urls.forEach { assertEquals("Cached", cache.cachedPreview(it, dataStore)?.title) }
             assertEquals(urls.size, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
+    fun `persisted preview classification survives blob eviction but clears on memory trim`() = runTest {
+        val dataStore = FakePersisting()
+        val urls = (0 until 513).map { "https://example.com/cached/$it" }
+        urls.forEach { dataStore.seed(LinkPreviewDataDTO(url = it, title = "Cached")) }
+        val cache = previewsEnabledCache()
+        try {
+            urls.forEach { assertEquals("Cached", cache.cachedPreview(it, dataStore)?.title) }
+
+            assertNull(cache.cachedPreview(urls.first()))
+            assertTrue(cache.hasCachedPreview(urls.first()))
+
+            cache.clearMemory()
+            assertFalse(cache.hasCachedPreview(urls.first()))
         } finally {
             cache.close()
         }

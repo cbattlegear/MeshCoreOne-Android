@@ -105,12 +105,20 @@ interface ChatListFeatureDependencies {
 interface ChatLinkEnvironment {
     var selectedTab: AppTab
     val currentRadioId: RadioId?
+    val contactLinkGeneration: Long get() = 0
     val connectedDevicePublicKey: com.meshcoreone.android.core.protocol.bytes.Bytes?
     val parser: MeshCoreLinkParsing
     fun navigateToMap(latitude: Double, longitude: Double)
     fun navigateToContactDetail(contact: ContactDTO)
     fun navigateToChannel(channel: ChannelDTO)
     fun stageContactLink(link: ContactLinkResult)
+    fun completeContactLookup(
+        link: ContactLinkResult, existing: ContactDTO?, radioId: RadioId?, generation: Long,
+    ): Boolean {
+        if (currentRadioId != radioId || contactLinkGeneration != generation) return false
+        if (existing != null) navigateToContactDetail(existing) else stageContactLink(link)
+        return true
+    }
     fun stageChannelLink(link: ChannelLinkResult)
     fun stageHashtag(fullName: String)
     suspend fun fetchContact(radioId: RadioId, publicKey: com.meshcoreone.android.core.protocol.bytes.Bytes): ContactDTO?

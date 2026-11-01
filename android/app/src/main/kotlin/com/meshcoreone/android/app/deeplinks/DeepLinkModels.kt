@@ -24,17 +24,26 @@ sealed interface DeepLinkRouteOutcome {
     data object IgnoredSelfContact : DeepLinkRouteOutcome
     data object Navigated : DeepLinkRouteOutcome
     data object ConfirmationStaged : DeepLinkRouteOutcome
+    data object ContactLookupRejected : DeepLinkRouteOutcome
 }
 
 interface AppDeepLinkEnvironment {
     var selectedTab: com.meshcoreone.android.core.contracts.AppTab
     val currentRadioId: RadioId?
+    val contactLinkGeneration: Long get() = 0
     val connectedDevicePublicKey: Bytes?
 
     fun navigateToMap(latitude: Double, longitude: Double)
     fun navigateToContactDetail(contact: ContactDTO)
     fun navigateToChannel(channel: ChannelDTO)
     fun stageContactConfirmation(link: MeshCoreDeepLink.Contact)
+    fun completeContactLookup(
+        link: MeshCoreDeepLink.Contact, existing: ContactDTO?, radioId: RadioId?, generation: Long,
+    ): Boolean {
+        if (currentRadioId != radioId || contactLinkGeneration != generation) return false
+        if (existing != null) navigateToContactDetail(existing) else stageContactConfirmation(link)
+        return true
+    }
     fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel)
     fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag)
     suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO?

@@ -84,6 +84,7 @@ data class ContactLinkRequest(
     val type: ContactType,
     val targetRadioId: RadioId? = null,
     val generation: Long = 0,
+    val deliveryId: Long? = null,
 )
 data class ChannelLinkRequest(
     val name: String,
@@ -150,7 +151,8 @@ data class NavigationState(
         require(stacks.all { (tab, stack) ->
             stack.isNotEmpty() && stack.first().destination == NavigationDestination.Root(tab)
         }) { "Every stack must start at its matching root" }
-        val ids = stacks.values.flatten().map { it.id } + pendingNotifications.map { it.id }
+        val ids = stacks.values.flatten().map { it.id } + pendingNotifications.map { it.id } +
+            listOfNotNull(pendingContactLink?.deliveryId)
         require(ids.distinct().size == ids.size && ids.all { it >= 0 && it < nextEntryId }) {
             "Entry identities must be unique, nonnegative and below the next identity"
         }

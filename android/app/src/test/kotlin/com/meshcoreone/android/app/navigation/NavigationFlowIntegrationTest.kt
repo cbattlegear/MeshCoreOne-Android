@@ -18,18 +18,24 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
+import com.meshcoreone.android.app.deeplinks.AppDeepLinkEnvironment
 import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
+import com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome
 import com.meshcoreone.android.app.navigation.*
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.notifications.*
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
+import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
+import com.meshcoreone.android.feature.chats.list.ChatLinkEnvironment
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesSession
@@ -78,8 +84,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     private fun unmount() = compose.runOnUiThread { host.get().setContent {} }
 
-    private suspend fun connect(h: ContainerHarness) {
-        h.manager.connect(h.target())
+    private suspend fun connect(h: ContainerHarness, target: ConnectionTarget = h.target()) {
+        h.manager.connect(target)
         h.settle()
         h.assertReady()
         h.eventually("real graph finishes its initial contact/channel synchronization") {
@@ -205,13 +211,20 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { unmount(); h.container.close() }
     }
 
-    @Test fun actualPlatformTapWaitsForTheGraphAndReachesTheMountedDestinationExactlyOnce() = runTest {
+    @Test fun actualPlatformTapSurvivesSyncBeyondTheRetryWindowAndReachesTheMountedDestinationExactlyOnce() = runTest {
         val context = ApplicationProvider.getApplicationContext<android.app.Application>()
         if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         lateinit var delivery: AndroidMessagingNotificationDelivery
-        val h = ContainerHarness(this, store, notificationNavigationReady = { delivery.retryPendingActions() })
+        var readinessSignals = 0
+        val h = ContainerHarness(
+            this, store, sessionConfiguration = SessionConfiguration(contactStreamInactivityTimeout = 60.0),
+            notificationNavigationReady = { readinessSignals++; delivery.retryPendingActions() },
+        )
         delivery = AndroidMessagingNotificationDelivery(context, backgroundScope, h.container::handleNotificationResponse)
-        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Cold notification peer") }
+        h.links.configureRadio = { radio ->
+            radio.knownContacts += contactFrame(key(20), "Cold notification peer")
+            radio.respond = { frame -> if (frame[0].toInt() == 0x04) listOf(Bytes.of(2) + le32(1)) else null }
+        }
         try {
             val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
             val contact = ContactDTO(
@@ -229,7 +242,24 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             testScheduler.runCurrent()
             assertNull(h.sessions.current)
             assertEquals(1, h.container.navigation.state.value.activeStack.size, "No destination before real readiness")
-            connect(h)
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("callbacks installed while initial contact sync is held") {
+                h.manager.connectionState == DeviceConnectionState.SYNCING &&
+                    h.container.navigation.state.value.navigationReady &&
+                    h.links.radios.last().sent.any { it[0].toInt() == 0x04 }
+            }
+            testScheduler.advanceTimeBy(16_000)
+            testScheduler.runCurrent()
+            assertEquals(DeviceConnectionState.SYNCING, h.manager.connectionState)
+            assertNull(h.container.navigation.state.value.pendingChatContact)
+            val beforeReady = readinessSignals
+            val firmware = h.links.radios.last()
+            firmware.push(firmware.knownContacts.single())
+            firmware.push(Bytes.of(4) + le32(0))
+            h.eventually("held sync completes through the real READY edge") {
+                h.manager.connectionState == DeviceConnectionState.READY && readinessSignals > beforeReady
+            }
+            connecting.await()
             mount(h)
             await(h) { h.container.navigation.state.value.pendingChatContact?.id == contact.id }
             val state = h.container.navigation.state.value
@@ -240,6 +270,117 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             h.settle()
             assertEquals(stack, h.container.navigation.state.value.activeStack)
             manager.cancelAll()
+        } finally { unmount(); h.container.close() }
+    }
+
+    @Test fun externalAndChatLookupResultsCannotCrossARealRadioSwitchOrNavigateAnOldSavedContact() = runTest {
+        val deviceA = UUID(1, 1)
+        val deviceB = UUID(2, 2)
+        val h = ContainerHarness(this, store, identity = { target ->
+            if ((target as ConnectionTarget.Bluetooth).deviceId == deviceA) key(7) else key(8)
+        })
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Original identity") }
+        try {
+            for (fromChat in listOf(false, true)) for (found in listOf(false, true)) {
+                connect(h, h.target(deviceA))
+                val radioA = assertNotNull(h.appState.currentRadioId)
+                val original = assertNotNull(store.fetchContact(radioA, key(20)))
+                val n = h.container.navigation
+                val entered = CompletableDeferred<RadioId>()
+                val lookup = CompletableDeferred<ContactDTO?>()
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri("Original claim", key(20), ContactType.ROOM)
+                val external = AppDeepLinkRouter(object : AppDeepLinkEnvironment by ContainerDeepLinkEnvironment(h.container, n) {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        entered.complete(radioId)
+                        return lookup.await()
+                    }
+                })
+                val chat = ChatLinkRouter(object : ChatLinkEnvironment by h.container.chatsFeature.list.links {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        entered.complete(radioId)
+                        return lookup.await()
+                    }
+                }, backgroundScope)
+                val routing = if (fromChat) {
+                    assertTrue(chat.route(uri))
+                    null
+                } else async { external.routeExternal(uri) }
+                assertEquals(radioA, entered.await())
+                h.manager.disconnect()
+                h.settle()
+                connect(h, h.target(deviceB))
+                assertNotEquals(radioA, h.appState.currentRadioId)
+                n.stageContactLink(ContactLinkRequest("New radio claim", key(31), ContactType.REPEATER))
+                n.selectTab(AppTab.MAP)
+                val replacement = assertNotNull(n.state.value.pendingContactLink)
+                val stack = n.state.value.activeStack
+                lookup.complete(if (found) original else null)
+                if (routing != null) assertEquals(DeepLinkRouteOutcome.ContactLookupRejected, routing.await())
+                h.eventually("stale producer explicitly rejects completion") {
+                    n.state.value.failure == NavigationFailure.StaleGeneration
+                }
+                assertSame(replacement, n.state.value.pendingContactLink)
+                assertEquals(stack, n.state.value.activeStack)
+                assertEquals(AppTab.MAP, n.state.value.selectedTab)
+                assertNull(n.state.value.pendingContactDetail)
+                assertNull(store.fetchContact(assertNotNull(h.appState.currentRadioId), key(31)))
+                h.manager.disconnect()
+                h.settle()
+            }
+            assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+        } finally { h.container.close() }
+    }
+
+    @Test fun identicalDeliveriesReplaceMountedHoldersAndCancelHeldImportsWithoutLateAcknowledgement() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) emptyList() else null }
+        }
+        try {
+            connect(h)
+            mount(h)
+            val n = h.container.navigation
+            val raw = ContactLinkRequest("Identical claim", key(30), ContactType.REPEATER)
+            n.stageContactLink(raw)
+            val first = assertNotNull(n.state.value.pendingContactLink)
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            val firmware = h.links.radios.last()
+            h.eventually("real import waits for the held radio ACK") {
+                firmware.sent.count { it[0].toInt() == 0x09 } == 1
+            }
+            compose.runOnUiThread { n.stageContactLink(raw) }
+            val second = assertNotNull(n.state.value.pendingContactLink)
+            assertNotEquals(first.deliveryId, second.deliveryId)
+            assertFalse(n.completeContactLink(first), "Old dismissal must not clear an identical replacement")
+            compose.waitForIdle()
+            firmware.push(Bytes.of(0))
+            await(h) { confirmationEnabled() }
+            assertSame(second, n.state.value.pendingContactLink)
+            assertNull(n.state.value.pendingContactDetail, "The disposed import cannot navigate after a late ACK")
+            compose.runOnUiThread {
+                n.clearPendingContactLink()
+                n.stageContactLink(raw)
+            }
+            val third = assertNotNull(n.state.value.pendingContactLink)
+            assertNotEquals(second.deliveryId, third.deliveryId)
+            assertFalse(n.completeContactLink(second), "An unobserved clear/restage must retire the old holder")
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-cancel").performClick()
+            assertNull(n.state.value.pendingContactLink, "The current identical replacement remains dismissible")
+            assertNull(n.state.value.pendingContactDetail)
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 0x09 })
+
+            firmware.respond = { frame -> if (frame[0].toInt() == 0x09) listOf(Bytes.of(0)) else null }
+            compose.runOnUiThread {
+                n.stageContactLink(raw)
+                n.clearPendingContactLink()
+                n.stageContactLink(raw)
+            }
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            await(h) { n.state.value.pendingContactLink == null }
+            assertEquals(key(30), n.state.value.pendingContactDetail?.publicKey)
         } finally { unmount(); h.container.close() }
     }
 

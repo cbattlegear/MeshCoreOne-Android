@@ -7,6 +7,8 @@ import java.net.URISyntaxException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * Shared routing for chat-content URLs. Returns true for any URL whose scheme (and host, for
@@ -69,11 +71,15 @@ class ChatLinkRouter(
     private fun redacted(url: String): String = url.substringBefore('?')
 
     private fun handleContactLink(link: ContactLinkResult) {
+        if (link.publicKey == environment.connectedDevicePublicKey) return
+        val radioId = environment.currentRadioId
+        val generation = environment.contactLinkGeneration
         launchLookup {
-            if (link.publicKey == environment.connectedDevicePublicKey) return@launchLookup
-            val radioId = environment.currentRadioId
             val existing = radioId?.let { runCatchingNonCancellation { environment.fetchContact(it, link.publicKey) } }
-            if (existing != null) environment.navigateToContactDetail(existing) else environment.stageContactLink(link)
+            currentCoroutineContext().ensureActive()
+            if (!environment.completeContactLookup(link, existing, radioId, generation)) {
+                diagnostics.report("Contact-link lookup context is no longer current", null)
+            }
         }
     }
 

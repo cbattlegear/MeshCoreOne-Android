@@ -61,7 +61,7 @@ internal class ContactLinkConfirmation(
     val state = mutableState.asStateFlow()
 
     private fun isCurrent(): Boolean = navigation.state.value.let {
-        it.pendingContactLink === link && it.generation == link.generation &&
+        link.deliveryId != null && it.pendingContactLink?.deliveryId == link.deliveryId && it.generation == link.generation &&
             (radio == null || session.currentRadioId() == radio)
     }
 
@@ -70,6 +70,9 @@ internal class ContactLinkConfirmation(
             val store = session.servicesDataStore() ?: session.offlineDataStore()
             val existing = if (radio != null && store != null) store.fetchContact(radio, link.publicKey) else null
             currentCoroutineContext().ensureActive()
+            check(existing == null || existing.radioId == radio && existing.publicKey == link.publicKey) {
+                "Contact lookup returned a mismatched identity"
+            }
             if (isCurrent()) mutableState.update { it.copy(existing = existing, failure = null) }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -109,6 +112,9 @@ internal class ContactLinkConfirmation(
                 mutableState.update { it.copy(failure = UiText.Resource(C.contactsCommonErrorOccurred)) }
                 return false
             }
+            check(added.radioId == device.radioId && added.publicKey == link.publicKey) {
+                "Imported contact lookup returned a mismatched identity"
+            }
             return navigation.completeContactLink(link, added)
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -137,7 +143,7 @@ internal class ContactLinkConfirmation(
 internal fun AppPendingContact(dependencies: NodesFeatureDependencies, navigation: NavigationCoordinator) {
     val pending by navigation.state.collectAsStateWithLifecycle()
     val link = pending.pendingContactLink ?: return
-    key(link, pending.generation) {
+    key(link.deliveryId, pending.generation) {
         val holder = remember(dependencies, link) { ContactLinkConfirmation(dependencies, navigation, link) }
         val state by holder.state.collectAsStateWithLifecycle()
         val scope = rememberCoroutineScope()

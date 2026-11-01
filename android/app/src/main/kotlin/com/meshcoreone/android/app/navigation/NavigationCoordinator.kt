@@ -132,15 +132,47 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     fun stageContactLink(link: ContactLinkRequest?, targetRadioId: RadioId? = state.value.radioId) =
         mutableState.update {
-            it.copy(pendingContactLink = link?.copy(targetRadioId = targetRadioId, generation = it.generation))
+            if (link == null) it.copy(pendingContactLink = null) else it.stageContactLink(link, targetRadioId)
         }
+
+    private fun NavigationState.stageContactLink(link: ContactLinkRequest, radioId: RadioId?) = copy(
+        pendingContactLink = link.copy(targetRadioId = radioId, generation = generation, deliveryId = nextEntryId),
+        nextEntryId = Math.incrementExact(nextEntryId),
+    )
+
+    // Native adaptation: Commit lookup results against their initiating context, never a post-lookup radio.
+    fun completeContactLookup(
+        link: ContactLinkRequest, contact: ContactDTO?, targetRadioId: RadioId?,
+        expectedGeneration: Long, currentRadioId: RadioId?,
+    ): Boolean {
+        while (true) {
+            val current = state.value
+            val failure = when {
+                current.generation != expectedGeneration || currentRadioId != targetRadioId ||
+                    current.radioId != null && current.radioId != targetRadioId -> NavigationFailure.StaleGeneration
+                contact != null && (contact.radioId != targetRadioId || contact.publicKey != link.publicKey) ->
+                    NavigationFailure.WrongTarget(NavigationTarget.CONTACT)
+                else -> null
+            }
+            val next = when {
+                failure != null -> current.copy(failure = failure)
+                contact == null -> current.stageContactLink(link, targetRadioId)
+                else -> current.push(AppTab.NODES, NavigationDestination.ContactDetail(contact)).copy(
+                    pendingContactDetail = contact, selectedContact = contact, nodesShowingDiscovery = false,
+                )
+            }
+            if (mutableState.compareAndSet(current, next)) return failure == null
+        }
+    }
 
     // AndroidOnly: WP-302 A late dismiss/import must not acknowledge a replacement request or radio.
     fun completeContactLink(link: ContactLinkRequest, contact: ContactDTO? = null): Boolean {
         while (true) {
             val current = state.value
-            if (current.pendingContactLink !== link || current.generation != link.generation ||
-                contact != null && link.targetRadioId != null && contact.radioId != link.targetRadioId
+            if (link.deliveryId == null || current.pendingContactLink?.deliveryId != link.deliveryId ||
+                current.generation != link.generation ||
+                contact != null && (contact.publicKey != link.publicKey ||
+                    link.targetRadioId != null && contact.radioId != link.targetRadioId)
             ) return false
             val next = if (contact == null) current.copy(pendingContactLink = null) else {
                 current.push(AppTab.NODES, NavigationDestination.ContactDetail(contact)).copy(

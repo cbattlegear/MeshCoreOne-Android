@@ -391,7 +391,12 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
 
     init {
         dependencies.chatContent?.bindSimulatorConnection { connectionManager.isSimulatorConnection }
-        observerBridge.bind(appState, connectionPort)
+        observerBridge.bind(appState, connectionPort) { token ->
+            val current = sessions.current
+            if (appState.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                current != null && current.token == token && statePlatform.isReadyFor(current)
+            ) dependencies.onNotificationNavigationReady()
+        }
     }
 
     /** Starts the process: binds hosting, loads persisted state and activates the runtime (restores the last connection). */
@@ -545,11 +550,13 @@ private class ContainerAppStatePlatform(
 internal class ObserverBridge(private val foreground: ProcessForegroundState, private val mainContext: CoroutineContext) {
     @Volatile private var appState: AppState? = null
     @Volatile private var port: ConnectionManagerAppPort? = null
+    @Volatile private var onDeviceSynced: (SessionToken) -> Unit = {}
     private val scope = CoroutineScope(mainContext + SupervisorJob())
 
-    fun bind(appState: AppState, port: ConnectionManagerAppPort) {
+    fun bind(appState: AppState, port: ConnectionManagerAppPort, onDeviceSynced: (SessionToken) -> Unit = {}) {
         this.appState = appState
         this.port = port
+        this.onDeviceSynced = onDeviceSynced
     }
 
     private suspend fun onMain(block: suspend (AppState, ConnectionManagerAppPort) -> Unit) {
@@ -562,7 +569,7 @@ internal class ObserverBridge(private val foreground: ProcessForegroundState, pr
         onServicesAvailable = { onMain { state, connection -> connection.refreshLastConnection(); state.onSessionStateChanged() } },
         onConnectionLost = { onMain { state, connection -> connection.refreshLastConnection(); state.onSessionStateChanged() } },
         onAutoReconnectStarted = { onMain { state, _ -> state.onAutoReconnectStarted() } },
-        onDeviceSynced = { onMain { state, _ -> state.onDeviceSynced() } },
+        onDeviceSynced = { token -> onMain { state, _ -> state.onDeviceSynced(); onDeviceSynced(token) } },
         onAuthenticationFailure = { id -> scope.launch { appState?.handleAuthenticationFailure(id, foreground.isForeground) } },
         onLastDeviceCleared = { scope.launch { port?.refreshLastConnection(); appState?.onLastConnectedDeviceCleared() } },
     )

@@ -5,6 +5,8 @@ import com.meshcoreone.android.core.contracts.AppTab
 import java.net.URI
 import java.net.URISyntaxException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
     suspend fun routeExternal(uriText: String): DeepLinkRouteOutcome {
@@ -45,14 +47,18 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
 
     private suspend fun routeContact(link: MeshCoreDeepLink.Contact): DeepLinkRouteOutcome {
         if (link.publicKey == environment.connectedDevicePublicKey) return DeepLinkRouteOutcome.IgnoredSelfContact
-        val existing = environment.currentRadioId?.let { radioId ->
+        val radioId = environment.currentRadioId
+        val generation = environment.contactLinkGeneration
+        val existing = radioId?.let { radioId ->
             lookupOrNull { environment.fetchContact(radioId, link.publicKey) }
         }
+        currentCoroutineContext().ensureActive()
+        if (!environment.completeContactLookup(link, existing, radioId, generation)) {
+            return DeepLinkRouteOutcome.ContactLookupRejected
+        }
         return if (existing != null) {
-            environment.navigateToContactDetail(existing)
             DeepLinkRouteOutcome.Navigated
         } else {
-            environment.stageContactConfirmation(link)
             DeepLinkRouteOutcome.ConfirmationStaged
         }
     }

@@ -1,16 +1,19 @@
 // AndroidOnly: WP-304 Mounted WP-305 scanner consumes shared signal bars without duplicating announcements or changing selection.
 package com.meshcoreone.android.app.container
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.material3.Surface
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -33,7 +36,9 @@ import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertIs
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,6 +53,18 @@ import org.robolectric.annotation.GraphicsMode
 class ScannerSignalPresentationTest {
     @get:Rule val compose = createEmptyComposeRule()
 
+    private fun nativeGlyphPixels(node: SemanticsNode): Bitmap {
+        // Draw the owning Compose view; Robolectric does not deliver PixelCopy callbacks.
+        val view = assertIs<ViewRootForTest>(node.root).view
+        val bounds = node.boundsInRoot
+        return compose.runOnUiThread {
+            val window = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(window))
+            Bitmap.createBitmap(window, bounds.left.roundToInt(), bounds.top.roundToInt(),
+                bounds.width.roundToInt(), bounds.height.roundToInt())
+        }
+    }
+
     @Test fun mountedScannerKeepsOneLocalizedNameTierAnnouncementAndItsActualSelection() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         val discoveries = RSSITuning.SignalTier.entries.mapIndexed { index, tier ->
@@ -59,9 +76,11 @@ class ScannerSignalPresentationTest {
         try {
             activity.get().setContent {
                 MeshCoreTheme(motionScale = 0f) {
-                    DeviceScannerSheetContent(discoveries,
-                        OnboardingPermissionSnapshot(bluetooth = PermissionStatus.GRANTED),
-                        selected::add, {})
+                    Surface {
+                        DeviceScannerSheetContent(discoveries,
+                            OnboardingPermissionSnapshot(bluetooth = PermissionStatus.GRANTED),
+                            selected::add, {})
+                    }
                 }
             }
             for ((index, device) in discoveries.withIndex()) {
@@ -79,10 +98,10 @@ class ScannerSignalPresentationTest {
                 val foreground = accessibleForeground(ThemeColor.hex(seeds[index]), surface.toThemeColor(), 4.5)
                     .toComposeColor()
                 assertEquals(foreground, glyph.fetchSemanticsNode().config[SharedEmittedForeground])
-                val pixels = glyph.captureToImage().toPixelMap()
+                val pixels = nativeGlyphPixels(glyph.fetchSemanticsNode())
                 for (bar in 0..<3) {
                     val expected = if (bar <= index) foreground else foreground.copy(alpha = 0.2f).compositeOver(surface)
-                    val actual = pixels[(pixels.width * (bar + 0.375f) / 3).toInt(), pixels.height * 5 / 6].toArgb()
+                    val actual = pixels.getPixel((pixels.width * (bar + 0.375f) / 3).toInt(), pixels.height * 5 / 6)
                     for (shift in listOf(0, 8, 16)) {
                         assertTrue(abs(((actual ushr shift) and 255) - ((expected.toArgb() ushr shift) and 255)) <= 1,
                             "Mounted $announcement bar $bar does not match its independent tier")

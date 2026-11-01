@@ -26,7 +26,7 @@ original parameter families remain pinned. No original expectation is weakened.
 | --- | ---: | --- |
 | APP-G05 | 8 | Existing `AppState`/`ConnectionUIState` and connection-manager snapshots reach `MainActivity` -> `AppConnectionStatus` -> `SyncingPillView`. Preserve `SyncingPillTest`'s connecting/syncing/ready/disconnected/failed/custom-message/hidden/tap cases. Existing AppConnectionStatusTest exercises live runtime connection/loss and mounted priority/recovery. No new connection owner. |
 | APP-G11 | 5 | `ErrorLocalizationTest`: advertisement not-connected, room permission-denied, binary timeout, persistence contact-not-found, settings session delegation. Frozen original English literals and retained causes; SharedUiComposeTest additionally renders each in a real Material dialog. Resource accessors are not expected results. |
-| APP-G14 | 10 | BatteryDisplayTest retains all five source icon-name families and three source color-role families. Shared native battery pixel tests assert five actual fill levels, normal/orange/red foreground and text/progress. The live radio menu uses current OCV values for 0/25/50/75/100 percent. RSSITuningTest retains the three-row fill parameter family and source-color family; signal pixel tests inspect all three bars. Mounted scanner test consumes actual SignalBars beside existing tier text and checks one announcement and unchanged selection. |
+| APP-G14 | 10 | BatteryDisplayTest retains all five source icon-name families and three source color-role families. Shared native battery pixel tests assert five actual fill levels, normal/orange/red foreground and text/progress. The mounted radio-menu test inspects actual glyph fill/color for independent OCV values at 0/15/25/50/75/100 percent, including orange warning against the menu's actual container color. RSSITuningTest retains the three-row fill parameter family and source-color family; signal pixel tests inspect all three bars. Mounted scanner tests assert independent row-specific colors/bar counts on a painted Material Surface, one announcement and unchanged selection. |
 | APP-G15 | 1 | ServicesBasicTest retains the re-export source family but now executes the Kotlin fixture compiled by compileProtocolApiConsumer against only the contracts API closure. Independent request bytes `14` and actual parsed `MeshEvent.Ok` prove usable exposed types. Kotlin explicit imports are an approved adaptation, not Swift namespace identity. |
 | APP-G17 | 2 | ErrorUserFacingTest's protocol and native-storage dispatch families have independent visible literals, actual typed values and unchanged metadata/recovery. Existing StoragePresentationTest/SharedUiComposeTest cover native fault categories, retained causes, secret suppression and actual unlock/preference-only actions. No Apple OSStatus or live physical storage failure is claimed. |
 | APP-G21 | 10 | RSSITuningTest's original single smoothing vector and RSSIScanTrackerTest's original name/helper assertions remain, supplemented with absolute -51/-72/-48 vectors. RelativeTimestampTest keeps all eight original nonempty/space-based minute/hour/yesterday/day/old-date/week-boundary families, with separately named exact native literal vectors. Stronger oracles are not retroactive Swift assertions. |
@@ -56,7 +56,11 @@ landed-WP repair: `docs/android/ci/README.md` declares the shared affected/scaff
 verification route. The existing UI `verifySharedUiTests`/`testDebugUnitTest`
 and App/onboarding tests are registered with the scaffold. The compiler fixture
 is a dependency of UI tests, uses the already-locked compiler configuration and
-API graph, and fails if compilation fails or its class is missing.
+API graph, and fails if compilation fails or its class is missing. Generated class
+bytes are declared test inputs so fixture-only changes invalidate test execution.
+Mounted glyph assertions draw their owning Compose view with native graphics;
+they do not depend on unimplemented Robolectric PixelCopy callbacks or assume an
+unpainted activity window has the theme surface color.
 
 Local availability is blocked, not failed product tests: preflight requires an
 explicit same-host `ANDROID_CI_STATE`; the supported local launcher then reports

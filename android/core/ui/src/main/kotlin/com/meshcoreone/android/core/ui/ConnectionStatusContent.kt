@@ -21,6 +21,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -126,7 +127,7 @@ fun BLEStatusIndicatorView(state: RadioStatusState, actions: RadioStatusActions,
                     Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).semantics(mergeDescendants = true) {
                         contentDescription = "${resources.getString(S.deviceInfoBattery)}: $reading"
                     }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        BatteryGlyph(percentage)
+                        BatteryGlyph(percentage, paintedSurface = MenuDefaults.containerColor)
                         Text(reading)
                     }
                 }

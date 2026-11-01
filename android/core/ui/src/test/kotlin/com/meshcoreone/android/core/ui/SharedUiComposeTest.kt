@@ -39,7 +39,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -49,7 +50,6 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertWidthIsAtLeast
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -118,6 +118,7 @@ import java.util.Locale
 import java.time.Duration
 import kotlin.test.*
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -160,6 +161,18 @@ class SharedUiComposeTest {
         controller.pause().stop().destroy()
     }
     private fun content(block: @Composable () -> Unit) { controller.get().setContent(content = block) }
+
+    private fun nativeGlyphPixels(node: SemanticsNode): Bitmap {
+        // Draw the owning Compose view; Robolectric does not deliver PixelCopy callbacks.
+        val view = assertIs<ViewRootForTest>(node.root).view
+        val bounds = node.boundsInRoot
+        return compose.runOnUiThread {
+            val window = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(window))
+            Bitmap.createBitmap(window, bounds.left.roundToInt(), bounds.top.roundToInt(),
+                bounds.width.roundToInt(), bounds.height.roundToInt())
+        }
+    }
 
     private fun nativeFrame() {
         // MainTestClock does not drain Android's snapshot and window-attachment queues.
@@ -414,10 +427,10 @@ class SharedUiComposeTest {
             val foreground = accessibleForeground(seed, surface.toThemeColor(), 4.5).toComposeColor()
             assertEquals(foreground, glyph.fetchSemanticsNode().config[SharedEmittedForeground])
             assertFalse(row.config.contains(SemanticsProperties.ProgressBarRangeInfo))
-            val pixels = glyph.captureToImage().toPixelMap()
+            val pixels = nativeGlyphPixels(glyph.fetchSemanticsNode())
             val span = pixels.width * 0.88f - 6f
             for (segment in 0..<4) {
-                val actual = pixels[(3f + span * (segment + 0.5f) / 4).toInt(), pixels.height / 2].toArgb()
+                val actual = pixels.getPixel((3f + span * (segment + 0.5f) / 4).toInt(), pixels.height / 2)
                 val expectedPixel = if (segment < filled) foreground.toArgb() else surface.toArgb()
                 for (shift in listOf(0, 8, 16)) {
                     assertTrue(abs(((actual ushr shift) and 255) - ((expectedPixel ushr shift) and 255)) <= 1,

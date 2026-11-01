@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 
 internal data class ContactLinkConfirmationState(
@@ -58,6 +59,7 @@ internal class ContactLinkConfirmation(
     private val session = dependencies.session
     private val radio = link.targetRadioId ?: session.currentRadioId()
     private val mutableState = MutableStateFlow(ContactLinkConfirmationState())
+    private val operation = Mutex()
     val state = mutableState.asStateFlow()
 
     private fun isCurrent(): Boolean = navigation.state.value.let {
@@ -66,7 +68,10 @@ internal class ContactLinkConfirmation(
     }
 
     suspend fun load() {
+        if (!operation.tryLock()) return
+        mutableState.update { it.copy(loading = true, failure = null) }
         try {
+            if (!isCurrent()) return
             val store = session.servicesDataStore() ?: session.offlineDataStore()
             val existing = if (radio != null && store != null) store.fetchContact(radio, link.publicKey) else null
             currentCoroutineContext().ensureActive()
@@ -80,10 +85,16 @@ internal class ContactLinkConfirmation(
             report(failure)
         } finally {
             mutableState.update { it.copy(loading = false) }
+            operation.unlock()
         }
     }
 
     suspend fun confirm(): Boolean {
+        if (!operation.tryLock()) return false
+        return try { confirmCurrent() } finally { operation.unlock() }
+    }
+
+    private suspend fun confirmCurrent(): Boolean {
         if (!isCurrent() || state.value.loading || state.value.importing || state.value.failure != null) return false
         state.value.existing?.let { return navigation.completeContactLink(link, it) }
         val device = session.connectedDevice()

@@ -77,12 +77,12 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @After fun destroyActivity() { host.pause().stop().destroy() }
 
-    private fun mount(h: ContainerHarness) = compose.runOnUiThread {
+    private fun mount(h: ContainerHarness, nodes: NodesFeatureDependencies = h.container.nodesFeature) = compose.runOnUiThread {
         host.get().setContent {
             Box(Modifier.width(width.value).height(1000.dp)) {
                 MeshCoreTheme(motionScale = 0f) {
                     NativeNavigationShell(
-                        h.container.navigation, chats = h.container.chatsFeature, nodes = h.container.nodesFeature,
+                        h.container.navigation, chats = h.container.chatsFeature, nodes = nodes,
                     )
                 }
             }
@@ -268,10 +268,14 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             }
             connecting.await()
             mount(h)
-            await(h) { h.container.navigation.state.value.pendingChatContact?.id == contact.id }
+            await(h) {
+                (h.container.navigation.state.value.chatsSelectedRoute as? ChatSelection.Direct)?.contact?.id == contact.id
+            }
             val state = h.container.navigation.state.value
+            val synchronizedContact = assertNotNull(store.fetchContact(radio, contact.publicKey))
+            assertEquals(contact.id, synchronizedContact.id, "Sync must preserve the notification's original target")
             compose.onNodeWithTag("entry:${state.activeStack.last().id}").assertIsDisplayed()
-            assertEquals(ChatSelection.Direct(contact), state.chatsSelectedRoute)
+            assertEquals(synchronizedContact, assertIs<ChatSelection.Direct>(state.chatsSelectedRoute).contact)
             val stack = state.activeStack
             delivery.retryPendingActions()
             h.settle()
@@ -506,6 +510,90 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             compose.onNodeWithTag("contact-link-confirm").performClick()
             await(h) { n.state.value.pendingContactLink == null }
             assertEquals(key(30), n.state.value.pendingContactDetail?.publicKey)
+        } finally { unmount(); h.container.close() }
+    }
+
+    @Test fun mountedRetryMarksEveryLoadBusyAndCannotOverwriteANewerResult() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Retry saved identity") }
+        try {
+            connect(h)
+            val actual = h.container.nodesFeature
+            val saved = assertNotNull(store.fetchContact(assertNotNull(h.appState.currentRadioId), key(20)))
+            var attempts = 0
+            val entered = CompletableDeferred<Unit>()
+            val retry = CompletableDeferred<ContactDTO?>()
+            val delayed = object : NodesDataStore by assertNotNull(actual.session.servicesDataStore()) {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    attempts++
+                    if (attempts == 1) throw IllegalStateException("Temporary lookup failure")
+                    if (retry.isCompleted) return store.fetchContact(radioId, publicKey)
+                    check(attempts == 2) { "An overlapping retry reached persistence" }
+                    entered.complete(Unit)
+                    return retry.await()
+                }
+            }
+            val dependencies = NodesFeatureDependencies(
+                object : NodesSession by actual.session {
+                    override fun servicesDataStore() = delayed
+                },
+                actual.uriCodec, actual.timeouts, actual.messages, actual.announcer,
+                actual.preferences, actual.clock, actual.locale,
+            )
+            val n = h.container.navigation
+            n.stageContactLink(ContactLinkRequest("Retry claim", key(20), ContactType.ROOM))
+            mount(h, dependencies)
+            await(h) { compose.onAllNodesWithTag("contact-link-error").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            await(h) { entered.isCompleted }
+            compose.onNodeWithTag("contact-link-confirm").assertIsNotEnabled().performClick()
+            compose.waitForIdle()
+            assertEquals(2, attempts)
+            retry.complete(saved)
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-error").assertDoesNotExist()
+            compose.onNodeWithTag("contact-link-name").assertTextEquals(saved.displayName)
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            await(h) { n.state.value.pendingContactLink == null }
+            assertEquals(saved.id, n.state.value.selectedContact?.id)
+            assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+        } finally { unmount(); h.container.close() }
+    }
+
+    @Test fun aSavedContactLinkRetiresTheMountedPendingImportItReplaces() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.knownContacts += contactFrame(key(20), "Saved destination")
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) emptyList() else null }
+        }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val saved = assertNotNull(store.fetchContact(radio, key(20)))
+            val n = h.container.navigation
+            mount(h)
+            n.stageContactLink(ContactLinkRequest("Retired pending import", key(30), ContactType.ROOM))
+            val retired = assertNotNull(n.state.value.pendingContactLink)
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            val firmware = h.links.radios.last()
+            h.eventually("old mounted import waits for radio ACK") { firmware.sent.any { it[0].toInt() == 0x09 } }
+            val uri = h.container.nodesFeature.uriCodec.exportContactUri("Claimed saved alias", key(20), ContactType.ROOM)
+            assertEquals(
+                DeepLinkRouteOutcome.Navigated,
+                AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, n)).routeExternal(uri),
+            )
+            assertNull(n.state.value.pendingContactLink)
+            compose.waitForIdle()
+            compose.onNodeWithTag("contact-link-confirmation").assertDoesNotExist()
+            firmware.push(Bytes.of(0))
+            h.settle()
+            assertFalse(n.completeContactLink(retired))
+            assertEquals(saved.id, n.state.value.selectedContact?.id)
+            assertEquals(saved.id, assertIs<NavigationDestination.ContactDetail>(
+                n.state.value.activeStack.last().destination,
+            ).contact.id)
+            compose.onNodeWithTag("entry:${n.state.value.activeStack.last().id}").assertIsDisplayed()
         } finally { unmount(); h.container.close() }
     }
 

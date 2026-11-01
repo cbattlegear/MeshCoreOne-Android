@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.model.snapshotMap
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -161,7 +162,8 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 failure != null -> current.copy(failure = failure)
                 contact == null -> current.stageContactLink(link, radio)
                 else -> current.push(AppTab.NODES, NavigationDestination.ContactDetail(contact)).copy(
-                    pendingContactDetail = contact, selectedContact = contact, nodesShowingDiscovery = false,
+                    pendingContactLink = null, pendingContactDetail = contact, selectedContact = contact,
+                    nodesShowingDiscovery = false,
                 )
             }
             if (mutableState.compareAndSet(current, next)) return failure == null

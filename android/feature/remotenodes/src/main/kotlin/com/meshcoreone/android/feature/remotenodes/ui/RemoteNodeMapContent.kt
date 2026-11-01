@@ -33,7 +33,7 @@ val NativeRemoteNodesMapSurface: RemoteNodesMapSurface = { state, clusters, labe
     }
 }
 
-internal fun remoteMapPresentation(
+fun remoteMapPresentation(
     points: List<MapPoint>,
     lines: List<NodeMapLine>,
     region: CoordinateRegion?,

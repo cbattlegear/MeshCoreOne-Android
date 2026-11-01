@@ -162,6 +162,7 @@ class LinkUrlExtractionTest {
         assertNull(LinkUrlExtraction.extractFirstUrl("irc:irc.libera.chat"))
         assertNull(LinkUrlExtraction.extractFirstUrl("news:comp.lang.java"))
         assertNull(LinkUrlExtraction.extractFirstUrl("custom:payload:tracker.example/path"))
+        assertNull(LinkUrlExtraction.extractFirstUrl("custom:tracker.example.com/path"))
         assertEquals(
             "https://Example.COM/Page",
             LinkUrlExtraction.extractFirstUrl("Link:HTTPS://Example.COM/Page"),
@@ -223,6 +224,7 @@ class LinkUrlExtractionTest {
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Link:(https://example.com)"))
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Visit:example.com"))
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Article:example.com"))
+        assertEquals("https://example.com/path", LinkUrlExtraction.extractFirstUrl("Article:example.com/path"))
     }
 
     @Test

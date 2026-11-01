@@ -27,7 +27,7 @@ object LinkUrlExtraction {
     private val explicitHttpUrlPattern = Regex("""(?i)https?://[^\s<>"]+""")
     // Suppress structured opaque-scheme payloads without treating prose labels as URI schemes.
     private val uriSchemePattern = Regex(
-        """(?i)(?<![\w.-])(?!see-https?://)(?:[a-z][a-z0-9+.-]*://|(?:mailto|view-source|file|data|javascript|tel|sms|geo|urn|xmpp|sip|sips|magnet|bitcoin|ipfs|ipns|ftp|ftps|did|irc|ircs|news|nntp):|(?!(?:link|visit):)[a-z][a-z0-9+.-]*:(?=[^\s<>"]*[:=?][^\s<>"]*[a-z0-9.-]+\.[a-z0-9-]+))""",
+        """(?i)(?<![\w.-])(?!see-https?://)(?:[a-z][a-z0-9+.-]*://|(?:mailto|view-source|file|data|javascript|tel|sms|geo|urn|xmpp|sip|sips|magnet|bitcoin|ipfs|ipns|ftp|ftps|did|irc|ircs|news|nntp):|(?!(?:link|visit|article):)[a-z][a-z0-9+.-]*:(?=(?:[^\s<>"]*[:=?][^\s<>"]*[a-z0-9.-]+\.[a-z0-9-]+|[a-z0-9.-]+\.[a-z0-9-]+/[^\s<>"]*)))""",
     )
     private val emailPattern = Regex(
         """(?i)(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|[\w.!#$%&'*+/^_`{|}~-]+)@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})""",

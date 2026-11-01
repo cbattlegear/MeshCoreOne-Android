@@ -318,6 +318,8 @@ class MessagingRoomIntegrationTest {
     @OriginalCase("ChatSendQueueServiceTests::transient send error preserves the persisted row while parked on the trigger()")
     @Test fun theActualTransientQueueFailureKeepsItsCommittedEnvelopeWhileParked() = runTest(scheduler) {
         withParkedDm { g, message, row, events ->
+            advanceTimeBy(200)
+            runCurrent()
             assertEquals(listOf(row.copy(attemptCount = 1)), store.fetchPendingSends(radio))
             assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, message.id))?.status)
             assertEquals(3, g.firmware.sent().size)
@@ -373,17 +375,20 @@ class MessagingRoomIntegrationTest {
 
     @OriginalCase("ChatSendQueueServiceTests::observeConnectionState keeps a drain parked through .connected and wakes it on .ready()")
     @Test fun actualConnectedStateCannotWakeTheParkButTheNextReadyEdgeCan() = runTest(scheduler) {
-        withParkedDm { g, _, row, events ->
+        withParkedDm { g, message, row, events ->
             g.signals.set(DeviceConnectionState.CONNECTED)
             runCurrent()
             advanceTimeBy(1_000)
             runCurrent()
             assertEquals(listOf(row.copy(attemptCount = 1)), store.fetchPendingSends(radio))
+            assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, message.id))?.status)
+            assertEquals(3, g.firmware.sent().size)
             g.signals.set(DeviceConnectionState.READY)
             runCurrent()
             advanceTimeBy(300)
             runCurrent()
             assertEquals(listOf(row.copy(attemptCount = 2)), store.fetchPendingSends(radio))
+            assertEquals(6, g.firmware.sent().size)
             assertTrue(completedStatuses(g, events).isEmpty())
         }
     }
@@ -1708,6 +1713,223 @@ class MessagingRoomIntegrationTest {
         assertEquals(0, g.service.pendingAckCount); assertTrue(g.service.close().isComplete); g.stop()
     }
 
+    @Test fun actualRoomFailAllRetainsEachFailedEntryAndRetriesWithoutDuplicateEvents() = runTest(scheduler) {
+        seed()
+        val actual = store
+        val faults = listOf(
+            PersistenceStoreException(PersistenceStoreError.SaveFailed("first fail-all"), IllegalStateException("first")),
+            PersistenceStoreException(PersistenceStoreError.SaveFailed("second fail-all"), IllegalStateException("second")),
+        )
+        val blocked = linkedMapOf<UUID, PersistenceStoreException>()
+        val writes = mutableListOf<EntityKey>()
+        val faulty = object : PersistenceStoreProtocol by actual {
+            override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
+                writes += key
+                blocked[key.id]?.let { throw it }
+                return actual.updateMessageStatusUnlessDelivered(key, status)
+            }
+        }
+        val g = RadioGeneration(80, faulty); g.start()
+        val messages = listOf(
+            g.acceptedWithoutAck("first retained", Bytes.of(1, 2, 3, 4)),
+            g.acceptedWithoutAck("second retained", Bytes.of(5, 6, 7, 8)),
+            g.acceptedWithoutAck("healthy later", Bytes.of(9, 10, 11, 12)),
+        )
+        messages.take(2).forEachIndexed { index, message -> blocked[message.id] = faults[index] }
+        val foreign = messages[0].copy(radioId = other)
+        store.saveMessage(foreign)
+        val observed = mutableListOf<MessageStatusEvent>()
+        val events = g.service.statusEvents()
+        val collecting = backgroundScope.launch(UnconfinedTestDispatcher(scheduler)) {
+            events.events.collect { event ->
+                assertEquals(g.token, event.token)
+                observed += event.event
+            }
+        }
+        val thrown = assertFailsWith<PersistenceStoreException> { g.service.failAllPendingMessages() }
+        assertSame(faults[0], thrown)
+        assertEquals(listOf(faults[1]), thrown.suppressed.toList())
+        assertEquals(messages.map { EntityKey(radio, it.id) }, writes)
+        for (index in 0..1) {
+            val message = messages[index]
+            assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+            assertTrue(g.diagnostics.any { it is MessagingDiagnostic.Failure &&
+                it.operation == "failPending.${message.id}" && it.cause === faults[index] })
+        }
+        assertEquals(messages[2].copy(status = MessageStatus.FAILED),
+            store.fetchMessage(EntityKey(radio, messages[2].id)))
+        assertEquals(2, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.Failed(messages[2].id)), observed)
+        blocked.clear()
+        g.service.failAllPendingMessages()
+        g.service.failAllPendingMessages()
+        runCurrent()
+        assertEquals(listOf(0, 1, 2, 0, 1).map { EntityKey(radio, messages[it].id) }, writes)
+        for (message in messages) {
+            assertEquals(message.copy(status = MessageStatus.FAILED),
+                store.fetchMessage(EntityKey(radio, message.id)))
+        }
+        assertEquals(foreign, store.fetchMessage(EntityKey(other, foreign.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(2, 0, 1).map { MessageStatusEvent.Failed(messages[it].id) }, observed)
+        assertEquals(3, g.firmware.sent().size)
+        assertTrue(g.service.close().isComplete)
+        collecting.cancelAndJoin(); events.close(); g.stop()
+    }
+
+    @Test fun cancellingActualRoomFailAllPreservesUncommittedRowsAndAllowsExplicitRetry() = runTest(scheduler) {
+        seed()
+        val actual = store
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val writes = mutableListOf<EntityKey>()
+        var suspendWrite = true
+        val suspended = object : PersistenceStoreProtocol by actual {
+            override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
+                writes += key
+                if (suspendWrite) { entered.complete(Unit); release.await() }
+                return actual.updateMessageStatusUnlessDelivered(key, status)
+            }
+        }
+        val g = RadioGeneration(81, suspended); g.start()
+        val first = g.acceptedWithoutAck("cancel first", Bytes.of(1, 2, 3, 4))
+        val later = g.acceptedWithoutAck("cancel later", Bytes.of(5, 6, 7, 8))
+        val observed = mutableListOf<MessageStatusEvent>()
+        val events = g.service.statusEvents()
+        val collecting = backgroundScope.launch(UnconfinedTestDispatcher(scheduler)) {
+            events.events.collect { event -> assertEquals(g.token, event.token); observed += event.event }
+        }
+        val sweep = backgroundScope.async { g.service.failAllPendingMessages() }
+        entered.await(); sweep.cancelAndJoin()
+        assertFailsWith<CancellationException> { sweep.await() }
+        assertEquals(listOf(EntityKey(radio, first.id)), writes)
+        assertEquals(first, store.fetchMessage(EntityKey(radio, first.id)))
+        assertEquals(later, store.fetchMessage(EntityKey(radio, later.id)))
+        assertEquals(2, g.service.pendingAckCount)
+        assertTrue(observed.isEmpty())
+        assertTrue(g.diagnostics.none { it is MessagingDiagnostic.Failure })
+        suspendWrite = false
+        g.service.failAllPendingMessages(); g.service.failAllPendingMessages(); runCurrent()
+        assertEquals(listOf(first.id, first.id, later.id).map { EntityKey(radio, it) }, writes)
+        assertEquals(first.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, first.id)))
+        assertEquals(later.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, later.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(listOf(MessageStatusEvent.Failed(first.id), MessageStatusEvent.Failed(later.id)), observed)
+        assertEquals(2, g.firmware.sent().size)
+        assertTrue(g.service.close().isComplete)
+        collecting.cancelAndJoin(); events.close(); g.stop()
+    }
+
+    @Test fun actualRoomFailAllStopsAfterOwnershipWithdrawalWithoutPublishingStaleFailure() = runTest(scheduler) {
+        seed()
+        val actual = store
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val writes = mutableListOf<EntityKey>()
+        val suspended = object : PersistenceStoreProtocol by actual {
+            override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
+                writes += key; entered.complete(Unit); release.await()
+                return actual.updateMessageStatusUnlessDelivered(key, status)
+            }
+        }
+        val g = RadioGeneration(82, suspended); g.start()
+        val first = g.acceptedWithoutAck("withdraw first", Bytes.of(1, 2, 3, 4))
+        val later = g.acceptedWithoutAck("withdraw later", Bytes.of(5, 6, 7, 8))
+        val successor = RadioGeneration(83)
+        val events = g.service.statusEvents()
+        val sweep = backgroundScope.async {
+            assertFailsWith<MessageServiceException> { g.service.failAllPendingMessages() }
+        }
+        entered.await()
+        g.signals.set(DeviceConnectionState.READY, successor.token)
+        release.complete(Unit)
+        assertEquals(MessageServiceError.NotConnected, sweep.await().error)
+        runCurrent()
+        assertEquals(listOf(EntityKey(radio, first.id)), writes)
+        assertEquals(first.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, first.id)))
+        assertEquals(later, store.fetchMessage(EntityKey(radio, later.id)))
+        assertEquals(2, g.service.pendingAckCount)
+        assertTrue(completedStatuses(g, events).isEmpty())
+        assertTrue(g.diagnostics.none { it is MessagingDiagnostic.Failure })
+        assertEquals(2, g.firmware.sent().size)
+        g.stop()
+    }
+
+    @Test fun actualRoomHydrationReadFailureRetriesItsOriginalEnvelopeAndThenLatches() = runTest(scheduler) {
+        seed()
+        val actual = store
+        val cause = PersistenceStoreException(PersistenceStoreError.SaveFailed("hydration read"), IllegalStateException("read"))
+        var failRead = true
+        var reads = 0
+        val faulty = object : PersistenceStoreProtocol by actual {
+            override suspend fun fetchPendingSends(radioId: RadioId): SnapshotList<PendingSendDTO> {
+                reads++
+                if (failRead) throw cause
+                return actual.fetchPendingSends(radioId)
+            }
+        }
+        val g = RadioGeneration(84, faulty); g.start(); g.signals.set(DeviceConnectionState.READY)
+        val message = g.service.createPendingMessage("retry hydration read", contact)
+        val row = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio).copy(sequence = 1)
+        store.upsertPendingSend(row)
+        val failure = assertFailsWith<ChatSendQueueServiceException> { g.queue.hydrate() }
+        assertTrue(generateSequence(failure.cause) { it.cause }.any { it === cause })
+        assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(listOf(row), store.fetchPendingSends(radio))
+        assertTrue(g.firmware.sent().isEmpty())
+        failRead = false
+        g.queue.hydrate(); runCurrent(); g.queue.awaitDrainCompletion()
+        val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        assertEquals(message.timestamp, delivered.timestamp)
+        assertEquals(message.createdAt, delivered.createdAt)
+        assertEquals(message.id, delivered.id)
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
+        g.queue.hydrate(); runCurrent(); g.queue.awaitDrainCompletion()
+        assertEquals(2, reads)
+        assertEquals(1, g.firmware.sent().size)
+        assertTrue(g.queue.shutdown().isComplete); g.stop()
+    }
+
+    @Test fun cancellingActualRoomHydrationObserverKeepsOneSharedReadAndOneWireSend() = runTest(scheduler) {
+        seed()
+        val actual = store
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var reads = 0
+        val suspended = object : PersistenceStoreProtocol by actual {
+            override suspend fun fetchPendingSends(radioId: RadioId): SnapshotList<PendingSendDTO> {
+                reads++; entered.complete(Unit); release.await()
+                return actual.fetchPendingSends(radioId)
+            }
+        }
+        val g = RadioGeneration(85, suspended); g.start(); g.signals.set(DeviceConnectionState.READY)
+        val message = g.service.createPendingMessage("shared hydration read", contact)
+        val row = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio).copy(sequence = 1)
+        store.upsertPendingSend(row)
+        val first = backgroundScope.async { g.queue.hydrate() }
+        entered.await(); first.cancelAndJoin()
+        assertFailsWith<CancellationException> { first.await() }
+        val second = backgroundScope.async { g.queue.hydrate() }
+        runCurrent()
+        assertFalse(second.isCompleted)
+        assertEquals(1, reads)
+        assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(listOf(row), store.fetchPendingSends(radio))
+        assertTrue(g.firmware.sent().isEmpty())
+        release.complete(Unit); second.await(); runCurrent(); g.queue.awaitDrainCompletion()
+        val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        assertEquals(message.timestamp, delivered.timestamp)
+        assertEquals(message.createdAt, delivered.createdAt)
+        assertEquals(message.id, delivered.id)
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
+        g.queue.hydrate()
+        assertEquals(1, reads)
+        assertEquals(1, g.firmware.sent().size)
+        assertTrue(g.queue.shutdown().isComplete); g.stop()
+    }
+
     @Test fun realSessionPushAfterManualNoMoreIsDeliveredOnceIntoRoomWithLiveContext() = runTest(scheduler) {
         seed(); val g = RadioGeneration(22); g.start(); g.signals.set(DeviceConnectionState.READY)
         val p = g.poller(); val saved = mutableListOf<UUID>()
@@ -1894,8 +2116,8 @@ class MessagingRoomIntegrationTest {
         private val value = MutableStateFlow(snapshot(token, DeviceConnectionState.CONNECTED))
         override val snapshot: kotlinx.coroutines.flow.StateFlow<ConnectionSnapshot> get() = value
         private val channels = mutableListOf<kotlinx.coroutines.channels.Channel<ConnectionSnapshot>>()
-        fun set(rung: DeviceConnectionState) {
-            val next = snapshot(token, rung); value.value = next
+        fun set(rung: DeviceConnectionState, currentToken: SessionToken = token) {
+            val next = snapshot(currentToken, rung); value.value = next
             channels.forEach { it.trySend(next).getOrThrow() }
         }
         override suspend fun subscribeTransitions(): ConnectionSubscription {

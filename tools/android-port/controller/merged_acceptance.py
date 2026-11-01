@@ -176,13 +176,6 @@ class MergedAcceptance:
         if not isinstance(head, str) or SHA.fullmatch(head) is None:
             raise PortError("Merged PR has no immutable candidate head")
         repository = self.manifest.repo
-        try:
-            git(repository, "cat-file", "-e", head + "^{commit}")
-        except PortError:
-            pass
-        else:
-            yield repository
-            return
         grafts = Path(git(repository, "rev-parse", "--git-path", "info/grafts").decode().strip())
         if not grafts.is_absolute():
             grafts = repository / grafts
@@ -192,6 +185,13 @@ class MergedAcceptance:
             or grafts.exists()
         ):
             raise PortError("Merged PR inspection requires complete, unreplaced default-branch history")
+        try:
+            git(repository, "cat-file", "-e", head + "^{commit}")
+        except PortError:
+            pass
+        else:
+            yield repository
+            return
         objects = Path(git(repository, "rev-parse", "--git-path", "objects").decode().strip())
         if not objects.is_absolute():
             objects = repository / objects
@@ -423,8 +423,9 @@ class MergedAcceptance:
             review_id = positive_integer(review.get("id"), "Review ID")
             login = author["login"]
             if state in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
-                if login not in latest or review_id > latest[login]["id"]:
-                    latest[login] = review
+                current = latest.get(login)
+                if current is None or (submitted, review_id) > (current["submitted_at"], current["id"]):
+                    latest[login] = {"id": review_id, "submitted_at": submitted, "state": state}
         if any(review["state"] == "CHANGES_REQUESTED" for review in latest.values()):
             raise PortError("A reviewer has outstanding requested changes")
 

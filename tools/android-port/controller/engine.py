@@ -447,6 +447,8 @@ class Controller:
                         or repair.get("binding", {}).get("work_package") != wp_id
                     ):
                         raise PortError("Current worker's merged scope has a conflicting identity")
+                    if record["state"] not in ("review_wait", "gate_wait", "merge_wait"):
+                        self.observe(wp_id, record["attempt"], observation)
                     self.ledger.recover_merge({
                         "work_package": wp_id, "pr_number": identity.pr_number, "action": "merge",
                         "attempt": record["attempt"], "reservation_revision": record["revision"],
@@ -514,12 +516,14 @@ class Controller:
             }
             if not isinstance(payload["expected_head_sha"], str) or SHA.fullmatch(payload["expected_head_sha"]) is None:
                 raise PortError("Merged bounded scope has no exact candidate head")
-            previous, _ = self.ledger.begin_merge(payload)
             receipt = {"merged": True, "sha": merge_sha}
-            if previous is not None and previous != receipt:
-                raise PortError("Stored merge receipt conflicts with the authenticated merged PR")
-            if not self.ledger.recover_merge(payload, receipt, authoritative=True):
-                raise PortError("Authenticated merged PR has no recoverable merge intent")
+            recovered = self.ledger.recover_merge(payload, receipt, authoritative=True)
+            if not recovered:
+                previous, _ = self.ledger.begin_merge(payload)
+                if previous is not None and previous != receipt:
+                    raise PortError("Stored merge receipt conflicts with the authenticated merged PR")
+                if not self.ledger.recover_merge(payload, receipt, authoritative=True):
+                    raise PortError("Authenticated merged PR has no recoverable merge intent")
             self.ledger.release(
                 wp_id, record["attempt"], identity, observation.worker_state,
                 observation.pr_open, observation.authoritative,

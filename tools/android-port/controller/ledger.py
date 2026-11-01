@@ -1303,17 +1303,40 @@ class Ledger:
     def recover_merge(self, payload: dict, receipt: dict, authoritative: bool):
         from .model import SHA
 
-        if authoritative is not True or receipt.get("merged") is not True or not isinstance(receipt.get("sha"), str):
+        if (
+            authoritative is not True or not isinstance(payload, dict) or not isinstance(receipt, dict)
+            or receipt.get("merged") is not True or not isinstance(receipt.get("sha"), str)
+        ):
             raise PortError("Merge recovery requires an actual verified merged-PR receipt")
         if SHA.fullmatch(receipt["sha"]) is None:
             raise PortError("Malformed actual merge commit")
         with self.transaction() as connection:
+            lease = self.unpack(connection.execute(
+                "SELECT * FROM leases WHERE repository=? AND wp=?",
+                (self.repository, payload.get("work_package")),
+            ).fetchone())
+            if (
+                lease is None or payload.get("attempt") != lease["attempt"]
+                or type(payload.get("reservation_revision")) is not int
+                or payload["reservation_revision"] != lease["revision"]
+                or type(payload.get("pr_number")) is not int
+                or payload["pr_number"] != lease["identity"]["pr_number"]
+                or payload.get("binding") != lease["binding"]
+                or payload.get("base_sha") != lease["binding"].get("base_sha")
+                or payload.get("policy_revision") != lease["binding"].get("policy_revision")
+                or not isinstance(payload.get("expected_head_sha"), str)
+                or SHA.fullmatch(payload["expected_head_sha"]) is None
+                or lease["state"] not in ("review_wait", "gate_wait", "merge_wait", "completed")
+            ):
+                raise PortError("Merge recovery disagrees with the current attempt/revision/PR/binding/state")
             row = connection.execute(
                 "SELECT * FROM operations WHERE repository=? AND key='merge-lane'", (self.repository,)
             ).fetchone()
             if row is None or row["payload_hash"] != digest(payload):
                 return False
             if row["state"] == "confirmed":
+                if decode_json(row["identity"]) != receipt:
+                    raise PortError("Conflicting confirmed merge receipt")
                 return True
             if row["state"] != "intent":
                 raise PortError("Unknown merge-lane state")

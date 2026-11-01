@@ -205,6 +205,35 @@ class MergedAcceptanceTests(unittest.TestCase):
                     with reader.candidate_history(123, base, head):
                         self.fail("An unrelated fetched head must not be accepted")
 
+    def test_local_merged_head_still_rejects_replaced_grafted_or_shallow_history(self):
+        reader, _, _, manifest, _ = self.fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            for kind in ("replace", "graft", "shallow"):
+                repository = Path(directory) / kind
+                subprocess.run(["git", "init", "--quiet", str(repository)], check=True)
+                (repository / "file.txt").write_text("base\n", encoding="utf-8")
+                git(repository, "add", "file.txt")
+                git(repository, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                    "commit", "--quiet", "-m", "base")
+                base = git(repository, "rev-parse", "HEAD").decode().strip()
+                (repository / "file.txt").write_text("candidate\n", encoding="utf-8")
+                git(repository, "add", "file.txt")
+                git(repository, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                    "commit", "--quiet", "-m", "candidate")
+                head = git(repository, "rev-parse", "HEAD").decode().strip()
+                reader.manifest = replace(manifest, repo=repository)
+                if kind == "replace":
+                    git(repository, "replace", head, base)
+                elif kind == "graft":
+                    grafts = repository / ".git" / "info" / "grafts"
+                    grafts.parent.mkdir(parents=True, exist_ok=True)
+                    grafts.write_text(f"{head} {base}\n", encoding="utf-8")
+                else:
+                    (repository / ".git" / "shallow").write_text(f"{head}\n", encoding="utf-8")
+                with self.subTest(kind=kind), self.assertRaisesRegex(PortError, "complete, unreplaced"):
+                    with reader.candidate_history(123, base, head):
+                        self.fail("Untrusted history must not be used, even when the head is local")
+
     def test_candidate_fetch_keeps_credentials_out_of_command_and_git_configuration(self):
         reader, api, _, manifest, _ = self.fixture()
         api.token = "fixture-token"
@@ -307,6 +336,17 @@ class MergedAcceptanceTests(unittest.TestCase):
         checks.pop()
         reviews[-1]["submitted_at"] = "2026-10-10T11:45:00Z"
         with self.assertRaisesRegex(PortError, "requested changes"):
+            self.evaluate(reader, manifest, rules)
+
+    def test_latest_decisive_review_uses_submission_time_before_review_id(self):
+        reader, api, prefix, manifest, rules = self.fixture()
+        reviews = api.routes[("GET", prefix + "/pulls/123/reviews?per_page=100&page=1")]
+        reviews[0].update(state="APPROVED", submitted_at="2026-10-10T11:00:00Z")
+        reviews.append({
+            **reviews[0], "id": 80, "state": "CHANGES_REQUESTED",
+            "submitted_at": "2026-10-10T11:30:00Z",
+        })
+        with self.assertRaisesRegex(PortError, "outstanding requested changes"):
             self.evaluate(reader, manifest, rules)
 
     def test_check_runs_include_postmerge_reruns_without_replacing_premerge_check(self):

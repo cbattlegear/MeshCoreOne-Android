@@ -1759,7 +1759,7 @@ class MessagingRoomIntegrationTest {
         assertEquals(messages[2].copy(status = MessageStatus.FAILED),
             store.fetchMessage(EntityKey(radio, messages[2].id)))
         assertEquals(2, g.service.pendingAckCount)
-        assertEquals(listOf(MessageStatusEvent.Failed(messages[2].id)), observed)
+        assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(messages[2].id)), observed)
         blocked.clear()
         g.service.failAllPendingMessages()
         g.service.failAllPendingMessages()
@@ -1771,7 +1771,8 @@ class MessagingRoomIntegrationTest {
         }
         assertEquals(foreign, store.fetchMessage(EntityKey(other, foreign.id)))
         assertEquals(0, g.service.pendingAckCount)
-        assertEquals(listOf(2, 0, 1).map { MessageStatusEvent.Failed(messages[it].id) }, observed)
+        val expected: List<MessageStatusEvent> = listOf(2, 0, 1).map { MessageStatusEvent.Failed(messages[it].id) }
+        assertEquals(expected, observed)
         assertEquals(3, g.firmware.sent().size)
         assertTrue(g.service.close().isComplete)
         collecting.cancelAndJoin(); events.close(); g.stop()
@@ -1814,7 +1815,7 @@ class MessagingRoomIntegrationTest {
         assertEquals(first.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, first.id)))
         assertEquals(later.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, later.id)))
         assertEquals(0, g.service.pendingAckCount)
-        assertEquals(listOf(MessageStatusEvent.Failed(first.id), MessageStatusEvent.Failed(later.id)), observed)
+        assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(first.id), MessageStatusEvent.Failed(later.id)), observed)
         assertEquals(2, g.firmware.sent().size)
         assertTrue(g.service.close().isComplete)
         collecting.cancelAndJoin(); events.close(); g.stop()

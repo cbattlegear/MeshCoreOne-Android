@@ -480,6 +480,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertFalse(n.state.value.navigationReady)
             assertEquals(oldGeneration, n.state.value.generation)
             val replacementGap = n.state.value
+            assertFalse(h.container.handleNotificationResponse(NotificationResponse(
+                NotificationPayload.DirectMessage(EntityKey(radio, target.id), UUID.randomUUID()), null, null,
+            )), "The production dispatcher must retain the response until the new graph is ready")
             lookup.complete(target)
             contactLookupRelease.complete(Unit)
             testScheduler.runCurrent()

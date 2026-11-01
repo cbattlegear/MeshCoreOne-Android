@@ -525,7 +525,7 @@ private class ContainerAppStatePlatform(
     private var binding: NotificationNavigationBinding? = null
 
     fun isReadyFor(current: com.meshcoreone.android.app.state.AppSession): Boolean =
-        session === current && binding != null && generation == navigation.state.value.generation &&
+        isCurrentSession(current) && session === current && binding != null && generation == navigation.state.value.generation &&
             navigation.state.value.navigationReady
 
     override fun configureNotificationNavigation(

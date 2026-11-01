@@ -185,6 +185,82 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }
     }
 
+    @Test fun failedFifoEvictionRerequestsTheOneVisibleCardWithoutRecreatingItsScreen() = runTest {
+        val replacement = CompletableDeferred<Bitmap?>()
+        var visibleCalls = 0
+        val visibleRequest = MapSnapshotRequest(37.7749, -122.4194, false, false)
+        withFixture(render = {
+            if (it == visibleRequest && ++visibleCalls > 1) replacement.await() else null
+        }) {
+            mount(message)
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true)
+                    .fetchSemanticsNodes().size == 1
+            }
+            assertEquals(1, visibleCalls)
+            compose.onNodeWithContentDescription(label).assertIsDisplayed()
+            val backgroundFailures = (0 until 200).map {
+                MapSnapshotRequest(1.0 + it / 1_000.0, 2.0, false, false)
+            }
+            compose.runOnIdle { backgroundFailures.forEach(previews::request) }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true)
+                    .fetchSemanticsNodes().size == 1 && visibleCalls == 2
+            }
+            assertEquals(202, requests.size)
+            assertFalse(previews.snapshots.isResolved(visibleRequest))
+            assertTrue(backgroundFailures.all(previews.snapshots::isResolved))
+            compose.onNodeWithContentDescription(label).assertIsDisplayed()
+            compose.runOnIdle { replacement.complete(bitmap()) }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true)
+                    .fetchSemanticsNodes().size == 1
+            }
+            assertEquals(2, visibleCalls)
+            assertEquals(202, requests.size)
+        }
+    }
+
+    @Test fun clearingMoreThanSixtyFourFailedKeysMustNotStrandTheOneVisibleCard() = runTest {
+        val replacement = CompletableDeferred<Bitmap?>()
+        var visibleCalls = 0
+        val visibleRequest = MapSnapshotRequest(37.7749, -122.4194, false, false)
+        withFixture(render = {
+            if (it == visibleRequest && ++visibleCalls > 1) replacement.await() else null
+        }) {
+            mount(message)
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true)
+                    .fetchSemanticsNodes().size == 1
+            }
+            val backgroundFailures = (0 until 199).map {
+                MapSnapshotRequest(1.0 + it / 1_000.0, 2.0, false, false)
+            }
+            compose.runOnIdle { backgroundFailures.forEach(previews::request) }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true).fetchSemanticsNodes()
+                backgroundFailures.all(previews.snapshots::isResolved)
+            }
+            assertEquals(200, requests.size)
+            assertEquals(1, visibleCalls)
+            assertTrue(previews.snapshots.isResolved(visibleRequest))
+            compose.onNodeWithContentDescription(label).assertIsDisplayed()
+            compose.runOnIdle { previews.snapshots.clearFailures() }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true)
+                    .fetchSemanticsNodes().size == 1 && visibleCalls == 2
+            }
+            assertEquals(201, requests.size)
+            assertTrue(backgroundFailures.none(previews.snapshots::isResolved))
+            compose.runOnIdle { replacement.complete(bitmap()) }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true)
+                    .fetchSemanticsNodes().size == 1
+            }
+            assertEquals(2, visibleCalls)
+        }
+    }
+
     @Test fun offlineFallbackRecoversToTheOnlineDarkKeyWithoutGatingCoordinateNavigation() = runTest {
         var online = false
         var opened: String? = null

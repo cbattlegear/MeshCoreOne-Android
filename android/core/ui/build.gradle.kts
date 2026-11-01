@@ -5,6 +5,7 @@ import org.gradle.api.artifacts.component.ModuleComponentSelector
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 import org.gradle.api.artifacts.result.ResolvedComponentResult
+import org.gradle.api.artifacts.type.ArtifactTypeDefinition
 import org.gradle.api.file.Directory
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.InputDirectory
@@ -139,13 +140,16 @@ val protocolConsumerClasspath = providers.provider {
     check(projects == setOf(":core:contracts", ":core:model", ":core:protocol")) {
         "Unexpected projects in the isolated contracts API: $projects"
     }
-    configuration.incoming.artifactView { componentFilter { it in reachable } }.files
+    configuration.incoming.artifactView {
+        componentFilter { it in reachable }
+        attributes.attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, ArtifactTypeDefinition.JAR_TYPE)
+    }.files
 }
 val compileProtocolApiConsumer by tasks.registering(JavaExec::class) {
     group = "verification"
     description = "Compile a Kotlin consumer using only the contracts API's locked transitive artifacts."
     notCompatibleWithConfigurationCache("Selects the contracts API subgraph from the existing locked compile graph")
-    dependsOn(configurations.named("debugCompileClasspath"))
+    dependsOn(protocolConsumerClasspath)
     classpath = configurations.getByName("kotlinCompilerClasspath")
     mainClass.set("org.jetbrains.kotlin.cli.jvm.K2JVMCompiler")
     val source = layout.projectDirectory.file("verification/protocol-api-consumer/ProtocolApiConsumer.kt")

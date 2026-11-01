@@ -18,7 +18,7 @@ from controller.scope_amendment import (
     ROOM_CLEANUP_CAPABILITY, room_cleanup_predecessor,
     BUBBLE_CONSUMER_CAPABILITY, bubble_consumer_predecessor,
     ROOM_FAILED_EVENT_CAPABILITY, room_failed_event_predecessor,
-    routine_support_predecessor,
+    completion_policy_predecessor, routine_support_predecessor,
 )
 from portmap import capability_support_admitted
 
@@ -107,7 +107,9 @@ class CapabilityReservationTests(unittest.TestCase):
                 CapabilityEngine.validate_support_changes(operations, base, head)
 
     def test_related_support_preserves_and_checks_historical_policy(self):
-        current = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        current = completion_policy_predecessor(
+            json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        )
         historical = routine_support_predecessor(current)
         actual = json.loads(subprocess.check_output(
             ["git", "-C", str(REPO), "show",
@@ -342,7 +344,9 @@ class CapabilityReservationTests(unittest.TestCase):
             "git", "-C", str(REPO), "show",
             "a5dd0fc6c521d09d59d28ca75169e4bdbd56a6cd:docs/android/automation-policy.json",
         ], encoding="utf-8"))
-        actual = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        actual = completion_policy_predecessor(
+            json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        )
         self.assertEqual(room_cleanup_predecessor(actual), original)
         for field, value in (("work_packages", ["WP-303", "WP-501"]),
                              ("operations", ["modify", "delete"]),

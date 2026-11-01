@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fixtures import BASE, HEAD, NOW, REPO, base_manifest, policy, settings, test_manifest
-from controller.dispatch import ledger_snapshot, main
+from controller.dispatch import ledger_snapshot, main, require_trusted_controller
 from controller.errors import PortError
 from controller.ledger import Ledger
 from controller.model import Manifest, REFERENCE_SHA, validate_manifest
@@ -76,6 +76,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(value["dispatch_mode"], "off")
                 self.assertEqual(len(value["work_packages"]), 64)
                 self.assertTrue(all(not w["completion_reconciled"] for w in value["work_packages"]))
+                self.assertTrue(all(w["completion_status"] == "not-checked" for w in value["work_packages"]))
             else:
                 self.assertTrue(value["traceability_only"])
                 self.assertFalse(value["authoritative"])
@@ -172,7 +173,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("historical claim mismatch alone is not an edit lock", prompt)
             self.assertIn("does not by itself block dispatch or an already-assigned", prompt)
             self.assertIn("do not require a separate WP-003 binding or issue solely", prompt)
-            self.assertIn("do not prove whole-WP or device acceptance", prompt)
+            self.assertIn("Name concrete unverified items, not boilerplate disclaimers", prompt)
             self.assertIn("do not prevent feature-branch publication", prompt)
             self.assertNotIn("All writes require the shared lease", prompt)
 
@@ -183,12 +184,13 @@ class CliTests(unittest.TestCase):
         self.assertFalse(wp["verification"]["commands"])
         prompt = render(manifest, policy(), "WP-207")
         self.assertIn('"configured": false', prompt)
-        self.assertIn("can use the shared whole-WP contract", prompt)
+        self.assertIn("can use the declared project-wide software lane", prompt)
         self.assertIn("does not by itself block dispatch or an already-assigned", prompt)
-        self.assertIn("schema-4 verification scope", prompt)
+        self.assertNotIn("schema-4 verification scope", prompt)
+        self.assertIn("a repair accepts its own scope", prompt)
         self.assertIn("existing declared affected or scaffold checks", prompt)
         self.assertIn("exact-candidate hosted checks", prompt)
-        self.assertIn("Project-wide declared software lane (not whole-WP or device acceptance)", prompt)
+        self.assertIn("Project-wide declared software lane:", prompt)
         for command in (
             ["python", "tools/android-port/controller/ci.py", "preflight"],
             ["python", "tools/android-port/controller/ci.py", "run", "--stage", "scaffold"],
@@ -196,6 +198,91 @@ class CliTests(unittest.TestCase):
         ):
             self.assertIn(json.dumps(command), prompt)
             self.assertIn(command, manifest.wp("WP-003")["verification"]["commands"])
+
+    def test_read_only_merged_inspection_needs_no_activation_or_ledger(self):
+        proof = {"kind": "merged-implementation", "pr_number": 54}
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory) / "not-created.sqlite"
+            environment = {
+                "ANDROID_PORT_LEDGER": str(ledger),
+                "ANDROID_PORT_GITHUB_TOKEN": "fixture-not-a-credential",
+            }
+            with patch("controller.dispatch.GitHubApi") as api, \
+                    patch("controller.dispatch.CloudBackend") as cloud, \
+                    patch("controller.dispatch.require_trusted_controller", return_value=BASE), \
+                    patch("controller.merged_acceptance.MergedAcceptance") as factory:
+                cloud.return_value.current_base.return_value = BASE
+                reader = factory.return_value
+                reader.discover_implementation.return_value = 54
+                reader.evaluate.return_value = proof
+                result, output, errors = self.command(
+                    ["--live", "report", "--wp", "WP-214", "--inspect-merged"], environment,
+                )
+                self.assertEqual((result, errors), (0, ""))
+                value = json.loads(output)
+                self.assertEqual(value["completion"], proof)
+                self.assertIsNone(value["accepted_scope"])
+                self.assertTrue(value["dependency_unlock"])
+                self.assertTrue(value["authoritative"])
+                self.assertFalse(value["completion_recorded"])
+                self.assertFalse(value["side_effects"])
+                reader.discover_implementation.assert_called_once_with("WP-214")
+                reader.evaluate.assert_called_once_with("WP-214", 54, merged=True)
+                api.assert_called_once_with("fixture-not-a-credential")
+                self.assertFalse(ledger.exists())
+                reader.reset_mock()
+                result, _, errors = self.command(
+                    ["--live", "report", "--wp", "WP-214", "--inspect-merged", "--pr-number", "54"],
+                    environment,
+                )
+                self.assertEqual((result, errors), (0, ""))
+                reader.discover_implementation.assert_not_called()
+                reader.evaluate.assert_called_once_with("WP-214", 54, merged=True)
+                from controller.merged_acceptance import BoundedRepair
+
+                reader.reset_mock()
+                scope = {"kind": "merged-scope", "pr_number": 54}
+                reader.evaluate.side_effect = [BoundedRepair("partial"), scope]
+                result, output, errors = self.command(
+                    ["--live", "report", "--wp", "WP-214", "--inspect-merged", "--pr-number", "54"],
+                    environment,
+                )
+                self.assertEqual((result, errors), (0, ""))
+                value = json.loads(output)
+                self.assertIsNone(value["completion"])
+                self.assertEqual(value["accepted_scope"], scope)
+                self.assertFalse(value["dependency_unlock"])
+                reader.evaluate.side_effect = None
+                reader.evaluate.return_value = proof
+                cloud.return_value.current_base.return_value = HEAD
+                result, _, errors = self.command(
+                    ["--live", "report", "--wp", "WP-214", "--inspect-merged"], environment,
+                )
+                self.assertEqual(result, 2)
+                self.assertIn("Default branch advanced", errors)
+            with patch("controller.dispatch.GitHubApi", side_effect=AssertionError("no read without permission")):
+                for args, env in (
+                    (["report", "--wp", "WP-214", "--inspect-merged"], environment),
+                    (["--live", "report", "--wp", "WP-214", "--inspect-merged"], {}),
+                ):
+                    with self.subTest(args=args):
+                        result, _, errors = self.command(args, env)
+                        self.assertEqual(result, 2)
+                        self.assertIn("BLOCKED", errors)
+
+    def test_live_controller_requires_immutable_current_default_branch_inputs(self):
+        with patch("controller.dispatch.CloudBackend") as cloud, \
+                patch("controller.dispatch.git", return_value=BASE.encode()), \
+                patch("controller.dispatch.verify_committed_inputs") as verify:
+            cloud.return_value.current_base.return_value = BASE
+            self.assertEqual(require_trusted_controller(REPO, cloud.return_value), BASE)
+            verify.assert_called_once_with(REPO.resolve(), BASE)
+            cloud.return_value.current_base.return_value = HEAD
+            with self.assertRaisesRegex(PortError, "current default-branch commit"):
+                require_trusted_controller(REPO, cloud.return_value)
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(PortError, "own trusted repository checkout"):
+                    require_trusted_controller(Path(directory), cloud.return_value)
 
     def test_unconfigured_wp_prompt_rejects_missing_project_software_commands(self):
         original = base_manifest()

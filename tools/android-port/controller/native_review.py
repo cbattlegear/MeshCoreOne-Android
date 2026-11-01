@@ -49,7 +49,9 @@ class NativeReview:
     def __init__(self, backend, manifest, policy):
         self.backend, self.manifest, self.policy = backend, manifest, policy
         self.prefix = backend.prefix
-        if set(policy["required_checks"]) != {"android-ci", "parity-review", "gate-integrity"}:
+        if policy["required_checks"] not in (
+            ["android-ci", "parity-review"], ["android-ci", "parity-review", "gate-integrity"],
+        ):
             raise PortError("Native transport does not implement the configured required-check set")
 
     def get(self, path):
@@ -128,10 +130,11 @@ class NativeReview:
         return {"staging": staged, "staging_sha256": digest(staged), "verification_scope": scope,
                 "verification_scope_sha256": digest(scope), "state": "staged-data-only", "authoritative": False}
 
-    def workflow_run(self, run_id, attempt, path, head, events, *, completed=True, review_identity=None):
+    def workflow_run(self, run_id, attempt, path, head, events, *, completed=True, review_identity=None,
+                     historical_attempt=False):
         positive_integer(run_id, "Actions run ID")
         positive_integer(attempt, "Actions run attempt")
-        run = self.get(f"/actions/runs/{run_id}")
+        run = self.get(f"/actions/runs/{run_id}" + (f"/attempts/{attempt}" if historical_attempt else ""))
         workflow = self.get("/actions/workflows/" + path.rsplit("/", 1)[-1])
         positive_integer(workflow.get("id"), "Trusted workflow ID")
         if (
@@ -199,12 +202,42 @@ class NativeReview:
             cursor = next_cursor
         raise PortError("Source finding pagination exceeds bound")
 
+    def source_receipt(self, actual, binding):
+        body = bounded_output(actual.get("body"))
+        if (
+            actual.get("state") not in ("COMMENTED", "APPROVED")
+            or actual.get("commit_id") != binding.head_sha
+            or actual.get("user", {}).get("type") != "User"
+            or actual.get("user", {}).get("login") not in self.policy["review_policy"]["authorized_coordinators"]
+            or not body.startswith((REVIEW_MARKER, COMPRESSED_REVIEW_MARKER))
+        ):
+            raise PortError("Missing authenticated exact-head coordinator read-only review receipt")
+        receipt = decode_structured_body(body, REVIEW_MARKER, COMPRESSED_REVIEW_MARKER)
+        if not isinstance(receipt, dict):
+            raise PortError("Native source receipt must be a complete object")
+        repair = receipt.get("schema_version") == 2
+        whole = receipt.get("schema_version") == 3
+        fields(receipt, {"schema_version", "binding", "method", "staging_sha256",
+                         "review", "evidence", "approvals"} | ({"scope_comment_id"} if repair else set()),
+               label="native source receipt")
+        if (
+            type(receipt["schema_version"]) is not int or receipt["schema_version"] not in (1, 2, 3)
+            or receipt["method"] != "authenticated-coordinator-read-only"
+            or Binding.parse(receipt["binding"]) != binding
+            or not isinstance(receipt["evidence"], dict)
+            or receipt["evidence"].get("schema_version") != (3 if repair else 4 if whole else 2)
+        ):
+            raise PortError("Stale binding or unsupported native review method/schema")
+        return body, receipt
+
     def evaluate(self, wp_id, number, review_id):
         """Read server facts only; never publish, approve, merge, execute a candidate or launch a reviewer."""
         from controller.authority import GitHubGateAuthority
+        from controller.merged_acceptance import MergedAcceptance
 
         positive_integer(number, "Implementation PR")
         positive_integer(review_id, "Source review ID")
+        MergedAcceptance(self.backend, self.manifest, self.policy).require_no_requested_changes(number)
         pr = self.get(f"/pulls/{number}")
         if (
             pr.get("number") != number or marker(wp_id) not in (pr.get("body") or "")
@@ -231,32 +264,9 @@ class NativeReview:
         selected = [item for item in reviews if item.get("id") == review_id]
         if len(selected) != 1:
             raise PortError("Source receipt is not an actual review on this PR")
-        actual = selected[0]
-        body = bounded_output(actual.get("body"))
-        if (
-            actual.get("state") not in ("COMMENTED", "APPROVED")
-            or actual.get("commit_id") != binding.head_sha
-            or actual.get("user", {}).get("type") != "User"
-            or actual.get("user", {}).get("login") not in self.policy["review_policy"]["authorized_coordinators"]
-            or not body.startswith((REVIEW_MARKER, COMPRESSED_REVIEW_MARKER))
-        ):
-            raise PortError("Missing authenticated exact-head coordinator read-only review receipt")
-        receipt = decode_structured_body(body, REVIEW_MARKER, COMPRESSED_REVIEW_MARKER)
-        if not isinstance(receipt, dict):
-            raise PortError("Native source receipt must be a complete object")
+        body, receipt = self.source_receipt(selected[0], binding)
         repair = receipt.get("schema_version") == 2
         whole = receipt.get("schema_version") == 3
-        fields(receipt, {"schema_version", "binding", "method", "staging_sha256",
-                         "review", "evidence", "approvals"} | ({"scope_comment_id"} if repair else set()),
-               label="native source receipt")
-        if (
-            type(receipt["schema_version"]) is not int or receipt["schema_version"] not in (1, 2, 3)
-            or receipt["method"] != "authenticated-coordinator-read-only"
-            or Binding.parse(receipt["binding"]) != binding
-            or not isinstance(receipt["evidence"], dict)
-            or receipt["evidence"].get("schema_version") != (3 if repair else 4 if whole else 2)
-        ):
-            raise PortError("Stale binding or unsupported native review method/schema")
         scope = None
         if repair:
             from .repair_acceptance import authenticated_scope, scoped_candidate_sources, scoped_retained_sources, validate_scope
@@ -429,13 +439,16 @@ class NativeReview:
         pr = self.get(f"/pulls/{number}")
         checks = self.backend.pages(f"{self.prefix}/commits/{pr['head']['sha']}/check-runs", "check_runs")
         selected = []
-        for name in ("parity-review", "gate-integrity"):
+        names = ["parity-review"]
+        if "gate-integrity" in self.policy["required_checks"]:
+            names.append("gate-integrity")
+        for name in names:
             matches = [c for c in checks if c.get("name") == name]
             if not matches:
                 raise PortError("Missing native project check: " + name)
             selected.append(max(matches, key=lambda c: positive_integer(c.get("id"), "Project check ID")))
         summaries = [bounded_output(c.get("output", {}).get("summary")) for c in selected]
-        if summaries[0] != summaries[1] or not summaries[0].startswith(RESULT_MARKER):
+        if any(summary != summaries[0] for summary in summaries) or not summaries[0].startswith(RESULT_MARKER):
             raise PortError("Project checks do not reference one complete native review")
         result = decode_json(summaries[0][len(RESULT_MARKER):])
         fields(result, {"binding", "pr_number", "review_id", "review_body_sha256",
@@ -475,7 +488,10 @@ class NativeReview:
                           self.manifest.data["reference"]["commit"], self.manifest.sha256,
                           policy_revision(self.manifest, self.policy))
         created = []
-        for name in ("parity-review", "gate-integrity"):
+        names = ["parity-review"]
+        if "gate-integrity" in self.policy["required_checks"]:
+            names.append("gate-integrity")
+        for name in names:
             check = self.backend.api.request("POST", self.prefix + "/check-runs", {
                 "name": name, "head_sha": head, "status": "in_progress",
                 "external_id": f"{binding.key}:{run_id}:{attempt}",

@@ -43,9 +43,11 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
     return validate_compiled_hosted_methods(scope, candidate_tree, repo, executed, compiled_sources)
 
 
-def fixture():
+def fixture(*, current=False):
     manifest, rules = base_manifest(), policy()
     rules["trusted_gate_publisher_app_id"] = None
+    if current:
+        rules["required_checks"] = ["android-ci", "parity-review"]
     value = bundle(manifest, rules, "WP-312", changed_paths=[PATH], merged=False)
     source = next(e["path"] for e in manifest.inputs("WP-312", False) if e["kind"] == "production" and e["exclusion"] is None)
     scope = {
@@ -1572,10 +1574,10 @@ class RepairExecutionTests(unittest.TestCase):
 
 
 class RepairAuthorityTests(unittest.TestCase):
-    def fixture(self):
+    def fixture(self, *, current=False):
         helper = test_native_review.NativeReviewTests()
-        native, api, prefix, _ = helper.fixture()
-        manifest, rules, value, scope = fixture()
+        native, api, prefix, _ = helper.fixture(current=current)
+        manifest, rules, value, scope = fixture(current=current)
         native.manifest, native.policy = manifest, rules
         native.backend.manifest, native.backend.policy = manifest, rules
         pr = api.routes[("GET", prefix + "/pulls/123")]
@@ -2274,6 +2276,48 @@ class RepairAuthorityTests(unittest.TestCase):
             api.routes[("GET", prefix + "/issues/comments/700")]["body"] += "\nnot-json"
             with self.assertRaises(PortError):
                 native.bundle("WP-312", Identity(pr_number=123))
+
+    def test_current_reviewed_candidate_accepts_only_the_bounded_repair_scope(self):
+        from controller.authority import GitHubGateAuthority
+
+        native, api, prefix, value, _, staged, entries = self.fixture(current=True)
+        api.routes[("GET", prefix + "/actions/runs/2/attempts/1/jobs?per_page=100&page=1")]["jobs"][0]["name"] = (
+            "Native review WP-312 PR 123 receipt 90"
+        )
+        api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"
+        api.routes[("POST", prefix + "/check-runs")] = {"id": 201}
+        api.routes[("PATCH", prefix + "/check-runs/201")] = {}
+
+        def objects(repo, blob):
+            if blob == "4" * 40:
+                return b"class MapTest { @Test fun keepsListReachable() { check(true) } }"
+            return json.dumps({"schema_version": 1, "source_sha": value.binding.source_sha, "entries": []}).encode()
+
+        with patch("controller.native_review.stage_review", return_value=staged), \
+                patch("controller.native_review.tree", return_value=entries), \
+                patch("controller.native_review.object_bytes", side_effect=objects), \
+                patch("controller.native_review.git", return_value=BASE.encode()), \
+                patch("controller.staging.object_bytes", side_effect=objects), \
+                patch("controller.repair_acceptance.read_job_log",
+                      return_value=build_log(["feature/map", "core/maps"])):
+            result = native.publish("WP-312", 123, 90, 2, 1)
+            self.assertEqual(result["acceptance_kind"], "bounded-repair")
+            self.assertFalse(result["wp_complete"])
+            self.assertFalse(result["dependency_unlock"])
+            created = next(call[2] for call in api.calls if call[0] == "POST" and call[1].endswith("/check-runs"))
+            published = next(call[2] for call in api.calls if call[0] == "PATCH")
+            check = {**created, **published, "id": 201, "app": {"id": 10}}
+            checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+            checks[:] = [entry for entry in checks if entry["name"] == "android-ci"] + [check]
+            api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "completed"
+            authority = GitHubGateAuthority(native.backend, native.manifest, native.policy)
+            proof = authority.reviewed_candidate("WP-312", Identity(pr_number=123), BASE)
+            self.assertEqual(proof["binding"], asdict(value.binding))
+            self.assertEqual(proof["ci_run_ids"], [1])
+            with self.assertRaisesRegex(PortError, "cannot complete"):
+                replayed = native.bundle("WP-312", Identity(pr_number=123))
+                verify_completion(replayed.pr, replayed.evidence, replayed.review, replayed.approvals,
+                                  replayed.binding, native.manifest, native.policy, replayed.catalog)
 
     def test_repair_stage_is_data_only_and_scope_is_bound(self):
         native, api, _, value, scope, staged, entries = self.fixture()

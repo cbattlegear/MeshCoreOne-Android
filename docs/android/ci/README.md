@@ -797,6 +797,13 @@ readable, unchanged. Neither format can substitute for authenticated code review
 
 ### Native authenticated review publication (bounded WP-003 repair)
 
+The controller revalidates an authenticated staged review and the exact hosted run. After deployment,
+the manually dispatched default-branch publisher emits one `parity-review` check. Branch protection
+must separately require it to enforce review for manual merges; the existing rules have not been
+changed and may still require `gate-integrity`. The former duplicate check is retained for legacy
+three-check policies. A bare author comment or a green build does not replace the independent
+read-only review, path admission or applicable human gates.
+
 The manual path no longer requires a custom GitHub App, injected Copilot app-host
 APIs, a second human, or a formal GitHub `APPROVED` review. An authorized coordinator
 performs/arranges the trusted-profile read/search-only review and explicitly records
@@ -898,13 +905,13 @@ authenticated GitHub user credential in `ANDROID_PORT_GITHUB_TOKEN`:
 python .\tools\android-port\controller\native_review.py inspect --trusted-base <base> --wp WP-xxx --pr <number> --review-id <actual-review-id>
 ```
 
-After **supervised review and merge of this repair**, dispatch the deployed workflow:
+After **supervised review and merge of the publisher**, dispatch the deployed workflow:
 
 ```powershell
 gh workflow run android-parity-review.yml --ref main -f work_package=WP-xxx -f pull_request=<number> -f review_id=<actual-review-id>
 ```
 
-Only this workflow may publish `parity-review` and `gate-integrity`; local
+Only this workflow may publish `parity-review` (and the legacy `gate-integrity` check); local
 `publish` fails before mutation. Publication creates in-progress checks first and
 records failures explicitly. Interrupted publication remains pending/failed, never
 success. A successful check is authoritative only after its real default-branch
@@ -914,11 +921,10 @@ The immutable Actions job identity includes the WP/PR/review ID and is reconcile
 through the exact run-attempt jobs API; another PR's successful default-branch run
 cannot be reused by changing a check's summary or `external_id`.
 Legacy custom-publisher bundles remain readable when that publisher is configured.
-`GitHubGateAuthority` and the existing completion/accounting path revalidate native
-receipts rather than bypassing them with a new success flag.
-Native completion validates the server PR's actual merged head/merge commit and
-first-parent base for both a normal merge and the existing REST adapter's squash
-strategy; it never invents a second parent for a squash commit.
+The controller revalidates the authenticated review and the successful publisher run.
+Native completion validates the server PR's actual merged head/merge commit for both normal and squash
+merges. If the merge parent advanced after the tested base, it verifies the ancestry and records both;
+it does not claim CI ran against the later parent or invent a second parent for a squash commit.
 
 ### Reviewed support capabilities
 
@@ -939,15 +945,15 @@ manifest projections remain unchanged. Admission uses only the merged trusted
 base: a candidate rule cannot authorize its own edits before review and merge,
 and receipts remain bound to the exact policy revision.
 
-### Shared whole-WP verification for Android modules
+### Shared software verification and legacy schema-4 reviews
 
-For an Android app, core, feature or platform module WP with an empty,
-unconfigured verification entry, the controller can use the declared WP-003
-software lane without a per-WP verification amendment. This permits dispatch
-only after the normal foundation, dependency, budget, identity and activation
-checks. Original-case inventory production, non-module work, WPs without primary-owned
-source inputs, and WPs with explicitly partially configured commands or other
-substantive blockers do not inherit this contract. For JUnit dynamic and
+The obsolete WP-000 bootstrap-only verification placeholder alone does not prevent
+dispatch when the declared WP-003 software lane exists; normal foundation, dependency,
+budget, identity and activation checks still apply. An eligible Android app, core,
+feature or platform module WP can use that lane for completion without a per-WP
+verification amendment. Original-case inventory production, non-module work, WPs without
+primary-owned source inputs, and WPs with explicitly partially configured commands or
+other substantive blockers do not inherit this completion contract. For JUnit dynamic and
 parameterized families, the Gradle listener captures actual successful
 test-descriptor ancestry during the selected run and binds each child to the
 matching JUnit case, task and source declaration. A missing or ambiguous
@@ -958,9 +964,22 @@ give those Android test methods distinct names rather than claiming one
 execution covers multiple declarations.
 No schedule or controller activation is implied.
 
-The shared lane is a way to execute checks, not proof of parity. Whole-WP
-completion uses hosted evidence schema `4`, containing all normal schema-2
-fields plus `verification_scope`. The scope is a JSON object with:
+The shared lane is a way to execute checks, not proof of parity. A maintainer-merged,
+reviewed implementation with its actual applicable checks accepts its declared scope;
+no separate post-merge completion document is needed. A bounded repair accepts its
+own scope and neither completes other work nor reopens an accepted implementation.
+The published review identifies full versus bounded scope without a required phrase in the PR description,
+including native publications under the former three-check policy. Older implementations without that check are
+reconciled conservatively from their original merged declarations. Concrete missing integration, device,
+hardware, legal and human evidence remains missing; an authenticated human acceptance already present in
+the published review is reused.
+
+For an eligible unconfigured module WP, the current automated pre-merge review
+route uses staged schema-4 evidence to bind the original-case and executed-method
+mapping. This is review evidence, not a second post-merge acceptance record;
+historical maintainer-merged implementations do not need a retroactive schema-4
+receipt. The evidence contains all normal schema-2 fields plus
+`verification_scope`; the scope is a JSON object with:
 
 | Field | Required meaning |
 | --- | --- |
@@ -996,8 +1015,8 @@ python .\tools\android-port\controller\native_review.py stage-whole --trusted-ba
 The staged output is data-only. The existing authenticated coordinator review
 receipt uses native review schema `3` with the normal binding, staging digest,
 review and approvals; its evidence is schema `4` and embeds the same scope.
-The default-branch publisher and subsequent completion checks revalidate the
-hosted run. This does not bypass reviewer authentication or human, device,
+The trusted publisher and controller validate the staged review and hosted run.
+This does not bypass reviewer authentication or human, device,
 hardware, legal or release gates, and no CI-result bundle is retained.
 
 ### Change-scoped acceptance for an already-landed WP repair
@@ -1026,7 +1045,7 @@ Do not treat support issue closure or this handoff's merge as dependency unlock.
 
 An open repair of an already-landed WP is not a request to complete that entire
 WP again. The bounded path uses the same authenticated source reviewer and
-default-branch publisher, but returns `acceptance_kind: "bounded-repair"`,
+trusted review check, but returns `acceptance_kind: "bounded-repair"`,
 `wp_complete: false` and `dependency_unlock: false`. Evidence schema 3 is
 deliberately rejected by full-WP gates and completion/accounting. It never
 replaces the shared or specifically configured whole-WP contract.

@@ -11,7 +11,7 @@ from controller.capabilities import CapabilityEngine
 from controller.errors import PortError
 from controller.scope_amendment import (
     CONTACT_IMPORT_LOCALIZATION_CAPABILITY,
-    routine_support_predecessor,
+    completion_policy_predecessor, routine_support_predecessor,
 )
 
 
@@ -100,16 +100,21 @@ class ContactImportLocalizationCapabilityTests(unittest.TestCase):
             ["git", "-C", str(REPO), "show", BASE + ":docs/android/automation-policy.json"],
             encoding="utf-8",
         )
-        previous = copy.deepcopy(current)
+        previous = completion_policy_predecessor(current)
         self.assertEqual(previous["reservation_policy"]["capabilities"].pop(), self.rule)
         self.assertEqual(previous, json.loads(original_text))
         current_text = (REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8")
+        current_text = current_text.replace(
+            '"required_checks": ["android-ci", "parity-review"],',
+            '"required_checks": ["android-ci", "parity-review", "gate-integrity"],',
+        )
         marker = '      },\n      {\n        "id": "' + self.rule["id"] + '"'
         start = current_text.index(marker)
         end = current_text.index("    ]\n  },", start)
         self.assertEqual(current_text[:start] + "      }\n" + current_text[end:], original_text)
-        self.assertEqual(routine_support_predecessor(current), routine_support_predecessor(previous))
-        self.assertEqual(json.loads(historical_policy_text()), routine_support_predecessor(current))
+        projected = completion_policy_predecessor(routine_support_predecessor(current))
+        self.assertEqual(projected, routine_support_predecessor(previous))
+        self.assertEqual(json.loads(historical_policy_text()), projected)
         self.assertEqual(current, untouched)
 
     def test_mutated_duplicate_reordered_and_malformed_rule_fails_closed(self):

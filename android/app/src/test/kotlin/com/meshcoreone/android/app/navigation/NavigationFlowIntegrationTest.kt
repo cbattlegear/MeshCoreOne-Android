@@ -409,7 +409,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun sameRadioSessionReplacementRetiresCapturedAndInFlightCallbacksWithoutLosingSelection() = runTest {
         val uiScheduler = TestCoroutineScheduler()
-        val mainScope = CoroutineScope(backgroundScope.coroutineContext + StandardTestDispatcher(uiScheduler))
+        val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
         var hold = false
         var holdReplacement = false
         var heldKey: EntityKey? = null

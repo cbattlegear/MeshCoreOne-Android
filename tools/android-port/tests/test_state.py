@@ -17,6 +17,7 @@ from controller.backends import Observation
 from controller.engine import Controller, TerminalMerge
 from controller.errors import PortError, ReceiptError
 from controller.ledger import Identity, Ledger
+from controller.merged_acceptance import BoundedRepair
 from controller.schema import digest
 from controller.settings import Budget, Settings, Usage
 
@@ -673,6 +674,39 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.ledger.get("WP-101")["state"], "pending")
         self.assertEqual(self.ledger.accepted_completion("WP-101"), proof)
         authority.merged_scope.assert_called_once_with("WP-101", identity)
+
+    def test_merged_bounded_repair_releases_lease_without_completing_wp_or_dependency(self):
+        identity = self.running()
+        record = self.ledger.get("WP-101")
+        binding = {**record["binding"], "head_sha": HEAD}
+        scope = {
+            "kind": "merged-scope", "binding": binding, "pr_number": identity.pr_number,
+            "merge_commit_sha": MERGE, "ci_run_ids": [1], "approval_id": None,
+        }
+
+        class Authority:
+            def merged_implementation(self, *_):
+                raise BoundedRepair("merged PR declares a bounded repair")
+
+            def merged_scope(self, wp_id, actual_identity):
+                self.request = (wp_id, actual_identity)
+                return scope
+
+        self.controller.authority = Authority()
+        self.backend.observation = Observation(identity, "completed", False, True)
+        self.assertEqual(self.controller.record_completion("WP-101"), scope)
+        self.assertEqual(self.ledger.get("WP-101")["state"], "pending")
+        self.assertEqual(self.ledger.get("WP-101")["reservation"], 0)
+        self.assertIsNone(self.ledger.accepted_completion("WP-101"))
+        with self.ledger.transaction() as connection:
+            operation = connection.execute(
+                "SELECT state,identity FROM operations WHERE key='merge-lane'",
+            ).fetchone()
+        self.assertEqual(operation["state"], "confirmed")
+        self.assertEqual(json.loads(operation["identity"]), {"merged": True, "sha": MERGE})
+        self.manifest.wp("WP-102")["depends_on"] = ["WP-101"]
+        with self.assertRaises(BoundedRepair):
+            self.controller.require_ready("WP-102")
 
     def test_accepted_completion_rejects_malformed_or_conflicting_proofs(self):
         binding = {**self.controller.binding("WP-101", BASE), "head_sha": HEAD}

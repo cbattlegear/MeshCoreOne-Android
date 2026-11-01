@@ -65,6 +65,14 @@ def log_objects(log, step):
 
 def declares_completion(wp, body):
     """Distinguish a declared WP implementation from a change to part of one."""
+    acceptance_ids = [item["id"] for item in wp["acceptance"]]
+    acceptance_reference = (
+        r"(?:\b(?:acceptance\s+(?:criterion|criteria|item|requirement)|required\s+"
+        r"(?:behavior|verification|test|integration))\b"
+        + ("|(?<![\\w-])(?:" + "|".join(re.escape(value) for value in acceptance_ids)
+           + r")(?![\w-])" if acceptance_ids else "")
+        + ")"
+    )
     if re.search(
         r"\b(?:bounded|partial|limited)\s+(?:port|implementation|repair|scope|fix|change)\b"
         r"|\b(?:partially|only)\s+(?:implements?|ports?|covers?)\b"
@@ -76,15 +84,15 @@ def declares_completion(wp, body):
         body, re.IGNORECASE | re.DOTALL,
     ):
         return False
-    if re.search(
-        r"\b(?:acceptance\s+(?:criterion|criteria|item|requirement)|required\s+"
-        r"(?:behavior|verification|test|integration))\b[^\n.!?]{0,160}"
+    unfinished = (
         r"\b(?:deferred|postponed|outstanding|unmet|incomplete|"
         r"not\s+(?:implemented|covered|tested|verified|runnable)|"
         r"can(?:not|'t)\s+(?:run|be\s+(?:run|implemented|covered|tested|verified)))\b"
-        r"|\b(?:deferred|postponed)\b[^\n.!?]{0,160}\b(?:acceptance\s+"
-        r"(?:criterion|criteria|item|requirement)|required\s+(?:behavior|verification|test|integration))\b",
-        body, re.IGNORECASE | re.DOTALL,
+    )
+    if re.search(
+        rf"(?:{acceptance_reference}[^\n.!?]{{0,160}}{unfinished}"
+        rf"|{unfinished}[^\n.!?]{{0,160}}{acceptance_reference})",
+        body, re.IGNORECASE,
     ):
         return False
     explicit = re.search(
@@ -101,10 +109,10 @@ def declares_completion(wp, body):
         rf"\s*(?:#{{1,6}}[^\n]*\n\s*)?A\s+port\s+of\s+\**{re.escape(wp['id'])}\**\s*:",
         body, re.IGNORECASE,
     )
-    ids = [item["id"] for item in wp["acceptance"]]
-    return bool(lead and ids and any(
+    return bool(lead and acceptance_ids and any(
         re.search(r"\b(?:targets?|targeted)\b", line, re.IGNORECASE)
-        and all(re.search(rf"(?<![\w-]){re.escape(identifier)}(?![\w-])", line) for identifier in ids)
+        and all(re.search(rf"(?<![\w-]){re.escape(identifier)}(?![\w-])", line)
+                for identifier in acceptance_ids)
         for line in body.splitlines()
     ))
 
@@ -239,7 +247,7 @@ class MergedAcceptance:
             raise PortError("Current merged-review recognition requires the native trusted publisher")
         if not isinstance(head, str) or SHA.fullmatch(head) is None:
             raise PortError("PR has no immutable head")
-        checks = self.backend.pages(f"{self.prefix}/commits/{head}/check-runs", "check_runs")
+        checks = self.backend.pages(f"{self.prefix}/commits/{head}/check-runs?filter=all", "check_runs")
         def latest(name):
             candidates = []
             for check in checks:
@@ -421,7 +429,7 @@ class MergedAcceptance:
             raise PortError("A reviewer has outstanding requested changes")
 
     def check(self, number, base, head, merged_at):
-        checks = self.backend.pages(f"{self.prefix}/commits/{head}/check-runs", "check_runs")
+        checks = self.backend.pages(f"{self.prefix}/commits/{head}/check-runs?filter=all", "check_runs")
         candidates = []
         for check in checks:
             if check.get("name") != "android-ci" or check.get("head_sha") != head:
@@ -447,15 +455,20 @@ class MergedAcceptance:
             raise PortError("Android check is not linked to an actual repository Actions run")
         run_id = positive_integer(int(match[1]), "Actions run ID")
         job_id = positive_integer(int(match[2]), "Actions job ID")
+        check_id = positive_integer(check.get("id"), "Android CI check-run ID")
         selected_job = self.get(f"/actions/jobs/{job_id}")
         attempt = positive_integer(selected_job.get("run_attempt"), "Actions run attempt")
+        expected_check_run_url = (
+            f"https://api.github.com{self.prefix}/check-runs/{check_id}"
+        )
         if (
-            job_id != check["id"] or selected_job.get("id") != job_id
+            selected_job.get("id") != job_id
             or selected_job.get("run_id") != run_id or selected_job.get("name") != "android-ci"
             or selected_job.get("head_sha") != head or selected_job.get("status") != "completed"
             or selected_job.get("conclusion") != "success"
+            or selected_job.get("check_run_url") != expected_check_run_url
         ):
-            raise PortError("Required check is not the selected successful Actions job")
+            raise PortError("Required check is not linked to the selected successful Actions job")
         run = self.get(f"/actions/runs/{run_id}/attempts/{attempt}")
         suite_id = positive_integer(run.get("check_suite_id"), "Actions check suite ID")
         if (
@@ -501,7 +514,7 @@ class MergedAcceptance:
                 validator.verify_scoped_run(jobs, run_id, base, head, scope_jobs)
             else:
                 validator.verify_legacy_run(jobs, run_id, attempt, base, head, job_id)
-        return {"run_id": run_id, "run_attempt": attempt, "check_id": check["id"]}
+        return {"run_id": run_id, "run_attempt": attempt, "check_id": check_id}
 
     def verify_trusted_readers(self, base, head):
         before, candidate = tree(self.manifest.repo, base), tree(self.manifest.repo, head)

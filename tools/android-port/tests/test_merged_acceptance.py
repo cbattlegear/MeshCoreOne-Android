@@ -60,7 +60,7 @@ class MergedAcceptanceTests(unittest.TestCase):
             "id": 100, "name": "android-ci", "head_sha": HEAD, "status": "completed",
             "conclusion": "success", "started_at": "2026-10-10T11:15:00Z",
             "completed_at": "2026-10-10T11:30:00Z",
-            "details_url": f"https://github.com/{rules['repository']}/actions/runs/1/job/100",
+            "details_url": f"https://github.com/{rules['repository']}/actions/runs/1/job/200",
             "app": {"id": 10}, "check_suite": {"id": 71},
         }
         run = {
@@ -82,11 +82,17 @@ class MergedAcceptanceTests(unittest.TestCase):
                 {"filename": "android/core/protocol/src/main/Fixture.kt"},
             ],
             ("GET", prefix + "/pulls/123/reviews?per_page=100&page=1"): [review],
-            ("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1"): {"check_runs": [check]},
+            ("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1"): {
+                "check_runs": [check],
+            },
+            ("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1"): {
+                "check_runs": [check],
+            },
             ("GET", prefix + f"/commits/{HEAD}/pulls?per_page=100&page=1"): [{"number": 123}],
-            ("GET", prefix + "/actions/jobs/100"): {
-                "id": 100, "run_id": 1, "run_attempt": 1, "name": "android-ci",
+            ("GET", prefix + "/actions/jobs/200"): {
+                "id": 200, "run_id": 1, "run_attempt": 1, "name": "android-ci",
                 "head_sha": HEAD, "status": "completed", "conclusion": "success",
+                "check_run_url": f"https://api.github.com{prefix}/check-runs/100",
             },
             ("GET", prefix + "/actions/runs/1/attempts/1"): run,
             ("GET", prefix + "/check-suites/71"): {
@@ -120,7 +126,7 @@ class MergedAcceptanceTests(unittest.TestCase):
                 "review_body_sha256": hashlib.sha256(review["body"].encode()).hexdigest(),
                 "publisher_run_id": 2, "publisher_run_attempt": 1,
             }
-            api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"].append({
+            api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"].append({
                 "id": 101, "name": "parity-review", "head_sha": HEAD, "status": "completed",
                 "conclusion": "success", "started_at": "2026-10-10T11:35:00Z",
                 "completed_at": "2026-10-10T11:45:00Z", "app": {"id": 10},
@@ -129,7 +135,7 @@ class MergedAcceptanceTests(unittest.TestCase):
                 "output": {"summary": RESULT_MARKER + json.dumps(published)},
             })
             if legacy_native:
-                checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+                checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"]
                 checks.append({**copy.deepcopy(checks[-1]), "id": 103, "name": "gate-integrity"})
             api.routes[("GET", prefix + "/actions/runs/2/attempts/1")] = {
                 "id": 2, "run_attempt": 1, "workflow_id": 22, "check_suite_id": 72,
@@ -258,7 +264,7 @@ class MergedAcceptanceTests(unittest.TestCase):
             "wrong-merger", "wrong-run", "wrong-suite", "wrong-workflow", "unmerged",
         ):
             reader, api, prefix, manifest, rules = self.fixture()
-            check = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"][0]
+            check = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"][0]
             pr = api.routes[("GET", prefix + "/pulls/123")]
             if kind == "missing":
                 check["name"] = "other"
@@ -288,7 +294,7 @@ class MergedAcceptanceTests(unittest.TestCase):
 
     def test_newer_failure_before_merge_blocks_but_later_feedback_does_not_reopen(self):
         reader, api, prefix, manifest, rules = self.fixture()
-        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"]
         checks.append({**checks[0], "id": 101, "conclusion": "failure",
                        "started_at": "2026-10-10T12:30:00Z", "completed_at": "2026-10-10T13:00:00Z"})
         reviews = api.routes[("GET", prefix + "/pulls/123/reviews?per_page=100&page=1")]
@@ -303,9 +309,32 @@ class MergedAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(PortError, "requested changes"):
             self.evaluate(reader, manifest, rules)
 
+    def test_check_runs_include_postmerge_reruns_without_replacing_premerge_check(self):
+        reader, api, prefix, manifest, rules = self.fixture()
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"]
+        checks.append({
+            **checks[0], "id": 105, "started_at": "2026-10-10T12:10:00Z",
+            "completed_at": "2026-10-10T12:20:00Z", "conclusion": "failure",
+            "details_url": f"https://github.com/{rules['repository']}/actions/runs/5/job/205",
+        })
+        proof = self.evaluate(reader, manifest, rules)
+        self.assertEqual(proof["ci"]["check_id"], 100)
+        self.assertTrue(any(
+            method == "GET" and path == prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1"
+            for method, path, _, _ in api.calls
+        ))
+
+    def test_android_check_run_must_match_actions_job_check_run_url(self):
+        reader, api, prefix, manifest, rules = self.fixture()
+        api.routes[("GET", prefix + "/actions/jobs/200")]["check_run_url"] = (
+            f"https://api.github.com{prefix}/check-runs/999"
+        )
+        with self.assertRaisesRegex(PortError, "linked to the selected successful Actions job"):
+            self.evaluate(reader, manifest, rules)
+
     def test_a_newer_check_pending_at_merge_cannot_be_hidden_by_an_older_success(self):
         reader, api, prefix, manifest, rules = self.fixture()
-        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"]
         checks.append({**checks[0], "id": 101, "status": "in_progress", "conclusion": None,
                        "started_at": "2026-10-10T11:45:00Z", "completed_at": None})
         with self.assertRaisesRegex(PortError, "did not pass"):
@@ -375,7 +404,7 @@ class MergedAcceptanceTests(unittest.TestCase):
         self.assertEqual(self.evaluate(reader, manifest, rules)["review_ids"], [90])
         with patch("controller.native_review.trusted_inputs", return_value=(manifest, rules)):
             self.assertEqual(reader.discover_implementation("WP-101"), 123)
-        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"]
         checks[-1]["conclusion"] = "failure"
         with self.assertRaisesRegex(PortError, "gate-integrity.*did not pass"):
             self.evaluate(reader, manifest, rules)
@@ -410,7 +439,7 @@ class MergedAcceptanceTests(unittest.TestCase):
 
     def test_published_bounded_scope_cannot_be_expanded_by_pr_description(self):
         reader, api, prefix, manifest, rules = self.fixture(current=True)
-        check = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"][-1]
+        check = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"][-1]
         result = json.loads(check["output"]["summary"][len(RESULT_MARKER):])
         review = api.routes[("GET", prefix + "/pulls/123/reviews?per_page=100&page=1")][0]
         receipt = json.loads(review["body"][len(REVIEW_MARKER):])
@@ -438,7 +467,7 @@ class MergedAcceptanceTests(unittest.TestCase):
         for kind in ("missing", "failure", "pending", "after-merge", "app", "binding",
                      "review-hash", "review-author", "review-timestamp", "publisher", "publisher-job", "scope"):
             reader, api, prefix, manifest, rules = self.fixture(current=True)
-            checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+            checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"]
             check = checks[-1]
             result = json.loads(check["output"]["summary"][len(RESULT_MARKER):])
             if kind == "missing":
@@ -471,7 +500,7 @@ class MergedAcceptanceTests(unittest.TestCase):
 
     def test_merged_review_uses_latest_premerge_check_not_a_later_rerun(self):
         reader, api, prefix, manifest, rules = self.fixture(current=True)
-        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"]
         checks.append({**checks[-1], "id": 103, "status": "in_progress", "conclusion": None,
                        "started_at": "2026-10-10T11:50:00Z", "completed_at": None})
         with self.assertRaisesRegex(PortError, "did not pass before merge"):
@@ -526,6 +555,16 @@ class MergedAcceptanceTests(unittest.TestCase):
         ) + "."
         self.assertTrue(declares_completion(wp, legacy))
         self.assertFalse(declares_completion(wp, legacy + "\nThis is a partial implementation."))
+        acceptance_id = wp["acceptance"][0]["id"]
+        for blocker in (
+            f"{acceptance_id} is deferred.",
+            f"This is deferred: {acceptance_id}.",
+        ):
+            with self.subTest(blocker=blocker):
+                self.assertFalse(declares_completion(wp, legacy + "\n" + blocker))
+        self.assertTrue(declares_completion(
+            wp, legacy + "\nAn unrelated enhancement is deferred.",
+        ))
 
     def test_human_gates_and_bounded_repairs_are_not_inferred_from_merge(self):
         reader, api, prefix, manifest, rules = self.fixture()

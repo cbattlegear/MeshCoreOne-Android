@@ -452,7 +452,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             )))
             assertNull(n.state.value.pendingChannel)
             assertEquals(contact, n.state.value.pendingChatContact)
-            assertEquals(latestMessage, n.state.value.pendingScrollToMessageID)
+            assertNull(n.state.value.pendingScrollToMessageID, "Only reaction taps request a message anchor")
             val chatsStack = n.state.value.activeStack
             h.container.connectionPort.updateDevice(assertNotNull(h.appState.connectedDevice).copy(manualAddContacts = true))
             h.eventually("interleaved discovery uses the actual manual-add device preference") {

@@ -295,6 +295,38 @@ class LinkPreviewCacheTest {
     }
 
     @Test
+    fun `successful save replaces a negative lookup recorded during memory trim`() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val url = "https://example.com/trimmed-fetch"
+        val service = LinkMetadataFetching {
+            started.complete(Unit)
+            release.await()
+            LinkPreviewMetadata("Fetched after trim", null, null)
+        }
+        val dataStore = FakePersisting()
+        val cache = previewsEnabledCache(service)
+        try {
+            val fetch = async { cache.manualFetch(url, dataStore) }
+            started.await()
+            cache.clearMemory()
+            assertNull(cache.cachedPreview(url, dataStore))
+            assertFalse(cache.hasCachedPreview(url))
+
+            release.complete(Unit)
+            val result = fetch.await()
+            assertTrue(result is LinkPreviewResult.Loaded)
+            assertEquals("Fetched after trim", (result as LinkPreviewResult.Loaded).data.title)
+            assertTrue(cache.hasCachedPreview(url))
+            assertNull(cache.cachedPreview(url))
+            assertEquals("Fetched after trim", cache.cachedPreview(url, dataStore)?.title)
+        } finally {
+            release.complete(Unit)
+            cache.close()
+        }
+    }
+
+    @Test
     fun `positive cache retains two hundred messages with two media urls each`() = runTest {
         val dataStore = FakePersisting()
         val urls = (0 until 402).map { "https://example.com/cached/$it" }

@@ -256,6 +256,7 @@ class AppChatContent internal constructor(
         } else entry
     }
     internal fun hasCachedPreview(url: String) = previewCache.hasCachedPreview(url)
+    internal suspend fun hasPersistedPreview(url: String) = previewCache.cachedPreview(url, store) != null
     private val previews = object : LinkPreviewPort {
         override suspend fun cachedPreview(url: String) = previewCache.cachedPreview(url, store)?.forUi()
         override suspend fun preview(url: String, isChannelMessage: Boolean) = previewCache.preview(url, store, isChannelMessage).forUi()

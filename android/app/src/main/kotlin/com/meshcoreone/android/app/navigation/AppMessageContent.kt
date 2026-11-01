@@ -73,11 +73,6 @@ internal fun AppMessageContent(
         if (DemoOfflineContent.isSimulatorMessage(message) && !bundledPreview && !bundledImage) return@forEach
         key(message.radioId, message.id, url, autoResolve) {
             var previewRevision by remember(content, url) { mutableLongStateOf(0L) }
-            LaunchedEffect(content, url) {
-                content.previewAvailability.collect { changedUrl ->
-                    if (changedUrl == url) previewRevision = Math.incrementExact(previewRevision)
-                }
-            }
             var image by remember { mutableStateOf<ChatImage?>(null) }
             var imageBlocked by remember { mutableStateOf(false) }
             var verifiedMalwareRevision by remember { mutableLongStateOf(Long.MIN_VALUE) }
@@ -89,9 +84,21 @@ internal fun AppMessageContent(
             val hasMalwareWarning = rendered?.content?.any {
                 it is MessageFragment.MalwareWarning && it.url.absoluteString == url
             } == true
-            val hasCachedPreview = content.hasCachedPreview(url)
-            val inline = if (url == media.firstOrNull()?.url && rendered != null) {
-                bundledImage || rendered.content.any { it is MessageFragment.InlineImage } ||
+            val renderedPrimary = rendered.takeIf { url == media.firstOrNull()?.url }
+            val cachedPreviewKnown = content.hasCachedPreview(url)
+            val needsPersistedPreviewLookup = entry.isImage && renderedPrimary == null && !cachedPreviewKnown
+            var persistedPreviewAvailable by remember(content, url, cachedPreviewKnown, previewRevision) {
+                mutableStateOf<Boolean?>(null)
+            }
+            LaunchedEffect(content, url, needsPersistedPreviewLookup, cachedPreviewKnown, previewRevision) {
+                if (needsPersistedPreviewLookup) {
+                    persistedPreviewAvailable = content.hasPersistedPreview(url)
+                }
+            }
+            val persistedPreviewPending = needsPersistedPreviewLookup && persistedPreviewAvailable == null
+            val hasCachedPreview = cachedPreviewKnown || persistedPreviewAvailable == true
+            val inline = if (renderedPrimary != null) {
+                bundledImage || renderedPrimary.content.any { it is MessageFragment.InlineImage } ||
                     (entry.isImage && hasMalwareWarning)
             } else {
                 bundledImage || (entry.isImage && !hasCachedPreview) || hasMalwareWarning
@@ -119,8 +126,17 @@ internal fun AppMessageContent(
                     MalwareDomainPort { host -> if (bundledPreview) false else malwareCheck(host) },
                     scope, ComposerDiagnostics(report))
             }
+            LaunchedEffect(content, url, holder) {
+                content.previewAvailability.collect { changedUrl ->
+                    if (changedUrl == url && holder.state.value !is LinkPreviewCardState.Loading) {
+                        previewRevision = Math.incrementExact(previewRevision)
+                    }
+                }
+            }
             DisposableEffect(holder) { onDispose { holder.close() } }
-            if (!inline || displayedImage == ChatImage.HtmlPage || imageBlocked) {
+            if (persistedPreviewPending) {
+                CircularProgressIndicator(Modifier.size(24.dp))
+            } else if (!inline || displayedImage == ChatImage.HtmlPage || imageBlocked) {
                 val preview by holder.state.collectAsState()
                 SideEffect {
                     if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, preview)
@@ -154,8 +170,10 @@ internal fun AppMessageContent(
                 shouldCheckImage,
                 hasMalwareWarning,
                 inline,
+                persistedPreviewPending,
                 bundledImage,
             ) {
+                if (persistedPreviewPending) return@LaunchedEffect
                 if (!inline) return@LaunchedEffect
                 try {
                     if (bundledImage) {

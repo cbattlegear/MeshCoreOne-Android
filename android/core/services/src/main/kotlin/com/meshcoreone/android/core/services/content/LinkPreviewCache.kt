@@ -248,27 +248,32 @@ class LinkPreviewCache(
                 imageHeight = heroDimensions?.second?.toLong(),
             )
 
-            synchronized(memoryClearLock) {
-                if (memoryClearRevision.get() == clearRevisionAtFetch) memoryCache.put(url, dto)
+            val retainedInMemory = synchronized(memoryClearLock) {
+                if (memoryClearRevision.get() == clearRevisionAtFetch) {
+                    memoryCache.put(url, dto)
+                    memoryCache.get(url) != null
+                } else {
+                    false
+                }
             }
 
             // Persist to database.
+            var persistedSuccessfully = false
             try {
                 dataStore.saveLinkPreview(dto)
+                persistedSuccessfully = true
                 persistedLookupMutex.withLock {
                     synchronized(memoryClearLock) {
+                        val currentMemoryClearRevision = memoryClearRevision.get()
                         val lookupCostBytes = url.persistedLookupCostBytes()
-                        if (
-                            memoryClearRevision.get() == clearRevisionAtFetch &&
-                            lookupCostBytes <= CacheConfig.MAX_PERSISTED_LOOKUP_COST_BYTES
-                        ) {
+                        if (lookupCostBytes <= CacheConfig.MAX_PERSISTED_LOOKUP_COST_BYTES) {
                             persistedLookups.put(
                                 url,
                                 PersistedLookup(
                                     hasPreview = true,
                                     createdAtNanos = monotonicNowNanos(),
                                     costBytes = lookupCostBytes,
-                                    memoryClearRevision = clearRevisionAtFetch,
+                                    memoryClearRevision = currentMemoryClearRevision,
                                 ),
                             )
                         }
@@ -282,7 +287,7 @@ class LinkPreviewCache(
                 Logger.getLogger("MeshCore.LinkPreviewCache").fine("Preview database write failed: ${error.javaClass.simpleName}")
             }
 
-            publishPreviewAvailability(url)
+            if (retainedInMemory || persistedSuccessfully) publishPreviewAvailability(url)
             LinkPreviewResult.Loaded(dto)
         }
 

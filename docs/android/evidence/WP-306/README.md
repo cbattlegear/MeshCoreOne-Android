@@ -49,3 +49,38 @@ Native (not source-bound) tests: 30 (`ChatListActionsTest` 25, `ChatTextMatching
 
 Compose rendering, gestures and TalkBack are not exercised (no compose-ui-test/Robolectric on the locked classpath and
 no device). See WP-306.md "Not verifiable without a device".
+
+## Issue #404 list-owned candidate (separate from historical results)
+
+Base: `d7f35bbe938ca79d3bc8ab5510fb5cfa9cf8a808`. Reference remains
+`db14559b39d32322b06477c6ae676112f583db50`. Candidate head is identified by Git and
+the exact-commit check invocation; no self-referential head or duplicate CI result
+bundle is persisted here. The historical `source-cases.json`, oracle files and
+results above remain unchanged.
+
+User-directed scope carves the shared heading and mailto dispatcher out to their
+current owners. The following is a source/assertion map, **not passing execution
+evidence**. New methods have not acquired acceptance merely by being written.
+
+| Issue concern | Candidate assertion or retained obligation |
+| --- | --- |
+| `CHAT-LIST-FILTER-MATRIX-ORACLES` | `ChatListRepairTest`: exact joint 2x2 identities; two chats/two repeaters; all-blocked/all-repeater empty snapshots; complete exclusions and date-ordered favorite partitions. Six original families are bound in the methods. |
+| `CHAT-DELETE-MASK-ORACLES` | `ChatListRepairTest`: stale and confirming room reload generations; held DTO restore identity/idempotence; each pending set plus union. Original masks and generations are asserted on `ChatListStateHolder`. |
+| `CHAT-RELOAD-INTERLEAVE-ORACLES` | `ChatListRepairTest`: cancelled continuation-backed stale contact and room fetches resume after an exact eleven-row replacement snapshot. No original-store transaction acceptance is inferred from a fake datasource. |
+| `CHAT-DELETE-API-POLICY` | Feature action enforces READY and original localized typed failure; all non-READY states and disconnect-before-write restoration have assertions. Raw App datasource, unread/badge sequencing and persisted outcomes remain a producer follow-up. |
+| `CHAT-LOCALE-MATCHING` | `ChatTextMatchingTest`: retained independently recorded Unicode expected values now exercise actual sender matching/blocked exclusion and every selected search filter. Broader Foundation locale tailoring remains unestablished. |
+| `CHAT-LINK-PERSISTENCE-ORACLE` | Existing DTO test unchanged; App-owned real existing-channel Germany store readback still required. Existing newly-joined-channel region tests are not the same predicate. |
+| `CHAT-LINK-MAILTO-FALLBACK` | Carved out to current shared-dispatcher owner; no arbitrary scheme policy change here. |
+| `CHAT-CONVERSATION-CHROME-CONSUMER` | Carved out to current shell owner; existing pure metadata tests are not mounted heading evidence. |
+| `CHAT-LIST-PERFORMANCE-EVIDENCE` | Original native source guard unchanged. Real 40-row/26-step scroll-budget adaptation and mounted/device execution remain required; no new measurement or performance pass claimed. |
+
+New execution must use the supported change-scoped lane:
+
+```powershell
+python tools\android-port\local\check.py --commit <candidate SHA> --affected-base d7f35bbe938ca79d3bc8ab5510fb5cfa9cf8a808
+```
+
+Any readiness refusal means product tests did not execute, not that tests failed.
+Actual discovered/run/pass/fail/error/skip counts must come from the runner.
+This candidate does not change golden expectations, source pin, policy or module
+dependencies, or edit the timeline/map/shared graph.

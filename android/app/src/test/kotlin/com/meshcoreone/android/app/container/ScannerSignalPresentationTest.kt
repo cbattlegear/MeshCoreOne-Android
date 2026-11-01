@@ -55,7 +55,7 @@ class ScannerSignalPresentationTest {
         }
         val selected = mutableListOf<UUID>()
         val tiers = listOf("Weak signal", "Medium signal", "Strong signal")
-        val seeds = listOf(0xFF3B30, 0xFFCC00, 0x34C759)
+        val seeds = listOf(0xFF3B30L, 0xFFCC00L, 0x34C759L)
         try {
             activity.get().setContent {
                 MeshCoreTheme(motionScale = 0f) {

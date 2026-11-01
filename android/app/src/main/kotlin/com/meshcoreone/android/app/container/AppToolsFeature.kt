@@ -73,5 +73,7 @@ fun AppContainer.createToolsFeatureDependencies(
         { appState.connectedDevice?.radioId },
         appState.servicesVersion,
         toolsDiagnostics,
+        mapPreferences,
+        appState.contactsVersion,
     )
 }

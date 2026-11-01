@@ -4,6 +4,8 @@
 package com.meshcoreone.android.feature.tools.trace
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,6 +33,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -44,19 +50,26 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as T
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
-import com.meshcoreone.android.core.maps.GeoPoint
 import com.meshcoreone.android.core.maps.MapAvailability
 import com.meshcoreone.android.core.maps.MapCamera
 import com.meshcoreone.android.core.maps.MapLibreMapSurface
 import com.meshcoreone.android.core.maps.MapLibreOpenFreeMap
 import com.meshcoreone.android.core.maps.MapLibreRuntime
-import com.meshcoreone.android.core.maps.MapLine
-import com.meshcoreone.android.core.maps.MapLineStyle
 import com.meshcoreone.android.core.maps.MapMarker
-import com.meshcoreone.android.core.maps.MapPinStyle
 import com.meshcoreone.android.core.maps.MapPresentationState
-import com.meshcoreone.android.core.maps.boundingCamera
+import com.meshcoreone.android.core.maps.MapPreferenceStore
+import com.meshcoreone.android.core.maps.MapPreferences
+import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.maps.MapColorPreference
+import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
+import android.icu.text.MeasureFormat
+import android.icu.util.Measure
+import android.icu.util.MeasureUnit
+import java.text.NumberFormat
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 @Composable
@@ -90,10 +103,17 @@ object TracePathScreen {
         val diagnostics: TraceDiagnostics,
         val radioId: RadioId?,
         val generation: Int,
+        val mapPreferences: MapPreferenceStore? = null,
+        val nodeTableVersion: Int = 0,
     )
 
     @Composable
-    operator fun invoke(dependencies: Dependencies?) {
+    operator fun invoke(
+        dependencies: Dependencies?,
+        mapSurface: TraceMapSurface = { presentation, clusters, labels, camera, marker, overlay ->
+            NativeTraceMapSurface(presentation, clusters, labels, camera, marker, overlay)
+        },
+    ) {
         if (dependencies == null) {
             ToolDisconnected(stringResource(C.contactsTraceTitle))
             return
@@ -122,12 +142,18 @@ object TracePathScreen {
         LaunchedEffect(dependencies.generation, dependencies.radioId) {
             holder.configure(dependencies.feature)
             holder.startListening()
+        }
+        LaunchedEffect(dependencies.generation, dependencies.radioId, dependencies.nodeTableVersion) {
             dependencies.radioId?.let { holder.loadContacts(it) }
         }
         DisposableEffect(holder) { onDispose { holder.stopListening(); holder.cancelBatchTrace() } }
         val state by holder.state.collectAsStateWithLifecycle()
         val savedState by savedPaths.state.collectAsStateWithLifecycle()
-        TracePathContent(state, holder, savedState, savedPaths)
+        TracePathContent(
+            state, holder, savedState, savedPaths, dependencies.mapPreferences,
+            dependencies.feature.bestAvailableLocation(), dependencies.diagnostics,
+            mapSurface,
+        )
     }
 }
 
@@ -149,6 +175,10 @@ private fun TracePathContent(
     holder: TracePathStateHolder,
     savedState: SavedPathsState,
     savedPaths: SavedPathsStateHolder,
+    mapPreferences: MapPreferenceStore?,
+    location: Coordinate?,
+    diagnostics: TraceDiagnostics,
+    mapSurface: TraceMapSurface,
 ) {
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember { mutableStateOf(false) }
@@ -176,7 +206,8 @@ private fun TracePathContent(
                 Text(stringResource(C.contactsTraceSaved))
             }
         }
-        if (showMap) TracePathMapContent(state) else TracePathListContent(state, holder)
+        if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, mapSurface)
+        else TracePathListContent(state, holder)
     }
     if (showSaved) {
         AlertDialog(
@@ -334,65 +365,186 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
     }
 }
 
+typealias TraceMapSurface = @Composable (
+    MapPresentationState, Boolean, Boolean, (MapCamera) -> Unit, (MapMarker) -> Unit,
+    @Composable BoxScope.() -> Unit,
+) -> Unit
+
 @Composable
-private fun TracePathMapContent(state: TracePathState) {
-    val located = state.result?.hops.orEmpty().filter { it.hasLocation }
-    if (!MapLibreRuntime.isSupported || located.size < 2) {
-        Column(
-            Modifier.fillMaxSize().padding(24.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(stringResource(C.contactsTraceModeMap), style = MaterialTheme.typography.headlineSmall)
-            Text(
-                state.repeatersWithoutLocation.takeIf(List<String>::isNotEmpty)?.joinToString()
-                    ?: stringResource(C.contactsTraceListEmptyPath),
-                modifier = Modifier.padding(top = 8.dp),
-            )
+internal fun TracePathMapContent(
+    state: TracePathState,
+    holder: TracePathStateHolder,
+    preferenceStore: MapPreferenceStore?,
+    location: Coordinate?,
+    diagnostics: TraceDiagnostics,
+    mapSurface: TraceMapSurface = { presentation, clusters, labels, camera, marker, overlay ->
+        NativeTraceMapSurface(presentation, clusters, labels, camera, marker, overlay)
+    },
+) {
+    val preferences = checkNotNull(preferenceStore) { "Trace map requires process preference wiring" }
+    val map = remember(holder) { TraceMapPathLogic(holder).also { it.configure(location) } }
+    val scope = rememberCoroutineScope()
+    var settings by remember(preferences) { mutableStateOf<MapPreferences?>(null) }
+    val haptics = LocalHapticFeedback.current
+    var preferenceError by remember(preferences) { mutableStateOf(false) }
+    var retry by remember(preferences) { mutableStateOf(0) }
+    var camera by remember(holder) { mutableStateOf<MapCamera?>(null) }
+    var presentation by remember(holder) { mutableStateOf(MapPresentationState()) }
+    var confirmClear by remember { mutableStateOf(false) }
+    val locale = LocalContext.current.resources.configuration.locales[0]
+    val unit = stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesStatusSnrBadgeUnit)
+    val distanceFormat = remember(locale) { MeasureFormat.getInstance(locale, MeasureFormat.FormatWidth.SHORT) }
+    val snrFormat = remember(locale) { NumberFormat.getNumberInstance(locale).apply {
+        minimumFractionDigits = 1
+        maximumFractionDigits = 1
+    } }
+    val formatBadge: (Double, Double) -> String = remember(distanceFormat, snrFormat, unit) {
+        { meters, snr ->
+            val distance = if (meters >= 1_000) Measure(meters / 1_000, MeasureUnit.KILOMETER)
+            else Measure(meters, MeasureUnit.METER)
+            "${distanceFormat.formatMeasures(distance)} \u00b7 ${snrFormat.format(snr)} $unit"
         }
-        return
     }
-    val markers = located.mapIndexed { index, hop ->
-        MapMarker(
-            id = hop.id,
-            position = GeoPoint(checkNotNull(hop.latitude), checkNotNull(hop.longitude)),
-            style = MapPinStyle.REPEATER_HOP,
-            label = hop.resolvedName ?: hop.hashDisplayString,
-            clusterable = false,
-            hopIndex = index,
-            badgeText = "${"%.1f".format(hop.snr)} dB",
-        )
+    val systemDark = isSystemInDarkTheme()
+    LaunchedEffect(preferences, retry) {
+        try {
+            preferences.observe(MapFilterHost.TRACE_PATH).collect {
+                settings = it
+                preferenceError = false
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            diagnostics.failure("trace-map-read-preferences", error)
+            preferenceError = true
+        }
     }
-    val lines = markers.zipWithNext().mapIndexed { index, pair ->
-        MapLine(
-            id = "trace-$index",
-            points = listOf(pair.first.position, pair.second.position),
-            style = when (traceLineQuality(located[index + 1].snr)) {
-                TraceLineQuality.GOOD -> MapLineStyle.TRACE_GOOD
-                TraceLineQuality.MEDIUM -> MapLineStyle.TRACE_MEDIUM
-                TraceLineQuality.WEAK -> MapLineStyle.TRACE_WEAK
-                TraceLineQuality.UNTRACED -> MapLineStyle.TRACE_UNTRACED
-            },
-            pathIndex = index,
-        )
-    }
-    var camera by remember(markers) { mutableStateOf(markers.map { it.position }.boundingCamera()) }
-    MapLibreMapSurface(
+    fun refresh() {
         presentation = MapPresentationState(
             availability = MapAvailability.Available(MapLibreOpenFreeMap.catalog),
-            camera = camera,
-            points = markers,
-            lines = lines,
-        ),
-        clusteringEnabled = false,
-        labelsEnabled = true,
-        accessibilityLabel = located.joinToString(" → ") {
-            "${it.resolvedName ?: it.hashDisplayString ?: "Local"}, ${"%.1f".format(it.snr)} dB"
-        },
-        onCameraChanged = { camera = it },
-        onMarkerSelected = {},
-        modifier = Modifier.fillMaxSize(),
+            points = map.mapMarkers(formatBadge), lines = map.lines,
+        )
+        if (camera == null && settings != null) camera = map.initialCamera()
+    }
+    LaunchedEffect(state.availableNodes, state.discoveredRepeaters, state.outboundPath, state.result, settings, formatBadge) {
+        settings?.let {
+            map.applyFilter(TraceMapPinFilter(it.filter.favoritesOnly, it.filter.showDiscovered))
+            map.setShowLabels(it.labels)
+        }
+        map.rebuildPathState()
+        refresh()
+    }
+    LaunchedEffect(location) { map.updateUserLocation(location); refresh() }
+    fun write(operation: String, action: suspend () -> Unit) {
+        scope.launch {
+            try {
+                action()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                diagnostics.failure(operation, error)
+                preferenceError = true
+            }
+        }
+    }
+    val loaded = settings
+    Column(Modifier.fillMaxSize()) {
+        if (loaded == null) CircularProgressIndicator(Modifier.padding(16.dp))
+        if (preferenceError) {
+            Text(stringResource(L.commonErrorFailedToLoad), color = MaterialTheme.colorScheme.error)
+            TextButton(onClick = { retry++ }) { Text(stringResource(M.mapPreviewRetryButtonAccessibilityLabel)) }
+        }
+        if (loaded != null) {
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = loaded.filter.favoritesOnly,
+                    onClick = { write("trace-map-write-filter") {
+                        preferences.setFilter(MapFilterHost.TRACE_PATH, loaded.filter.setFavoritesOnly(!loaded.filter.favoritesOnly))
+                    } },
+                    label = { Text(stringResource(C.contactsPathEditFilterFavorites)) },
+                    modifier = Modifier.sizeIn(minHeight = 48.dp),
+                )
+                FilterChip(
+                    selected = loaded.filter.effectiveShowDiscovered, enabled = !loaded.filter.favoritesOnly,
+                    onClick = { write("trace-map-write-filter") {
+                        preferences.setFilter(MapFilterHost.TRACE_PATH, loaded.filter.setShowDiscovered(!loaded.filter.showDiscovered))
+                    } },
+                    label = { Text(stringResource(C.contactsPathEditFilterDiscovered)) },
+                    modifier = Modifier.sizeIn(minHeight = 48.dp),
+                )
+                FilterChip(
+                    selected = loaded.labels,
+                    onClick = { write("trace-map-write-labels") { preferences.setLabels(!loaded.labels) } },
+                    label = { Text(stringResource(M.mapControlsShowLabels)) },
+                    modifier = Modifier.sizeIn(minHeight = 48.dp),
+                )
+            }
+        }
+        Box(Modifier.weight(1f)) {
+            mapSurface(
+                presentation.copy(camera = camera, isDark = when (loaded?.appearance) {
+                    MapColorPreference.DARK -> true
+                    MapColorPreference.LIGHT -> false
+                    else -> systemDark
+                }),
+                loaded?.clustering ?: false, loaded?.labels ?: true, { camera = it },
+                { marker -> if (loaded != null) {
+                    if (map.handleMapPointTap(marker.id) == PathPinTapResult.REJECTED_MIDDLE_HOP) {
+                        haptics.performHapticFeedback(HapticFeedbackType.Reject)
+                    }
+                    refresh()
+                } },
+                {
+                    Column(Modifier.align(Alignment.BottomEnd).padding(12.dp)) {
+                        TextButton(
+                            onClick = { camera = map.allPinsCamera() }, enabled = loaded != null && map.pins.isNotEmpty(),
+                            modifier = Modifier.testTag("trace-map:center-all").sizeIn(minHeight = 48.dp),
+                        ) { Text(stringResource(M.mapControlsCenterAll)) }
+                        TextButton(onClick = { camera = map.pathCamera() }, enabled = loaded != null && map.hasPath) {
+                            Text(stringResource(C.contactsTraceMapCenterOnPath))
+                        }
+                    }
+                },
+            )
+        }
+        state.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { confirmClear = true }, enabled = state.outboundPath.isNotEmpty()) {
+                Text(stringResource(C.contactsTraceMapClear))
+            }
+            Button(
+                onClick = { camera = map.pathCamera(); scope.launch { map.runTrace() } },
+                enabled = loaded != null && state.canRunTraceWhenConnected,
+            ) { Text(stringResource(C.contactsTraceListRunTrace)) }
+        }
+    }
+    if (confirmClear) AlertDialog(
+        onDismissRequest = { confirmClear = false },
+        title = { Text(stringResource(C.contactsTraceClearPath)) },
+        text = { Text(stringResource(C.contactsTraceClearPathMessage)) },
+        confirmButton = { TextButton(
+            onClick = { map.clearPath(); refresh(); confirmClear = false },
+            modifier = Modifier.testTag("trace-map:confirm-clear"),
+        ) {
+            Text(stringResource(C.contactsTraceClearPath))
+        } },
+        dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(stringResource(L.commonCancel)) } },
     )
+}
+
+@Composable
+private fun NativeTraceMapSurface(
+    presentation: MapPresentationState, clusters: Boolean, labels: Boolean,
+    camera: (MapCamera) -> Unit, marker: (MapMarker) -> Unit, overlay: @Composable BoxScope.() -> Unit,
+) {
+    if (MapLibreRuntime.isSupported) {
+        MapLibreMapSurface(
+            presentation, clusters, labels, stringResource(C.contactsTraceModeMap), camera, marker, overlay = overlay,
+        )
+    } else Box(Modifier.fillMaxSize()) {
+        Text(stringResource(com.meshcoreone.android.core.l10n.R.string.scaffold_map_description))
+        overlay()
+    }
 }
 
 @Composable

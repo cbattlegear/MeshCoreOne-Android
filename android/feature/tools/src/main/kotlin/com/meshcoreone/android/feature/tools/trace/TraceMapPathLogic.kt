@@ -1,11 +1,18 @@
 // PortedFrom: MC1/Views/Tools/TracePath/Map/TracePathMapViewModel.swift@db14559b39d32322b06477c6ae676112f583db50
-// Engine-free part only: path membership, pin visibility and pin taps. Lines, SNR badges and the
-// camera wait for the WP-312 map engine and MapLine/MapPoint types.
+// PortedFrom: MC1/Views/Map/MapLine+SNR.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.tools.trace
 
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
+import com.meshcoreone.android.core.maps.GeoPoint
+import com.meshcoreone.android.core.maps.MapCamera
+import com.meshcoreone.android.core.maps.MapLine
+import com.meshcoreone.android.core.maps.MapLineStyle
+import com.meshcoreone.android.core.maps.MapMarker
+import com.meshcoreone.android.core.maps.MapPinStyle
+import com.meshcoreone.android.core.maps.boundingCamera
+import com.meshcoreone.android.core.maps.distanceMetersTo
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
@@ -23,6 +30,8 @@ data class RepeaterPathInfo(val inPath: Boolean, val hopIndex: Int?, val isLastH
 
 /** An engine-neutral pin: the map layer chooses styles from [inPath]. */
 data class TraceMapPin(val id: UUID, val coordinate: Coordinate, val inPath: Boolean, val hopIndex: Int?, val label: String?)
+
+data class TraceMapBadge(val id: UUID, val coordinate: GeoPoint, val distanceMeters: Double, val snr: Double)
 
 enum class PathPinTapResult { ADDED, REMOVED, REJECTED_MIDDLE_HOP, IGNORED }
 
@@ -49,6 +58,10 @@ class TraceMapPathLogic(private val trace: TracePathStateHolder) {
     var visibleDiscovered: List<DiscoveredNodeDTO> = emptyList()
         private set
     var pins: List<TraceMapPin> = emptyList()
+        private set
+    var lines: List<MapLine> = emptyList()
+        private set
+    var badges: List<TraceMapBadge> = emptyList()
         private set
 
     /** Repeaters and rooms with a location. */
@@ -99,8 +112,78 @@ class TraceMapPathLogic(private val trace: TracePathStateHolder) {
         for (repeater in repeaters) state[repeater.id] = lookup[repeater.id] ?: RepeaterPathInfo(false, null, false)
         for (node in discovered) lookup[node.id]?.let { state[node.id] = it }
         pathState = state
+        rebuildOverlays()
         rebuildPins()
     }
+
+    fun mapMarkers(formatBadge: (Double, Double) -> String): List<MapMarker> =
+        pins.map { pin ->
+            MapMarker(
+                pin.id, GeoPoint(pin.coordinate.latitude, pin.coordinate.longitude),
+                if (pin.inPath) MapPinStyle.REPEATER_RING_WHITE else MapPinStyle.REPEATER,
+                label = pin.label, clusterable = true, hopIndex = pin.hopIndex,
+            )
+        } + badges.map { badge ->
+            MapMarker(
+                badge.id, badge.coordinate, MapPinStyle.BADGE, clusterable = false,
+                badgeText = formatBadge(badge.distanceMeters, badge.snr),
+            )
+        }
+
+    fun allPinsCamera(): MapCamera? =
+        pins.map { GeoPoint(it.coordinate.latitude, it.coordinate.longitude) }.boundingCamera()
+
+    fun pathCamera(): MapCamera? =
+        (listOfNotNull(userLocation?.geoPoint()) +
+            trace.current.outboundPath.mapNotNull(::locatedPathCoordinate)).boundingCamera()
+
+    fun initialCamera(): MapCamera? = if (hasPath) pathCamera() ?: allPinsCamera() else allPinsCamera()
+
+    private fun rebuildOverlays() {
+        var previous = userLocation?.geoPoint()
+        val rebuiltLines = mutableListOf<MapLine>()
+        val rebuiltBadges = mutableListOf<TraceMapBadge>()
+        trace.current.outboundPath.forEachIndexed { index, hop ->
+            val coordinate = locatedPathCoordinate(hop) ?: return@forEachIndexed
+            previous?.let { from ->
+                val snr = trace.current.result?.takeIf { it.success }?.hops?.getOrNull(index + 1)?.snr
+                rebuiltLines += MapLine(
+                    id = "trace-$index", points = listOf(from, coordinate),
+                    style = when (traceLineQuality(snr)) {
+                        TraceLineQuality.GOOD -> MapLineStyle.TRACE_GOOD
+                        TraceLineQuality.MEDIUM -> MapLineStyle.TRACE_MEDIUM
+                        TraceLineQuality.WEAK -> MapLineStyle.TRACE_WEAK
+                        TraceLineQuality.UNTRACED -> MapLineStyle.TRACE_UNTRACED
+                    },
+                    pathIndex = index,
+                )
+                if (snr != null) {
+                    rebuiltBadges += TraceMapBadge(
+                        UUID(0L, (index + 1).toLong()), from.midpoint(coordinate),
+                        from.distanceMetersTo(coordinate), snr,
+                    )
+                }
+            }
+            previous = coordinate
+        }
+        lines = rebuiltLines
+        badges = rebuiltBadges
+    }
+
+    private fun locatedPathCoordinate(hop: TracePathHop): GeoPoint? {
+        val id = locatedPathNodeId(hop) ?: return null
+        trace.current.availableNodes.firstOrNull { it.id == id }?.let {
+            return Coordinate(it.latitude, it.longitude).geoPoint()
+        }
+        return trace.current.discoveredRepeaters.firstOrNull { it.id == id }?.let {
+            Coordinate(it.latitude, it.longitude).geoPoint()
+        }
+    }
+
+    private fun Coordinate.geoPoint(): GeoPoint? =
+        if (latitude.isFinite() && longitude.isFinite() &&
+            latitude in -90.0..90.0 && longitude in -180.0..180.0
+        ) GeoPoint(latitude, longitude) else null
 
     fun handleRepeaterTap(repeater: ContactDTO): PathPinTapResult = handlePathPinTap(repeater.id) { trace.addNode(repeater) }
 

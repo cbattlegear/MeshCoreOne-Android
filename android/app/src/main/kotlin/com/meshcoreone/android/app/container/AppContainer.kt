@@ -297,9 +297,14 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     }
 
     internal fun captureContactLinkSession(generation: Long): () -> Boolean {
-        val initiating = sessions.current?.takeUnless { it.isTornDown }
+        val initiating = sessions.current
         return {
-            if (initiating != null) isCurrentSession(initiating) else {
+            if (initiating != null) {
+                isCurrentSession(initiating) ||
+                    sessions.current === initiating && !initiating.isTornDown &&
+                    connectionManager.snapshot.value.token == null &&
+                    navigation.state.value.let { it.radioId == null && it.generation == generation }
+            } else {
                 val current = sessions.current?.takeUnless { it.isTornDown }
                 current == null || navigation.state.value.let {
                     it.radioId == null && it.generation == generation ||
@@ -438,12 +443,14 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         return dependencies.mainScope.launch { appState.initialize() }
     }
 
-    /** Reconciles app state on every disconnected edge, covering failures the runtime reports no loss callback for. */
+    /** A rebuild's transient disconnected edge retires its binding, not its retained UI selection. */
     private fun watchDisconnects(): Job =
         uiScope.launch {
             connectionManager.snapshot.map { it.state }.distinctUntilChanged()
                 .filter { it == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED }
-                .collect { appState.reconcileSessionLoss() }
+                .collect {
+                    if (connectionManager.activeReconnectDeviceId == null) appState.reconcileSessionLoss()
+                }
         }
 
     /** Checks permission revocation on each foreground edge (the first read becomes the baseline). */

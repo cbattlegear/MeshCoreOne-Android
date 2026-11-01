@@ -408,12 +408,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     }
 
     @Test fun sameRadioSessionReplacementRetiresCapturedAndInFlightCallbacksWithoutLosingSelection() = runTest {
+        val uiScheduler = TestCoroutineScheduler()
+        val mainScope = CoroutineScope(backgroundScope.coroutineContext + StandardTestDispatcher(uiScheduler))
         var hold = false
         var holdReplacement = false
         var heldKey: EntityKey? = null
         val entered = CompletableDeferred<Unit>()
         val lookup = CompletableDeferred<ContactDTO?>()
         val replacementHandshake = CompletableDeferred<Unit>()
+        val retiredTransport = CompletableDeferred<Unit>()
         val contactLookupRelease = CompletableDeferred<Unit>()
         val contactReads = java.util.concurrent.atomic.AtomicInteger()
         val persistence = object : PersistenceStoreProtocol by store {
@@ -425,14 +428,25 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 return store.fetchContact(key)
             }
         }
-        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val h = ContainerHarness(this, store, persistenceOverride = persistence, mainScope = mainScope)
         h.links.configureRadio = { radio ->
             if (holdReplacement) radio.connectGate = replacementHandshake
             radio.knownContacts += contactFrame(key(20), "Retired callback target")
             radio.knownContacts += contactFrame(key(21), "Retained selection")
         }
         try {
-            connect(h)
+            val started = h.container.start()
+            h.eventually("production activation completes") {
+                uiScheduler.runCurrent()
+                started.isCompleted
+            }
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("activated graph finishes real initial synchronization") {
+                uiScheduler.runCurrent()
+                connecting.isCompleted && h.manager.connectionState == DeviceConnectionState.READY &&
+                    h.container.navigation.state.value.navigationReady
+            }
+            connecting.await()
             val radio = assertNotNull(h.appState.currentRadioId)
             val oldSession = assertNotNull(h.sessions.current)
             val oldCallback = assertNotNull(oldSession.notificationService.onNotificationTapped)
@@ -441,9 +455,23 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             heldKey = EntityKey(radio, target.id)
             val selected = assertNotNull(store.fetchContact(radio, key(21)))
             val n = h.container.navigation
+            val conversation = ChatConversationID.dm(radio, selected.id)
+            h.draftStore.setDraft("saved before rebuild", conversation)
             n.navigateToChat(selected)
             mount(h)
-            compose.waitForIdle()
+            val composerMatcher = hasSetTextAction() and hasContentDescription(
+                host.get().getString(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsInputAccessibilityLabel),
+                substring = true,
+            )
+            h.eventually("retained composer mounts") {
+                uiScheduler.runCurrent()
+                compose.waitForIdle()
+                compose.onAllNodes(composerMatcher and hasText("saved before rebuild")).fetchSemanticsNodes().size == 1
+            }
+            val composer = compose.onNode(composerMatcher).assertTextEquals("saved before rebuild")
+            composer.performClick().performTextReplacement("typing during rebuild")
+            val composerId = composer.fetchSemanticsNode().id
+            h.draftStore.setDraft("independent persisted draft", conversation)
             val stack = n.state.value.activeStack
             hold = true
             val inFlight = async { oldCallback(EntityKey(radio, target.id)) }
@@ -469,7 +497,23 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             hold = false
             holdReplacement = true
             val deviceId = assertNotNull(h.appState.connectedDevice).id
+            h.links.radios.first().disconnectGate = retiredTransport
             val rebuilding = async { h.manager.rebuildSession(deviceId) }
+            h.eventually("graph withdrawn while physical teardown keeps the actual DISCONNECTED edge current") {
+                h.sessions.current == null && h.links.radios.first().disconnecting &&
+                    h.manager.connectionState == DeviceConnectionState.DISCONNECTED
+            }
+            uiScheduler.runCurrent()
+            h.eventually("activated withdrawal retirement runs after the disconnected edge") {
+                uiScheduler.runCurrent()
+                oldSession.notificationService.onNotificationTapped == null && !n.state.value.navigationReady
+            }
+            assertEquals(stack, n.state.value.activeStack)
+            assertEquals(ChatSelection.Direct(selected), n.state.value.chatsSelectedRoute)
+            assertEquals(composerId, composer.fetchSemanticsNode().id)
+            composer.assertIsFocused().assertTextEquals("typing during rebuild")
+            assertEquals("independent persisted draft", h.draftStore.draft(conversation))
+            retiredTransport.complete(Unit)
             h.eventually("retired graph withdrawn while replacement handshake is held") {
                 h.links.radios.size == 2 && h.sessions.current == null
             }
@@ -493,6 +537,11 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(replacementGap, n.state.value, "Retired callbacks cannot commit before the next binding")
             assertEquals(stack, n.state.value.activeStack)
             replacementHandshake.complete(Unit)
+            h.eventually("activated replacement becomes ready") {
+                uiScheduler.runCurrent()
+                rebuilding.isCompleted && h.manager.connectionState == DeviceConnectionState.READY &&
+                    n.state.value.navigationReady
+            }
             rebuilding.await()
             h.settle()
             h.assertReady()
@@ -501,6 +550,11 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertTrue(n.state.value.generation > oldGeneration)
             assertEquals(stack, n.state.value.activeStack)
             assertEquals(ChatSelection.Direct(selected), n.state.value.chatsSelectedRoute)
+            uiScheduler.runCurrent()
+            compose.waitForIdle()
+            assertEquals(composerId, composer.fetchSemanticsNode().id)
+            composer.assertIsFocused().assertTextEquals("typing during rebuild")
+            assertEquals("independent persisted draft", h.draftStore.draft(conversation))
             oldCallback(EntityKey(radio, target.id))
             assertEquals(stack, n.state.value.activeStack)
             assertEquals(ChatSelection.Direct(selected), n.state.value.chatsSelectedRoute)
@@ -511,9 +565,97 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(ChatSelection.Direct(target), n.state.value.chatsSelectedRoute)
             compose.onNodeWithTag("entry:${n.state.value.activeStack.last().id}").assertIsDisplayed()
         } finally {
+            retiredTransport.complete(Unit)
             replacementHandshake.complete(Unit)
             contactLookupRelease.complete(Unit)
             lookup.complete(null)
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun contactLinksFromBothProducersSurviveProvisionalFirstGraphBeforeTokenPublication() = runTest {
+        val publication = CompletableDeferred<Unit>()
+        val saving = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDevice(device: DeviceDTO) {
+                saving.complete(Unit)
+                publication.await()
+                store.saveDevice(device)
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
+        val saved = ContactDTO(
+            radioId = radio, publicKey = key(20), name = "Persisted provisional peer", lastHeardTimestamp = null,
+        )
+        h.links.configureRadio = { firmware -> firmware.knownContacts += contactFrame(saved.publicKey, saved.name) }
+        try {
+            store.saveDevice(DeviceDTO(id = radio.value, radioId = radio, publicKey = key(7), nodeName = "Cached radio"))
+            store.saveContact(saved)
+            val persisted = assertNotNull(store.fetchContact(radio, saved.publicKey))
+            LastConnectionStore(h.preferences, SystemRuntimeClock()).persist(radio.value, radio, "Cached radio")
+            h.container.connectionPort.refreshLastConnection()
+            h.settle()
+            val connecting = async { h.manager.connect(h.target(radio.value)) }
+            h.eventually("real graph published before suspended device persistence completes") {
+                saving.isCompleted && h.sessions.current != null && h.manager.snapshot.value.token == null
+            }
+            val provisional = assertNotNull(h.sessions.current)
+            val n = h.container.navigation
+            assertNull(n.state.value.radioId)
+            assertEquals(radio, h.appState.currentRadioId)
+            val external = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, n))
+            val chat = ChatLinkRouter(h.container.chatsFeature.list.links, backgroundScope)
+            mount(h)
+            for (fromChat in listOf(false, true)) {
+                val foundUri = h.container.nodesFeature.uriCodec.exportContactUri("Untrusted alias", saved.publicKey, ContactType.ROOM)
+                if (fromChat) {
+                    assertTrue(chat.route(foundUri))
+                    h.eventually("chat producer navigates persisted identity during provisional publication") {
+                        n.state.value.activeStack.last().destination == NavigationDestination.ContactDetail(persisted)
+                    }
+                } else {
+                    val found = async { external.routeExternal(foundUri) }
+                    h.eventually("external saved lookup completes during provisional publication") { found.isCompleted }
+                    assertEquals(DeepLinkRouteOutcome.Navigated, found.await())
+                }
+                compose.waitForIdle()
+                assertEquals(NavigationDestination.ContactDetail(persisted), n.state.value.activeStack.last().destination)
+                compose.onNodeWithTag("entry:${n.state.value.activeStack.last().id}").assertIsDisplayed()
+                n.back()
+                val request = ContactLinkRequest("Provisional ${if (fromChat) "chat" else "external"}", key(30), ContactType.REPEATER)
+                val absentUri = h.container.nodesFeature.uriCodec.exportContactUri(request.name, request.publicKey, request.type)
+                if (fromChat) {
+                    assertTrue(chat.route(absentUri))
+                    h.eventually("chat producer stages provisional confirmation") { n.state.value.pendingContactLink != null }
+                } else {
+                    val absent = async { external.routeExternal(absentUri) }
+                    h.eventually("external absent lookup completes during provisional publication") { absent.isCompleted }
+                    assertEquals(DeepLinkRouteOutcome.ConfirmationStaged, absent.await())
+                }
+                val pending = assertNotNull(n.state.value.pendingContactLink)
+                assertEquals(
+                    request.copy(targetRadioId = radio, generation = n.state.value.generation, deliveryId = pending.deliveryId),
+                    pending,
+                )
+                compose.waitForIdle()
+                compose.onNodeWithTag("contact-link-confirmation").assertIsDisplayed()
+                compose.onNodeWithTag("contact-link-cancel").performClick()
+                assertNull(n.state.value.pendingContactLink)
+                assertSame(provisional, h.sessions.current)
+                assertNull(h.manager.snapshot.value.token)
+            }
+            publication.complete(Unit)
+            h.eventually("provisional first graph becomes the same published ready graph") { connecting.isCompleted }
+            connecting.await()
+            h.settle()
+            h.assertReady()
+            assertSame(provisional, h.sessions.current)
+            assertNull(n.state.value.pendingContactLink)
+            assertTrue(h.links.radios.all { firmware -> firmware.sent.none { it[0].toInt() == 0x09 } })
+        } finally {
+            publication.complete(Unit)
             unmount()
             h.container.close()
         }

@@ -47,7 +47,8 @@ internal fun ChatSelection.route(): ChatRoute = when (this) {
 
 internal fun NavigationCoordinator.openChat(route: ChatRoute) {
     if (state.value.chatsSelectedRoute?.route() == route &&
-        state.value.activeStack.last().destination is NavigationDestination.Chat
+        state.value.stacks.getValue(com.meshcoreone.android.core.contracts.AppTab.CHATS)
+            .last().destination is NavigationDestination.Chat
     ) return
     when (route) {
         is ChatRoute.Direct -> navigateToChat(route.contact)

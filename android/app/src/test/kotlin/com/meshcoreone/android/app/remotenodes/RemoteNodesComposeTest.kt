@@ -24,6 +24,11 @@ import com.meshcoreone.android.app.navigation.AppRemoteNodeCli
 import com.meshcoreone.android.core.maps.MapCamera
 import com.meshcoreone.android.core.maps.GeoPoint
 import com.meshcoreone.android.core.maps.MapPresentationState
+import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.datastore.AppStorageKey
+import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.app.container.AppMapPreferences
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.services.remote.RemoteNodeError
@@ -54,6 +59,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.IOException
 import java.io.File
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Build
@@ -70,10 +78,17 @@ class RemoteNodesComposeTest {
     private val font = mutableFloatStateOf(1f)
     private var nextCamera = MapCamera(GeoPoint(38.0, -121.0), .05, .05)
     private var renderedMap: MapPresentationState? = null
+    private var renderedLabels = true
+    private var renderedClusters = true
 
     @Before fun createHost() {
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
+        host.get().getSharedPreferences("shared-map", 0).edit().clear().commit()
+        runBlocking { MeshCoreStorage.get(host.get()).preferences.resetAppPreferences() }
+        fixture.mapPreferences = AppMapPreferences(
+            MeshCoreStorage.get(host.get()).preferences, host.get().getSharedPreferences("shared-map", 0),
+        )
     }
     @After fun destroyHost() { host.pause().stop().destroy() }
     private fun text(id: Int) = host.get().getString(id)
@@ -83,8 +98,12 @@ class RemoteNodesComposeTest {
             CompositionLocalProvider(LocalDensity provides Density(1f, font.floatValue)) {
                 Box(Modifier.width(width.value).height(1000.dp)) {
                     MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
-                        val map: RemoteNodesMapSurface = { state, _, _, _, camera, select, modifier ->
-                            renderedMap = state
+                        val map: RemoteNodesMapSurface = { state, clusters, labels, _, camera, select, modifier ->
+                            SideEffect {
+                                renderedMap = state
+                                renderedLabels = labels
+                                renderedClusters = clusters
+                            }
                             Column(modifier.testTag("synthetic-map")) {
                                 Text("Local map fixture: ${state.points.size} markers")
                                 Button({ state.points.firstOrNull()?.let(select) }) { Text("Select fixture report") }
@@ -103,6 +122,84 @@ class RemoteNodesComposeTest {
         compose.onNodeWithTag("remote-management").assertExists()
     }
     private fun expand(id: Int) = compose.onNodeWithText(text(id), useUnmergedTree = true).performScrollTo().performClick()
+
+    @Test fun neighborHostUsesRealPersistedFilterAndLiveRestoreWithoutLosingThePannedCamera() {
+        val key = com.meshcoreone.android.core.protocol.bytes.Bytes(byteArrayOf(1, 2, 3, 4, 5, 6) + ByteArray(26))
+        fixture.contacts = fixture.contacts + fixture.contact.copy(
+            id = java.util.UUID(0, 312), publicKey = key, name = "Located neighbor",
+            latitude = 38.0, longitude = -121.0,
+            isFavorite = false,
+        )
+        val preferences = requireNotNull(fixture.mapPreferences)
+        runBlocking {
+            preferences.setFilter(MapFilterHost.MAIN_MAP, MapFilterState(favoritesOnly = true))
+            preferences.setFilter(MapFilterHost.NEIGHBOR_SNR, MapFilterState())
+        }
+        show()
+        open()
+        compose.onNodeWithTag("remote-tab:TELEMETRY").performClick()
+        expand(L.remoteNodesStatusNeighbors)
+        compose.onNodeWithText(text(L.remoteNodesStatusViewOnMap)).performScrollTo().performClick()
+        compose.waitUntil(5_000) { renderedMap?.points?.any { it.label == "Located neighbor" } == true }
+        compose.onNodeWithText("Move fixture camera").performScrollTo().performClick()
+        val panned = nextCamera
+        compose.waitUntil(5_000) { renderedMap?.camera == panned }
+        val favorites = com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.trustedContactsFavoritesOnly
+        compose.onNodeWithText(text(favorites)).performScrollTo().performClick()
+        compose.waitUntil(5_000) { renderedMap?.points?.none { it.label == "Located neighbor" } == true }
+        assertEquals(panned, requireNotNull(renderedMap).camera)
+        runBlocking {
+            val stored = MeshCoreStorage.get(host.get()).preferences
+            stored.update {
+                this[AppStorageKey.mapFilterNeighborSNR] = MapFilterState().encode()
+                this[AppStorageKey.mapColorSchemePreference] = "dark"
+                this[AppStorageKey.mapShowLabels] = false
+                this[AppStorageKey.mapClusteringEnabled] = false
+            }
+        }
+        compose.waitUntil(5_000) {
+            renderedMap?.points?.any { it.label == "Located neighbor" } == true &&
+                renderedMap?.isDark == true && !renderedLabels && !renderedClusters
+        }
+        assertEquals(panned, requireNotNull(renderedMap).camera)
+        assertEquals(
+            true, runBlocking { preferences.observe(MapFilterHost.MAIN_MAP).first() }.filter.favoritesOnly,
+        )
+        compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapControlsShowLabels))
+            .performScrollTo().performClick()
+        compose.waitUntil(5_000) { renderedLabels }
+        assertTrue(runBlocking { preferences.observe(MapFilterHost.NEIGHBOR_SNR).first() }.labels)
+        assertTrue(runBlocking { preferences.observe(MapFilterHost.MAIN_MAP).first() }.labels)
+    }
+
+    @Test fun remoteMapFailsClosedWithoutPreferenceInjectionRatherThanCreatingPrivateDefaults() {
+        fixture.mapPreferences = null
+        show(RemoteNodeLaunch(fixture.contact, RemoteNodeLaunchAction.SAVED_HISTORY))
+        compose.waitUntil(5_000) { fixture.historyReads > 0 }
+        compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
+        compose.onAllNodesWithText(text(L.remoteNodesSettingsNoService)).onFirst().assertExists()
+    }
+
+    @Test fun remoteMapSurfacesRealStoreObservationFailureAndRetryRestoresTheSameConsumer() {
+        val real = requireNotNull(fixture.mapPreferences)
+        var failed = false
+        fixture.mapPreferences = object : com.meshcoreone.android.core.maps.MapPreferenceStore by real {
+            override fun observe(host: MapFilterHost) = kotlinx.coroutines.flow.flow {
+                if (!failed) {
+                    failed = true
+                    throw IOException("Fixture observation failure")
+                }
+                real.observe(host).collect { emit(it) }
+            }
+        }
+        show(RemoteNodeLaunch(fixture.contact, RemoteNodeLaunchAction.SAVED_HISTORY))
+        compose.waitUntil(5_000) { failed }
+        compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
+        compose.onNodeWithTag("remote-error").performScrollTo().assertExists()
+        compose.onNodeWithTag("remote-map:retry").performScrollTo().performClick()
+        compose.onNodeWithTag("synthetic-map").performScrollTo().assertExists()
+        compose.onNodeWithTag("remote-map:retry").assertDoesNotExist()
+    }
 
     @Test fun ownerInfoRemainsReadableWhileFocusedAndApplyUsesTheEditedNativeBinding() {
         show(); open(); expand(L.remoteNodesSettingsContactInfo)

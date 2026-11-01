@@ -18,6 +18,7 @@ data class RemoteNodesConnection(val radioId: RadioId?, val generation: String?,
 data class RemoteRadioOptions(val bandwidthsKHz: List<Double>, val spreadingFactors: List<Long>, val codingRates: List<Long>)
 
 interface RemoteNodesUiDependencies {
+    val mapPreferences: com.meshcoreone.android.core.maps.MapPreferenceStore? get() = null
     val updates: Flow<RemoteNodesConnection>
     val radioOptions: RemoteRadioOptions
     suspend fun catalog(): RemoteNodesCatalog

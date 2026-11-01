@@ -27,6 +27,7 @@ data class MapPresentationState(
     val isInteractive: Boolean = true,
     val showsUserLocation: Boolean = false,
     val issue: MapIssue? = null,
+    val isDark: Boolean = false,
 ) {
     val canRender: Boolean get() = availability is MapAvailability.Available
     val attribution: List<MapProviderAttribution>

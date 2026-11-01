@@ -4,6 +4,7 @@ package com.meshcoreone.android.feature.map
 
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -52,8 +53,9 @@ import com.meshcoreone.android.core.maps.GeoBounds
 import com.meshcoreone.android.core.maps.MapAvailability
 import com.meshcoreone.android.core.maps.MapCamera
 import com.meshcoreone.android.core.maps.MapFilterHost
-import com.meshcoreone.android.core.maps.MapFilterPreferences
 import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapPreferences
+import com.meshcoreone.android.core.maps.resolvedMapIsDark
 import com.meshcoreone.android.core.maps.MapLibreMapSurface
 import com.meshcoreone.android.core.maps.MapLibreOpenFreeMap
 import com.meshcoreone.android.core.maps.MapLibreRuntime
@@ -75,6 +77,7 @@ import com.meshcoreone.android.core.ui.ScaffoldFeatureContent
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 
 typealias OperationalMapSurface = @Composable (
     MapPresentationState, Boolean, Boolean, (MapCamera) -> Unit, (MapMarker) -> Unit,
@@ -150,16 +153,13 @@ private fun MapContent(
 ) {
     val context = LocalContext.current
     val preferences = remember(context) { context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE) }
-    var filter by remember {
-        mutableStateOf(
-            MapFilterPreferences.decodeOrSeed(
-                preferences.getString(FILTER_KEY, null).orEmpty(),
-                MapFilterHost.MAIN_MAP,
-            ),
-        )
-    }
-    var clustering by remember { mutableStateOf(preferences.getBoolean(CLUSTER_KEY, true)) }
-    var labels by remember { mutableStateOf(preferences.getBoolean(LABEL_KEY, true)) }
+    val preferenceStore = checkNotNull(dependencies.preferences) { "Process map preferences were not installed" }
+    var settings by remember(dependencies) { mutableStateOf<MapPreferences?>(null) }
+    var preferenceError by remember { mutableStateOf<Exception?>(null) }
+    var preferenceRetry by remember { mutableStateOf(0) }
+    val filter = settings?.filter ?: MapFilterState.seed(MapFilterHost.MAIN_MAP)
+    val clustering = settings?.clustering ?: true
+    val labels = settings?.labels ?: true
     val scope = rememberCoroutineScope()
     val holder = remember(dependencies, scope) { MapFeatureStateHolder(dependencies, scope, filter) }
     val feature by holder.state.collectAsStateWithLifecycle()
@@ -175,8 +175,37 @@ private fun MapContent(
         )
     }
 
-    LaunchedEffect(feature.visibleMarkers, feature.loading) {
-        if (camera == null && focusedPoint == null) {
+    LaunchedEffect(preferenceStore, preferenceRetry) {
+        try {
+            preferenceStore.observe(MapFilterHost.MAIN_MAP).collect { next ->
+                if (holder.state.value.filter != next.filter) {
+                    holder.setFilter(next.filter)
+                    selectedFocus = null
+                }
+                settings = next
+                preferenceError = null
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            preferenceError = failure
+        }
+    }
+    fun writePreference(write: suspend () -> Unit) {
+        scope.launch {
+            try {
+                write()
+                preferenceError = null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                preferenceError = failure
+            }
+        }
+    }
+
+    LaunchedEffect(feature.visibleMarkers, feature.loading, settings) {
+        if (settings != null && settings?.filter == feature.filter && camera == null && focusedPoint == null) {
             camera = feature.visibleMarkers.map { it.marker.position }.boundingCamera()
         }
     }
@@ -206,6 +235,7 @@ private fun MapContent(
         camera = camera,
         points = filtered,
         lines = feature.content.lines,
+        isDark = settings?.let { resolvedMapIsDark(it.appearance, isSystemInDarkTheme()) } ?: false,
     )
 
     mapSurface(
@@ -219,23 +249,18 @@ private fun MapContent(
             holder.select(it.id)
         },
     ) {
-        MapControls(
+        if (settings != null) MapControls(
             filter = filter,
             onFilter = {
-                filter = it
-                holder.setFilter(it)
-                selectedFocus = null
-                preferences.edit().putString(FILTER_KEY, MapFilterPreferences.encode(it, MapFilterHost.MAIN_MAP)).apply()
+                writePreference { preferenceStore.setFilter(MapFilterHost.MAIN_MAP, it) }
             },
             clustering = clustering,
             onClustering = {
-                clustering = it
-                preferences.edit().putBoolean(CLUSTER_KEY, it).apply()
+                writePreference { preferenceStore.setClustering(it) }
             },
             labels = labels,
             onLabels = {
-                labels = it
-                preferences.edit().putBoolean(LABEL_KEY, it).apply()
+                writePreference { preferenceStore.setLabels(it) }
             },
             listVisible = listVisible,
             onListVisible = { listVisible = it },
@@ -245,15 +270,17 @@ private fun MapContent(
             onCenterAll = { camera = filtered.map { it.position }.boundingCamera() },
             modifier = Modifier.align(Alignment.TopCenter),
         )
-        if (feature.loading && feature.error == null) {
+        if ((feature.loading || settings == null) && feature.error == null && preferenceError == null) {
             CircularProgressIndicator(Modifier.align(Alignment.Center))
         }
-        feature.error?.let { error ->
+        (preferenceError ?: feature.error)?.let { error ->
             val presented = remember(error) { UiErrorMapper().present(error) }
             Card(Modifier.align(Alignment.Center).padding(16.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(uiString(presented.content.message))
-                    Button(onClick = holder::refresh) {
+                    Button(onClick = {
+                        if (preferenceError != null) preferenceRetry++ else holder.refresh()
+                    }) {
                         Text(stringResource(R.string.l10n_app_map_map_controls_refresh))
                     }
                 }
@@ -664,6 +691,3 @@ private fun normalizeLongitude(value: Double): Double {
 
 private const val PREFERENCES = "shared-map"
 private const val CAMERA_KEY = "camera-v1"
-private const val FILTER_KEY = "filter-v1"
-private const val CLUSTER_KEY = "cluster-v1"
-private const val LABEL_KEY = "labels-v1"

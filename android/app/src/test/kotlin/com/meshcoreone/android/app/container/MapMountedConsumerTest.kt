@@ -21,6 +21,10 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.core.datastore.AppStorageKey
+import com.meshcoreone.android.core.datastore.BackupPreferenceSnapshot
+import com.meshcoreone.android.core.datastore.PreferenceValue
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.maps.*
 import com.meshcoreone.android.core.model.*
@@ -29,6 +33,7 @@ import com.meshcoreone.android.feature.map.*
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -61,6 +66,7 @@ class MapMountedConsumerTest {
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
         host.get().getSharedPreferences("shared-map", 0).edit().clear().commit()
+        runBlocking { MeshCoreStorage.get(host.get()).preferences.resetAppPreferences() }
     }
 
     @After fun destroyHost() { host.pause().stop().destroy() }
@@ -89,9 +95,15 @@ class MapMountedConsumerTest {
         compose.onNodeWithTag("pick:${contact.id}").performClick()
         compose.onNodeWithText("37.0, -122.0").assertExists()
         compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
+        }
         compose.onNodeWithText("37.0, -122.0").assertDoesNotExist()
         compose.onNodeWithTag("pick:${contact.id}").assertDoesNotExist()
         compose.onNodeWithText(text(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithTag("pick:${contact.id}").performClick()
         compose.runOnIdle {
             current = MapFeatureContent()
@@ -111,6 +123,9 @@ class MapMountedConsumerTest {
             override suspend fun addDiscovered(node: DiscoveredNodeDTO) { added += node }
         }))
         compose.onNodeWithText(text(R.string.l10n_app_map_map_callout_discovered)).performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("pick:${node.id}").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithTag("pick:${node.id}").performClick()
         compose.onNodeWithText(text(R.string.l10n_app_map_map_discovereddetail_title)).assertExists()
         compose.onNodeWithText(text(R.string.l10n_app_map_map_discovereddetail_add)).performClick()
@@ -163,9 +178,10 @@ class MapMountedConsumerTest {
     @Test fun newFocusReplacesTheSingleStablePinAndReloadPreservesIt() {
         val focus = mutableStateOf<GeoPoint?>(GeoPoint(10.0, 20.0))
         val updates = MutableSharedFlow<MapFeatureUpdate>(extraBufferCapacity = 10)
+        var loads = 0
         var latest: MapPresentationState? = null
         mount(
-            MapFeatureDependencies(source { content() }, offline(), updates),
+            MapFeatureDependencies(source { loads++; content() }, offline(), updates),
             focus = { focus.value },
             onPresentation = { latest = it },
         )
@@ -177,7 +193,7 @@ class MapMountedConsumerTest {
         assertEquals(GeoPoint(30.0, 40.0), replaced.position)
         assertEquals(MapCamera(replaced.position, 0.01, 0.01), requireNotNull(latest).camera)
         compose.runOnIdle { assertTrue(updates.tryEmit(MapFeatureUpdate("radio"))) }
-        compose.waitUntil(5_000) { requireNotNull(latest).points.any { it.id == contact.id } }
+        compose.waitUntil(5_000) { loads == 2 && requireNotNull(latest).points.any { it.id == contact.id } }
         assertEquals(replaced, requireNotNull(latest).points.single { it.style == MapPinStyle.DROPPED_PIN })
     }
 
@@ -208,16 +224,57 @@ class MapMountedConsumerTest {
         compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).assertIsNotEnabled()
     }
 
+    @Test fun mountedHostObservesLegacyRestoreAndAppearanceWithoutARefetchOrPrivateStore() {
+        var loads = 0
+        var latest: MapPresentationState? = null
+        mount(
+            MapFeatureDependencies(source { loads++; content() }, offline()),
+            onPresentation = { latest = it },
+        )
+        assertEquals(1, loads)
+        compose.onNodeWithTag("pick:${node.id}").assertDoesNotExist()
+        val storage = MeshCoreStorage.get(host.get())
+        runBlocking {
+            storage.backupPreferences.restoreMissing(BackupPreferenceSnapshot(mapOf(
+                "showDiscoveredNodesOnMap" to PreferenceValue.BooleanValue(true),
+                "mapColorSchemePreference" to PreferenceValue.StringValue("dark"),
+            )))
+        }
+        compose.waitUntil(5_000) {
+            requireNotNull(latest).isDark && requireNotNull(latest).points.any { it.id == node.id }
+        }
+        assertEquals(1, loads)
+        compose.onNodeWithTag("pick:${node.id}").assertExists()
+        runBlocking {
+            assertTrue(requireNotNull(MapFilterState.decode(storage.preferences.get(AppStorageKey.mapFilterMainMap)))
+                .showDiscovered)
+            storage.preferences.set(AppStorageKey.mapColorSchemePreference, "light")
+        }
+        compose.waitUntil(5_000) { !requireNotNull(latest).isDark }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_clusternodes)).performClick()
+        compose.waitUntil(5_000) {
+            !runBlocking { storage.preferences.get(AppStorageKey.mapClusteringEnabled) }
+        }
+        assertFalse(host.get().getSharedPreferences("shared-map", 0).contains("cluster-v1"))
+        assertEquals(PreferenceValue.BooleanValue(false),
+            runBlocking { storage.backupPreferences.snapshotForBackup() }.presentValues["mapClusteringEnabled"])
+    }
+
     private fun mount(
         dependencies: MapFeatureDependencies,
         focus: () -> GeoPoint? = { null },
         onFocusConsumed: () -> Unit = {},
         onPresentation: (MapPresentationState) -> Unit = {},
     ) {
+        val bound = dependencies.copy(preferences = dependencies.preferences ?: AppMapPreferences(
+            MeshCoreStorage.get(host.get()).preferences,
+            host.get().getSharedPreferences("shared-map", 0),
+        ))
         host.get().setContent {
             MeshCoreTheme(motionScale = 0f) {
                 MapEntry(
-                    FeatureRoute(FeatureId.MAP), { error("No generic navigation") }, dependencies,
+                    FeatureRoute(FeatureId.MAP), { error("No generic navigation") },
+                    bound,
                     focus = focus(),
                     onFocusConsumed = onFocusConsumed,
                     mapSurface = { state, _, _, _, select, overlay ->
@@ -233,6 +290,11 @@ class MapMountedConsumerTest {
                     },
                 )
             }
+        }
+        compose.waitForIdle()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(text(R.string.l10n_app_map_map_controls_centerall))
+                .fetchSemanticsNodes().isNotEmpty()
         }
         compose.waitForIdle()
     }

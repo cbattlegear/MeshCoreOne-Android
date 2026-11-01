@@ -141,6 +141,7 @@ class AppContainerDependencies(
     /** Production pre-advert policy; an unbound composition must not silently skip an enabled refresh. */
     val advertLocation: AppAdvertLocation? = null,
     val offlineMaps: OfflineMapController? = null,
+    val mapPreferences: com.meshcoreone.android.core.maps.MapPreferenceStore? = null,
     val nodesMessages: UserFacingMessages = UserFacingMessages { it.message ?: "Operation failed" },
     val nodesAnnouncer: Announcer = Announcer {},
     val nodesPreferences: StringListPreferences = object : StringListPreferences {
@@ -182,6 +183,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             (dependencies.linkFactory as? AndroidRuntimeLinkFactory)?.transportFor(it)
         }
     internal val processStore get() = dependencies.store
+    internal val mapPreferences get() = dependencies.mapPreferences
     internal val uiScope = CoroutineScope(dependencies.mainScope.coroutineContext + SupervisorJob(processJob))
     val foreground: ProcessForegroundState = dependencies.foreground
     val bootstrapDebugLog: DebugLogBuffer? = dependencies.newBootstrapDebugLog(processScope)

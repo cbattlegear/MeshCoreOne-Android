@@ -255,6 +255,9 @@ object AndroidAppContainerFactory {
                     currentLocation = { locationProducing.currentLocation },
                 ),
                 offlineMaps = offlineMaps,
+                mapPreferences = AppMapPreferences(
+                    storage.preferences, application.getSharedPreferences("shared-map", android.content.Context.MODE_PRIVATE),
+                ),
                 nodesMessages = UserFacingMessages { failure ->
                     UiErrorMapper().message(failure).resolve(application.resources)
                 },

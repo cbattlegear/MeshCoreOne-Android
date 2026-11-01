@@ -81,6 +81,22 @@ class MapDomainTest {
     }
 
     @Test
+    fun filterDecodeRequiresACompleteJsonObjectWithActualBooleanValues() {
+        val valid = MapFilterState().encode()
+        assertEquals(MapFilterState(), MapFilterState.decode(valid))
+        for (invalid in listOf(
+            valid.dropLast(1), valid + " trailing", "[$valid]",
+            valid.replace("\"showChat\":true", "\"showChat\":truegarbage"),
+            valid.replace("\"showChat\":true", "\"showChat\":\"true\""),
+            valid.replace("\"showChat\":true,", ""),
+            valid.replace("\"showChat\":true", "\"showChat\":null"),
+        )) {
+            assertNull(invalid, MapFilterState.decode(invalid))
+        }
+        assertEquals(MapFilterState(), MapFilterState.decode(valid.dropLast(1) + ""","future":{"flag":true}}"""))
+    }
+
+    @Test
     fun clusteringKeepsStableOrder() {
         val contact = marker(clusterable = true)
         val dropped = marker(clusterable = false)

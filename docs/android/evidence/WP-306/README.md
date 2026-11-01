@@ -84,3 +84,16 @@ Any readiness refusal means product tests did not execute, not that tests failed
 Actual discovered/run/pass/fail/error/skip counts must come from the runner.
 This candidate does not change golden expectations, source pin, policy or module
 dependencies, or edit the timeline/map/shared graph.
+
+### Actual candidate execution refusal
+
+`python tools\android-port\local\check.py --commit 359666a98 --affected-base d7f35bbe938ca79d3bc8ab5510fb5cfa9cf8a808`
+returned exit 1 before product execution:
+`Installed execution runtime is old or mismatched: controller/execution_recovery.py`.
+No Gradle build or JUnit discovery ran; zero product tests were executed and no
+passing result is claimed. This is an execution-readiness gate, not a product test
+failure or permission to install/deploy a runtime, bypass the launcher, clear an
+owner or weaken verification. A separately authorized trusted runtime deployment
+is required before rerunning the affected lane on the then-current exact candidate.
+The subsequent documentation-only commit records this refusal; it is not a
+verified replacement candidate.

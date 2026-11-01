@@ -220,6 +220,7 @@ class LinkUrlExtractionTest {
     fun `extracts links after prose labels without treating labels as URI schemes`() {
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Link:(https://example.com)"))
         assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Visit:example.com"))
+        assertEquals("https://example.com", LinkUrlExtraction.extractFirstUrl("Article:example.com"))
     }
 
     @Test

@@ -428,6 +428,13 @@ class SharedUiComposeTest {
             assertEquals(foreground, glyph.fetchSemanticsNode().config[SharedEmittedForeground])
             assertFalse(row.config.contains(SemanticsProperties.ProgressBarRangeInfo))
             val pixels = nativeGlyphPixels(glyph.fetchSemanticsNode())
+            for ((x, y) in listOf(pixels.width * 0.95f to pixels.height / 2f, pixels.width * 0.44f to 0f)) {
+                val actual = pixels.getPixel(x.toInt(), y.toInt())
+                for (shift in listOf(0, 8, 16)) {
+                    assertTrue(abs(((actual ushr shift) and 255) - ((foreground.toArgb() ushr shift) and 255)) <= 1,
+                        "Mounted $expected battery must paint its cap and outline, even with empty fill")
+                }
+            }
             val span = pixels.width * 0.88f - 6f
             for (segment in 0..<4) {
                 val actual = pixels.getPixel((3f + span * (segment + 0.5f) / 4).toInt(), pixels.height / 2)

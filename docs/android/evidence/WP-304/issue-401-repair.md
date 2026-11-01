@@ -35,6 +35,9 @@ Battery artwork is original Canvas geometry, not extracted SF Symbol artwork.
 Fill buckets retain 13/38/63/88 boundaries; warning thresholds retain 10/20.
 Signal fill/threshold/hysteresis/smoothing source values are unchanged. Decorative
 glyphs do not duplicate the enclosing row's spoken text.
+Standalone and mounted battery assertions inspect painted cap/outline pixels even
+at empty fill, so a missing or wrongly colored critical glyph cannot pass only
+through background pixels and foreground semantics.
 
 ## Capability and decision record
 

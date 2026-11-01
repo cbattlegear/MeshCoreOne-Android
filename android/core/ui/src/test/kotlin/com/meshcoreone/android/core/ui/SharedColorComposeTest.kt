@@ -186,6 +186,14 @@ class SharedColorComposeTest {
             }
             assertEquals(expected, foreground)
             val bounds = node.boundsInWindow
+            for ((x, y) in listOf(bounds.left + bounds.width * 0.95f to bounds.top + bounds.height / 2,
+                bounds.left + bounds.width * 0.44f to bounds.top)) {
+                val pixel = bitmap.getPixel(x.toInt(), y.toInt())
+                for (shift in listOf(0, 8, 16)) {
+                    assertTrue(abs(((pixel ushr shift) and 255) - ((expected.toArgb() ushr shift) and 255)) <= 1,
+                        "Battery $percentage must paint its cap and outline in the expected role color")
+                }
+            }
             val inset = 3f
             val span = bounds.width * 0.88f - 6f
             for (index in 0..<4) {

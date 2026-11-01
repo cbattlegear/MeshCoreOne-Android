@@ -407,6 +407,62 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { deferredChat.cancel(); unmount(); h.container.close() }
     }
 
+    @Test fun interleavedNotificationDestinationsRetireEarlierChatHandoffsBeforeMountedEffectsRun() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Interleaved peer") }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val channel = assertNotNull(store.fetchChannel(radio, 0u))
+            val n = h.container.navigation
+            val firstMessage = UUID.randomUUID()
+            val latestMessage = UUID.randomUUID()
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(
+                NotificationPayload.DirectMessage(EntityKey(radio, contact.id), firstMessage), null, null,
+            )))
+            assertEquals(contact, n.state.value.pendingChatContact)
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(
+                NotificationPayload.ChannelMessage(radio, channel.index, UUID.randomUUID()), null, null,
+            )))
+            assertNull(n.state.value.pendingChatContact)
+            assertEquals(channel, n.state.value.pendingChannel)
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(
+                NotificationPayload.DirectMessage(EntityKey(radio, contact.id), latestMessage), null, null,
+            )))
+            assertNull(n.state.value.pendingChannel)
+            assertEquals(contact, n.state.value.pendingChatContact)
+            assertEquals(latestMessage, n.state.value.pendingScrollToMessageID)
+            val chatsStack = n.state.value.activeStack
+            h.container.connectionPort.updateDevice(assertNotNull(h.appState.connectedDevice).copy(manualAddContacts = true))
+            h.eventually("interleaved discovery uses the actual manual-add device preference") {
+                h.appState.connectedDevice?.manualAddContacts == true
+            }
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(
+                NotificationPayload.NewContact(EntityKey(radio, contact.id)), null, null,
+            )))
+            assertEquals(AppTab.NODES, n.state.value.selectedTab)
+            assertNull(n.state.value.pendingChatContact)
+            assertNull(n.state.value.pendingChannel)
+            assertNull(n.state.value.pendingRoomSession)
+            mount(h)
+            h.settle()
+            compose.waitForIdle()
+            assertEquals(AppTab.NODES, n.state.value.selectedTab)
+            assertEquals(NavigationDestination.Discovery, n.state.value.activeStack.last().destination)
+            compose.onNodeWithTag("entry:${n.state.value.activeStack.last().id}").assertIsDisplayed()
+            assertEquals(chatsStack, n.state.value.stacks.getValue(AppTab.CHATS))
+            compose.runOnUiThread { n.selectTab(AppTab.CHATS) }
+            h.settle()
+            compose.waitForIdle()
+            assertEquals(chatsStack, n.state.value.activeStack)
+            assertEquals(contact, assertIs<ChatSelection.Direct>(n.state.value.chatsSelectedRoute).contact)
+            compose.onNodeWithTag("entry:${chatsStack.last().id}").assertIsDisplayed()
+            assertTrue(n.back())
+            assertEquals(channel, assertIs<ChatSelection.Channel>(n.state.value.chatsSelectedRoute).channel)
+        } finally { unmount(); h.container.close() }
+    }
+
     @Test fun sameRadioSessionReplacementRetiresCapturedAndInFlightCallbacksWithoutLosingSelection() = runTest {
         val uiScheduler = TestCoroutineScheduler()
         val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
@@ -570,7 +626,12 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             contactLookupRelease.complete(Unit)
             lookup.complete(null)
             unmount()
-            h.container.close()
+            val closing = async { h.container.close() }
+            h.eventually("activated process cleanup drains the controlled UI queue") {
+                uiScheduler.runCurrent()
+                closing.isCompleted
+            }
+            closing.await()
         }
     }
 

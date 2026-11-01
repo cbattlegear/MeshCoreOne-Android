@@ -85,6 +85,7 @@ interface OnboardingWiFiPort {
 interface OnboardingDemoPort {
     val isEnabled: StateFlow<Boolean>
     fun unlock()
+    suspend fun unlockAndAwait() = unlock()
     suspend fun connectDemo(): OnboardingConnectOutcome
 }
 

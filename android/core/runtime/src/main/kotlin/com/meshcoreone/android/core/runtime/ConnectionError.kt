@@ -14,7 +14,7 @@ sealed class ConnectionError(message: String, cause: Throwable? = null) :
     class UnsupportedCapability(val capability: String) : ConnectionError("Unsupported connection capability: $capability")
     class ForeignPhysicalOwner : ConnectionError("Physical connection is owned by another runtime")
     class RetainedPhysicalLink : ConnectionError("A retained physical link cannot become a fresh protocol generation")
-    class InvalidIdentity : ConnectionError("Radio public key must contain exactly 32 bytes")
+    class InvalidIdentity(message: String = "Radio public key must contain exactly 32 bytes") : ConnectionError(message)
     class FactoryOwnershipViolation : ConnectionError("Factory must return its registered generation-owned service handle")
 
     override val sourceServiceFault: ConnectionFault

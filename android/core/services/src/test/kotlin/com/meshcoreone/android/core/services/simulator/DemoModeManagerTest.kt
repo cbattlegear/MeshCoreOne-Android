@@ -47,7 +47,7 @@ class DemoModeManagerTest {
             val defaults = InMemoryDemoModeDefaults()
             val manager = DemoModeManager(defaults)
 
-            manager.isUnlocked = true
+            manager.setUnlocked(true)
 
             assertEquals(true, defaults.bool(forKey = "isDemoModeUnlocked"))
         },
@@ -55,7 +55,7 @@ class DemoModeManagerTest {
             val defaults = InMemoryDemoModeDefaults()
             val manager = DemoModeManager(defaults)
 
-            manager.isEnabled = true
+            manager.setEnabled(true)
 
             assertEquals(true, defaults.bool(forKey = "isDemoModeEnabled"))
         },
@@ -79,5 +79,6 @@ class DemoModeManagerTest {
         },
     )
 
-    private fun case(name: String, body: () -> Unit): DynamicTest = SimulatorTestSupport.caseNamed("DemoModeManagerTests", name, body)
+    private fun case(name: String, body: suspend () -> Unit): DynamicTest =
+        SimulatorTestSupport.caseNamed("DemoModeManagerTests", name) { SimulatorTestSupport.blocking { body() } }
 }

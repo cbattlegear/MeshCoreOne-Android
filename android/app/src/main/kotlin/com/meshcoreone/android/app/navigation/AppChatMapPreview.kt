@@ -62,18 +62,19 @@ internal fun AppChatMapPreview(
     previews: AppChatMapPreviews,
     coordinate: Coordinate,
     onMap: (String) -> Unit,
+    forceOffline: Boolean = false,
 ) {
     val network by previews.network.collectAsStateWithLifecycle()
     val dark = LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK
-    val request = remember(coordinate, dark, network) {
-        MapSnapshotRequest(coordinate.latitude, coordinate.longitude, dark, network != ChatMapNetwork.Online)
+    val request = remember(coordinate, dark, network, forceOffline) {
+        MapSnapshotRequest(coordinate.latitude, coordinate.longitude, dark, forceOffline || network != ChatMapNetwork.Online)
     }
     fun readImage() = ChatMapImage(previews.snapshots.value(request), previews.snapshots.isResolved(request))
     val image by produceState(readImage(), previews, request) {
         coroutineScope {
             fun refresh() {
                 value = readImage()
-                if (!value.resolved && request.isOffline == (previews.network.value != ChatMapNetwork.Online)) {
+                if (!value.resolved && request.isOffline == (forceOffline || previews.network.value != ChatMapNetwork.Online)) {
                     previews.request(request)
                 }
             }

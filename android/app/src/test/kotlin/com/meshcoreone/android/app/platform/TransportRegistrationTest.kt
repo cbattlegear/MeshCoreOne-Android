@@ -18,6 +18,7 @@ class TransportRegistrationTest {
         val mixed = listOf(wifi, ConnectionMethod.Bluetooth(UUID.randomUUID()))
         assertTrue(usesLanHosting(TransportType.WIFI, mixed))
         assertFalse(usesLanHosting(TransportType.BLUETOOTH, listOf(wifi)))
+        assertFalse(usesLanHosting(TransportType.SIMULATOR, listOf(wifi)))
         assertFalse(usesLanHosting(null, mixed))
         assertTrue(usesLanHosting(null, listOf(wifi)))
         assertFalse(usesLanHosting(null, emptyList()))

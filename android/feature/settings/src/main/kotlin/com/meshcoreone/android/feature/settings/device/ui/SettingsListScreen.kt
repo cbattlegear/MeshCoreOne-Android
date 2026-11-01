@@ -41,7 +41,9 @@ fun SettingsListScreen(
                 ActionRow(res(AppSettingsStrings.deviceInfoTitle), true, { onSelect(SettingsDetail.DEVICE_INFO) }, detail = UiText.Verbatim(device.nodeName))
                 ActionRow(res(AppSettingsStrings.radioHeader), true, { onSelect(SettingsDetail.RADIO) }, detail = radioDetail)
                 ActionRow(res(AppSettingsStrings.locationHeader), true, { onSelect(SettingsDetail.LOCATION) }, detail = SettingsListPresentation.locationDetailText(device))
-                ActionRow(SettingsListPresentation.connectionTitle(transport), true, { onSelect(SettingsDetail.CONNECTION) })
+                if (showPhysicalConnectionSettings(transport)) {
+                    ActionRow(SettingsListPresentation.connectionTitle(transport), true, { onSelect(SettingsDetail.CONNECTION) })
+                }
                 ActionRow(res(AppSettingsStrings.advancedSettingsTitle), true, { onSelect(SettingsDetail.ADVANCED) })
             }
         } else {
@@ -49,6 +51,7 @@ fun SettingsListScreen(
                 ActionRow(res(AppSettingsStrings.deviceConnect), true, onConnect)
             }
         }
+
         SettingsSection(res(AppSettingsStrings.appSettingsHeader)) {
             ActionRow(res(AppSettingsStrings.notificationsHeader), true, { onSelect(SettingsDetail.NOTIFICATIONS) })
             ActionRow(res(AppSettingsStrings.chatSettingsTitle), true, { onSelect(SettingsDetail.CHATS) })
@@ -66,3 +69,5 @@ fun SettingsListScreen(
         }
     }
 }
+
+internal fun showPhysicalConnectionSettings(transport: TransportType?): Boolean = transport != TransportType.SIMULATOR

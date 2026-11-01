@@ -214,7 +214,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Cold notification peer") }
         try {
             val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
-            val contact = ContactDTO(radioId = radio, publicKey = key(20), name = "Cold notification peer")
+            val contact = ContactDTO(
+                radioId = radio, publicKey = key(20), name = "Cold notification peer", lastHeardTimestamp = null,
+            )
             store.saveContact(contact)
             delivery.registerCategories(SnapshotList.empty())
             delivery.post(NotificationRequest(

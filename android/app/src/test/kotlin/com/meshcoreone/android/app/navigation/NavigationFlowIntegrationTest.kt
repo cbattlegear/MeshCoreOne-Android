@@ -21,11 +21,13 @@ import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
 import com.meshcoreone.android.app.deeplinks.AppDeepLinkEnvironment
 import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
 import com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome
+import com.meshcoreone.android.app.deeplinks.PendingExternalRoute
 import com.meshcoreone.android.app.navigation.*
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.notifications.*
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -41,10 +43,15 @@ import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesSession
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -286,6 +293,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 val radioA = assertNotNull(h.appState.currentRadioId)
                 val original = assertNotNull(store.fetchContact(radioA, key(20)))
                 val n = h.container.navigation
+                n.clearFailure()
                 val entered = CompletableDeferred<RadioId>()
                 val lookup = CompletableDeferred<ContactDTO?>()
                 val uri = h.container.nodesFeature.uriCodec.exportContactUri("Original claim", key(20), ContactType.ROOM)
@@ -329,6 +337,123 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             }
             assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
         } finally { h.container.close() }
+    }
+
+    @Test fun coldContactDeliverySurvivesTheInitialHandshakeAndRequiresMountedConsent() = runTest {
+        val h = ContainerHarness(this, store)
+        val handshake = CompletableDeferred<Unit>()
+        val chatScheduler = TestCoroutineScheduler()
+        val deferredChat = CoroutineScope(SupervisorJob() + StandardTestDispatcher(chatScheduler))
+        h.links.configureRadio = { radio -> radio.connectGate = handshake }
+        try {
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("physical handshake is held before radio assignment") { h.links.radios.isNotEmpty() }
+            val n = h.container.navigation
+            val router = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, n))
+            val pending = PendingExternalRoute(router::routeExternal)
+            val uri = h.container.nodesFeature.uriCodec.exportContactUri("Handshake claim", key(30), ContactType.ROOM)
+            val delivery = PendingExternalRoute.Delivery("wp302-handshake", uri)
+            pending.markReady()
+            assertEquals(
+                PendingExternalRoute.SubmitOutcome.Routed(DeepLinkRouteOutcome.ConfirmationStaged),
+                pending.submit(delivery),
+            )
+            val unbound = assertNotNull(n.state.value.pendingContactLink)
+            assertNull(unbound.targetRadioId)
+            val chatUri = h.container.nodesFeature.uriCodec.exportContactUri("Queued handshake claim", key(31), ContactType.REPEATER)
+            assertTrue(ChatLinkRouter(h.container.chatsFeature.list.links, deferredChat).route(chatUri))
+            mount(h)
+            await(h) { confirmationEnabled() }
+            handshake.complete(Unit)
+            connecting.await()
+            h.settle()
+            h.assertReady()
+            val rebound = assertNotNull(n.state.value.pendingContactLink)
+            assertEquals(h.appState.currentRadioId, rebound.targetRadioId)
+            assertEquals(n.state.value.generation, rebound.generation)
+            assertEquals(unbound.name, rebound.name)
+            assertEquals(unbound.publicKey, rebound.publicKey)
+            assertEquals(unbound.type, rebound.type)
+            assertNotEquals(unbound.deliveryId, rebound.deliveryId)
+            assertFalse(n.completeContactLink(unbound))
+            assertNull(pending.snapshot())
+            assertEquals(PendingExternalRoute.SubmitOutcome.Duplicate, pending.submit(delivery))
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-name").assertTextEquals("Handshake claim")
+            assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+            assertNull(store.fetchContact(assertNotNull(rebound.targetRadioId), key(30)))
+            compose.onNodeWithTag("contact-link-cancel").performClick()
+            assertNull(n.state.value.pendingContactLink)
+            chatScheduler.runCurrent()
+            val queued = assertNotNull(n.state.value.pendingContactLink)
+            assertEquals(key(31), queued.publicKey)
+            assertEquals(rebound.targetRadioId, queued.targetRadioId)
+            assertEquals(n.state.value.generation, queued.generation)
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-name").assertTextEquals("Queued handshake claim")
+            compose.onNodeWithTag("contact-link-cancel").performClick()
+            assertNull(n.state.value.pendingContactLink)
+            assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+        } finally { deferredChat.cancel(); unmount(); h.container.close() }
+    }
+
+    @Test fun sameRadioSessionReplacementRetiresCapturedAndInFlightCallbacksWithoutLosingSelection() = runTest {
+        var hold = false
+        var heldKey: EntityKey? = null
+        val entered = CompletableDeferred<Unit>()
+        val lookup = CompletableDeferred<ContactDTO?>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContact(key: EntityKey): ContactDTO? {
+                if (hold && key == heldKey) {
+                    entered.complete(Unit)
+                    return lookup.await()
+                }
+                return store.fetchContact(key)
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        h.links.configureRadio = { radio ->
+            radio.knownContacts += contactFrame(key(20), "Retired callback target")
+            radio.knownContacts += contactFrame(key(21), "Retained selection")
+        }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val oldSession = assertNotNull(h.sessions.current)
+            val oldCallback = assertNotNull(oldSession.notificationService.onNotificationTapped)
+            val oldGeneration = h.container.navigation.state.value.generation
+            val target = assertNotNull(store.fetchContact(radio, key(20)))
+            heldKey = EntityKey(radio, target.id)
+            val selected = assertNotNull(store.fetchContact(radio, key(21)))
+            val n = h.container.navigation
+            n.navigateToChat(selected)
+            mount(h)
+            compose.waitForIdle()
+            val stack = n.state.value.activeStack
+            hold = true
+            val inFlight = async { oldCallback(EntityKey(radio, target.id)) }
+            entered.await()
+            hold = false
+            h.manager.rebuildSession(assertNotNull(h.appState.connectedDevice).id)
+            h.settle()
+            h.assertReady()
+            assertNotSame(oldSession, h.sessions.current)
+            assertNull(oldSession.notificationService.onNotificationTapped)
+            assertTrue(n.state.value.generation > oldGeneration)
+            assertEquals(stack, n.state.value.activeStack)
+            assertEquals(ChatSelection.Direct(selected), n.state.value.chatsSelectedRoute)
+            lookup.complete(target)
+            inFlight.await()
+            oldCallback(EntityKey(radio, target.id))
+            assertEquals(stack, n.state.value.activeStack)
+            assertEquals(ChatSelection.Direct(selected), n.state.value.chatsSelectedRoute)
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(
+                NotificationPayload.DirectMessage(EntityKey(radio, target.id), UUID.randomUUID()), null, null,
+            )))
+            compose.waitForIdle()
+            assertEquals(ChatSelection.Direct(target), n.state.value.chatsSelectedRoute)
+            compose.onNodeWithTag("entry:${n.state.value.activeStack.last().id}").assertIsDisplayed()
+        } finally { unmount(); h.container.close() }
     }
 
     @Test fun identicalDeliveriesReplaceMountedHoldersAndCancelHeldImportsWithoutLateAcknowledgement() = runTest {

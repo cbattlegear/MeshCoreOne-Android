@@ -53,6 +53,7 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
             lookupOrNull { environment.fetchContact(radioId, link.publicKey) }
         }
         currentCoroutineContext().ensureActive()
+        if (link.publicKey == environment.connectedDevicePublicKey) return DeepLinkRouteOutcome.IgnoredSelfContact
         if (!environment.completeContactLookup(link, existing, radioId, generation)) {
             return DeepLinkRouteOutcome.ContactLookupRejected
         }

@@ -147,16 +147,19 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     ): Boolean {
         while (true) {
             val current = state.value
+            val initialAssignment = current.initialContactLinkGeneration == expectedGeneration &&
+                current.generation == Math.incrementExact(expectedGeneration)
+            val radio = if (initialAssignment && targetRadioId == null) current.radioId else targetRadioId
             val failure = when {
-                current.generation != expectedGeneration || currentRadioId != targetRadioId ||
-                    current.radioId != null && current.radioId != targetRadioId -> NavigationFailure.StaleGeneration
-                contact != null && (contact.radioId != targetRadioId || contact.publicKey != link.publicKey) ->
+                current.generation != expectedGeneration && !initialAssignment || currentRadioId != radio ||
+                    current.radioId != null && current.radioId != radio -> NavigationFailure.StaleGeneration
+                contact != null && (contact.radioId != radio || contact.publicKey != link.publicKey) ->
                     NavigationFailure.WrongTarget(NavigationTarget.CONTACT)
                 else -> null
             }
             val next = when {
                 failure != null -> current.copy(failure = failure)
-                contact == null -> current.stageContactLink(link, targetRadioId)
+                contact == null -> current.stageContactLink(link, radio)
                 else -> current.push(AppTab.NODES, NavigationDestination.ContactDetail(contact)).copy(
                     pendingContactDetail = contact, selectedContact = contact, nodesShowingDiscovery = false,
                 )
@@ -245,15 +248,34 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     // AndroidOnly: WP-302 The process owner supplies generation changes; manual disconnect retains cached chats.
-    fun replaceRadio(radioId: RadioId?) = mutableState.update {
-        clearRadioSelection(it).copy(
-            radioId = radioId, generation = Math.incrementExact(it.generation),
+    fun replaceRadio(radioId: RadioId?) = mutableState.update { it.replaceRadioState(radioId) }
+
+    // Native adaptation: A new session always retires old callbacks, even for the same radio.
+    fun bindNotificationSession(radioId: RadioId, localPublicKey: Bytes?) = mutableState.update { current ->
+        val eligible = current.pendingContactLink?.takeIf {
+            (current.radioId == null || current.radioId == radioId) &&
+                it.generation == current.generation && (it.targetRadioId == null || it.targetRadioId == radioId) &&
+                it.publicKey != localPublicKey
+        }
+        val next = if (current.radioId == radioId) current.copy(
+            generation = Math.incrementExact(current.generation), navigationReady = false, pendingContactLink = null,
+            initialContactLinkGeneration = null,
+        ) else current.replaceRadioState(radioId).copy(
+            navigationReady = false,
+            initialContactLinkGeneration = if (current.radioId == null) current.generation else null,
+        )
+        if (eligible == null) next else next.stageContactLink(eligible, radioId)
+    }
+
+    private fun NavigationState.replaceRadioState(radioId: RadioId?) =
+        clearRadioSelection(this).copy(
+            radioId = radioId, generation = Math.incrementExact(generation),
+            initialContactLinkGeneration = null,
             pendingContactLink = null, pendingChannelLink = null, pendingHashtag = null,
             pendingChatContact = null, pendingChannel = null, pendingRoomSession = null,
             pendingRoomAuthentication = null, pendingContactDetail = null,
             pendingDiscoveryNavigation = false, pendingScrollToMessageID = null, pendingMapFocus = null,
         )
-    }
 
     fun manuallyDisconnect() = mutableState.update {
         clearDeviceSelection(it).copy(generation = Math.incrementExact(it.generation))

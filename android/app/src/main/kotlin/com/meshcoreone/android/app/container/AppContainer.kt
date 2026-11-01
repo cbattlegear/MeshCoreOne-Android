@@ -504,7 +504,9 @@ private class ContainerAppStatePlatform(
         delegate.configureNotificationNavigation(session, connectedDevice)
         if (this.session !== session || generation != navigation.state.value.generation) {
             binding?.close()
-            if (navigation.state.value.radioId != session.token.radioId) {
+            if (this.session !== session) {
+                navigation.bindNotificationSession(session.token.radioId, connectedDevice()?.publicKey)
+            } else if (navigation.state.value.radioId != session.token.radioId) {
                 navigation.replaceRadio(session.token.radioId)
             }
             binding = NotificationNavigationBinding(

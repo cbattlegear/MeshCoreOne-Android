@@ -19,20 +19,20 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 private object CacheConfig {
     const val MAX_ENTRY_COUNT = 512
     const val MAX_TOTAL_COST_BYTES = 50L * 1024 * 1024 // 50MB
     const val MAX_CONCURRENT_FETCHES = 3
+    const val PREVIEW_AVAILABILITY_BUFFER = 32
     const val MAX_PERSISTED_LOOKUPS = 10_000
     const val MAX_PERSISTED_LOOKUP_COST_BYTES = 4L * 1024 * 1024
     const val PERSISTED_LOOKUP_TTL_NANOS = 60_000_000_000L
+    const val ENTRY_OVERHEAD_BYTES = 64L
 }
 
 /**
@@ -58,15 +58,17 @@ class LinkPreviewCache(
     private val memoryCache = ThreadSafeLruCostBoundedCache<String, LinkPreviewDataDTO>(
         maxEntryCount = CacheConfig.MAX_ENTRY_COUNT,
         maxTotalCostBytes = CacheConfig.MAX_TOTAL_COST_BYTES,
-        costOf = { it.imageData.costOf() + it.iconData.costOf() },
+        costOf = { it.costOf() },
     )
     private val fetchSemaphore = Semaphore(CacheConfig.MAX_CONCURRENT_FETCHES)
     private val mutex = Mutex()
     private val persistedLookupMutex = Mutex()
+    private val memoryClearLock = Any()
     private data class PersistedLookup(
         val hasPreview: Boolean,
         val createdAtNanos: Long,
         val costBytes: Long,
+        val memoryClearRevision: Long,
     )
     private val persistedLookups = ThreadSafeLruCostBoundedCache<String, PersistedLookup>(
         maxEntryCount = CacheConfig.MAX_PERSISTED_LOOKUPS,
@@ -74,9 +76,9 @@ class LinkPreviewCache(
         costOf = { it.costBytes },
     )
     private val memoryClearRevision = AtomicLong()
-    private var lastPublishedMemoryClearRevision = 0L
-    private val mutablePreviewAvailability = MutableStateFlow(0L)
-    val previewAvailability: StateFlow<Long> = mutablePreviewAvailability.asStateFlow()
+    private val mutablePreviewAvailability =
+        MutableSharedFlow<String>(extraBufferCapacity = CacheConfig.PREVIEW_AVAILABILITY_BUFFER)
+    val previewAvailability: SharedFlow<String> = mutablePreviewAvailability.asSharedFlow()
 
     /**
      * Shared fetch deferred per in-flight URL. Concurrent requests for the same URL await the
@@ -120,13 +122,17 @@ class LinkPreviewCache(
 
     override suspend fun isFetching(url: String): Boolean = inFlightTasks.containsKey(url)
 
-    override suspend fun cachedPreview(url: String): LinkPreviewDataDTO? = memoryCache.get(url)
+    override suspend fun cachedPreview(url: String): LinkPreviewDataDTO? =
+        synchronized(memoryClearLock) { memoryCache.get(url) }
 
     fun hasCachedPreview(url: String): Boolean {
-        if (memoryCache.get(url) != null) return true
-        val lookup = persistedLookups.get(url) ?: return false
-        return lookup.hasPreview &&
-            monotonicNowNanos() - lookup.createdAtNanos < CacheConfig.PERSISTED_LOOKUP_TTL_NANOS
+        return synchronized(memoryClearLock) {
+            if (memoryCache.get(url) != null) return@synchronized true
+            val lookup = persistedLookups.get(url) ?: return@synchronized false
+            lookup.memoryClearRevision == memoryClearRevision.get() &&
+                lookup.hasPreview &&
+                monotonicNowNanos() - lookup.createdAtNanos < CacheConfig.PERSISTED_LOOKUP_TTL_NANOS
+        }
     }
 
     suspend fun cachedPreview(url: String, dataStore: LinkPreviewPersisting): LinkPreviewDataDTO? =
@@ -138,40 +144,46 @@ class LinkPreviewCache(
      */
     private suspend fun checkCaches(url: String, dataStore: LinkPreviewPersisting): LinkPreviewDataDTO? {
         // Tier 1: Memory cache (instant).
-        memoryCache.get(url)?.let { return it }
+        synchronized(memoryClearLock) { memoryCache.get(url) }?.let { return it }
 
         // Tier 2: Database lookup.
         return persistedLookupMutex.withLock {
-            memoryCache.get(url)?.let { return@withLock it }
+            synchronized(memoryClearLock) { memoryCache.get(url) }?.let { return@withLock it }
             val now = monotonicNowNanos()
-            val cachedLookup = persistedLookups.get(url)
+            val (clearRevisionAtLookup, cachedLookup) = synchronized(memoryClearLock) {
+                memoryClearRevision.get() to persistedLookups.get(url)
+            }
             val lookupIsFresh = cachedLookup != null &&
                 now - cachedLookup.createdAtNanos < CacheConfig.PERSISTED_LOOKUP_TTL_NANOS
             if (lookupIsFresh && cachedLookup?.hasPreview == false) return@withLock null
             val expiredLookup = cachedLookup != null && !lookupIsFresh
-            val clearRevisionAtLookup = memoryClearRevision.get()
+            val lookupCostBytes = url.persistedLookupCostBytes()
+            val lookupCanBeCached = lookupCostBytes <= CacheConfig.MAX_PERSISTED_LOOKUP_COST_BYTES
             try {
                 val persisted = dataStore.fetchLinkPreview(url)
-                val currentMemoryClearRevision = memoryClearRevision.get()
-                val cost = url.length.toLong() * 2 + 64
-                if (
-                    currentMemoryClearRevision == clearRevisionAtLookup &&
-                    cost <= CacheConfig.MAX_PERSISTED_LOOKUP_COST_BYTES
-                ) {
-                    persistedLookups.put(
-                        url,
-                        PersistedLookup(persisted != null, monotonicNowNanos(), cost),
-                    )
-                }
-                persisted?.also {
-                    if (currentMemoryClearRevision == clearRevisionAtLookup) {
-                        memoryCache.put(url, it)
+                val currentMemoryClearRevision = synchronized(memoryClearLock) {
+                    val currentRevision = memoryClearRevision.get()
+                    if (currentRevision == clearRevisionAtLookup && lookupCanBeCached) {
+                        persistedLookups.put(
+                            url,
+                            PersistedLookup(
+                                hasPreview = persisted != null,
+                                createdAtNanos = monotonicNowNanos(),
+                                costBytes = lookupCostBytes,
+                                memoryClearRevision = currentRevision,
+                            ),
+                        )
+                        persisted?.let { memoryCache.put(url, it) }
                     }
-                    if (expiredLookup || currentMemoryClearRevision != lastPublishedMemoryClearRevision) {
-                        lastPublishedMemoryClearRevision = currentMemoryClearRevision
-                        publishPreviewAvailability()
-                    }
+                    currentRevision
                 }
+                val clearedDuringLookup = currentMemoryClearRevision != clearRevisionAtLookup
+                val recheckedAfterTrim = lookupCanBeCached && currentMemoryClearRevision > 0 &&
+                    cachedLookup?.memoryClearRevision != currentMemoryClearRevision
+                if (persisted != null && (expiredLookup || clearedDuringLookup || recheckedAfterTrim)) {
+                    publishPreviewAvailability(url)
+                }
+                persisted
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Exception) {
@@ -184,8 +196,8 @@ class LinkPreviewCache(
         }
     }
 
-    private fun publishPreviewAvailability() {
-        mutablePreviewAvailability.update(Math::incrementExact)
+    private suspend fun publishPreviewAvailability(url: String) {
+        mutablePreviewAvailability.emit(url)
     }
 
     /**
@@ -218,6 +230,7 @@ class LinkPreviewCache(
         // `defer { signal() }` pair; `withPermit` releases on both normal return and
         // cancellation, matching the source's defer-guaranteed release.
         fetchSemaphore.withPermit {
+            val clearRevisionAtFetch = memoryClearRevision.get()
             val metadata = service.fetchMetadata(url)
             if (metadata == null) {
                 // Cache negative result to avoid repeated fetch attempts.
@@ -235,19 +248,30 @@ class LinkPreviewCache(
                 imageHeight = heroDimensions?.second?.toLong(),
             )
 
-            // Cache in memory with cost based on image sizes.
-            memoryCache.put(url, dto)
+            synchronized(memoryClearLock) {
+                if (memoryClearRevision.get() == clearRevisionAtFetch) memoryCache.put(url, dto)
+            }
 
             // Persist to database.
             try {
                 dataStore.saveLinkPreview(dto)
                 persistedLookupMutex.withLock {
-                    val cost = url.length.toLong() * 2 + 64
-                    if (cost <= CacheConfig.MAX_PERSISTED_LOOKUP_COST_BYTES) {
-                        persistedLookups.put(
-                            url,
-                            PersistedLookup(true, monotonicNowNanos(), cost),
-                        )
+                    synchronized(memoryClearLock) {
+                        val lookupCostBytes = url.persistedLookupCostBytes()
+                        if (
+                            memoryClearRevision.get() == clearRevisionAtFetch &&
+                            lookupCostBytes <= CacheConfig.MAX_PERSISTED_LOOKUP_COST_BYTES
+                        ) {
+                            persistedLookups.put(
+                                url,
+                                PersistedLookup(
+                                    hasPreview = true,
+                                    createdAtNanos = monotonicNowNanos(),
+                                    costBytes = lookupCostBytes,
+                                    memoryClearRevision = clearRevisionAtFetch,
+                                ),
+                            )
+                        }
                     }
                 }
             } catch (cancellation: CancellationException) {
@@ -258,20 +282,27 @@ class LinkPreviewCache(
                 Logger.getLogger("MeshCore.LinkPreviewCache").fine("Preview database write failed: ${error.javaClass.simpleName}")
             }
 
+            publishPreviewAvailability(url)
             LinkPreviewResult.Loaded(dto)
         }
 
     private fun Bytes?.costOf(): Long = this?.size?.toLong() ?: 0L
 
+    private fun LinkPreviewDataDTO.costOf(): Long =
+        imageData.costOf() + iconData.costOf() +
+            url.storageCostBytes() + (title?.storageCostBytes() ?: 0L) +
+            CacheConfig.ENTRY_OVERHEAD_BYTES
+
+    private fun String.storageCostBytes(): Long = length.toLong() * 2L
+
+    private fun String.persistedLookupCostBytes(): Long =
+        storageCostBytes() + CacheConfig.ENTRY_OVERHEAD_BYTES
+
     fun clearMemory() {
-        memoryCache.clear()
-        persistedLookups.clear()
-        memoryClearRevision.incrementAndGet()
-        workers.launch(start = CoroutineStart.UNDISPATCHED) {
-            persistedLookupMutex.withLock {
-                memoryCache.clear()
-                persistedLookups.clear()
-            }
+        synchronized(memoryClearLock) {
+            memoryClearRevision.incrementAndGet()
+            memoryCache.clear()
+            persistedLookups.clear()
         }
     }
 

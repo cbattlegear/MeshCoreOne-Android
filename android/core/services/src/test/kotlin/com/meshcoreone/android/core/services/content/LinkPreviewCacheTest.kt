@@ -11,9 +11,11 @@ import com.meshcoreone.android.core.contracts.domain.LinkPreviewPersisting
 import com.meshcoreone.android.core.model.LinkPreviewDataDTO
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -204,11 +206,13 @@ class LinkPreviewCacheTest {
 
             assertTrue(cache.manualFetch(url, dataStore) is LinkPreviewResult.Loaded)
             cache.clearMemory()
-            val availabilityBeforeReload = cache.previewAvailability.value
+            val availability = async(start = CoroutineStart.UNDISPATCHED) {
+                cache.previewAvailability.first()
+            }
 
             assertEquals("Written preview", cache.cachedPreview(url, dataStore)?.title)
             assertEquals(2, dataStore.fetchCallCount)
-            assertTrue(cache.previewAvailability.value > availabilityBeforeReload)
+            assertEquals(url, availability.await())
         } finally {
             cache.close()
         }
@@ -227,13 +231,15 @@ class LinkPreviewCacheTest {
         )
         try {
             assertNull(cache.cachedPreview(url, dataStore))
-            val availabilityBeforeReload = cache.previewAvailability.value
             dataStore.seed(LinkPreviewDataDTO(url = url, title = "Externally written"))
             now = 120_000_000_000L
+            val availability = async(start = CoroutineStart.UNDISPATCHED) {
+                cache.previewAvailability.first()
+            }
 
             assertEquals("Externally written", cache.cachedPreview(url, dataStore)?.title)
             assertEquals(2, dataStore.fetchCallCount)
-            assertTrue(cache.previewAvailability.value > availabilityBeforeReload)
+            assertEquals(url, availability.await())
         } finally {
             cache.close()
         }
@@ -257,6 +263,38 @@ class LinkPreviewCacheTest {
     }
 
     @Test
+    fun `memory trim does not let an in-flight persisted lookup repopulate either cache`() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var fetchCalls = 0
+        val url = "https://example.com/trim-race"
+        val dataStore = object : LinkPreviewPersisting {
+            override suspend fun fetchLinkPreview(requestUrl: String): LinkPreviewDataDTO? {
+                fetchCalls++
+                started.complete(Unit)
+                release.await()
+                return LinkPreviewDataDTO(url, title = "Persisted after trim")
+            }
+
+            override suspend fun saveLinkPreview(dto: LinkPreviewDataDTO) = Unit
+        }
+        val cache = previewsEnabledCache()
+        try {
+            val lookup = async { cache.cachedPreview(url, dataStore) }
+            started.await()
+            cache.clearMemory()
+            release.complete(Unit)
+
+            assertEquals("Persisted after trim", lookup.await()?.title)
+            assertNull(cache.cachedPreview(url))
+            assertEquals("Persisted after trim", cache.cachedPreview(url, dataStore)?.title)
+            assertEquals(2, fetchCalls)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
     fun `positive cache retains two hundred messages with two media urls each`() = runTest {
         val dataStore = FakePersisting()
         val urls = (0 until 402).map { "https://example.com/cached/$it" }
@@ -268,6 +306,24 @@ class LinkPreviewCacheTest {
 
             urls.forEach { assertEquals("Cached", cache.cachedPreview(it, dataStore)?.title) }
             assertEquals(urls.size, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
+    fun `title-only previews count toward the positive cache byte limit`() = runTest {
+        val dataStore = FakePersisting()
+        val urls = (0 until 52).map { "https://example.com/title-cache/$it" }
+        val largeTitle = "x".repeat(512 * 1024)
+        urls.forEach { dataStore.seed(LinkPreviewDataDTO(url = it, title = largeTitle)) }
+        val cache = previewsEnabledCache()
+        try {
+            urls.forEach { assertEquals(largeTitle, cache.cachedPreview(it, dataStore)?.title) }
+            assertEquals(urls.size, dataStore.fetchCallCount)
+
+            assertEquals(largeTitle, cache.cachedPreview(urls.first(), dataStore)?.title)
+            assertEquals(urls.size + 1, dataStore.fetchCallCount)
         } finally {
             cache.close()
         }

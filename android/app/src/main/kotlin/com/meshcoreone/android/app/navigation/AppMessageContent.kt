@@ -32,6 +32,7 @@ import com.meshcoreone.android.core.services.rendering.PreviewLoadState
 import com.meshcoreone.android.core.services.simulator.DemoOfflineContent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 internal suspend fun shareMountedImage(
@@ -63,7 +64,6 @@ internal fun AppMessageContent(
         com.meshcoreone.android.app.platform.shareImage(context, bytes)
     }
     val preferences by content.rendering.collectAsState()
-    val previewAvailability by content.previewAvailability.collectAsState()
     val malwareRevision by malwareRevisionSource.collectAsState()
     val autoResolve = preferences[if (message.isChannelMessage) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM]
     (if (preferences[AppStorageKey.linkPreviewsEnabled]) media else emptyList()).forEach { entry ->
@@ -72,6 +72,12 @@ internal fun AppMessageContent(
         val bundledImage = DemoOfflineContent.isInlineImage(message, url)
         if (DemoOfflineContent.isSimulatorMessage(message) && !bundledPreview && !bundledImage) return@forEach
         key(message.radioId, message.id, url, autoResolve) {
+            var previewRevision by remember(content, url) { mutableLongStateOf(0L) }
+            LaunchedEffect(content, url) {
+                content.previewAvailability.collect { changedUrl ->
+                    if (changedUrl == url) previewRevision = Math.incrementExact(previewRevision)
+                }
+            }
             var image by remember { mutableStateOf<ChatImage?>(null) }
             var imageBlocked by remember { mutableStateOf(false) }
             var verifiedMalwareRevision by remember { mutableLongStateOf(Long.MIN_VALUE) }
@@ -103,7 +109,7 @@ internal fun AppMessageContent(
                 preferences[AppStorageKey.linkPreviewsEnabled],
                 preferences[AppStorageKey.linkPreviewsAutoResolveDM],
                 preferences[AppStorageKey.linkPreviewsAutoResolveChannels],
-                previewAvailability,
+                previewRevision,
             ) {
                 LinkPreviewStateHolder(
                     url,

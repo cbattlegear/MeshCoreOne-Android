@@ -56,7 +56,7 @@ class AppChatContent internal constructor(
         throw failure
     }.stateIn(scope, SharingStarted.Eagerly, initialPreferences)
     private val previewCache = LinkPreviewCache(NativeLinkMetadataFetching(http), LinkPreviewPreferences(preferences), scope)
-    internal val previewAvailability: StateFlow<Long> = previewCache.previewAvailability
+    internal val previewAvailability: SharedFlow<String> = previewCache.previewAvailability
     private val imageCache = InlineImageCache(http, isUrlSafe = imageSafety)
     private val dimensions = inlineImageDimensionsStore(context).also(imageCache::attachDimensionsStore)
     private val mutableResolutions = MutableStateFlow(0L)

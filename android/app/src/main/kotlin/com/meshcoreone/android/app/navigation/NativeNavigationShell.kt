@@ -330,7 +330,7 @@ fun NativeNavigationShell(
                     entryProvider = { entry ->
                         NavEntry(
                             entry, contentKey = "entry-${entry.id}",
-                            metadata = mapOf("destination" to entry.destination, "ownerTab" to owners.getValue(entry.id)) +
+                            metadata = mapOf("destination" to entry.destination, "ownerTab" to entry.ownerTab) +
                                 predictiveTransition,
                         ) {
                             Box(Modifier.fillMaxSize().focusRestorer().focusGroup().testTag("entry:${entry.id}")) {

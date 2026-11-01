@@ -36,6 +36,8 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.runtime.LastConnectionStore
+import com.meshcoreone.android.core.runtime.SystemRuntimeClock
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ChatLinkEnvironment
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
@@ -458,6 +460,62 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(ChatSelection.Direct(target), n.state.value.chatsSelectedRoute)
             compose.onNodeWithTag("entry:${n.state.value.activeStack.last().id}").assertIsDisplayed()
         } finally { unmount(); h.container.close() }
+    }
+
+    @Test fun savedOfflineContactDestinationSurvivesCompatibleInitialAssignmentButNotAnotherRadio() = runTest {
+        for (compatible in listOf(true, false)) {
+            val h = ContainerHarness(this, store, identity = { if (compatible) key(7) else key(8) })
+            val deviceId = DeviceIdentity.deriveUUID(key(7))
+            val radio = RadioId(deviceId)
+            val saved = ContactDTO(
+                radioId = radio, publicKey = key(20), name = "Saved offline identity", lastHeardTimestamp = null,
+            )
+            val handshake = CompletableDeferred<Unit>()
+            h.links.configureRadio = { firmware ->
+                firmware.connectGate = handshake
+                firmware.knownContacts += contactFrame(key(20), saved.name)
+            }
+            try {
+                store.saveDevice(DeviceDTO(id = deviceId, radioId = radio, publicKey = key(7), nodeName = "Cached radio"))
+                store.saveContact(saved)
+                LastConnectionStore(h.preferences, SystemRuntimeClock()).persist(deviceId, radio, "Cached radio")
+                h.container.connectionPort.refreshLastConnection()
+                val connecting = async { h.manager.connect(h.target(deviceId)) }
+                h.eventually("handshake held with actual persisted offline radio") { h.links.radios.isNotEmpty() }
+                val n = h.container.navigation
+                assertNull(n.state.value.radioId)
+                assertEquals(radio, h.appState.currentRadioId)
+                val router = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, n))
+                val pending = PendingExternalRoute(router::routeExternal)
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri("Claimed alias", saved.publicKey, ContactType.ROOM)
+                pending.markReady()
+                assertEquals(
+                    PendingExternalRoute.SubmitOutcome.Routed(DeepLinkRouteOutcome.Navigated),
+                    pending.submit(PendingExternalRoute.Delivery("wp302-saved-offline", uri)),
+                )
+                val stack = n.state.value.activeStack
+                assertEquals(saved.id, n.state.value.selectedContact?.id)
+                mount(h)
+                compose.onNodeWithTag("entry:${stack.last().id}").assertIsDisplayed()
+                handshake.complete(Unit)
+                connecting.await()
+                h.settle()
+                h.assertReady()
+                compose.waitForIdle()
+                assertNull(pending.snapshot())
+                assertNull(n.state.value.pendingContactLink)
+                if (compatible) {
+                    assertEquals(stack, n.state.value.activeStack)
+                    assertEquals(saved.id, n.state.value.selectedContact?.id)
+                    compose.onNodeWithTag("entry:${stack.last().id}").assertIsDisplayed()
+                } else {
+                    assertNotEquals(radio, n.state.value.radioId)
+                    assertNull(n.state.value.selectedContact)
+                    assertEquals(1, n.state.value.activeStack.size)
+                }
+                assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+            } finally { unmount(); h.container.close() }
+        }
     }
 
     @Test fun identicalDeliveriesReplaceMountedHoldersAndCancelHeldImportsWithoutLateAcknowledgement() = runTest {

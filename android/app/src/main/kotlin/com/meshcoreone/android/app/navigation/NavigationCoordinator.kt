@@ -259,14 +259,46 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 it.generation == current.generation && (it.targetRadioId == null || it.targetRadioId == radioId) &&
                 it.publicKey != localPublicKey
         }
-        val next = if (current.radioId == radioId) current.copy(
-            generation = Math.incrementExact(current.generation), navigationReady = false, pendingContactLink = null,
-            initialContactLinkGeneration = null,
-        ) else current.replaceRadioState(radioId).copy(
-            navigationReady = false,
-            initialContactLinkGeneration = if (current.radioId == null) current.generation else null,
-        )
+        val next = when {
+            current.radioId == radioId -> current.copy(
+                generation = Math.incrementExact(current.generation), navigationReady = false, pendingContactLink = null,
+                initialContactLinkGeneration = null,
+            )
+            current.radioId == null -> current.bindInitialRadioState(radioId)
+            else -> current.replaceRadioState(radioId).copy(navigationReady = false)
+        }
         if (eligible == null) next else next.stageContactLink(eligible, radioId)
+    }
+
+    private fun NavigationState.bindInitialRadioState(radioId: RadioId): NavigationState {
+        val retained = removeDestinations { destination ->
+            val ownerRadio = when (destination) {
+                is NavigationDestination.Chat -> when (val selection = destination.selection) {
+                    is ChatSelection.Direct -> selection.contact.radioId
+                    is ChatSelection.Channel -> selection.channel.radioId
+                    is ChatSelection.Room -> selection.session.radioId
+                }
+                is NavigationDestination.ContactDetail -> destination.contact.radioId
+                is NavigationDestination.RemoteNode -> destination.contact.radioId
+                else -> null
+            }
+            ownerRadio != null && ownerRadio != radioId
+        }
+        val chats = retained.stacks.getValue(AppTab.CHATS).last().destination as? NavigationDestination.Chat
+        val nodes = retained.stacks.getValue(AppTab.NODES).last().destination
+        return retained.copy(
+            radioId = radioId, generation = Math.incrementExact(generation),
+            initialContactLinkGeneration = generation, navigationReady = false, pendingContactLink = null,
+            chatsSelectedRoute = chats?.selection,
+            selectedContact = (nodes as? NavigationDestination.ContactDetail)?.contact,
+            nodesShowingDiscovery = nodes == NavigationDestination.Discovery,
+            pendingChatContact = pendingChatContact?.takeIf { it.radioId == radioId },
+            pendingChannel = pendingChannel?.takeIf { it.radioId == radioId },
+            pendingRoomSession = pendingRoomSession?.takeIf { it.radioId == radioId },
+            pendingRoomAuthentication = pendingRoomAuthentication?.takeIf { it.radioId == radioId },
+            pendingContactDetail = pendingContactDetail?.takeIf { it.radioId == radioId },
+            pendingScrollToMessageID = pendingScrollToMessageID.takeIf { chats != null },
+        )
     }
 
     private fun NavigationState.replaceRadioState(radioId: RadioId?) =

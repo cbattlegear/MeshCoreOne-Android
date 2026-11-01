@@ -72,7 +72,7 @@ sealed interface NavigationDestination {
 }
 
 // Native adaptation: Opaque entry identity; never a public key, DTO or radio ID in saved-state keys.
-data class NavigationEntry(val id: Long, val destination: NavigationDestination)
+data class NavigationEntry(val id: Long, val destination: NavigationDestination, val ownerTab: AppTab)
 
 // PortedFrom: MC1/State/MapFocusRequest.swift@db14559b39d32322b06477c6ae676112f583db50
 data class MapFocusRequest(val latitude: Double, val longitude: Double) {
@@ -114,7 +114,7 @@ object NavigationLayout {
 
 private fun initialStacks(): SnapshotMap<AppTab, SnapshotList<NavigationEntry>> =
     AppTab.entries.associateWith { tab ->
-        listOf(NavigationEntry(tab.sourceIndex.toLong(), NavigationDestination.Root(tab))).snapshot()
+        listOf(NavigationEntry(tab.sourceIndex.toLong(), NavigationDestination.Root(tab), tab)).snapshot()
     }.snapshotMap()
 
 data class NavigationState(
@@ -150,7 +150,8 @@ data class NavigationState(
     init {
         require(stacks.keys == AppTab.entries.toSet()) { "Every tab needs its own stack" }
         require(stacks.all { (tab, stack) ->
-            stack.isNotEmpty() && stack.first().destination == NavigationDestination.Root(tab)
+            stack.isNotEmpty() && stack.first().destination == NavigationDestination.Root(tab) &&
+                stack.all { it.ownerTab == tab }
         }) { "Every stack must start at its matching root" }
         val ids = stacks.values.flatten().map { it.id } + pendingNotifications.map { it.id } +
             listOfNotNull(pendingContactLink?.deliveryId)
@@ -186,7 +187,7 @@ data class NavigationState(
                 (stack.dropLast(1) + stack.last().copy(destination = destination)).snapshot())).snapshotMap(),
             failure = null,
         )
-        val entry = NavigationEntry(base.nextEntryId, destination)
+        val entry = NavigationEntry(base.nextEntryId, destination, tab)
         return base.copy(
             selectedTab = tab,
             stacks = (base.stacks + (tab to (stack + entry).snapshot())).snapshotMap(),

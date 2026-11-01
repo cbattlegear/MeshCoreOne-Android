@@ -397,19 +397,19 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                 current != null && current.token == token && statePlatform.isReadyFor(current)
             ) dependencies.onNotificationNavigationReady()
         }
+        watchDisconnects()
     }
 
     /** Starts the process: binds hosting, loads persisted state and activates the runtime (restores the last connection). */
     fun start(): Job {
         hostBinding?.start()
-        watchDisconnects()
         watchPermissions()
         return dependencies.mainScope.launch { appState.initialize() }
     }
 
     /** Reconciles app state on every disconnected edge, covering failures the runtime reports no loss callback for. */
     private fun watchDisconnects() {
-        dependencies.mainScope.launch {
+        uiScope.launch {
             connectionManager.snapshot.map { it.state }.distinctUntilChanged()
                 .filter { it == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED }
                 .collect { appState.reconcileSessionLoss() }

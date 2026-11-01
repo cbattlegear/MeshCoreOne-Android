@@ -33,7 +33,6 @@ import com.meshcoreone.android.core.services.simulator.DemoOfflineContent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 internal suspend fun shareMountedImage(
@@ -127,16 +126,26 @@ internal fun AppMessageContent(
                     MalwareDomainPort { host -> if (bundledPreview) false else malwareCheck(host) },
                     scope, ComposerDiagnostics(report))
             }
+            var previewRefreshPending by remember(content, url, holder) { mutableStateOf(false) }
             LaunchedEffect(content, url, holder) {
                 content.previewAvailability.collect { changedUrl ->
                     if (changedUrl == url) {
                         val state = holder.state.value
-                        val settledState = if (state is LinkPreviewCardState.Loading) {
-                            holder.state.first { it !is LinkPreviewCardState.Loading }
+                        if (state is LinkPreviewCardState.Loading) {
+                            previewRefreshPending = true
                         } else {
-                            state
+                            if (state !is LinkPreviewCardState.Loaded) {
+                                previewRevision = Math.incrementExact(previewRevision)
+                            }
                         }
-                        if (settledState !is LinkPreviewCardState.Loaded) {
+                    }
+                }
+            }
+            LaunchedEffect(holder) {
+                holder.state.collect { state ->
+                    if (state !is LinkPreviewCardState.Loading && previewRefreshPending) {
+                        previewRefreshPending = false
+                        if (state !is LinkPreviewCardState.Loaded) {
                             previewRevision = Math.incrementExact(previewRevision)
                         }
                     }

@@ -33,6 +33,7 @@ import com.meshcoreone.android.core.services.simulator.DemoOfflineContent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 internal suspend fun shareMountedImage(
@@ -128,8 +129,16 @@ internal fun AppMessageContent(
             }
             LaunchedEffect(content, url, holder) {
                 content.previewAvailability.collect { changedUrl ->
-                    if (changedUrl == url && holder.state.value !is LinkPreviewCardState.Loading) {
-                        previewRevision = Math.incrementExact(previewRevision)
+                    if (changedUrl == url) {
+                        val state = holder.state.value
+                        val settledState = if (state is LinkPreviewCardState.Loading) {
+                            holder.state.first { it !is LinkPreviewCardState.Loading }
+                        } else {
+                            state
+                        }
+                        if (settledState !is LinkPreviewCardState.Loaded) {
+                            previewRevision = Math.incrementExact(previewRevision)
+                        }
                     }
                 }
             }

@@ -51,6 +51,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -409,6 +410,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun interleavedNotificationDestinationsRetireEarlierChatHandoffsBeforeMountedEffectsRun() = runTest {
         val h = ContainerHarness(this, store)
+        var navigationSubscription: kotlinx.coroutines.Job? = null
         h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Interleaved peer") }
         try {
             connect(h)
@@ -424,6 +426,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             n.navigateToRoom(retainedRoom)
             h.settle()
             val listNavigation = h.container.chatsFeature.list.navigation
+            navigationSubscription = listNavigation.pendingRoomSession.launchIn(backgroundScope)
+            h.settle()
             assertEquals(retainedRoom, listNavigation.pendingRoomSession.value)
             n.navigateToContactDetail(contact)
             h.settle()
@@ -476,7 +480,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             compose.onNodeWithTag("entry:${chatsStack.last().id}").assertIsDisplayed()
             assertTrue(n.back())
             assertEquals(channel, assertIs<ChatSelection.Channel>(n.state.value.chatsSelectedRoute).channel)
-        } finally { unmount(); h.container.close() }
+        } finally { navigationSubscription?.cancelAndJoin(); unmount(); h.container.close() }
     }
 
     @Test fun sameRadioSessionReplacementRetiresCapturedAndInFlightCallbacksWithoutLosingSelection() = runTest {

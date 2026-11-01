@@ -4,6 +4,8 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationDestination
+import com.meshcoreone.android.app.navigation.NotificationNavigationBinding
+import com.meshcoreone.android.app.navigation.PersistenceNavigationLookup
 import com.meshcoreone.android.app.state.AccessibilityAnnouncer
 import com.meshcoreone.android.app.state.AppState
 import com.meshcoreone.android.app.state.AppStateDependencies
@@ -39,6 +41,7 @@ import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
+import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -60,6 +63,7 @@ import com.meshcoreone.android.core.services.messaging.ChatSendQueueProgress
 import com.meshcoreone.android.core.services.messaging.ChannelQueryAccountingEvent
 import com.meshcoreone.android.core.services.messaging.LoggingMessagingIssueReporter
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
+import com.meshcoreone.android.core.services.notifications.didReceive
 import com.meshcoreone.android.core.services.rendering.ChatCoordinatorRegistry
 import com.meshcoreone.android.core.services.rendering.DraftStore
 import com.meshcoreone.android.core.services.sync.SyncClock
@@ -160,6 +164,8 @@ class AppContainerDependencies(
     val onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
     /** Releases process-owned resources (database, storage) once the runtime has closed. */
     val onClose: suspend () -> Unit = {},
+    /** Retry platform responses only after the current generation's navigation callbacks are installed. */
+    val onNotificationNavigationReady: () -> Unit = {},
 )
 
 /**
@@ -269,6 +275,10 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         connectionManager, platformAdapter, pairing, lastConnection, deviceEditor, dependencies.scans::stopBleScanning,
     )
 
+    private val statePlatform = ContainerAppStatePlatform(
+        dependencies.platform, navigation, dependencies.store, dependencies.onNotificationNavigationReady,
+    )
+
     val appState: AppState = AppState(
         AppStateDependencies(
             connection = connectionPort,
@@ -292,7 +302,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             },
             chatEnvInputsFactory = { kind, snapshot -> chatsFeature.envInputs(kind, snapshot) },
             navigation = navigation,
-            platform = ContainerAppStatePlatform(dependencies.platform),
+            platform = statePlatform,
             regionStore = dependencies.regionStore,
             stalePreferences = dependencies.stalePreferences,
             clock = dependencies.runtimeClock,
@@ -345,6 +355,15 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
 
     /** The companion setup service (for `setChooserHost` and the chooser result), when a registry exists. */
     val companionSetup = dependencies.companionSetup
+
+    internal suspend fun handleNotificationResponse(response: NotificationResponse): Boolean {
+        val current = sessions.current ?: return false
+        if (appState.connectionState != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY ||
+            !statePlatform.isReadyFor(current)
+        ) return false
+        current.notificationService.didReceive(response)
+        return true
+    }
 
     /** Forwards a chooser activity result to the platform gateway; a no-op without a companion registry. */
     fun onChooserResult(requestId: Long, resultCode: Int, data: android.content.Intent?) {
@@ -436,6 +455,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         withContext(NonCancellable) {
             hostBinding?.close()
             appState.shutdown()
+            statePlatform.close()
             connectionManager.close()
             processJob.cancelAndJoin()
             dependencies.onClose()
@@ -457,7 +477,60 @@ internal class ResyncFailureHub : ResyncFailureSignal {
 }
 
 /** Adds the process-global debug-log flush to the platform hooks app state calls. */
-private class ContainerAppStatePlatform(private val delegate: AppStatePlatform) : AppStatePlatform by delegate {
+private class ContainerAppStatePlatform(
+    private val delegate: AppStatePlatform,
+    private val navigation: NavigationCoordinator,
+    store: PersistenceStoreProtocol,
+    private val onNavigationReady: () -> Unit,
+) : AppStatePlatform by delegate, AutoCloseable {
+    private val lookup = PersistenceNavigationLookup(store)
+    private var session: com.meshcoreone.android.app.state.AppSession? = null
+    private var generation: Long? = null
+    private var binding: NotificationNavigationBinding? = null
+
+    fun isReadyFor(current: com.meshcoreone.android.app.state.AppSession): Boolean =
+        session === current && binding != null && generation == navigation.state.value.generation &&
+            navigation.state.value.navigationReady
+
+    override fun configureNotificationNavigation(
+        session: com.meshcoreone.android.app.state.AppSession,
+        connectedDevice: () -> com.meshcoreone.android.core.model.DeviceDTO?,
+    ) {
+        delegate.configureNotificationNavigation(session, connectedDevice)
+        if (this.session !== session || generation != navigation.state.value.generation) {
+            binding?.close()
+            if (navigation.state.value.radioId != session.token.radioId) {
+                navigation.replaceRadio(session.token.radioId)
+            }
+            binding = NotificationNavigationBinding(
+                session.notificationService, navigation, lookup, connectedDevice,
+            ) { outcome ->
+                if (outcome is com.meshcoreone.android.app.navigation.NavigationOutcome.Failed) {
+                    java.util.logging.Logger.getLogger("com.mc1.Navigation").warning(
+                        "Notification navigation failed: ${outcome.failure.javaClass.simpleName}",
+                    )
+                }
+            }
+            this.session = session
+            generation = navigation.state.value.generation
+        }
+        navigation.setNavigationReady(true)
+        onNavigationReady()
+    }
+
+    override suspend fun onConnectionLost() {
+        close()
+        delegate.onConnectionLost()
+    }
+
+    override fun close() {
+        navigation.setNavigationReady(false)
+        binding?.close()
+        binding = null
+        session = null
+        generation = null
+    }
+
     override suspend fun flushDebugLog() {
         DebugLogBuffer.shared?.flush()
         delegate.flushDebugLog()

@@ -78,7 +78,13 @@ data class NavigationEntry(val id: Long, val destination: NavigationDestination)
 data class MapFocusRequest(val latitude: Double, val longitude: Double) {
     val coordinate: Coordinate get() = Coordinate(latitude, longitude)
 }
-data class ContactLinkRequest(val name: String, val publicKey: Bytes, val type: ContactType)
+data class ContactLinkRequest(
+    val name: String,
+    val publicKey: Bytes,
+    val type: ContactType,
+    val targetRadioId: RadioId? = null,
+    val generation: Long = 0,
+)
 data class ChannelLinkRequest(
     val name: String,
     val secret: Bytes,

@@ -28,7 +28,7 @@ class ContainerDeepLinkEnvironment(
     override fun navigateToChannel(channel: ChannelDTO) = navigation.navigateToChannel(channel)
 
     override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact) =
-        navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType))
+        navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType), currentRadioId)
 
     override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel) =
         navigation.stageChannelLink(

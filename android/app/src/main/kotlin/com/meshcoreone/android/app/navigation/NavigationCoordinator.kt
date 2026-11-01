@@ -130,7 +130,27 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         it.push(AppTab.TOOLS, NavigationDestination.Tool(tool)).copy(selectedTool = tool)
     }
 
-    fun stageContactLink(link: ContactLinkRequest?) = mutableState.update { it.copy(pendingContactLink = link) }
+    fun stageContactLink(link: ContactLinkRequest?, targetRadioId: RadioId? = state.value.radioId) =
+        mutableState.update {
+            it.copy(pendingContactLink = link?.copy(targetRadioId = targetRadioId, generation = it.generation))
+        }
+
+    // AndroidOnly: WP-302 A late dismiss/import must not acknowledge a replacement request or radio.
+    fun completeContactLink(link: ContactLinkRequest, contact: ContactDTO? = null): Boolean {
+        while (true) {
+            val current = state.value
+            if (current.pendingContactLink !== link || current.generation != link.generation ||
+                contact != null && link.targetRadioId != null && contact.radioId != link.targetRadioId
+            ) return false
+            val next = if (contact == null) current.copy(pendingContactLink = null) else {
+                current.push(AppTab.NODES, NavigationDestination.ContactDetail(contact)).copy(
+                    pendingContactLink = null, pendingContactDetail = contact, selectedContact = contact,
+                    nodesShowingDiscovery = false,
+                )
+            }
+            if (mutableState.compareAndSet(current, next)) return true
+        }
+    }
     fun stageChannelLink(link: ChannelLinkRequest?) = mutableState.update { it.copy(pendingChannelLink = link) }
     fun stageHashtag(link: HashtagJoinRequest?) = mutableState.update { it.copy(pendingHashtag = link) }
     fun setPendingDeviceMenuTipDonation(pending: Boolean) =

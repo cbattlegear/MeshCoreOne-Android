@@ -205,7 +205,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 container.navigation.navigateToContactDetail(contact)
             override fun navigateToChannel(channel: ChannelDTO) = container.navigation.navigateToChannel(channel)
             override fun stageContactLink(link: ContactLinkResult) =
-                container.navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType))
+                container.navigation.stageContactLink(
+                    ContactLinkRequest(link.name, link.publicKey, link.contactType), app.currentRadioId,
+                )
             override fun stageChannelLink(link: ChannelLinkResult) =
                 container.navigation.stageChannelLink(ChannelLinkRequest(
                     link.name, link.secret, link.regionScope,

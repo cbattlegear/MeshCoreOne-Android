@@ -341,6 +341,7 @@ fun NativeNavigationShell(
                 )
             }
         }
+        if (nodes != null) AppPendingContact(nodes, coordinator)
     }
 }
 

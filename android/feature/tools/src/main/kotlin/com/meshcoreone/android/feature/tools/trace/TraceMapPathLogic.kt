@@ -35,7 +35,6 @@ data class TraceMapBadge(val id: UUID, val coordinate: GeoPoint, val distanceMet
 
 enum class PathPinTapResult { ADDED, REMOVED, REJECTED_MIDDLE_HOP, IGNORED }
 
-// PortedFrom: MC1/Views/Map/MapLine+SNR.swift@db14559b39d32322b06477c6ae676112f583db50
 enum class TraceLineQuality { GOOD, MEDIUM, WEAK, UNTRACED }
 
 fun traceLineQuality(snr: Double?): TraceLineQuality = when {

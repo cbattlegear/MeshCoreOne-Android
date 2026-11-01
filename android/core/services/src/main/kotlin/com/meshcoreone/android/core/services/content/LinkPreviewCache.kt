@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 private object CacheConfig {
@@ -236,7 +237,7 @@ class LinkPreviewCache(
             try {
                 dataStore.saveLinkPreview(dto)
                 persistedLookupMutex.withLock {
-                    persistedMisses.remove(url)?.let { persistedMissCostBytes -= it }
+                    persistedMisses.remove(url)?.let { persistedMissCostBytes -= it.costBytes }
                 }
             } catch (cancellation: CancellationException) {
                 throw cancellation

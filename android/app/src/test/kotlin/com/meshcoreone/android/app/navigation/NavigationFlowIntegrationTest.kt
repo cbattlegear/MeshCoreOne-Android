@@ -414,14 +414,30 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             connect(h)
             val radio = assertNotNull(h.appState.currentRadioId)
             val contact = assertNotNull(store.fetchContact(radio, key(20)))
-            val channel = assertNotNull(store.fetchChannel(radio, 0u))
+            val channel = ChannelDTO(radioId = radio, index = 3u, name = "Interleaved channel")
+            store.saveChannel(channel)
             val n = h.container.navigation
+            val retainedRoom = RemoteNodeSessionDTO(
+                radioId = radio, publicKey = key(40), name = "Retained room",
+                role = RemoteNodeRole.ROOM_SERVER, isConnected = true,
+            )
+            n.navigateToRoom(retainedRoom)
+            h.settle()
+            val listNavigation = h.container.chatsFeature.list.navigation
+            assertEquals(retainedRoom, listNavigation.pendingRoomSession.value)
+            n.navigateToContactDetail(contact)
+            h.settle()
+            assertEquals(retainedRoom, n.state.value.pendingRoomSession, "Plain contact navigation preserves Room context")
+            assertNull(listNavigation.pendingRoomSession.value, "The inactive Chats list cannot consume Room context")
+            assertTrue(n.back())
+            n.selectTab(AppTab.CHATS)
             val firstMessage = UUID.randomUUID()
             val latestMessage = UUID.randomUUID()
             assertTrue(h.container.handleNotificationResponse(NotificationResponse(
                 NotificationPayload.DirectMessage(EntityKey(radio, contact.id), firstMessage), null, null,
             )))
             assertEquals(contact, n.state.value.pendingChatContact)
+            assertNull(n.state.value.pendingRoomSession, "A newer notification replaces the earlier delivery handoff")
             assertTrue(h.container.handleNotificationResponse(NotificationResponse(
                 NotificationPayload.ChannelMessage(radio, channel.index, UUID.randomUUID()), null, null,
             )))

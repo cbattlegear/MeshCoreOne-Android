@@ -6,9 +6,11 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
+import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.state.MessageEvent
+import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.ChannelQuery
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -183,10 +185,24 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             override fun isChannelReaction(text: String) = ReactionParser.parse(text) != null
         }
         override val navigation = object : ChatListNavigation {
-            override val pendingChatContact = navigationFlow { it.pendingChatContact }
-            override val pendingChannel = navigationFlow { it.pendingChannel }
-            override val pendingRoomSession = navigationFlow { it.pendingRoomSession }
-            override val pendingRoomAuthentication = navigationFlow { it.pendingRoomAuthentication }
+            override val pendingChatContact = navigationFlow { state ->
+                state.pendingChatContact?.takeIf {
+                    state.selectedTab == AppTab.CHATS && state.chatsSelectedRoute == ChatSelection.Direct(it)
+                }
+            }
+            override val pendingChannel = navigationFlow { state ->
+                state.pendingChannel?.takeIf {
+                    state.selectedTab == AppTab.CHATS && state.chatsSelectedRoute == ChatSelection.Channel(it)
+                }
+            }
+            override val pendingRoomSession = navigationFlow { state ->
+                state.pendingRoomSession?.takeIf {
+                    state.selectedTab == AppTab.CHATS && state.chatsSelectedRoute == ChatSelection.Room(it)
+                }
+            }
+            override val pendingRoomAuthentication = navigationFlow { state ->
+                state.pendingRoomAuthentication?.takeIf { state.selectedTab == AppTab.CHATS }
+            }
             override fun clearPendingChatContact() = container.navigation.clearPendingNavigation()
             override fun clearPendingChannel() = container.navigation.clearPendingChannelNavigation()
             override fun clearPendingRoomSession() = container.navigation.clearPendingRoomNavigation()

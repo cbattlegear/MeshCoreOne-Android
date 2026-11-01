@@ -405,17 +405,21 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             if (current.generation != generation || !isCurrentSession()) {
                 return NavigationOutcome.Failed(NavigationFailure.StaleGeneration)
             }
+            val delivery = if (resolved is Resolved.Failure) current else current.copy(
+                pendingChatContact = null, pendingChannel = null, pendingRoomSession = null,
+                pendingRoomAuthentication = null,
+            )
             val next = when (resolved) {
                     is Resolved.Chat -> {
                         val selection = ChatSelection.Direct(resolved.contact)
-                        current.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
+                        delivery.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
                             pendingChatContact = resolved.contact, chatsSelectedRoute = selection,
                             pendingScrollToMessageID = resolved.messageId, tabBarVisible = false,
                         )
                     }
                     is Resolved.Channel -> {
                         val selection = ChatSelection.Channel(resolved.channel)
-                        current.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
+                        delivery.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
                             pendingChannel = resolved.channel, chatsSelectedRoute = selection,
                             pendingScrollToMessageID = resolved.messageId, tabBarVisible = false,
                             failure = resolved.recoveryFailure,
@@ -424,20 +428,20 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                     is Resolved.Room -> {
                         if (resolved.session.isConnected) {
                             val selection = ChatSelection.Room(resolved.session)
-                            current.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
+                            delivery.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
                                 pendingRoomSession = resolved.session, chatsSelectedRoute = selection, tabBarVisible = false,
                             )
                         } else {
-                            current.select(AppTab.CHATS).copy(pendingRoomAuthentication = resolved.session, failure = null)
+                            delivery.select(AppTab.CHATS).copy(pendingRoomAuthentication = resolved.session, failure = null)
                         }
                     }
-                    is Resolved.Contact -> current.push(
+                    is Resolved.Contact -> delivery.push(
                         AppTab.NODES, NavigationDestination.ContactDetail(resolved.contact),
                     ).copy(pendingContactDetail = resolved.contact, selectedContact = resolved.contact, nodesShowingDiscovery = false)
-                    Resolved.Discovery -> current.push(AppTab.NODES, NavigationDestination.Discovery).copy(
+                    Resolved.Discovery -> delivery.push(AppTab.NODES, NavigationDestination.Discovery).copy(
                         pendingDiscoveryNavigation = true, nodesShowingDiscovery = true, tabBarVisible = true,
                     )
-                    is Resolved.Fallback -> current.select(AppTab.NODES).copy(failure = resolved.failure)
+                    is Resolved.Fallback -> delivery.select(AppTab.NODES).copy(failure = resolved.failure)
                     is Resolved.Failure -> current.copy(failure = resolved.failure)
             }
             if (mutableState.compareAndSet(current, next)) {

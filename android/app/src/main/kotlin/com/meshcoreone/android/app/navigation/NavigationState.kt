@@ -173,10 +173,7 @@ data class NavigationState(
     val canGoBack: Boolean get() = activeStack.size > 1 || selectedTab != AppTab.CHATS
 
     internal fun select(tab: AppTab): NavigationState {
-        val next = copy(
-            selectedTab = tab, tabBarVisible = stacks.getValue(tab).size == 1,
-            pendingChatContact = null, pendingChannel = null, pendingRoomSession = null,
-        )
+        val next = copy(selectedTab = tab, tabBarVisible = stacks.getValue(tab).size == 1)
         return if (NavigationLayout.usesRail(widthDp) && selectedTab == AppTab.TOOLS && tab != AppTab.TOOLS) {
             next.removeDestinations { it is NavigationDestination.Tool }.copy(selectedTool = null)
         } else next

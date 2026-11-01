@@ -165,6 +165,8 @@ val compileProtocolApiConsumer by tasks.registering(JavaExec::class) {
 }
 tasks.withType<Test>().configureEach {
     dependsOn(compileProtocolApiConsumer)
+    inputs.dir(layout.buildDirectory.dir("protocol-api-consumer"))
+        .withPropertyName("protocolApiConsumerClasses").withPathSensitivity(PathSensitivity.RELATIVE)
     systemProperty("protocolApiConsumerDirectory", layout.buildDirectory.dir("protocol-api-consumer").get().asFile.absolutePath)
 }
 rootProject.tasks.named("verifyScaffoldTests") { dependsOn(verifySharedUiTests) }

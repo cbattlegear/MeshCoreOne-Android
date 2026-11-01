@@ -37,6 +37,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -46,11 +49,13 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -73,6 +78,10 @@ import com.meshcoreone.android.core.designsystem.ColorScheme
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.designsystem.ThemeRegistry
+import com.meshcoreone.android.core.designsystem.ThemeColor
+import com.meshcoreone.android.core.designsystem.accessibleForeground
+import com.meshcoreone.android.core.designsystem.toComposeColor
+import com.meshcoreone.android.core.designsystem.toThemeColor
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -108,6 +117,7 @@ import java.util.UUID
 import java.util.Locale
 import java.time.Duration
 import kotlin.test.*
+import kotlin.math.abs
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -374,21 +384,46 @@ class SharedUiComposeTest {
 
     @Test fun actualRadioMenuUsesTheCurrentOcvBatteryReadingAndSharedNativeGlyph() {
         val radio = mutableStateOf(RadioStatusState(DeviceConnectionState.READY, device, BatteryInfo(3100)))
+        var normalForeground = Color.Unspecified
         content {
             MeshCoreTheme(motionScale = 0f) {
+                val primary = MaterialTheme.colorScheme.onSurface
+                SideEffect { normalForeground = primary }
                 BLEStatusIndicatorView(radio.value, RadioStatusActions({}, {}, {}, {}))
             }
         }
         resize(360)
         compose.onNodeWithContentDescription(resources.getString(S.bleStatusAccessibilityLabel)).performClick()
-        for ((voltage, expected) in listOf(
-            3100L to "0% (3.10v)", 3475L to "25% (3.48v)", 3720L to "50% (3.72v)",
-            3940L to "75% (3.94v)", 4190L to "100% (4.19v)",
+        for ((voltage, expected, filled) in listOf(
+            Triple(3100L, "0% (3.10v)", 0), Triple(3360L, "15% (3.36v)", 1),
+            Triple(3475L, "25% (3.48v)", 1), Triple(3720L, "50% (3.72v)", 2),
+            Triple(3940L, "75% (3.94v)", 3), Triple(4190L, "100% (4.19v)", 4),
         )) {
             compose.runOnIdle { radio.value = radio.value.copy(battery = BatteryInfo(voltage)) }
             compose.onNodeWithText(expected).assertIsDisplayed()
             val row = compose.onNodeWithContentDescription("Battery: $expected", useUnmergedTree = true).fetchSemanticsNode()
             assertEquals(1, row.children.count { it.config.contains(SharedEmittedForeground) })
+            val glyph = compose.onNode(SemanticsMatcher.keyIsDefined(SharedEmittedForeground) and
+                hasAnyAncestor(hasContentDescription("Battery: $expected")), useUnmergedTree = true)
+            val surface = glyph.fetchSemanticsNode().config[SharedPaintedSurface]
+            val seed = when (voltage) {
+                3100L -> ThemeColor.hex(0xFF3B30)
+                3360L -> ThemeColor.hex(0xFF9500)
+                else -> normalForeground.toThemeColor()
+            }
+            val foreground = accessibleForeground(seed, surface.toThemeColor(), 4.5).toComposeColor()
+            assertEquals(foreground, glyph.fetchSemanticsNode().config[SharedEmittedForeground])
+            assertFalse(row.config.contains(SemanticsProperties.ProgressBarRangeInfo))
+            val pixels = glyph.captureToImage().toPixelMap()
+            val span = pixels.width * 0.88f - 6f
+            for (segment in 0..<4) {
+                val actual = pixels[(3f + span * (segment + 0.5f) / 4).toInt(), pixels.height / 2].toArgb()
+                val expectedPixel = if (segment < filled) foreground.toArgb() else surface.toArgb()
+                for (shift in listOf(0, 8, 16)) {
+                    assertTrue(abs(((actual ushr shift) and 255) - ((expectedPixel ushr shift) and 255)) <= 1,
+                        "Mounted $expected battery segment $segment does not match its OCV reading")
+                }
+            }
         }
     }
 

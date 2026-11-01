@@ -30,6 +30,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -115,6 +116,8 @@ class CachedPreviewPolicyConsumerTest {
                 assertEquals(PreviewLoadState.LOADED, htmlPage.state)
                 assertEquals("Persisted HTML page", htmlPage.preview?.title)
                 assertFalse(htmlPage.inline)
+                assertTrue(owner.media(message.copy(text = htmlPageUrl)).single().isImage)
+                assertTrue(owner.hasCachedPreview(htmlPageUrl))
 
                 val holder = LinkPreviewStateHolder(
                     url,
@@ -132,6 +135,17 @@ class CachedPreviewPolicyConsumerTest {
 
                 val port = owner.previews(isChannel)
                 assertEquals(LinkPreviewOutcome.Disabled, port.preview("https://new.example/article", isChannel))
+
+                if (!isChannel) {
+                    val writtenAfterMissUrl = "https://late.example/article"
+                    val writtenAfterMiss = message.copy(text = writtenAfterMissUrl)
+                    assertEquals(PreviewLoadState.DISABLED, owner.renderContent(writtenAfterMiss, EnvInputs.DEFAULT).state)
+                    store.saveLinkPreview(LinkPreviewDataDTO(writtenAfterMissUrl, title = "Late preview"))
+                    val readsBeforeTrimmedLookup = previewReads
+                    owner.trimMemory()
+                    assertEquals("Late preview", owner.renderContent(writtenAfterMiss, EnvInputs.DEFAULT).preview?.title)
+                    assertEquals(readsBeforeTrimmedLookup + 1, previewReads)
+                }
             }
 
             val imageOwner = newContent(context, countedStore, http, storage, scope).also(contents::add)

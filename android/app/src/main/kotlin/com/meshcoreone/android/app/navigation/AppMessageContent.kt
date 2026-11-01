@@ -82,11 +82,12 @@ internal fun AppMessageContent(
             val hasMalwareWarning = rendered?.content?.any {
                 it is MessageFragment.MalwareWarning && it.url.absoluteString == url
             } == true
+            val hasCachedPreview = content.hasCachedPreview(url)
             val inline = if (url == media.firstOrNull()?.url && rendered != null) {
                 bundledImage || rendered.content.any { it is MessageFragment.InlineImage } ||
                     (entry.isImage && hasMalwareWarning)
             } else {
-                bundledImage || entry.isImage || hasMalwareWarning
+                bundledImage || (entry.isImage && !hasCachedPreview) || hasMalwareWarning
             }
             val shouldCheckImage = !bundledPreview && !bundledImage && entry.isImage && (inline || hasMalwareWarning)
             val holder = remember(

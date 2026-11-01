@@ -213,6 +213,63 @@ class LinkPreviewCacheTest {
     }
 
     @Test
+    fun `persisted misses expire so previews written by another store client become visible`() = runTest {
+        val dataStore = FakePersisting()
+        val url = "https://example.com/external-write"
+        var now = 0L
+        val source = InMemoryLinkPreviewPreferencesSource()
+        val cache = LinkPreviewCache(
+            FakeMetadataFetcher(title = null),
+            LinkPreviewPreferences(source),
+            monotonicNowNanos = { now },
+        )
+        try {
+            assertNull(cache.cachedPreview(url, dataStore))
+            dataStore.seed(LinkPreviewDataDTO(url = url, title = "Externally written"))
+            now = 120_000_000_000L
+
+            assertEquals("Externally written", cache.cachedPreview(url, dataStore)?.title)
+            assertEquals(2, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
+    fun `clearing memory also clears persisted misses for external store writes`() = runTest {
+        val dataStore = FakePersisting()
+        val url = "https://example.com/trimmed-write"
+        val cache = previewsEnabledCache()
+        try {
+            assertNull(cache.cachedPreview(url, dataStore))
+            dataStore.seed(LinkPreviewDataDTO(url = url, title = "Written after miss"))
+            cache.clearMemory()
+
+            assertEquals("Written after miss", cache.cachedPreview(url, dataStore)?.title)
+            assertEquals(2, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
+    fun `positive cache retains one two-hundred-message preview window`() = runTest {
+        val dataStore = FakePersisting()
+        val urls = (0 until 201).map { "https://example.com/cached/$it" }
+        urls.forEach { dataStore.seed(LinkPreviewDataDTO(url = it, title = "Cached")) }
+        val cache = previewsEnabledCache()
+        try {
+            urls.forEach { assertEquals("Cached", cache.cachedPreview(it, dataStore)?.title) }
+            assertEquals(urls.size, dataStore.fetchCallCount)
+
+            urls.forEach { assertEquals("Cached", cache.cachedPreview(it, dataStore)?.title) }
+            assertEquals(urls.size, dataStore.fetchCallCount)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
     fun `persisted misses remain memoized across more than one hundred distinct urls`() = runTest {
         val dataStore = FakePersisting()
         val cache = previewsEnabledCache()

@@ -184,8 +184,12 @@ class AppChatContent internal constructor(
         val mapReady: Boolean,
     )
     internal suspend fun renderContent(message: MessageDTO, env: EnvInputs): RenderContent {
-        val media = media(message).firstOrNull()
+        val mediaEntries = media(message)
+        val media = mediaEntries.firstOrNull()
         val url = media?.url
+        val cachedPreviews = if (enabled && !DemoOfflineContent.isSimulatorMessage(message)) {
+            mediaEntries.associate { entry -> entry.url to previewCache.cachedPreview(entry.url, store) }
+        } else emptyMap()
         val decoded = url?.let {
             when {
                 DemoOfflineContent.isInlineImage(message, it) -> imageCache.decoded(DEMO_IMAGE)
@@ -200,7 +204,7 @@ class AppChatContent internal constructor(
             demoPreview != null && (automatic(message.isChannelMessage) || recorded == PreviewLoadState.LOADED) ->
                 bundledPreview(message, url)
             DemoOfflineContent.isSimulatorMessage(message) -> null
-            else -> previewCache.cachedPreview(url, store)
+            else -> cachedPreviews[url]
         }
         val state = when {
             !enabled -> PreviewLoadState.DISABLED
@@ -248,6 +252,7 @@ class AppChatContent internal constructor(
             entry.copy(isImage = true, aspect = imageCache.decoded(DEMO_IMAGE)?.handle?.let { it.width.toDouble() / it.height })
         } else entry
     }
+    internal fun hasCachedPreview(url: String) = previewCache.hasCachedPreview(url)
     private val previews = object : LinkPreviewPort {
         override suspend fun cachedPreview(url: String) = previewCache.cachedPreview(url, store)?.forUi()
         override suspend fun preview(url: String, isChannelMessage: Boolean) = previewCache.preview(url, store, isChannelMessage).forUi()
@@ -412,6 +417,7 @@ class AppChatContent internal constructor(
     }
     fun trimMemory() {
         previewStates.evictAll()
+        previewCache.clearMemory()
         imageCache.clearDecodedMirror()
         imageCache.clearRawMemory()
         mapPreviews.snapshots.clear()
@@ -420,9 +426,9 @@ class AppChatContent internal constructor(
         dimensions.close()
         dimensionSubscription.cancel()
         mapPreviews.close()
+        trimMemory()
         previewCache.close()
         malware.close()
-        trimMemory()
     }
     companion object {
         private const val HERO = "mc1-preview-hero:"

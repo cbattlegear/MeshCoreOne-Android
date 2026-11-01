@@ -19,13 +19,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import java.util.concurrent.atomic.AtomicBoolean
 
 private object CacheConfig {
-    const val MAX_ENTRY_COUNT = 100
+    const val MAX_ENTRY_COUNT = 256
     const val MAX_TOTAL_COST_BYTES = 50L * 1024 * 1024 // 50MB
     const val MAX_CONCURRENT_FETCHES = 3
     const val MAX_PERSISTED_MISSES = 10_000
     const val MAX_PERSISTED_MISS_COST_BYTES = 4L * 1024 * 1024
+    const val PERSISTED_MISS_TTL_NANOS = 60_000_000_000L
 }
 
 /**
@@ -43,6 +45,7 @@ class LinkPreviewCache(
     private val service: LinkMetadataFetching,
     private val preferences: LinkPreviewPreferences,
     scope: CoroutineScope? = null,
+    private val monotonicNowNanos: () -> Long = { System.nanoTime() },
 ) : LinkPreviewCaching, AutoCloseable {
     private val workers = CoroutineScope(
         (scope?.coroutineContext ?: Dispatchers.Default) + SupervisorJob(scope?.coroutineContext?.get(Job)),
@@ -55,8 +58,10 @@ class LinkPreviewCache(
     private val fetchSemaphore = Semaphore(CacheConfig.MAX_CONCURRENT_FETCHES)
     private val mutex = Mutex()
     private val persistedLookupMutex = Mutex()
-    private val persistedMisses = linkedMapOf<String, Long>()
+    private data class PersistedMiss(val costBytes: Long, val createdAtNanos: Long)
+    private val persistedMisses = linkedMapOf<String, PersistedMiss>()
     private var persistedMissCostBytes = 0L
+    private val persistedMissClearRequested = AtomicBoolean()
 
     /**
      * Shared fetch deferred per in-flight URL. Concurrent requests for the same URL await the
@@ -102,6 +107,8 @@ class LinkPreviewCache(
 
     override suspend fun cachedPreview(url: String): LinkPreviewDataDTO? = memoryCache.get(url)
 
+    fun hasCachedPreview(url: String): Boolean = memoryCache.get(url) != null
+
     suspend fun cachedPreview(url: String, dataStore: LinkPreviewPersisting): LinkPreviewDataDTO? =
         checkCaches(url, dataStore)
 
@@ -115,21 +122,32 @@ class LinkPreviewCache(
 
         // Tier 2: Database lookup.
         return persistedLookupMutex.withLock {
+            clearPersistedMissesIfRequested()
             memoryCache.get(url)?.let { return@withLock it }
-            if (url in persistedMisses) return@withLock null
+            val now = monotonicNowNanos()
+            val cachedMiss = persistedMisses[url]
+            if (cachedMiss != null) {
+                if (now - cachedMiss.createdAtNanos < CacheConfig.PERSISTED_MISS_TTL_NANOS) {
+                    return@withLock null
+                }
+                persistedMisses.remove(url)
+                persistedMissCostBytes -= cachedMiss.costBytes
+            }
             try {
                 dataStore.fetchLinkPreview(url)?.also { memoryCache.put(url, it) } ?: run {
                     val cost = url.length.toLong() * 2 + 64
                     if (cost <= CacheConfig.MAX_PERSISTED_MISS_COST_BYTES) {
+                        val createdAtNanos = monotonicNowNanos()
+                        removeExpiredPersistedMisses(createdAtNanos)
                         while (
                             persistedMisses.size >= CacheConfig.MAX_PERSISTED_MISSES ||
                             persistedMissCostBytes > CacheConfig.MAX_PERSISTED_MISS_COST_BYTES - cost
                         ) {
                             val oldest = persistedMisses.entries.iterator().next()
                             persistedMisses.remove(oldest.key)
-                            persistedMissCostBytes -= oldest.value
+                            persistedMissCostBytes -= oldest.value.costBytes
                         }
-                        persistedMisses[url] = cost
+                        persistedMisses[url] = PersistedMiss(cost, createdAtNanos)
                         persistedMissCostBytes += cost
                     }
                     null
@@ -142,6 +160,24 @@ class LinkPreviewCache(
                 // genuine network fetch attempt, it is not a fabricated success.
                 Logger.getLogger("MeshCore.LinkPreviewCache").fine("Preview database read failed: ${error.javaClass.simpleName}")
                 null
+            }
+        }
+    }
+
+    private fun clearPersistedMissesIfRequested() {
+        if (persistedMissClearRequested.compareAndSet(true, false)) {
+            persistedMisses.clear()
+            persistedMissCostBytes = 0
+        }
+    }
+
+    private fun removeExpiredPersistedMisses(now: Long) {
+        val iterator = persistedMisses.entries.iterator()
+        while (iterator.hasNext()) {
+            val miss = iterator.next().value
+            if (now - miss.createdAtNanos >= CacheConfig.PERSISTED_MISS_TTL_NANOS) {
+                persistedMissCostBytes -= miss.costBytes
+                iterator.remove()
             }
         }
     }
@@ -215,7 +251,13 @@ class LinkPreviewCache(
 
     private fun Bytes?.costOf(): Long = this?.size?.toLong() ?: 0L
 
-    fun clearMemory() = memoryCache.clear()
+    fun clearMemory() {
+        memoryCache.clear()
+        persistedMissClearRequested.set(true)
+        workers.launch(start = CoroutineStart.UNDISPATCHED) {
+            persistedLookupMutex.withLock { clearPersistedMissesIfRequested() }
+        }
+    }
 
     override fun close() {
         workers.cancel()

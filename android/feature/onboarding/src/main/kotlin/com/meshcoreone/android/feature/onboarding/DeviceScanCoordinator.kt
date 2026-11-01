@@ -2,10 +2,14 @@
 package com.meshcoreone.android.feature.onboarding
 
 import com.meshcoreone.android.core.ui.UiText
+import com.meshcoreone.android.core.ui.UiErrorMapper
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,11 +62,25 @@ class DeviceScanCoordinator(
 
     /** Three taps on the title unlock demo mode (App Store reviewer path, preserved from the original). */
     fun onTitleTap() {
+        if (mutable.value.localBusy) return
         titleTaps += 1
         if (titleTaps < TITLE_TAPS_TO_UNLOCK) return
         titleTaps = 0
-        demo.unlock()
-        mutable.update { it.copy(showDemoAlert = true, successTick = it.successTick + 1) }
+        mutable.update { it.copy(localBusy = true, failure = null) }
+        job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                currentCoroutineContext().ensureActive()
+                demo.unlockAndAwait()
+                currentCoroutineContext().ensureActive()
+                mutable.update { it.copy(showDemoAlert = true, successTick = it.successTick + 1) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                mutable.update { it.copy(failure = UiErrorMapper().message(failure), failureTick = it.failureTick + 1) }
+            } finally {
+                mutable.update { it.copy(localBusy = false) }
+            }
+        }
     }
 
     /** Re-evaluates the Bluetooth blocker; the UI calls this after each permission result. */

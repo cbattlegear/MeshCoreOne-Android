@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.core.ui.UiText
+import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.feature.onboarding.OnboardingConnectOutcome
 import com.meshcoreone.android.feature.onboarding.OnboardingConnectionSnapshot
 import com.meshcoreone.android.feature.onboarding.OnboardingDemoPort
@@ -33,6 +34,7 @@ interface OnboardingConnectionHost {
     val isPairingActive: Boolean
     val registeredAccessoryCount: Int
     val hasLastConnectedDevice: Boolean
+    val isDemoDevice: Boolean get() = false
 
     /** Runs the guided pairing flow to completion (picker, bond, connect, service wiring); failures land in [ui]. */
     suspend fun startPairing(): OnboardingConnectOutcome
@@ -84,7 +86,9 @@ class AppOnboardingPairingPort(
     override val hasLastConnectedDevice: Boolean get() = host.hasLastConnectedDevice
 
     private fun snapshotOf(state: DeviceConnectionState, ui: ConnectionUiSnapshot) =
-        OnboardingConnectionSnapshot(isReady = state == DeviceConnectionState.READY, isBusy = ui.isBusy, isDemoDevice = false)
+        OnboardingConnectionSnapshot(
+            isReady = state == DeviceConnectionState.READY, isBusy = ui.isBusy, isDemoDevice = host.isDemoDevice,
+        )
 
     override suspend fun pairNewDevice(): OnboardingConnectOutcome {
         if (host.isPairingActive) return OnboardingConnectOutcome.Ignored
@@ -139,29 +143,27 @@ class AppOnboardingWiFiPort(private val host: OnboardingConnectionHost) : Onboar
 }
 
 /**
- * Demo mode flags from [DemoModeManager]. The simulator connection ([simulatorConnect]) is not bound in the runtime
- * yet (WP-217 deviation), so without it [connectDemo] reports the feature as unavailable instead of faking a link.
+ * Demo mode flags and the simulator lifecycle supplied by the production app container.
  */
 class AppOnboardingDemoPort(
     private val manager: DemoModeManager,
     scope: CoroutineScope,
-    private val simulatorConnect: (suspend () -> Unit)? = null,
+    private val simulatorConnect: suspend () -> Unit,
 ) : OnboardingDemoPort {
     override val isEnabled: StateFlow<Boolean> =
         manager.state.map { it.isEnabled }.stateIn(scope, SharingStarted.Eagerly, manager.isEnabled)
 
-    override fun unlock() = manager.unlock()
+    override fun unlock() = kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) { manager.unlock() }
+    override suspend fun unlockAndAwait() = manager.unlock()
 
     override suspend fun connectDemo(): OnboardingConnectOutcome {
-        val connect = simulatorConnect
-            ?: return OnboardingConnectOutcome.Failed(UiText.Resource(AppLocalizableStrings.errorMeshCoreFeatureDisabled))
         return try {
-            connect()
+            simulatorConnect()
             OnboardingConnectOutcome.Connected
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            OnboardingConnectOutcome.Failed(UiText.Verbatim(failure.message ?: failure.javaClass.simpleName))
+            OnboardingConnectOutcome.Failed(UiErrorMapper().message(failure))
         }
     }
 }

@@ -31,6 +31,7 @@ import com.meshcoreone.android.core.connectivity.service.ForegroundServiceStarte
 import com.meshcoreone.android.core.contracts.domain.Capability
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
+import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.MessagingIssueReporter
 import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
@@ -63,6 +64,8 @@ import com.meshcoreone.android.core.services.rendering.ChatCoordinatorRegistry
 import com.meshcoreone.android.core.services.rendering.DraftStore
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.sync.SyncLogSink
+import com.meshcoreone.android.core.services.simulator.MockDataProvider
+import com.meshcoreone.android.core.services.simulator.SimulatorSeedStore
 import com.meshcoreone.android.feature.nodes.deps.Announcer
 import com.meshcoreone.android.feature.nodes.deps.StringListPreferences
 import com.meshcoreone.android.feature.nodes.deps.UserFacingMessages
@@ -151,6 +154,8 @@ class AppContainerDependencies(
     internal val chatContent: AppChatContent? = null,
     val newBootstrapDebugLog: (CoroutineScope) -> DebugLogBuffer? = { null },
     val runtimeRecoveryDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    /** The actual process-store adapter used by simulator generations; physical-only test compositions may omit it. */
+    val simulatorSeedStore: SimulatorSeedStore? = null,
     /** Passive pre-barrier persistence observer; must not block, throw or perform lifecycle work. */
     val onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
     /** Releases process-owned resources (database, storage) once the runtime has closed. */
@@ -172,7 +177,8 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     val sessions = SessionRegistry()
     val navigation = NavigationCoordinator()
     internal val currentTransport: com.meshcoreone.android.core.model.TransportType?
-        get() = connectionManager.snapshot.value.token?.let {
+        get() = if (connectionManager.isSimulatorConnection) com.meshcoreone.android.core.model.TransportType.SIMULATOR
+        else connectionManager.snapshot.value.token?.let {
             (dependencies.linkFactory as? AndroidRuntimeLinkFactory)?.transportFor(it)
         }
     internal val processStore get() = dependencies.store
@@ -219,7 +225,15 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         },
         lastConnection = lastConnection,
         platform = platformAdapter,
-        linkFactory = dependencies.linkFactory,
+        linkFactory = RuntimeLinkFactory { target ->
+            if (target == ConnectionTarget.Simulator) {
+                val seed = checkNotNull(dependencies.simulatorSeedStore) { "Simulator seed store is not installed" }
+                SimulatorRuntimeLink(seed, finishSeed = {
+                    dependencies.store.flushPendingRxLogEntries()
+                    checkNotNull(dependencies.chatContent) { "Simulator chat content is not installed" }.seedDemoInlineImage()
+                })
+            } else dependencies.linkFactory.create(target)
+        },
         serviceFactory = RadioSessionContainerFactory(environment, sessions),
         observer = observerBridge.observer,
         reporter = dependencies.runtimeReporter,
@@ -227,6 +241,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         context = dependencies.runtimeContext,
         configuration = dependencies.sessionConfiguration,
         recoveryDispatcher = dependencies.runtimeRecoveryDispatcher,
+        simulatorDeviceId = MockDataProvider.simulatorDeviceID,
     )
 
     val pairing: PairingCoordinator = PairingCoordinator(
@@ -342,6 +357,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             object : TransportTeardown {
                 override val liveTransport: LiveTransport
                     get() {
+                        if (connectionManager.isSimulatorConnection) return LiveTransport.NONE
                         val methods = connectionManager.connectedDevice?.connectionMethods ?: return LiveTransport.NONE
                         if (!connectionManager.connectionState.isConnected) return LiveTransport.NONE
                         return if (methods.isNotEmpty() && methods.all { it is com.meshcoreone.android.core.model.ConnectionMethod.WiFi }) {
@@ -355,6 +371,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     }
 
     init {
+        dependencies.chatContent?.bindSimulatorConnection { connectionManager.isSimulatorConnection }
         observerBridge.bind(appState, connectionPort)
     }
 

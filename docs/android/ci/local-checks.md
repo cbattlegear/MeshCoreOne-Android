@@ -138,6 +138,115 @@ Neither Windows readiness nor Linux configuration authorizes bypassing the
 interlocked launcher with direct Gradle, deploying an execution runtime, clearing
 an incumbent owner, changing repository settings or activating automation.
 
+## Built-in execution recovery
+
+The WP-003 recovery controller is a reviewed-source operator entrance, independent
+of an old installed runtime. Until its source has merged to the trusted origin
+default branch it refuses live actions; a candidate cannot authorize itself.
+It does not install a runtime or make an outdated runtime current.
+
+Run from the actual execution host, with the existing canonical ledger environment
+and pinned Python. No original coding session, supervisor or manual receipt export
+is needed to finalize a genuinely completed orphan:
+
+```powershell
+python .\tools\android-port\controller\execution_recovery.py status
+python .\tools\android-port\controller\execution_recovery.py recover --owner local-check:<invocation-token>
+```
+
+The controller reads and compares the entire original receipt transactionally;
+the owner is an invocation identifier, not an instruction to impersonate its session.
+Native/device/disposable ownership is not interchangeable with a local
+check and is deliberately excluded. Status never starts WSL or probes a transport.
+
+Ordinary recovery never terminates work. It requires the original launcher to be
+absent AND the existing supervisor's exact-token `owned-children-reaped` completion.
+A live/reused launcher PID is conservatively refused. A missing PID alone, timeout,
+successful hosted job, or missing receipt is never sufficient. Removal and its
+audit record commit atomically: the ledger retains the original raw row, actual
+operator OS principal, real supervisor outcome and time. Retrying recovery is
+idempotent, including after a new invocation owns the same slot; it never deletes
+the new owner's row or recreates an unexplained missing old receipt.
+
+If the launcher is gone but its invocation-bound Linux supervisor still owns
+descendants, an explicit operator request may cancel **only that invocation**:
+
+```powershell
+python .\tools\android-port\controller\execution_recovery.py recover --owner local-check:<invocation-token> --cancel-owned --distribution <original-WSL-distribution>
+```
+
+On native Linux omit `--distribution`. Windows requires the original distribution
+explicitly and keeps all SQLite actions on Windows; the guest receives only the
+invocation handoff. The handoff carries the selected `--repo` root even when the
+operator launched the command from another working directory. The Linux entry
+calls back to native Windows Python through `powershell.exe`. Windows verifies
+reviewed default-base source/policy with native Git, compares the entire submitted
+receipt with canonical ownership, and checks the original launcher's liveness and
+admission. The response is bound to the exact receipt digest and repository; submitted
+PIDs are not independent authority. Controller source membership and bytes are
+validated in both the executing and selected checkouts, along with the selected
+launcher/reservation/supervisor sources, before delegation. Native Git supports Windows-created linked
+worktrees without asking Linux Git to interpret their Windows `.git` paths.
+WSL path output is decoded explicitly as UTF-8, independent of the Windows locale.
+The guest never constructs or opens a ledger. An existing `ANDROID_PORT_LEDGER`
+is carried unchanged through `WSLENV`, without path-translation flags for that
+variable; unrelated entries are preserved. Windows interop needs `wslpath`,
+`powershell.exe`, native Git and `python.exe` on the Windows command path.
+Missing or failed Windows authorization retains ownership. The tool
+verifies the admission, trusted retained supervisor bytes,
+exact command arguments, same OS principal and actual open admission inode. It
+supports both snapshot supervisors and the existing direct trusted adapter
+supervisor path.
+It pins the live supervisor and descendants with pidfds, pauses them to bound the
+tree, terminates only those descendants, and resumes the original subreaper to reap
+them and emit its own completion. Unknown/ambiguous supervision, lost control inputs,
+unbounded descendants or missing completion retain ownership. It never writes a
+replacement cleanup proof, signals a name-based process group, kills the supervisor
+to manufacture success, or adopts an unrelated execution.
+Both `os.pidfd_open` and `signal.pidfd_send_signal` must be exposed by the actual
+Linux interpreter; matching the Python version alone is insufficient. Normal exits
+during pin, freeze and final identity snapshots are retried within the bounded
+deadline, without weakening ancestry/pidfd checks. An exited supervisor still
+requires its genuine completion before ownership can be removed.
+A root rejected during reauthentication is never resumed: only an authenticated
+root that this recovery attempts to stop acquires a resume obligation.
+
+Taking ownership means finishing the abandoned invocation and launching a **new**
+check, not renaming or inheriting live work. The combined command recovers only the
+specified receipt before calling the unchanged supported immutable-candidate launcher:
+
+```powershell
+python .\tools\android-port\controller\execution_recovery.py check --owner local-check:<invocation-token> --commit <candidate-SHA> --affected-base <trusted-base-SHA>
+```
+
+`--cancel-owned` and the explicit original WSL distribution can also be supplied.
+Without `--owner` or `--receipt`, `check` simply delegates to the existing launcher.
+An optional `status --resource <exact-resource> --receipt-output <absolute-new-file>`
+and `recover --receipt <file>` pair retains stale-receipt diagnostics without making
+manual export the ordinary workflow. Recovery
+success does not report product-test success; the delegated launch still enforces
+runtime integrity, readiness, admission, nonzero discovery and actual outcomes.
+An installation-interlocked runtime update remains a separately authorized,
+quiescent operation after recovery, never a side effect of this command.
+
+Legacy executions whose supervisor, completion and resource identity are all lost
+cannot be reconstructed from PIDs. They still require authoritative original-owner
+or host-bound cleanup evidence; this tool does not add a force-unlock escape hatch.
+In particular, #440's unexplained absent receipt and #444's remote invocation with
+missing control directory are not retroactively accepted by adding recovery code.
+
+Focused source-only regression command (no real Gradle, deployment or device work):
+
+```powershell
+$env:PYTHONPATH = "$PWD\tools\android-port"
+python -m unittest discover -s .\tools\android-port\tests -p test_execution_recovery.py -v
+```
+
+The same tests run in the declared strict controller suite below. Real Linux pidfd
+fixtures use only test-owned temporary processes; native Windows exercises explicit
+Linux-cancellation rejection and the interrupted Windows-to-WSL handoff contract.
+Neither partition establishes product execution or legacy cleanup.
+
 ## Affected local verification
 
 Source work for `LOCAL-CHANGE-SCOPED-VERIFICATION` remains separate from trusted

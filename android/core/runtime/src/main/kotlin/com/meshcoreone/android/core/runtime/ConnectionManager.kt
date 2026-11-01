@@ -45,6 +45,7 @@ class ConnectionManager(
     private val jitter: () -> Double = { kotlin.random.Random.nextDouble(0.0, 0.1) },
     epoch: ProcessEpoch = ProcessEpoch(UUID.randomUUID()),
     private val recoveryDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val simulatorDeviceId: UUID? = null,
 ) : ConnectionController, BLEReconnectionDelegate {
     private class RuntimeOperation(val owner: Any) : AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<RuntimeOperation>
@@ -138,6 +139,9 @@ class ConnectionManager(
     private var cleanSync: Pair<RadioId, Instant>? = null
     private var attemptedSync: Pair<RadioId, Instant>? = null
     val connectedDevice: DeviceDTO? get() = synchronized(lock) { deviceValue }
+    val isSimulatorConnection: Boolean get() = synchronized(lock) {
+        pendingTarget == ConnectionTarget.Simulator || (active ?: retained)?.target == ConnectionTarget.Simulator
+    }
     val allowedRepeatFrequencyRanges: SnapshotList<FrequencyRange> get() = synchronized(lock) { repeatRanges }
     val detectedPlatform: DevicePlatform get() = synchronized(lock) { platformValue }
     val lastCleanChannelSync: Pair<RadioId, Instant>? get() = synchronized(lock) { cleanSync }
@@ -177,40 +181,65 @@ class ConnectionManager(
     suspend fun activate() = activation.withLock {
         if (activated) return@withLock
         requireOpen()
+        val (restorationRevision, mayRestore) = synchronized(lock) {
+            revision to (values.value.state == DeviceConnectionState.DISCONNECTED && pending?.isActive != true)
+        }
         // Native v1 already has stable IDs and sort dates: do not run Apple's destructive backfills.
         rooms.resetAllRemoteNodeSessionConnections()
-        setIntent(lastConnection.restoredIntent())
-        val last = lastConnection.read()
-        val id = last.deviceId
+        val restored = mayRestore && setIntentIfCurrent(lastConnection.restoredIntent(), restorationRevision)
+        val id = if (restored) lastConnection.read().deviceId else null
         val device = id?.let { devices.fetchDevice(it) }
         val wifi = device?.connectionMethods?.filterIsInstance<ConnectionMethod.WiFi>()?.firstOrNull()
+        val simulator = id != null && id == simulatorDeviceId
         var target: ConnectionTarget? = null
-        if (connectionIntent != ConnectionIntent.UserDisconnected && id != null) {
-            setIntent(ConnectionIntent.WantsConnection())
-            if (wifi == null) {
+        if (connectionIntent != ConnectionIntent.UserDisconnected && id != null &&
+            setIntentIfCurrent(ConnectionIntent.WantsConnection(), restorationRevision)
+        ) {
+            if (wifi == null && !simulator) {
                 target = platform.targetForDevice(id)
-                if (target != null) ensureRestorationRoute(target, synchronized(lock) { revision })
+                if (target != null) {
+                    try { ensureRestorationRoute(target, restorationRevision) }
+                    catch (cancelled: CancellationException) {
+                        currentCoroutineContext().ensureActive()
+                        if (isRevisionCurrent(restorationRevision)) throw cancelled
+                    }
+                }
             }
         }
+        requireOpen()
         try { platform.activate() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { reportIssue(failure, LifecycleStage.CONNECT) }
         activated = true
+        if (!isRevisionCurrent(restorationRevision)) return@withLock
         if (connectionIntent == ConnectionIntent.UserDisconnected) return@withLock
         if (id == null || connectionState.isOperational) return@withLock
+        if (simulator) {
+            try { connectAttempt(ConnectionTarget.Simulator, false, false, restorationRevision) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { reporter.report(RuntimeDiagnostic.Failure("activate.simulator", failure)) }
+            return@withLock
+        }
         if (wifi != null) {
-            try { connect(ConnectionTarget.WiFi(wifi.host, wifi.port)); return@withLock }
+            try { connectAttempt(ConnectionTarget.WiFi(wifi.host, wifi.port), false, false, restorationRevision); return@withLock }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { reporter.report(RuntimeDiagnostic.Failure("activate.wifi", failure)) }
         }
+        val routeRevision = if (wifi == null) restorationRevision else synchronized(lock) { revision }
         if (target == null) target = platform.targetForDevice(id)
+        if (!isRevisionCurrent(routeRevision)) return@withLock
         if (target == null) {
             reportIssue(ConnectionError.DeviceNotFound(), LifecycleStage.CONNECT)
             return@withLock
         }
         val resolvedTarget = target
         try {
-            val route = ensureRestorationRoute(resolvedTarget, synchronized(lock) { revision })
+            val route = try { ensureRestorationRoute(resolvedTarget, routeRevision) }
+            catch (cancelled: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                if (!isRevisionCurrent(routeRevision)) return@withLock
+                throw cancelled
+            }
             val state = platform.state(resolvedTarget)
             if (!isRelevant(route)) return@withLock
             if (state.autoReconnecting || state.connected) {
@@ -270,7 +299,10 @@ class ConnectionManager(
                 return
             }
         }
-        if (connectedDevice?.id == deviceId && connectionState.isOperational) return
+        if (deviceId != null && connectedDevice?.id == deviceId && connectionState.isOperational) return
+        if (normalized == ConnectionTarget.Simulator && synchronized(lock) {
+                active?.target == normalized && values.value.state.isOperational
+            }) return
         val submission = synchronized(lock) {
             if (expectedRevision != null && revision != expectedRevision) return
             val duplicate = pending
@@ -281,7 +313,7 @@ class ConnectionManager(
             val claimedRevision = revision
             val previous = pending
             // Swift connect(to:) routes a connected BLE radio through switchDevice, whose catch fires onConnectionLost.
-            val switching = deviceId != null && values.value.state.isConnected
+            val switching = (deviceId != null || normalized == ConnectionTarget.Simulator) && values.value.state.isConnected
             val oldOwners = detachOwnersLocked(DeviceConnectionState.CONNECTING, ConnectionIntent.WantsConnection(forceFullSync))
             val predecessor = precedingStop
             val oldStop = cleanupScope.async(start = CoroutineStart.LAZY) {
@@ -439,24 +471,30 @@ class ConnectionManager(
             override val wallClock: java.time.Clock get() = java.time.Clock.fixed(clock.instant, java.time.ZoneOffset.UTC)
             override suspend fun sleepFor(duration: Duration) = clock.sleep(duration)
         }
-        val session = MeshCoreSession(
-            link.transport, configuration, sessionClock, owner.scope.coroutineContext,
-            onDiagnostic = { diagnostic ->
-                when (diagnostic) {
-                    is SessionDiagnostic.BackgroundFailure ->
-                        reporter.report(RuntimeDiagnostic.Failure(diagnostic.operation, diagnostic.cause))
-                    is SessionDiagnostic.CorrelationUncertain -> {
-                        // The producer holds its protocol lock. Always enqueue recovery off that stack.
-                        dispatch(owner, "session.correlationUncertain", recoveryDispatcher) {
-                            recoverCorrelation(owner, MeshCoreException.ConnectionLost(
-                                SessionCorrelationException.UnresolvedReply(diagnostic.generation, diagnostic.responseFamily),
-                            ))
-                        }
+        val onDiagnostic: (SessionDiagnostic) -> Unit = { diagnostic ->
+            when (diagnostic) {
+                is SessionDiagnostic.BackgroundFailure ->
+                    reporter.report(RuntimeDiagnostic.Failure(diagnostic.operation, diagnostic.cause))
+                is SessionDiagnostic.CorrelationUncertain -> {
+                    // The producer holds its protocol lock. Always enqueue recovery off that stack.
+                    dispatch(owner, "session.correlationUncertain", recoveryDispatcher) {
+                        recoverCorrelation(owner, MeshCoreException.ConnectionLost(
+                            SessionCorrelationException.UnresolvedReply(diagnostic.generation, diagnostic.responseFamily),
+                        ))
                     }
-                    else -> Unit
                 }
-            },
-        )
+                else -> Unit
+            }
+        }
+        val session = if (owner.target == ConnectionTarget.Simulator) {
+            MeshCoreSession.offlinePlaceholder(
+                link.transport, configuration, sessionClock, owner.scope.coroutineContext, onDiagnostic,
+            )
+        } else {
+            MeshCoreSession(
+                link.transport, configuration, sessionClock, owner.scope.coroutineContext, onDiagnostic = onDiagnostic,
+            )
+        }
         synchronized(lock) { requireCurrent(owner); owner.session = session }
         val registration = try { link.register(LinkCallbacks(
             onDisconnected = { failure -> dispatch(owner, "link.disconnected") { handleConnectionLoss(owner, failure) } },
@@ -501,6 +539,10 @@ class ConnectionManager(
     }
 
     private suspend fun establish(owner: RadioGeneration, forceFullSync: Boolean, reconnecting: Boolean = false) {
+        if (owner.target == ConnectionTarget.Simulator) {
+            establishSimulator(owner)
+            return
+        }
         val (link, session) = prepareLink(owner)
         requireCurrent(owner)
         if (reconnecting) publishFor(owner, DeviceConnectionState.CONNECTED, token = null, issue = null)
@@ -545,6 +587,7 @@ class ConnectionManager(
         val methods = when (val target = owner.target) {
             is ConnectionTarget.Bluetooth -> listOf(ConnectionMethod.Bluetooth(target.deviceId))
             is ConnectionTarget.WiFi -> listOf(ConnectionMethod.WiFi(target.host, target.port))
+            ConnectionTarget.Simulator -> error("Simulator uses its own connection lifecycle")
         }
         val device = DeviceDTO.fromConnection(deviceId, radioId, info, capabilities, autoAdd, prior, methods, clock.instant)
         val ownership = FactoryOwnership(token)
@@ -553,25 +596,7 @@ class ConnectionManager(
         synchronized(lock) { requireCurrent(owner); owner.device = device; owner.ownership = ownership }
         val services = serviceFactory.create(RuntimeServiceInputs(
             SessionInputs(token, session, this, owner.scope), device,
-            RuntimeServiceCallbacks(
-                cleanChannelSync = { synchronized(lock) { if (isCurrent(owner)) cleanSync = radioId to clock.instant } },
-                channelSyncAttempted = { synchronized(lock) { if (isCurrent(owner)) attemptedSync = radioId to clock.instant } },
-                beginIdentityImport = { handoff ->
-                    synchronized(lock) {
-                        requireCurrent(owner)
-                        check(owner.identityHandoff?.isCompleted != false || owner.identityHandoff === handoff) {
-                            "An identity import already owns this connection"
-                        }
-                        owner.identityHandoff = handoff
-                    }
-                },
-                reconcileIdentity = { handoff -> reconcileIdentity(token, handoff) },
-                recoverIdentity = { handoff ->
-                    val current = synchronized(lock) { (active ?: retained)?.takeIf { it.token == token && ownsIdentityRecovery(it) } }
-                    if (current != null) scheduleIdentityRebuild(current, handoff)
-                    else staleIdentity(token)
-                },
-            ),
+            serviceCallbacks(owner, token),
             transportType = link.type,
         ), ownership)
         ownership.verifyReturned(services)
@@ -646,6 +671,84 @@ class ConnectionManager(
             }
         }
     }
+
+    private suspend fun establishSimulator(owner: RadioGeneration) {
+        val (link, session) = prepareLink(owner)
+        val simulator = link as? RuntimeSimulatorLink
+            ?: throw ConnectionError.InitializationFailed("Simulator runtime link is not installed")
+        check(link.type == TransportType.SIMULATOR) { "Simulator link has an invalid transport type" }
+        val device = simulator.connectSimulator()
+        requireCurrent(owner)
+        val expected = simulatorDeviceId
+            ?: throw ConnectionError.InitializationFailed("Simulator identity is not installed")
+        if (device.id != expected || device.radioId != RadioId(expected)) {
+            throw ConnectionError.InvalidIdentity("Simulator device and radio identities do not match")
+        }
+        if (device.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) throw ConnectionError.InvalidIdentity()
+        val token = SessionToken(processEpoch, Generation(owner.number), device.radioId)
+        val ownership = FactoryOwnership(token)
+        synchronized(lock) {
+            requireCurrent(owner)
+            owner.token = token
+            owner.device = device
+            owner.ownership = ownership
+        }
+        val services = serviceFactory.create(
+            RuntimeServiceInputs(
+                SessionInputs(token, session, this, owner.scope), device, serviceCallbacks(owner, token),
+                transportType = link.type,
+            ),
+            ownership,
+        )
+        ownership.verifyReturned(services)
+        synchronized(lock) {
+            requireCurrent(owner)
+            owner.services = OwnedRadioServices(services, ownership, context)
+        }
+        services.hydrate()
+        requireCurrent(owner)
+        simulator.seedSimulator()
+        requireCurrent(owner)
+        devices.setActiveDevice(device.id)
+        requireCurrent(owner)
+        val activatedDevice = devices.fetchDevice(device.id) ?: throw ConnectionError.DeviceNotFound()
+        requireCurrent(owner)
+        lastConnection.persist(device.id, device.radioId, "MeshCore One Sim")
+        requireCurrent(owner)
+        synchronized(lock) {
+            requireCurrent(owner)
+            owner.device = activatedDevice
+            deviceValue = activatedDevice
+            platformValue = DevicePlatform.UNKNOWN
+            repeatRanges = SnapshotList.empty()
+            // The simulator mode is connected; its placeholder protocol transport is deliberately not.
+            publishLocked(DeviceConnectionState.CONNECTED, ConnectionState.Disconnected, token, null)
+        }
+        observer.onServicesAvailable(token)
+        requireCurrent(owner)
+        requirePublished(owner, DeviceConnectionState.READY, issue = null)
+        observer.onDeviceSynced(token)
+        requireCurrent(owner)
+    }
+
+    private fun serviceCallbacks(owner: RadioGeneration, token: SessionToken) = RuntimeServiceCallbacks(
+        cleanChannelSync = { synchronized(lock) { if (isCurrent(owner)) cleanSync = token.radioId to clock.instant } },
+        channelSyncAttempted = { synchronized(lock) { if (isCurrent(owner)) attemptedSync = token.radioId to clock.instant } },
+        beginIdentityImport = { handoff ->
+            synchronized(lock) {
+                requireCurrent(owner)
+                check(owner.identityHandoff?.isCompleted != false || owner.identityHandoff === handoff) {
+                    "An identity import already owns this connection"
+                }
+                owner.identityHandoff = handoff
+            }
+        },
+        reconcileIdentity = { handoff -> reconcileIdentity(token, handoff) },
+        recoverIdentity = { handoff ->
+            val current = synchronized(lock) { (active ?: retained)?.takeIf { it.token == token && ownsIdentityRecovery(it) } }
+            if (current != null) scheduleIdentityRebuild(current, handoff) else staleIdentity(token)
+        },
+    )
 
     private suspend fun promoteToReady(owner: RadioGeneration, syncSucceeded: Boolean) {
         requireCurrent(owner)
@@ -912,7 +1015,8 @@ class ConnectionManager(
     }
 
     suspend fun checkBLEConnectionHealth() {
-        if (currentTransportType() == TransportType.WIFI || shouldDeferOpportunisticReconnect || !connectionIntent.wantsConnection) return
+        if (currentTransportType() == TransportType.WIFI || isSimulatorConnection ||
+            shouldDeferOpportunisticReconnect || !connectionIntent.wantsConnection) return
         val initialClaim = synchronized(lock) {
             if (pending != null || !connectionIntent.wantsConnection || closed) null
             else revision to (retained ?: active)
@@ -921,6 +1025,7 @@ class ConnectionManager(
         val last = lastConnection.read()
         if (!wantsCurrent(expectedRevision)) return
         val deviceId = last.deviceId ?: return
+        if (deviceId == simulatorDeviceId) return
         if (activeReconnectDeviceId == deviceId) return
         val target = platform.targetForDevice(deviceId) ?: return reportHealthReconnectFailure(ConnectionError.DeviceNotFound())
         if (!wantsCurrent(expectedRevision)) return
@@ -964,7 +1069,7 @@ class ConnectionManager(
         reporter.report(RuntimeDiagnostic.Failure("health.reconnect", failure))
 
     suspend fun checkWiFiConnectionHealth() {
-        if (identityImportPending || synchronized(lock) { wifiReconnect?.isActive == true } ||
+        if (isSimulatorConnection || identityImportPending || synchronized(lock) { wifiReconnect?.isActive == true } ||
             currentTransportType() == TransportType.BLUETOOTH) return
         val expectedRevision = synchronized(lock) { revision }
         val owner = synchronized(lock) { active }
@@ -1000,6 +1105,18 @@ class ConnectionManager(
         val expectedRevision = synchronized(lock) { revision }
         synchronized(lock) { foreground = true }
         platform.foreground(true)
+        if (isSimulatorConnection) return
+        if (connectionState == DeviceConnectionState.DISCONNECTED && connectionIntent.wantsConnection &&
+            simulatorDeviceId != null && lastConnection.read().deviceId == simulatorDeviceId
+        ) {
+            try {
+                connectAttempt(ConnectionTarget.Simulator, forceFullSync = false, forceReconnect = false,
+                    expectedRevision = expectedRevision)
+            }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { reporter.report(RuntimeDiagnostic.Failure("foreground.simulator", failure)) }
+            return
+        }
         checkWiFiConnectionHealth()
         checkBLEConnectionHealth()
         if (!wantsCurrent(expectedRevision) || connectionState != DeviceConnectionState.DISCONNECTED ||
@@ -1312,7 +1429,7 @@ class ConnectionManager(
         observer.onConnectionLost()
         if (!ownsConnectionLoss(owner)) return
         if (owner.link?.type == TransportType.WIFI) startWiFiReconnection(owner.target)
-        else if (connectionIntent.wantsConnection) startReconnectionWatchdog()
+        else if (owner.target != ConnectionTarget.Simulator && connectionIntent.wantsConnection) startReconnectionWatchdog()
     }
 
     private fun ownsConnectionLoss(owner: RadioGeneration): Boolean = synchronized(lock) {
@@ -1532,6 +1649,7 @@ class ConnectionManager(
     private fun requireRevision(expected: Long) {
         synchronized(lock) { if (closed || revision != expected) throw CancellationException("Superseded connection request") }
     }
+    private fun isRevisionCurrent(expected: Long): Boolean = synchronized(lock) { !closed && revision == expected }
     private fun wantsCurrent(expected: Long): Boolean = synchronized(lock) {
         !closed && revision == expected && connectionIntent.wantsConnection
     }
@@ -1539,10 +1657,19 @@ class ConnectionManager(
     private fun currentTransportType(): TransportType? = synchronized(lock) { (active ?: retained)?.link?.type }
     private suspend fun setIntent(intent: ConnectionIntent) {
         val expected = synchronized(lock) { revision }
-        lastConnection.persistIntent(intent) { synchronized(lock) { revision == expected && !closed } }
-        synchronized(lock) {
-            requireRevision(expected)
-            publishLocked(intent = intent)
+        if (!setIntentIfCurrent(intent, expected)) throw CancellationException("Superseded connection request")
+    }
+    private suspend fun setIntentIfCurrent(intent: ConnectionIntent, expected: Long): Boolean {
+        currentCoroutineContext().ensureActive()
+        if (!isRevisionCurrent(expected)) return false
+        lastConnection.persistIntent(intent) { isRevisionCurrent(expected) }
+        currentCoroutineContext().ensureActive()
+        return synchronized(lock) {
+            if (closed || revision != expected) false
+            else {
+                publishLocked(intent = intent)
+                true
+            }
         }
     }
     private fun intentSummary(): String = when (val intent = connectionIntent) {
@@ -1621,6 +1748,7 @@ class ConnectionManager(
     }
     private fun normalizeTarget(target: ConnectionTarget): ConnectionTarget = when (target) {
         is ConnectionTarget.Bluetooth -> target
+        ConnectionTarget.Simulator -> target
         is ConnectionTarget.WiFi -> {
             val host = target.host.trim()
             if (host.isEmpty()) throw com.meshcoreone.android.core.protocol.transport.tcp.WiFiTransportException(

@@ -11,7 +11,6 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlinx.coroutines.cancel
 import kotlin.test.assertNull
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -75,24 +74,43 @@ class DataStoreAdaptersTest {
         assertEquals(725_760_000.5, storage.preferences.get(com.meshcoreone.android.core.datastore.AppStorageKey.lastStaleCleanupDate))
     }
 
-    @Test fun demoModeDefaultsServeReadsFromTheSnapshotAndPersistWritesInOrder() = runBlocking<Unit> {
-        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
-        try {
-            val defaults = DataStoreDemoModeDefaults.load(storage.preferences, scope)
-            assertEquals(false, defaults.bool("isDemoModeUnlocked"))
-            defaults.set(true, "isDemoModeUnlocked")
-            defaults.set(false, "isDemoModeUnlocked")
-            defaults.set(true, "isDemoModeUnlocked")
-            defaults.set(true, "isDemoModeEnabled")
-            assertEquals(true, defaults.bool("isDemoModeUnlocked"), "the snapshot is current before persistence finishes")
-            kotlinx.coroutines.withTimeout(5_000) {
-                while (!storage.preferences.get(com.meshcoreone.android.core.datastore.AppStorageKey.isDemoModeEnabled)) kotlinx.coroutines.delay(5)
-            }
-            kotlinx.coroutines.delay(50)
-            val reloaded = DataStoreDemoModeDefaults.load(storage.preferences, scope)
-            assertEquals(true, reloaded.bool("isDemoModeUnlocked"), "writes persisted in order; the last write wins")
-            assertEquals(true, reloaded.bool("isDemoModeEnabled"))
-            assertFailsWith<IllegalArgumentException> { defaults.set(true, "somethingElse") }
-        } finally { scope.cancel() }
+    @Test fun demoModeDefaultsConfirmWritesBeforePublishingAndReopenBothFlags() = runBlocking<Unit> {
+        val keys = com.meshcoreone.android.core.datastore.AppStorageKey
+        storage.preferences.update { this[keys.isDemoModeUnlocked] = false; this[keys.isDemoModeEnabled] = false }
+        val defaults = DataStoreDemoModeDefaults.load(storage.preferences)
+        assertEquals(false, defaults.bool("isDemoModeUnlocked"))
+        defaults.set(true, "isDemoModeUnlocked")
+        defaults.set(false, "isDemoModeUnlocked")
+        defaults.set(true, "isDemoModeUnlocked")
+        defaults.set(true, "isDemoModeEnabled")
+        assertEquals(true, storage.preferences.get(keys.isDemoModeUnlocked))
+        assertEquals(true, storage.preferences.get(keys.isDemoModeEnabled))
+        storage.close()
+        val reopened = MeshCoreStorage.get(context)
+        val reloaded = DataStoreDemoModeDefaults.load(reopened.preferences)
+        assertEquals(true, reloaded.bool("isDemoModeUnlocked"), "the last committed write survives reopening")
+        assertEquals(true, reloaded.bool("isDemoModeEnabled"))
+        assertFailsWith<IllegalArgumentException> { reloaded.set(true, "somethingElse") }
+    }
+
+    @Test fun failedDemoWriteLeavesStateUnchangedAndCanBeRetriedAfterStorageReopens() = runBlocking<Unit> {
+        val keys = com.meshcoreone.android.core.datastore.AppStorageKey
+        val original = storage
+        original.preferences.update { this[keys.isDemoModeUnlocked] = false; this[keys.isDemoModeEnabled] = false }
+        val defaults = DataStoreDemoModeDefaults.load(original.preferences)
+        val manager = com.meshcoreone.android.core.services.simulator.DemoModeManager(defaults)
+        original.close()
+        assertFailsWith<com.meshcoreone.android.core.datastore.StorageFailure> { manager.unlock() }
+        assertEquals(false, manager.isUnlocked)
+        assertEquals(false, manager.isEnabled)
+        assertEquals(false, defaults.bool("isDemoModeUnlocked"))
+        assertEquals(false, defaults.bool("isDemoModeEnabled"))
+        val reopened = MeshCoreStorage.get(context)
+        val retry = com.meshcoreone.android.core.services.simulator.DemoModeManager(
+            DataStoreDemoModeDefaults.load(reopened.preferences),
+        )
+        retry.unlock()
+        assertEquals(true, reopened.preferences.get(keys.isDemoModeUnlocked))
+        assertEquals(true, reopened.preferences.get(keys.isDemoModeEnabled))
     }
 }

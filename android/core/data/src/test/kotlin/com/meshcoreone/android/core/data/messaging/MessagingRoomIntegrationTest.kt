@@ -1871,7 +1871,10 @@ class MessagingRoomIntegrationTest {
         }
         val g = RadioGeneration(84, faulty); g.start(); g.signals.set(DeviceConnectionState.READY)
         val message = g.service.createPendingMessage("retry hydration read", contact)
-        val row = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio).copy(sequence = 1)
+            .copy(timestamp = 42u, createdAt = base.minusSeconds(3_600))
+        store.saveMessage(message)
+        val row = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio)
+            .copy(sequence = 1, attemptCount = 1)
         store.upsertPendingSend(row)
         val failure = assertFailsWith<ChatSendQueueServiceException> { g.queue.hydrate() }
         assertTrue(generateSequence(failure.cause) { it.cause }.any { it === cause })
@@ -1906,7 +1909,10 @@ class MessagingRoomIntegrationTest {
         }
         val g = RadioGeneration(85, suspended); g.start(); g.signals.set(DeviceConnectionState.READY)
         val message = g.service.createPendingMessage("shared hydration read", contact)
-        val row = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio).copy(sequence = 1)
+            .copy(timestamp = 84u, createdAt = base.minusSeconds(7_200))
+        store.saveMessage(message)
+        val row = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio)
+            .copy(sequence = 1, attemptCount = 1)
         store.upsertPendingSend(row)
         val first = backgroundScope.async { g.queue.hydrate() }
         entered.await(); first.cancelAndJoin()

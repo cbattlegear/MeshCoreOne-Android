@@ -124,6 +124,14 @@ comment, privileged check, review, publisher authority or full-WP receipt.
   Python is the pinned 3.12.4; neither this process nor the persisted user
   environment supplies a state. The documented isolated verification interpreter
   is absent. No installation or SDK-license acceptance was attempted.
+- `python tools\android-port\local\check.py --commit d82209dfe --affected-base
+  d7f35bbe938ca79d3bc8ab5510fb5cfa9cf8a808 --scope module:android/core/data
+  --scope module:android/core/services`: BLOCKED before product execution:
+  `Installed execution runtime is old or mismatched: controller/execution_recovery.py`.
+  Full tested-input candidate identity is
+  `d82209dfec5059dc720971ecd449441221db71a4`; this attempt did not compile or
+  discover/run product methods. The blocked command is not failed product tests.
+  No runtime installation, recovery, lock release or direct-Gradle bypass occurred.
 
 Product compilation and test execution are unverified. The candidate needs the
 declared local check after actual host/runtime readiness, or exact-candidate hosted

@@ -74,11 +74,12 @@ class ChatLinkRouter(
         if (link.publicKey == environment.connectedDevicePublicKey) return
         val radioId = environment.currentRadioId
         val generation = environment.contactLinkGeneration
+        val isCurrentSession = environment.captureContactLinkSession(generation)
         launchLookup {
             val existing = radioId?.let { runCatchingNonCancellation { environment.fetchContact(it, link.publicKey) } }
             currentCoroutineContext().ensureActive()
             if (link.publicKey == environment.connectedDevicePublicKey) return@launchLookup
-            if (!environment.completeContactLookup(link, existing, radioId, generation)) {
+            if (!environment.completeContactLookup(link, existing, radioId, generation, isCurrentSession)) {
                 diagnostics.report("Contact-link lookup context is no longer current", null)
             }
         }

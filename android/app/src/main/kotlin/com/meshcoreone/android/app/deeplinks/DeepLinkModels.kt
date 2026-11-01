@@ -31,6 +31,7 @@ interface AppDeepLinkEnvironment {
     var selectedTab: com.meshcoreone.android.core.contracts.AppTab
     val currentRadioId: RadioId?
     val contactLinkGeneration: Long get() = 0
+    fun captureContactLinkSession(generation: Long): () -> Boolean = { true }
     val connectedDevicePublicKey: Bytes?
 
     fun navigateToMap(latitude: Double, longitude: Double)
@@ -39,8 +40,9 @@ interface AppDeepLinkEnvironment {
     fun stageContactConfirmation(link: MeshCoreDeepLink.Contact)
     fun completeContactLookup(
         link: MeshCoreDeepLink.Contact, existing: ContactDTO?, radioId: RadioId?, generation: Long,
+        isCurrentSession: () -> Boolean = { true },
     ): Boolean {
-        if (currentRadioId != radioId || contactLinkGeneration != generation) return false
+        if (!isCurrentSession() || currentRadioId != radioId || contactLinkGeneration != generation) return false
         if (existing != null) navigateToContactDetail(existing) else stageContactConfirmation(link)
         return true
     }

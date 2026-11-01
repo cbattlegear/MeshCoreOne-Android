@@ -97,10 +97,11 @@ internal class ContactLinkConfirmation(
     private suspend fun confirmCurrent(): Boolean {
         if (!isCurrent() || state.value.loading || state.value.importing || state.value.failure != null) return false
         state.value.existing?.let { return navigation.completeContactLink(link, it) }
+        val isCurrentSession = session.captureSessionValidity()
         val device = session.connectedDevice()
         val service = session.contactService()
         val store = session.servicesDataStore()
-        if (device == null || device.radioId != radio || service == null || store == null ||
+        if (!isCurrentSession() || device == null || device.radioId != radio || service == null || store == null ||
             session.connectionState() != DeviceConnectionState.READY
         ) {
             mutableState.update { it.copy(failure = UiText.Resource(C.contactsAddErrorNotConnected)) }
@@ -116,9 +117,17 @@ internal class ContactLinkConfirmation(
             ))
             currentCoroutineContext().ensureActive()
             if (!isCurrent()) return false
+            if (!isCurrentSession()) {
+                mutableState.update { it.copy(failure = UiText.Resource(C.contactsAddErrorNotConnected)) }
+                return false
+            }
             val added = store.fetchContact(device.radioId, link.publicKey)
             currentCoroutineContext().ensureActive()
             if (!isCurrent()) return false
+            if (!isCurrentSession()) {
+                mutableState.update { it.copy(failure = UiText.Resource(C.contactsAddErrorNotConnected)) }
+                return false
+            }
             if (added == null) {
                 mutableState.update { it.copy(failure = UiText.Resource(C.contactsCommonErrorOccurred)) }
                 return false
@@ -126,7 +135,7 @@ internal class ContactLinkConfirmation(
             check(added.radioId == device.radioId && added.publicKey == link.publicKey) {
                 "Imported contact lookup returned a mismatched identity"
             }
-            return navigation.completeContactLink(link, added)
+            return navigation.completeContactLink(link, added, isCurrentSession)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: NodesContactFailure.ContactTableFull) {

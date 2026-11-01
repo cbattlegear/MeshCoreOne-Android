@@ -22,6 +22,7 @@ class ContainerDeepLinkEnvironment(
 
     override val currentRadioId: RadioId? get() = container.appState.currentRadioId
     override val contactLinkGeneration get() = navigation.state.value.generation
+    override fun captureContactLinkSession(generation: Long) = container.captureContactLinkSession(generation)
     override val connectedDevicePublicKey: Bytes? get() = container.appState.connectedDevice?.publicKey
 
     override fun navigateToMap(latitude: Double, longitude: Double) = navigation.navigateToMap(latitude, longitude)
@@ -33,9 +34,10 @@ class ContainerDeepLinkEnvironment(
 
     override fun completeContactLookup(
         link: MeshCoreDeepLink.Contact, existing: ContactDTO?, radioId: RadioId?, generation: Long,
+        isCurrentSession: () -> Boolean,
     ) = navigation.completeContactLookup(
         ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
-        radioId, generation, currentRadioId,
+        radioId, generation, currentRadioId, isCurrentSession,
     )
 
     override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel) =

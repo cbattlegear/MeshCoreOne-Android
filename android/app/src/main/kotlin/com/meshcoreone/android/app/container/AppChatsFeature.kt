@@ -198,6 +198,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 set(value) = container.navigation.selectTab(value)
             override val currentRadioId get() = app.currentRadioId
             override val contactLinkGeneration get() = container.navigation.state.value.generation
+            override fun captureContactLinkSession(generation: Long) = container.captureContactLinkSession(generation)
             override val connectedDevicePublicKey get() = app.connectedDevice?.publicKey
             override val parser = MeshCoreLinkParser
             override fun navigateToMap(latitude: Double, longitude: Double) =
@@ -211,9 +212,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 )
             override fun completeContactLookup(
                 link: ContactLinkResult, existing: ContactDTO?, radioId: RadioId?, generation: Long,
+                isCurrentSession: () -> Boolean,
             ) = container.navigation.completeContactLookup(
                 ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
-                radioId, generation, app.currentRadioId,
+                radioId, generation, app.currentRadioId, isCurrentSession,
             )
             override fun stageChannelLink(link: ChannelLinkResult) =
                 container.navigation.stageChannelLink(ChannelLinkRequest(

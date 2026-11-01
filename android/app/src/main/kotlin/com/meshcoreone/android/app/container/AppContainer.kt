@@ -222,9 +222,6 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                 // The factory has withdrawn this graph; a state edge can arrive before that withdrawal.
                 uiScope.launch {
                     statePlatform.retire(container)
-                    if (connectionManager.connectionState ==
-                        com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED
-                    ) appState.reconcileSessionLoss()
                 }
                 dependencies.sessionLifecycle.tornDown(container)
             }
@@ -289,10 +286,29 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
 
     private val statePlatform = ContainerAppStatePlatform(
         dependencies.platform, navigation, dependencies.store, dependencies.onNotificationNavigationReady,
-        isCurrentSession = { session ->
-            sessions.current === session && connectionManager.snapshot.value.token == session.token
-        },
+        isCurrentSession = ::isCurrentSession,
     )
+    private val disconnectWatcher: Job by lazy { watchDisconnects() }
+
+    internal fun isCurrentSession(session: com.meshcoreone.android.app.state.AppSession): Boolean {
+        val current = sessions.current
+        return current != null && current === session && !current.isTornDown &&
+            connectionManager.snapshot.value.token == session.token
+    }
+
+    internal fun captureContactLinkSession(generation: Long): () -> Boolean {
+        val initiating = sessions.current?.takeUnless { it.isTornDown }
+        return {
+            if (initiating != null) isCurrentSession(initiating) else {
+                val current = sessions.current?.takeUnless { it.isTornDown }
+                current == null || navigation.state.value.let {
+                    it.radioId == null && it.generation == generation ||
+                        it.initialContactLinkGeneration == generation &&
+                        it.generation == Math.incrementExact(generation)
+                }
+            }
+        }
+    }
 
     val appState: AppState = AppState(
         AppStateDependencies(
@@ -412,24 +428,23 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                 current != null && current.token == token && statePlatform.isReadyFor(current)
             ) dependencies.onNotificationNavigationReady()
         }
-        watchDisconnects()
     }
 
     /** Starts the process: binds hosting, loads persisted state and activates the runtime (restores the last connection). */
     fun start(): Job {
         hostBinding?.start()
+        disconnectWatcher.start()
         watchPermissions()
         return dependencies.mainScope.launch { appState.initialize() }
     }
 
     /** Reconciles app state on every disconnected edge, covering failures the runtime reports no loss callback for. */
-    private fun watchDisconnects() {
+    private fun watchDisconnects(): Job =
         uiScope.launch {
             connectionManager.snapshot.map { it.state }.distinctUntilChanged()
                 .filter { it == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED }
                 .collect { appState.reconcileSessionLoss() }
         }
-    }
 
     /** Checks permission revocation on each foreground edge (the first read becomes the baseline). */
     private fun watchPermissions() {
@@ -517,6 +532,7 @@ private class ContainerAppStatePlatform(
         session: com.meshcoreone.android.app.state.AppSession,
         connectedDevice: () -> com.meshcoreone.android.core.model.DeviceDTO?,
     ) {
+        if (!isCurrentSession(session)) return
         delegate.configureNotificationNavigation(session, connectedDevice)
         if (this.session !== session || generation != navigation.state.value.generation) {
             binding?.close()

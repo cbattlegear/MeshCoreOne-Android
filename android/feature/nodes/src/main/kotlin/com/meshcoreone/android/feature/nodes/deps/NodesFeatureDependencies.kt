@@ -99,6 +99,11 @@ interface NodesNotificationCleanup {
  * disconnected.
  */
 interface NodesSession {
+    /** Capture before suspending RF work; production verifies the exact graph identity. */
+    fun captureSessionValidity(): () -> Boolean {
+        val device = connectedDevice()
+        return { device != null && connectedDevice()?.id == device.id && connectionState() == DeviceConnectionState.READY }
+    }
     fun connectionState(): DeviceConnectionState
     fun connectedDevice(): DeviceDTO?
     fun currentRadioId(): RadioId?

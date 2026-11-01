@@ -145,15 +145,17 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     fun completeContactLookup(
         link: ContactLinkRequest, contact: ContactDTO?, targetRadioId: RadioId?,
         expectedGeneration: Long, currentRadioId: RadioId?,
+        isCurrentSession: () -> Boolean = { true },
     ): Boolean {
         while (true) {
             val current = state.value
             val initialAssignment = current.initialContactLinkGeneration == expectedGeneration &&
                 current.generation == Math.incrementExact(expectedGeneration)
             val radio = if (initialAssignment && targetRadioId == null) current.radioId else targetRadioId
+            if (!isCurrentSession() || current.generation != expectedGeneration && !initialAssignment ||
+                currentRadioId != radio || current.radioId != null && current.radioId != radio
+            ) return false
             val failure = when {
-                current.generation != expectedGeneration && !initialAssignment || currentRadioId != radio ||
-                    current.radioId != null && current.radioId != radio -> NavigationFailure.StaleGeneration
                 contact != null && (contact.radioId != radio || contact.publicKey != link.publicKey) ->
                     NavigationFailure.WrongTarget(NavigationTarget.CONTACT)
                 else -> null
@@ -171,10 +173,12 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     // AndroidOnly: WP-302 A late dismiss/import must not acknowledge a replacement request or radio.
-    fun completeContactLink(link: ContactLinkRequest, contact: ContactDTO? = null): Boolean {
+    fun completeContactLink(
+        link: ContactLinkRequest, contact: ContactDTO? = null, isCurrentSession: () -> Boolean = { true },
+    ): Boolean {
         while (true) {
             val current = state.value
-            if (link.deliveryId == null || current.pendingContactLink?.deliveryId != link.deliveryId ||
+            if (!isCurrentSession() || link.deliveryId == null || current.pendingContactLink?.deliveryId != link.deliveryId ||
                 current.generation != link.generation ||
                 contact != null && (contact.publicKey != link.publicKey ||
                     link.targetRadioId != null && contact.radioId != link.targetRadioId)

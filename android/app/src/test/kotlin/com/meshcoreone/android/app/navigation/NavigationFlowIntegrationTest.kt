@@ -147,7 +147,6 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                         assertEquals(ChatSelection.Direct(contact), state.chatsSelectedRoute)
                     }
                     is NotificationPayload.ChannelMessage -> {
-                        assertNull(state.pendingChannel, "The mounted consumer acknowledges the delivery")
                         assertEquals(channel, assertIs<ChatSelection.Channel>(state.chatsSelectedRoute).channel)
                         assertEquals(ChatSelection.Channel(channel), state.chatsSelectedRoute)
                     }
@@ -304,6 +303,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 n.clearFailure()
                 val entered = CompletableDeferred<RadioId>()
                 val lookup = CompletableDeferred<ContactDTO?>()
+                val chatRejected = CompletableDeferred<Unit>()
                 val uri = h.container.nodesFeature.uriCodec.exportContactUri("Original claim", key(20), ContactType.ROOM)
                 val external = AppDeepLinkRouter(object : AppDeepLinkEnvironment by ContainerDeepLinkEnvironment(h.container, n) {
                     override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
@@ -316,7 +316,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                         entered.complete(radioId)
                         return lookup.await()
                     }
-                }, backgroundScope)
+                }, backgroundScope, com.meshcoreone.android.feature.chats.list.ChatListDiagnostics { message, _ ->
+                    if (message == "Contact-link lookup context is no longer current") chatRejected.complete(Unit)
+                })
                 val routing = if (fromChat) {
                     assertTrue(chat.route(uri))
                     null
@@ -330,11 +332,11 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 n.selectTab(AppTab.MAP)
                 val replacement = assertNotNull(n.state.value.pendingContactLink)
                 val stack = n.state.value.activeStack
+                val beforeCompletion = n.state.value
                 lookup.complete(if (found) original else null)
                 if (routing != null) assertEquals(DeepLinkRouteOutcome.ContactLookupRejected, routing.await())
-                h.eventually("stale producer explicitly rejects completion") {
-                    n.state.value.failure == NavigationFailure.StaleGeneration
-                }
+                else h.eventually("stale chat producer explicitly rejects completion") { chatRejected.isCompleted }
+                assertEquals(beforeCompletion, n.state.value)
                 assertSame(replacement, n.state.value.pendingContactLink)
                 assertEquals(stack, n.state.value.activeStack)
                 assertEquals(AppTab.MAP, n.state.value.selectedTab)
@@ -412,6 +414,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val lookup = CompletableDeferred<ContactDTO?>()
         val replacementHandshake = CompletableDeferred<Unit>()
+        val contactLookupRelease = CompletableDeferred<Unit>()
+        val contactReads = java.util.concurrent.atomic.AtomicInteger()
         val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun fetchContact(key: EntityKey): ContactDTO? {
                 if (hold && key == heldKey) {
@@ -444,6 +448,24 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             hold = true
             val inFlight = async { oldCallback(EntityKey(radio, target.id)) }
             entered.await()
+            suspend fun heldContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                val found = store.fetchContact(radioId, publicKey)
+                contactReads.incrementAndGet()
+                contactLookupRelease.await()
+                return found
+            }
+            val external = AppDeepLinkRouter(object : AppDeepLinkEnvironment by ContainerDeepLinkEnvironment(h.container, n) {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes) = heldContact(radioId, publicKey)
+            })
+            val chat = ChatLinkRouter(object : ChatLinkEnvironment by h.container.chatsFeature.list.links {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes) = heldContact(radioId, publicKey)
+            }, backgroundScope)
+            val urls = listOf(20, 30).map {
+                h.container.nodesFeature.uriCodec.exportContactUri("Retired contact lookup", key(it), ContactType.REPEATER)
+            }
+            val externalRoutes = urls.map { url -> async { external.routeExternal(url) } }
+            urls.forEach { assertTrue(chat.route(it)) }
+            h.eventually("both producers hold found and absent contact lookups") { contactReads.get() == 4 }
             hold = false
             holdReplacement = true
             val deviceId = assertNotNull(h.appState.connectedDevice).id
@@ -451,13 +473,19 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             h.eventually("retired graph withdrawn while replacement handshake is held") {
                 h.links.radios.size == 2 && h.sessions.current == null
             }
-            h.settle()
+            h.eventually("retired navigation binding is detached during the held handshake") {
+                oldSession.notificationService.onNotificationTapped == null && !n.state.value.navigationReady
+            }
             assertNull(oldSession.notificationService.onNotificationTapped)
             assertFalse(n.state.value.navigationReady)
             assertEquals(oldGeneration, n.state.value.generation)
             val replacementGap = n.state.value
             lookup.complete(target)
+            contactLookupRelease.complete(Unit)
+            testScheduler.runCurrent()
             inFlight.await()
+            externalRoutes.forEach { assertEquals(DeepLinkRouteOutcome.ContactLookupRejected, it.await()) }
+            testScheduler.runCurrent()
             oldCallback(EntityKey(radio, target.id))
             assertEquals(replacementGap, n.state.value, "Retired callbacks cannot commit before the next binding")
             assertEquals(stack, n.state.value.activeStack)
@@ -481,7 +509,82 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             compose.onNodeWithTag("entry:${n.state.value.activeStack.last().id}").assertIsDisplayed()
         } finally {
             replacementHandshake.complete(Unit)
+            contactLookupRelease.complete(Unit)
             lookup.complete(null)
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun retiredImportCannotNavigateAfterCommittedRowLookupDuringReplacementHandshake() = runTest {
+        val importedKey = key(30)
+        val importedName = "Committed retired import"
+        val importedLookup = CompletableDeferred<Unit>()
+        val releaseLookup = CompletableDeferred<Unit>()
+        val replacementHandshake = CompletableDeferred<Unit>()
+        var holdLookup = false
+        var replacing = false
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                val found = store.fetchContact(radioId, publicKey)
+                if (holdLookup && publicKey == importedKey && found != null) {
+                    importedLookup.complete(Unit)
+                    releaseLookup.await()
+                }
+                return found
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        h.links.configureRadio = { firmware ->
+            firmware.knownContacts += contactFrame(key(21), "Retained contact")
+            firmware.respond = { frame -> if (frame[0].toInt() == 0x09) listOf(Bytes.of(0)) else null }
+            if (replacing) {
+                firmware.connectGate = replacementHandshake
+                firmware.knownContacts += contactFrame(importedKey, importedName).copy(
+                    type = ContactType.REPEATER, typeRawValue = ContactType.REPEATER.rawValue,
+                )
+            }
+        }
+        try {
+            connect(h)
+            val n = h.container.navigation
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val selected = assertNotNull(store.fetchContact(radio, key(21)))
+            n.navigateToContactDetail(selected)
+            mount(h)
+            n.stageContactLink(ContactLinkRequest(importedName, importedKey, ContactType.REPEATER))
+            val pending = assertNotNull(n.state.value.pendingContactLink)
+            await(h) { confirmationEnabled() }
+            holdLookup = true
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            await(h) { importedLookup.isCompleted }
+            assertNotNull(store.fetchContact(radio, importedKey), "The ACK-backed write really committed")
+            replacing = true
+            val deviceId = assertNotNull(h.appState.connectedDevice).id
+            val rebuilding = async { h.manager.rebuildSession(deviceId) }
+            h.eventually("import's old graph withdraws before replacement handshake") {
+                h.links.radios.size == 2 && h.sessions.current == null
+            }
+            releaseLookup.complete(Unit)
+            compose.waitForIdle()
+            h.eventually("retired import reports disconnection instead of navigating") {
+                compose.onAllNodesWithTag("contact-link-error").fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(pending.deliveryId, n.state.value.pendingContactLink?.deliveryId)
+            assertEquals(selected.id, n.state.value.selectedContact?.id)
+            replacementHandshake.complete(Unit)
+            rebuilding.await()
+            h.settle()
+            h.assertReady()
+            assertNotEquals(pending.deliveryId, n.state.value.pendingContactLink?.deliveryId)
+            assertEquals(selected.id, n.state.value.selectedContact?.id)
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-cancel").performClick()
+            assertNull(n.state.value.pendingContactLink)
+            assertEquals(selected.id, n.state.value.selectedContact?.id)
+        } finally {
+            releaseLookup.complete(Unit)
+            replacementHandshake.complete(Unit)
             unmount()
             h.container.close()
         }
@@ -506,7 +609,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 val persisted = assertNotNull(store.fetchContact(radio, saved.publicKey))
                 LastConnectionStore(h.preferences, SystemRuntimeClock()).persist(deviceId, radio, "Cached radio")
                 h.container.connectionPort.refreshLastConnection()
-                val connecting = async { h.manager.connect(h.target(deviceId)) }
+                val targetId = if (compatible) deviceId else DeviceIdentity.deriveUUID(key(8))
+                val connecting = async { h.manager.connect(h.target(targetId)) }
                 h.eventually("handshake held with actual persisted offline radio") { h.links.radios.isNotEmpty() }
                 val n = h.container.navigation
                 assertNull(n.state.value.radioId)

@@ -1,5 +1,5 @@
 // PortedFrom: MC1Tests/Views/Map/MapFilterMigrationTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-312 Real process DataStore and backup-key consumer regressions.
+// WP-312 Real process DataStore and backup-key consumer regressions.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.datastore.AppStorageKey

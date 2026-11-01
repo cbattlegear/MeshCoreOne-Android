@@ -1,5 +1,5 @@
 // PortedFrom: MC1/Views/Map/MapFilter.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-312 Process DataStore adapter and migration of the former map-private keys.
+// WP-312 Process DataStore adapter and migration of the former map-private keys.
 package com.meshcoreone.android.app.container
 
 import android.content.SharedPreferences

@@ -1,5 +1,5 @@
 // PortedFrom: MC1/State/AppState.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-312 Real App graph and trace consumer over the existing Room/fake-radio harness.
+// WP-312 Real App graph and trace consumer over the existing Room/fake-radio harness.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState

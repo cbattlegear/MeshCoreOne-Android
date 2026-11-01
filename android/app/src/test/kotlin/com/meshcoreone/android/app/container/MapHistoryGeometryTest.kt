@@ -1,5 +1,5 @@
 // PortedFrom: MC1Tests/Views/LocationPathMapBuilderTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-312 Real history builder -> mounted-consumer adapter -> renderer GeoJSON assertions, not JNI evidence.
+// WP-312 Real history builder -> mounted-consumer adapter -> renderer GeoJSON assertions, not JNI evidence.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.maps.*

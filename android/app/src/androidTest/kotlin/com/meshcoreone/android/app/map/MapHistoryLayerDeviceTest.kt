@@ -1,5 +1,5 @@
 // PortedFrom: MC1Tests/Views/LocationPathMapBuilderTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-312 Installed native layers and source geometry from the real history consumer.
+// WP-312 Installed native layers and source geometry from the real history consumer.
 // This test's existence is not execution evidence; requires a supported device and actual provider readiness.
 package com.meshcoreone.android.app.map
 

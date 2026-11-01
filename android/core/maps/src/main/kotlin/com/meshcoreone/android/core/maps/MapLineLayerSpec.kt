@@ -1,5 +1,5 @@
 // PortedFrom: MC1/Views/Map/MC1MapView+Layers.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-312 Reconciled from the preserved 3ca57f86 advisory trail draft; prior execution unverified.
+// WP-312 Reconciled from the preserved 3ca57f86 advisory trail draft; prior execution unverified.
 package com.meshcoreone.android.core.maps
 
 import com.google.gson.JsonObject

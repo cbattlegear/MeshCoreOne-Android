@@ -216,7 +216,19 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         onChannelQueryAccounting = dependencies.onChannelQueryAccounting,
         messageServiceConfig = dependencies.messageServiceConfig,
         chatSendQueueConfig = dependencies.chatSendQueueConfig,
-        onSessionLifecycle = dependencies.sessionLifecycle,
+        onSessionLifecycle = object : SessionLifecycleListener {
+            override fun created(container: RadioSessionContainer) = dependencies.sessionLifecycle.created(container)
+            override fun tornDown(container: RadioSessionContainer) {
+                // The factory has withdrawn this graph; a state edge can arrive before that withdrawal.
+                uiScope.launch {
+                    statePlatform.retire(container)
+                    if (connectionManager.connectionState ==
+                        com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED
+                    ) appState.reconcileSessionLoss()
+                }
+                dependencies.sessionLifecycle.tornDown(container)
+            }
+        },
         bootstrapDebugLog = bootstrapDebugLog,
     )
 
@@ -277,6 +289,9 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
 
     private val statePlatform = ContainerAppStatePlatform(
         dependencies.platform, navigation, dependencies.store, dependencies.onNotificationNavigationReady,
+        isCurrentSession = { session ->
+            sessions.current === session && connectionManager.snapshot.value.token == session.token
+        },
     )
 
     val appState: AppState = AppState(
@@ -487,6 +502,7 @@ private class ContainerAppStatePlatform(
     private val navigation: NavigationCoordinator,
     store: PersistenceStoreProtocol,
     private val onNavigationReady: () -> Unit,
+    private val isCurrentSession: (com.meshcoreone.android.app.state.AppSession) -> Boolean,
 ) : AppStatePlatform by delegate, AutoCloseable {
     private val lookup = PersistenceNavigationLookup(store)
     private var session: com.meshcoreone.android.app.state.AppSession? = null
@@ -511,13 +527,15 @@ private class ContainerAppStatePlatform(
             }
             binding = NotificationNavigationBinding(
                 session.notificationService, navigation, lookup, connectedDevice,
-            ) { outcome ->
-                if (outcome is com.meshcoreone.android.app.navigation.NavigationOutcome.Failed) {
-                    java.util.logging.Logger.getLogger("com.mc1.Navigation").warning(
-                        "Notification navigation failed: ${outcome.failure.javaClass.simpleName}",
-                    )
-                }
-            }
+                onOutcome = { outcome ->
+                    if (outcome is com.meshcoreone.android.app.navigation.NavigationOutcome.Failed) {
+                        java.util.logging.Logger.getLogger("com.mc1.Navigation").warning(
+                            "Notification navigation failed: ${outcome.failure.javaClass.simpleName}",
+                        )
+                    }
+                },
+                isCurrentSession = { isCurrentSession(session) },
+            )
             this.session = session
             generation = navigation.state.value.generation
         }
@@ -528,6 +546,10 @@ private class ContainerAppStatePlatform(
     override suspend fun onConnectionLost() {
         close()
         delegate.onConnectionLost()
+    }
+
+    fun retire(retired: com.meshcoreone.android.app.state.AppSession) {
+        if (session === retired) close()
     }
 
     override fun close() {

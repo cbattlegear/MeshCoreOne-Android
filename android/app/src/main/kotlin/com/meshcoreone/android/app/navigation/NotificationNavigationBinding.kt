@@ -14,10 +14,12 @@ class NotificationNavigationBinding(
     lookup: NavigationLookup,
     connectedDevice: () -> DeviceDTO?,
     onOutcome: (NavigationOutcome) -> Unit,
+    isCurrentSession: () -> Boolean = { true },
 ) : AutoCloseable {
+    @Volatile private var active = true
     private val generation = coordinator.state.value.generation
     private val route: suspend (NotificationNavigationRequest) -> Unit = { request ->
-        onOutcome(coordinator.handleNotificationRequest(request, lookup, generation))
+        onOutcome(coordinator.handleNotificationRequest(request, lookup, generation) { active && isCurrentSession() })
     }
     private val direct: suspend (EntityKey) -> Unit = { route(NotificationNavigationRequest.Direct(it)) }
     private val newContact: suspend (EntityKey) -> Unit = {
@@ -40,6 +42,7 @@ class NotificationNavigationBinding(
     }
 
     override fun close() {
+        active = false
         if (service.onNotificationTapped === direct) service.onNotificationTapped = null
         if (service.onNewContactNotificationTapped === newContact) service.onNewContactNotificationTapped = null
         if (service.onChannelNotificationTapped === channel) service.onChannelNotificationTapped = null

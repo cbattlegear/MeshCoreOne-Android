@@ -361,22 +361,24 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         request: NotificationNavigationRequest,
         lookup: NavigationLookup,
         expectedGeneration: Long = state.value.generation,
+        isCurrentSession: () -> Boolean = { true },
     ): NavigationOutcome {
         return notificationMutex.withLock {
             val current = state.value
-            if (current.generation != expectedGeneration) {
+            if (current.generation != expectedGeneration || !isCurrentSession()) {
                 return@withLock NavigationOutcome.Failed(NavigationFailure.StaleGeneration)
             }
             if (current.radioId != null && request.radioId != null && current.radioId != request.radioId) {
                 return@withLock commitNotification(
                     Resolved.Failure(NavigationFailure.WrongRadio(current.radioId, requireNotNull(request.radioId))),
                     expectedGeneration,
+                    isCurrentSession,
                 )
             }
             try {
                 val resolved = resolve(request, lookup)
                 currentCoroutineContext().ensureActive()
-                commitNotification(resolved, expectedGeneration)
+                commitNotification(resolved, expectedGeneration, isCurrentSession)
             } catch (error: PersistenceStoreException) {
                 (error.cause as? CancellationException)?.let { throw it }
                 currentCoroutineContext().ensureActive()
@@ -385,15 +387,18 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                     if (request is NotificationNavigationRequest.NewContact) Resolved.Fallback(failure)
                     else Resolved.Failure(failure),
                     expectedGeneration,
+                    isCurrentSession,
                 )
             }
         }
     }
 
-    private fun commitNotification(resolved: Resolved, generation: Long): NavigationOutcome {
+    private fun commitNotification(
+        resolved: Resolved, generation: Long, isCurrentSession: () -> Boolean = { true },
+    ): NavigationOutcome {
         while (true) {
             val current = state.value
-            if (current.generation != generation) {
+            if (current.generation != generation || !isCurrentSession()) {
                 return NavigationOutcome.Failed(NavigationFailure.StaleGeneration)
             }
             val next = when (resolved) {

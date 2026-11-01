@@ -142,11 +142,13 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 compose.onNodeWithTag("entry:${state.activeStack.last().id}").assertIsDisplayed()
                 when (payload) {
                     is NotificationPayload.DirectMessage -> {
-                        assertEquals(contact.id, state.pendingChatContact?.id)
+                        assertNull(state.pendingChatContact, "The mounted consumer acknowledges the delivery")
+                        assertEquals(contact, assertIs<ChatSelection.Direct>(state.chatsSelectedRoute).contact)
                         assertEquals(ChatSelection.Direct(contact), state.chatsSelectedRoute)
                     }
                     is NotificationPayload.ChannelMessage -> {
-                        assertEquals(channel.id, state.pendingChannel?.id)
+                        assertNull(state.pendingChannel, "The mounted consumer acknowledges the delivery")
+                        assertEquals(channel, assertIs<ChatSelection.Channel>(state.chatsSelectedRoute).channel)
                         assertEquals(ChatSelection.Channel(channel), state.chatsSelectedRoute)
                     }
                     else -> error("Only chat payloads are in this matrix")
@@ -405,9 +407,11 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun sameRadioSessionReplacementRetiresCapturedAndInFlightCallbacksWithoutLosingSelection() = runTest {
         var hold = false
+        var holdReplacement = false
         var heldKey: EntityKey? = null
         val entered = CompletableDeferred<Unit>()
         val lookup = CompletableDeferred<ContactDTO?>()
+        val replacementHandshake = CompletableDeferred<Unit>()
         val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun fetchContact(key: EntityKey): ContactDTO? {
                 if (hold && key == heldKey) {
@@ -419,6 +423,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
         h.links.configureRadio = { radio ->
+            if (holdReplacement) radio.connectGate = replacementHandshake
             radio.knownContacts += contactFrame(key(20), "Retired callback target")
             radio.knownContacts += contactFrame(key(21), "Retained selection")
         }
@@ -440,7 +445,24 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val inFlight = async { oldCallback(EntityKey(radio, target.id)) }
             entered.await()
             hold = false
-            h.manager.rebuildSession(assertNotNull(h.appState.connectedDevice).id)
+            holdReplacement = true
+            val deviceId = assertNotNull(h.appState.connectedDevice).id
+            val rebuilding = async { h.manager.rebuildSession(deviceId) }
+            h.eventually("retired graph withdrawn while replacement handshake is held") {
+                h.links.radios.size == 2 && h.sessions.current == null
+            }
+            h.settle()
+            assertNull(oldSession.notificationService.onNotificationTapped)
+            assertFalse(n.state.value.navigationReady)
+            assertEquals(oldGeneration, n.state.value.generation)
+            val replacementGap = n.state.value
+            lookup.complete(target)
+            inFlight.await()
+            oldCallback(EntityKey(radio, target.id))
+            assertEquals(replacementGap, n.state.value, "Retired callbacks cannot commit before the next binding")
+            assertEquals(stack, n.state.value.activeStack)
+            replacementHandshake.complete(Unit)
+            rebuilding.await()
             h.settle()
             h.assertReady()
             assertNotSame(oldSession, h.sessions.current)
@@ -448,8 +470,6 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertTrue(n.state.value.generation > oldGeneration)
             assertEquals(stack, n.state.value.activeStack)
             assertEquals(ChatSelection.Direct(selected), n.state.value.chatsSelectedRoute)
-            lookup.complete(target)
-            inFlight.await()
             oldCallback(EntityKey(radio, target.id))
             assertEquals(stack, n.state.value.activeStack)
             assertEquals(ChatSelection.Direct(selected), n.state.value.chatsSelectedRoute)
@@ -459,7 +479,12 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             compose.waitForIdle()
             assertEquals(ChatSelection.Direct(target), n.state.value.chatsSelectedRoute)
             compose.onNodeWithTag("entry:${n.state.value.activeStack.last().id}").assertIsDisplayed()
-        } finally { unmount(); h.container.close() }
+        } finally {
+            replacementHandshake.complete(Unit)
+            lookup.complete(null)
+            unmount()
+            h.container.close()
+        }
     }
 
     @Test fun savedOfflineContactDestinationSurvivesCompatibleInitialAssignmentButNotAnotherRadio() = runTest {
@@ -478,6 +503,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             try {
                 store.saveDevice(DeviceDTO(id = deviceId, radioId = radio, publicKey = key(7), nodeName = "Cached radio"))
                 store.saveContact(saved)
+                val persisted = assertNotNull(store.fetchContact(radio, saved.publicKey))
                 LastConnectionStore(h.preferences, SystemRuntimeClock()).persist(deviceId, radio, "Cached radio")
                 h.container.connectionPort.refreshLastConnection()
                 val connecting = async { h.manager.connect(h.target(deviceId)) }
@@ -494,7 +520,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     pending.submit(PendingExternalRoute.Delivery("wp302-saved-offline", uri)),
                 )
                 val stack = n.state.value.activeStack
-                assertEquals(saved.id, n.state.value.selectedContact?.id)
+                assertEquals(persisted.id, n.state.value.selectedContact?.id)
                 mount(h)
                 compose.onNodeWithTag("entry:${stack.last().id}").assertIsDisplayed()
                 handshake.complete(Unit)
@@ -506,7 +532,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 assertNull(n.state.value.pendingContactLink)
                 if (compatible) {
                     assertEquals(stack, n.state.value.activeStack)
-                    assertEquals(saved.id, n.state.value.selectedContact?.id)
+                    assertEquals(persisted.id, n.state.value.selectedContact?.id)
                     compose.onNodeWithTag("entry:${stack.last().id}").assertIsDisplayed()
                 } else {
                     assertNotEquals(radio, n.state.value.radioId)

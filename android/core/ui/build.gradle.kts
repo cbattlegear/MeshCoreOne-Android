@@ -158,6 +158,7 @@ val compileProtocolApiConsumer by tasks.registering(JavaExec::class) {
     inputs.files(protocolConsumerClasspath)
     outputs.dir(destination)
     doFirst {
+        project.delete(destination)
         args("-no-stdlib", "-no-reflect", "-Xjdk-release=17", "-jvm-target", "17",
             "-classpath", protocolConsumerClasspath.get().asPath,
             "-d", destination.get().asFile.absolutePath, source.asFile.absolutePath)

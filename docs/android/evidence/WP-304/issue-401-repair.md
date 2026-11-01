@@ -58,6 +58,8 @@ and App/onboarding tests are registered with the scaffold. The compiler fixture
 is a dependency of UI tests, uses the already-locked compiler configuration and
 API graph, and fails if compilation fails or its class is missing. Generated class
 bytes are declared test inputs so fixture-only changes invalidate test execution.
+Each compiler invocation clears its dedicated generated-class directory, preventing
+a renamed fixture from passing through an obsolete consumer class.
 Mounted glyph assertions draw their owning Compose view with native graphics;
 they do not depend on unimplemented Robolectric PixelCopy callbacks or assume an
 unpainted activity window has the theme surface color.

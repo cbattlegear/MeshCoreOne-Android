@@ -12,9 +12,11 @@ import com.meshcoreone.android.feature.chats.list.support.OriginalCase
 import java.util.UUID
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
@@ -307,6 +309,161 @@ class ChannelSheetsStateHolderTest {
         }
     }
 
+    @Test
+    fun `late commit and success cannot adopt a reopened form with the same page and name`() = runBlocking {
+        for (hashtag in listOf(false, true)) {
+            val rig = rig(emptyList(), 4u)
+            val page = if (hashtag) ChannelSheetPage.JOIN_HASHTAG else ChannelSheetPage.JOIN_PRIVATE
+            rig.holder.open(page)
+            rig.holder.updateHashtag("ops")
+            val originalForm = rig.holder.state.value.formId
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            rig.service.beforeAllocation = {
+                entered.complete(Unit)
+                release.await()
+            }
+            val link = ChannelLink("#ops", Bytes(ByteArray(16)))
+            suspend fun join() = if (hashtag) rig.holder.joinHashtag() else rig.holder.joinLink(link)
+            val first = async(start = CoroutineStart.UNDISPATCHED) { join() }
+            lateinit var replacement: ChannelSheetsState
+            try {
+                assertTrue(entered.isCompleted)
+                rig.holder.back()
+                rig.holder.open(page)
+                rig.holder.updateHashtag("ops")
+                replacement = rig.holder.state.value
+                assertNotEquals(originalForm, replacement.formId)
+                assertTrue(replacement.isSubmitting, "Changing forms does not cancel the admitted operation")
+            } finally {
+                release.complete(Unit)
+            }
+            assertNull(first.await(), "Old completion must not return a current-form navigation result")
+            assertEquals(replacement.copy(isSubmitting = false), rig.holder.state.value)
+            val firstSaved = rig.data.channels.single()
+            assertEquals("#ops", firstSaved.name)
+            assertEquals(listOf("channel confirmation form replaced"), rig.diagnostics)
+            rig.service.beforeAllocation = null
+            val next = assertNotNull(join())
+            assertEquals(2, rig.service.allocationCalls)
+            assertEquals(if (hashtag) 1 else 2, rig.data.channels.size)
+            assertEquals(next, rig.holder.state.value.createdChannel)
+            assertEquals(replacement.formId, rig.holder.state.value.formId)
+            assertTrue(firstSaved in rig.data.channels, "Replacing a form does not delete a committed row")
+        }
+    }
+
+    @Test
+    fun `replaced form does not inherit an older committed failure or cancellation`() = runBlocking {
+        for (hashtag in listOf(false, true)) for (cancel in listOf(false, true)) {
+            val rig = rig(emptyList(), 4u)
+            rig.holder.updateHashtag("ops")
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val failure = if (cancel) CancellationException("older committed form") else IllegalStateException("older committed form")
+            rig.service.completionFailure = failure
+            rig.service.afterCommit = {
+                entered.complete(Unit)
+                release.await()
+            }
+            val link = ChannelLink("#ops", Bytes(ByteArray(16)))
+            var observedCancellation: CancellationException? = null
+            val first = async(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    if (hashtag) rig.holder.joinHashtag() else rig.holder.joinLink(link)
+                } catch (cancelled: CancellationException) {
+                    observedCancellation = cancelled
+                    throw cancelled
+                }
+            }
+            lateinit var replacement: ChannelSheetsState
+            try {
+                assertTrue(entered.isCompleted)
+                assertNotNull(rig.holder.state.value.committedWrite)
+                rig.holder.back()
+                rig.holder.open(ChannelSheetPage.JOIN_PRIVATE)
+                rig.holder.updateName("New form")
+                rig.holder.updateSecret("00112233445566778899AABBCCDDEEFF")
+                replacement = rig.holder.state.value
+                assertNull(replacement.committedWrite)
+            } finally {
+                release.complete(Unit)
+            }
+            if (cancel) {
+                assertFailsWith<CancellationException> { first.await() }
+                assertTrue(observedCancellation === failure)
+            } else assertNull(first.await())
+            assertEquals(replacement.copy(isSubmitting = false), rig.holder.state.value)
+            val saved = rig.data.channels.single()
+            rig.service.afterCommit = null
+            rig.service.completionFailure = null
+            val next = assertNotNull(rig.holder.joinPrivate())
+            assertEquals(2u, next.index)
+            assertEquals("New form", next.name)
+            assertEquals(saved, rig.data.channels.first())
+            assertEquals(2, rig.service.allocationCalls)
+        }
+    }
+
+    @Test
+    fun `older create completion cannot switch a replacement form to share`() = runBlocking {
+        val rig = rig(emptyList(), 4u)
+        rig.holder.open(ChannelSheetPage.CREATE_PRIVATE)
+        rig.holder.updateName("Older create")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        rig.service.beforeAllocation = {
+            entered.complete(Unit)
+            release.await()
+        }
+        val first = async(start = CoroutineStart.UNDISPATCHED) { rig.holder.createPrivate() }
+        lateinit var replacement: ChannelSheetsState
+        try {
+            assertTrue(entered.isCompleted)
+            rig.holder.back()
+            rig.holder.open(ChannelSheetPage.JOIN_PRIVATE)
+            rig.holder.updateName("Replacement")
+            replacement = rig.holder.state.value
+        } finally {
+            release.complete(Unit)
+        }
+        assertNull(first.await())
+        assertEquals(replacement.copy(isSubmitting = false), rig.holder.state.value)
+        assertEquals("Older create", rig.data.channels.single().name)
+        assertNull(rig.holder.state.value.shareUri)
+    }
+
+    @Test
+    fun `region setup remains part of the original form submission`() = runBlocking {
+        val rig = rig(emptyList(), 4u)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        rig.data.beforeRegionWrite = {
+            entered.complete(Unit)
+            release.await()
+        }
+        val first = async(start = CoroutineStart.UNDISPATCHED) {
+            rig.holder.joinLink(ChannelLink("Older join", Bytes(ByteArray(16)), "testregion"))
+        }
+        lateinit var replacement: ChannelSheetsState
+        try {
+            assertTrue(entered.isCompleted)
+            assertTrue(rig.holder.state.value.isSubmitting)
+            assertNotNull(rig.holder.state.value.committedWrite)
+            rig.holder.back()
+            rig.holder.open(ChannelSheetPage.JOIN_PRIVATE)
+            rig.holder.updateName("New form")
+            replacement = rig.holder.state.value
+            assertTrue(replacement.isSubmitting)
+        } finally {
+            release.complete(Unit)
+        }
+        assertNull(first.await())
+        assertEquals(replacement.copy(isSubmitting = false), rig.holder.state.value)
+        assertEquals(ChannelFloodScope.Region("testregion"), rig.data.channels.single().floodScope)
+        assertEquals(1, rig.service.allocationCalls)
+    }
+
     private fun rig(channels: List<ChannelDTO>, maxChannels: UByte): ChannelRig {
         val data = FakeChannelData(channels.toMutableList())
         val service = FakeChannelService(data)
@@ -333,9 +490,11 @@ private data class ChannelRig(
 private class FakeChannelData(val channels: MutableList<ChannelDTO>) : ChannelSheetDataSource {
     var lastRegion: String? = null
     var regionFailure: Throwable? = null
+    var beforeRegionWrite: (suspend () -> Unit)? = null
     override suspend fun fetchChannels(radioId: RadioId) = channels.toList()
     override suspend fun fetchChannel(radioId: RadioId, index: UByte) = channels.firstOrNull { it.index == index }
     override suspend fun setFloodScope(channel: ChannelDTO, scope: ChannelFloodScope): ChannelDTO {
+        beforeRegionWrite?.invoke()
         regionFailure?.let { throw it }
         lastRegion = (scope as? ChannelFloodScope.Region)?.name
         return channel.withFloodScope(scope).also { updated ->
@@ -352,6 +511,7 @@ private class FakeChannelService(private val data: FakeChannelData) : ChannelShe
     var failure: Throwable? = null
     var completionFailure: Throwable? = null
     var beforeAllocation: (suspend () -> Unit)? = null
+    var afterCommit: (suspend () -> Unit)? = null
     var allocationCalls = 0
 
     override suspend fun createChannelWithSecret(
@@ -363,6 +523,7 @@ private class FakeChannelService(private val data: FakeChannelData) : ChannelShe
         setChannelWithSecret(radioId, index, name, secret)
         val saved = requireNotNull(data.fetchChannel(radioId, index))
         onCommitted(ChannelWriteReceipt(EntityKey(radioId, saved.id), index))
+        afterCommit?.invoke()
         completionFailure?.let { throw it }
         return saved
     }
@@ -376,6 +537,7 @@ private class FakeChannelService(private val data: FakeChannelData) : ChannelShe
         setChannel(radioId, index, name, name)
         val saved = requireNotNull(data.fetchChannel(radioId, index))
         onCommitted(ChannelWriteReceipt(EntityKey(radioId, saved.id), index))
+        afterCommit?.invoke()
         completionFailure?.let { throw it }
         return saved
     }

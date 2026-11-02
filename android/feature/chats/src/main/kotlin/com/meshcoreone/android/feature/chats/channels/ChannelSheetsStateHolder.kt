@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.security.SecureRandom
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.update
 enum class ChannelSheetPage { OPTIONS, CREATE_PRIVATE, JOIN_PRIVATE, JOIN_PUBLIC, JOIN_HASHTAG, SCAN_QR, SHARE }
 
 data class ChannelSheetsState(
+    val formId: UUID = UUID.randomUUID(),
     val page: ChannelSheetPage = ChannelSheetPage.OPTIONS,
     val isLoading: Boolean = false,
     val isSubmitting: Boolean = false,
@@ -71,18 +73,26 @@ class ChannelSheetsStateHolder(
     }
 
     fun open(page: ChannelSheetPage) {
+        val formId = UUID.randomUUID()
+        val secret = if (page == ChannelSheetPage.CREATE_PRIVATE) {
+            Bytes(ByteArray(ProtocolLimits.CHANNEL_SECRET_SIZE).also(random::nextBytes))
+        } else null
         mutableState.update {
-            val secret = if (page == ChannelSheetPage.CREATE_PRIVATE) {
-                Bytes(ByteArray(ProtocolLimits.CHANNEL_SECRET_SIZE).also(random::nextBytes))
-            } else {
-                it.generatedSecret
-            }
-            it.copy(page = page, generatedSecret = secret, failure = null, createdChannel = null, committedWrite = null, shareUri = null)
+            it.copy(
+                formId = formId, page = page, generatedSecret = secret ?: it.generatedSecret,
+                failure = null, createdChannel = null, committedWrite = null, shareUri = null,
+            )
         }
     }
 
-    fun back() = mutableState.update {
-        it.copy(page = ChannelSheetPage.OPTIONS, name = "", secretHex = "", failure = null, createdChannel = null, committedWrite = null, shareUri = null)
+    fun back() {
+        val formId = UUID.randomUUID()
+        mutableState.update {
+            it.copy(
+                formId = formId, page = ChannelSheetPage.OPTIONS, name = "", secretHex = "",
+                failure = null, createdChannel = null, committedWrite = null, shareUri = null,
+            )
+        }
     }
 
     fun updateName(value: String) = mutableState.update { it.copy(name = utf8Prefix(value, ProtocolLimits.MAX_USABLE_NAME_BYTES)) }
@@ -107,7 +117,7 @@ class ChannelSheetsStateHolder(
         return writeWithSecret(mutableState.value.name, secret)
     }
 
-    suspend fun joinPublic(): ChannelDTO? = submit {
+    suspend fun joinPublic(): ChannelDTO? = submit { _ ->
         val radio = requireRadio()
         dependencies.service.setupPublicChannel(radio)
         dependencies.data.fetchChannel(radio, 0u) ?: throw ChannelSheetError.CreatedChannelMissing
@@ -116,24 +126,13 @@ class ChannelSheetsStateHolder(
     suspend fun joinHashtag(): ChannelDTO? {
         val name = mutableState.value.name
         if (!isValidHashtag(name)) return fail(ChannelSheetError.InvalidHashtag)
-        return submit {
-            dependencies.service.joinHashtagChannel(requireRadio(), maxChannels, "#$name", ::recordCommit)
+        return submit { onCommitted ->
+            dependencies.service.joinHashtagChannel(requireRadio(), maxChannels, "#$name", onCommitted)
         }
     }
 
-    suspend fun joinLink(link: ChannelLink): ChannelDTO? {
-        if (link.name.isEmpty()) return fail(ChannelSheetError.InvalidName)
-        val result = writeWithSecret(link.name, link.secret) ?: return null
-        val region = link.regionScope?.takeIf(String::isNotEmpty) ?: return result
-        return try {
-            dependencies.data.setFloodScope(result, ChannelFloodScope.Region(region))
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Exception) {
-            dependencies.diagnostics.report("set joined channel region", failure)
-            result
-        }
-    }
+    suspend fun joinLink(link: ChannelLink): ChannelDTO? =
+        writeWithSecret(link.name, link.secret, regionScope = link.regionScope)
 
     fun clearFailure() = mutableState.update {
         it.copy(failure = it.committedWrite?.let { receipt ->
@@ -141,25 +140,26 @@ class ChannelSheetsStateHolder(
         })
     }
 
-    private suspend fun writeWithSecret(name: String, secret: Bytes, shareAfter: Boolean = false): ChannelDTO? {
+    private suspend fun writeWithSecret(
+        name: String, secret: Bytes, shareAfter: Boolean = false, regionScope: String? = null,
+    ): ChannelDTO? {
         if (name.isEmpty()) return fail(ChannelSheetError.InvalidName)
         if (secret.size != ProtocolLimits.CHANNEL_SECRET_SIZE) return fail(ChannelSheetError.InvalidSecret)
-        return submit {
-            val channel = dependencies.service.createChannelWithSecret(requireRadio(), maxChannels, name, secret, ::recordCommit)
-            if (shareAfter) {
-                mutableState.update {
-                    it.copy(
-                        page = ChannelSheetPage.SHARE,
-                        createdChannel = channel,
-                        shareUri = dependencies.service.exportChannelUri(channel),
-                    )
-                }
+        return submit(shareAfter) { onCommitted ->
+            val channel = dependencies.service.createChannelWithSecret(requireRadio(), maxChannels, name, secret, onCommitted)
+            val region = regionScope?.takeIf(String::isNotEmpty) ?: return@submit channel
+            try {
+                dependencies.data.setFloodScope(channel, ChannelFloodScope.Region(region))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                dependencies.diagnostics.report("set joined channel region", failure)
+                channel
             }
-            channel
         }
     }
 
-    private suspend fun submit(operation: suspend () -> ChannelDTO): ChannelDTO? {
+    private fun claimSubmission(): UUID? {
         while (true) {
             val current = mutableState.value
             val receipt = current.committedWrite
@@ -177,27 +177,57 @@ class ChannelSheetsStateHolder(
                 )
                 return null
             }
-            if (mutableState.compareAndSet(current, current.copy(isSubmitting = true, failure = null))) break
+            if (mutableState.compareAndSet(current, current.copy(isSubmitting = true, failure = null))) return current.formId
         }
-        return try {
-            operation().also { result ->
-                mutableState.update { it.copy(isSubmitting = false, createdChannel = result) }
+    }
+
+    private suspend fun submit(
+        shareAfter: Boolean = false,
+        operation: suspend ((ChannelWriteReceipt) -> Unit) -> ChannelDTO,
+    ): ChannelDTO? {
+        val formId = claimSubmission() ?: return null
+        val result = try {
+            val channel = operation { receipt -> recordCommit(formId, receipt) }
+            val shareUri = if (shareAfter) dependencies.service.exportChannelUri(channel) else null
+            val current = completeSubmission(formId) {
+                it.copy(
+                    isSubmitting = false, createdChannel = channel,
+                    page = if (shareAfter) ChannelSheetPage.SHARE else it.page,
+                    shareUri = shareUri ?: it.shareUri,
+                )
             }
+            if (current) channel else null
         } catch (cancelled: CancellationException) {
-            mutableState.update {
+            completeSubmission(formId) {
                 it.copy(isSubmitting = false, failure = it.committedWrite?.let { receipt -> ChannelSheetError.AlreadyCommitted(receipt, cancelled) })
             }
             throw cancelled
         } catch (failure: Exception) {
-            mutableState.update {
+            completeSubmission(formId) {
                 it.copy(isSubmitting = false, failure = it.committedWrite?.let { receipt -> ChannelSheetError.AlreadyCommitted(receipt, failure) } ?: failure)
             }
             dependencies.diagnostics.report("write channel", failure)
-            null
+            return null
+        }
+        if (result == null) dependencies.diagnostics.report(
+            "channel confirmation form replaced",
+            IllegalStateException("Channel result belongs to a replaced form"),
+        )
+        return result
+    }
+
+    private fun completeSubmission(formId: UUID, update: (ChannelSheetsState) -> ChannelSheetsState): Boolean {
+        while (true) {
+            val current = mutableState.value
+            val matches = current.formId == formId
+            val next = if (matches) update(current) else current.copy(isSubmitting = false)
+            if (mutableState.compareAndSet(current, next)) return matches
         }
     }
 
-    private fun recordCommit(receipt: ChannelWriteReceipt) = mutableState.update { it.copy(committedWrite = receipt) }
+    private fun recordCommit(formId: UUID, receipt: ChannelWriteReceipt) = mutableState.update {
+        if (it.formId == formId) it.copy(committedWrite = receipt) else it
+    }
 
     private fun requireRadio(): RadioId = radioId ?: throw ChannelSheetError.NoDeviceConnected
     private fun fail(error: ChannelSheetError): ChannelDTO? {

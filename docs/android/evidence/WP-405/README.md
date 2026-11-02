@@ -1,5 +1,28 @@
 # WP-405 evidence
 
+## Form-instance follow-up: source only, execution held
+
+This follow-up builds on local unpublished
+`288b6f558fb21174c7251bfdcb451d986775350a`, not on a new hosted pass.
+Form-scoped compare-and-set completion prevents a returned UUID or terminal
+outcome from adopting a replacement form. Region preference setup remains
+within that submission; original cancellation and ordinary region-failure
+handling remain. Four additional holder methods define the reopened identical
+page/name, committed failure/cancellation, Create-to-Share and held-region
+controls. These are definitions, not discovered/executed test counts.
+
+The user explicitly selected `Keep local Android/Gradle hold`. No local
+checker, direct Gradle/compiler, native runner, runtime installation or
+ownership workaround is used. Dependency-free controller/portmap/whitespace
+checks do not establish Kotlin compilation or behavior.
+
+The separate recovered-drafts-list UX is now selected, with explicit user
+copy into a chosen chat and preservation of unbound original text. Its UI and
+durable occupant provenance are not implemented. Actual trusted admission for
+`add-or-update-recovered-draft-copy` on the App default
+`platform_strings.xml` returned DENIED (no trusted path/operation rule).
+There is no candidate-policy, generated-resource or English-copy workaround.
+
 ## Issue #417 allocation-through-save candidate: exact-head failure
 
 This local follow-up starts from `0c8e3cb22816673d2373fb20f2cbab3744387eaf`,

@@ -162,7 +162,7 @@ def stage_review(repo: Path, wp_id: str, trusted_base: str, candidate: str, *,
             raise PortError("Malformed scoped original inputs")
         allowed = {
             entry["path"]: entry for entry in data["inventory"]
-            if entry["kind"] in ("test", "support") and entry["exclusion"] is None
+            if entry["kind"] in ("production", "test", "support") and entry["exclusion"] is None
         }
         if additional_original_paths - allowed.keys():
             raise PortError("Unknown or excluded scoped original input")

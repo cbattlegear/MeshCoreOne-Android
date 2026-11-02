@@ -3,9 +3,13 @@
 import copy
 import hashlib
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from dataclasses import asdict, replace
+from pathlib import Path
 from unittest.mock import patch
 
 from fixtures import BASE, HEAD, MERGE, FakeApi, bundle, policy, settings, test_manifest
@@ -25,6 +29,74 @@ from controller.workflows import parse_yaml, validate_publisher
 
 
 class NativeReviewTests(unittest.TestCase):
+    def test_isolated_file_and_module_loading_reach_deferred_staging_imports(self):
+        source = Path(__file__).resolve().parents[1] / "controller" / "native_review.py"
+        script = """
+import importlib, runpy, socket, sys
+from unittest.mock import patch
+def no_network(*args, **kwargs):
+    raise AssertionError("entrypoint fixture must not use the network")
+with patch.object(socket, "socket", no_network):
+    sys.path.insert(0, str(__import__("pathlib").Path(sys.argv[1]).parents[1] / "tests"))
+    for mode in ("file", "module"):
+        if mode == "file":
+            namespace = runpy.run_path(sys.argv[1], run_name="entrypoint_fixture")
+        else:
+            namespace = vars(importlib.import_module("controller.native_review"))
+        cls = namespace["NativeReview"]
+        native = cls.__new__(cls)
+        for action, args in (("stage_repair", ("WP-003", 0, 0)),
+                             ("stage_whole", ("WP-003", 0, {}))):
+            try:
+                getattr(native, action)(*args)
+            except namespace["PortError"]:
+                pass
+            else:
+                raise AssertionError("expected validation after deferred imports")
+        from test_native_review import NativeReviewTests
+        fixture_native, api, prefix, value = NativeReviewTests().fixture(current=True)
+        native = cls(fixture_native.backend, fixture_native.manifest, fixture_native.policy)
+        with patch.object(native, "source_receipt", return_value=(
+            "", {"schema_version": 2, "scope_comment_id": 1},
+        )), patch("controller.repair_acceptance.authenticated_scope",
+                  side_effect=namespace["PortError"]("deferred repair receipt import reached")):
+            try:
+                native.evaluate("WP-003", 123, 90)
+            except namespace["PortError"] as error:
+                assert str(error) == "deferred repair receipt import reached", str(error)
+            else:
+                raise AssertionError("expected stop immediately after deferred receipt import")
+            assert all(method == "GET" for method, *rest in api.calls), api.calls
+            api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"
+            api.routes[("POST", prefix + "/check-runs")] = {"id": 201}
+            api.routes[("PATCH", prefix + "/check-runs/201")] = {}
+            with patch.dict(native.publish.__globals__, {"git": lambda *args: value.binding.base_sha.encode()}):
+                try:
+                    native.publish("WP-003", 123, 90, 2, 1)
+                except namespace["PortError"] as error:
+                    assert str(error) == "deferred repair receipt import reached", str(error)
+                else:
+                    raise AssertionError("publisher must refuse invalid repair receipt")
+            created = [call for call in api.calls if call[0] == "POST"]
+            completed = [call for call in api.calls if call[0] == "PATCH"]
+            assert len(created) == len(completed) == 1, api.calls
+            assert created[0][2]["status"] == "in_progress", created
+            assert created[0][2]["name"] == "parity-review", created
+            assert completed[0][2]["status"] == "completed", completed
+            assert completed[0][2]["conclusion"] == "failure", completed
+print("file/module deferred imports reached; offline fake publisher completes failure; no authority or network")
+"""
+        environment = dict(os.environ)
+        for name in tuple(environment):
+            if "TOKEN" in name.upper() or name.startswith("GITHUB_"):
+                environment.pop(name)
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", script, str(source)], env=environment,
+            cwd=source.parent, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("file/module deferred imports reached", result.stdout)
+
     def setUp(self):
         stage = patch("controller.native_review.stage_review", side_effect=lambda *args: self.staged)
         stage.start()
@@ -419,6 +491,44 @@ class NativeReviewTests(unittest.TestCase):
         writes = [call for call in api.calls if call[0] == "PATCH"]
         self.assertEqual(len(writes), 2)
         self.assertTrue(all(call[2]["conclusion"] == "failure" for call in writes))
+
+    def test_deferred_import_failure_completes_created_checks_and_preserves_exception(self):
+        native, api, prefix, _ = self.fixture()
+        api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"
+        ids = iter((201, 202))
+        api.routes[("POST", prefix + "/check-runs")] = lambda payload: {"id": next(ids)}
+        for check_id in (201, 202):
+            api.routes[("PATCH", prefix + f"/check-runs/{check_id}")] = {}
+        error = ImportError("attempted relative import with no known parent package")
+
+        def deferred_import(*args):
+            raise error
+
+        traceback_names = []
+        with patch("controller.native_review.git", return_value=BASE.encode()), \
+                patch.object(native, "evaluate", side_effect=deferred_import):
+            try:
+                native.publish("WP-003", 123, 90, 2, 1)
+            except ImportError as raised:
+                self.assertIs(raised, error)
+                traceback = raised.__traceback__
+                while traceback is not None:
+                    traceback_names.append(traceback.tb_frame.f_code.co_name)
+                    traceback = traceback.tb_next
+            else:
+                self.fail("Publisher must rethrow the original import failure")
+        self.assertIn("deferred_import", traceback_names)
+        created = [call for call in api.calls if call[0] == "POST"]
+        writes = [call for call in api.calls if call[0] == "PATCH"]
+        self.assertEqual(len(created), 2)
+        self.assertEqual({call[1] for call in writes}, {
+            prefix + "/check-runs/201", prefix + "/check-runs/202",
+        })
+        self.assertEqual(len(writes), 2)
+        for call in writes:
+            self.assertEqual(call[2]["status"], "completed")
+            self.assertEqual(call[2]["conclusion"], "failure")
+            self.assertEqual(call[2]["output"]["summary"], str(error))
 
     def test_publisher_authority_is_server_bound_not_a_worktree_lease(self):
         native, api, prefix, _ = self.fixture()

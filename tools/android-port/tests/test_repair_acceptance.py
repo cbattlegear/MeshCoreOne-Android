@@ -19,7 +19,7 @@ from controller.native_review import REVIEW_MARKER
 from controller.repair_acceptance import (
     COMPRESSED_SCOPE_MARKER, SCOPE_MARKER, authenticated_scope, instrumentation_results, validate_build_log,
     validate_hosted_methods as validate_compiled_hosted_methods, validate_scope, verify_native, verify_repair,
-    retained_repairs_execution, scoped_candidate_sources, scoped_retained_sources,
+    retained_repairs_execution, scoped_candidate_sources, scoped_original_paths, scoped_retained_sources,
 )
 from controller.schema import digest, load_json
 from controller.publication import encode_structured_body
@@ -125,6 +125,100 @@ def build_log(modules, **changes):
 
 
 class RepairContractTests(unittest.TestCase):
+    def test_wp002_admitted_unsupported_test_source_cannot_borrow_kotlin_execution(self):
+        manifest, rules, _, scope = fixture()
+        path = "android/app/src/test/java/sample/ChangedTest.java"
+        value = bundle(manifest, rules, "WP-002", changed_paths=[path], merged=False)
+        source = next(e["path"] for e in manifest.inputs("WP-002", False)
+                      if e["exclusion"] is None)
+        scope.update(binding=asdict(value.binding), owner=manifest.wp("WP-002")["owner"])
+        scope["paths"] = [{"path": path, "operation": "modify", "capability": "wp-owned"}]
+        scope["coverage"][0].update(path=path, source_paths=[source], modules=["app", "core/maps"])
+        with self.assertRaisesRegex(PortError, "Changed unit-test sources"):
+            validate_scope(scope, value.binding, manifest, rules, [path], None)
+
+    def test_changed_helper_scope_binds_only_same_module_executed_consumers(self):
+        helper = "android/feature/map/src/test/kotlin/com/meshcoreone/android/feature/map/MapHarness.kt"
+        consumer = "android/feature/map/src/test/kotlin/com/meshcoreone/android/feature/map/MapHarnessConsumerTest.kt"
+        manifest, rules, value, scope = fixture()
+        scope["paths"] = [{"path": helper, "operation": "modify", "capability": "wp-owned"}]
+        coverage = scope["coverage"][0]
+        coverage["path"] = helper
+        method = {"path": consumer, "blob_sha": "4" * 40, "id": "usesHarness"}
+        coverage["hosted_methods"] = [method]
+        coverage["helper_consumers"] = [copy.deepcopy(method)]
+        validate_scope(scope, value.binding, manifest, rules, [helper], None)
+
+        for kind in ("missing-consumer-map", "unrelated-method", "stale-consumer", "wrong-module",
+                     "duplicate-consumer", "duplicate-hosted-method"):
+            altered = copy.deepcopy(scope)
+            changed = altered["coverage"][0]
+            if kind == "missing-consumer-map":
+                changed.pop("helper_consumers")
+            elif kind == "unrelated-method":
+                changed["helper_consumers"][0]["id"] = "unrelated"
+            elif kind == "stale-consumer":
+                changed["helper_consumers"][0]["blob_sha"] = "5" * 40
+            elif kind == "wrong-module":
+                changed["helper_consumers"][0]["path"] = consumer.replace("feature/map", "core/maps")
+            elif kind == "duplicate-consumer":
+                changed["helper_consumers"].append(copy.deepcopy(changed["helper_consumers"][0]))
+            else:
+                changed["hosted_methods"].append(copy.deepcopy(changed["hosted_methods"][0]))
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_scope(altered, value.binding, manifest, rules, [helper], None)
+
+    def test_foreign_production_spec_requires_real_cross_owner_cases_in_each_scoped_route(self):
+        source = "MC1/Views/Chats/Navigation/ChatLinkRouter.swift"
+        test = "MC1Tests/Views/Chats/ChatLinkRouterTests.swift"
+        definition = next(entry for entry in load_json(REPO / "docs" / "android" / "test-cases.json")["entries"]
+                          if entry["path"] == test)
+        for route in ("repair", "verification", "whole"):
+            manifest, rules, value, scope = whole_fixture() if route == "whole" else fixture()
+            paths = [PATH]
+            if route == "verification":
+                scope.update(schema_version=2, kind="landed-wp-verification")
+                scope["paths"][0]["path"] = TEST
+                scope["coverage"][0].update(path=TEST, production_bindings={PATH: "5" * 40})
+                paths = [TEST]
+            catalog = copy.deepcopy(value.catalog) if route == "whole" else {
+                "schema_version": 1, "source_sha": value.binding.source_sha, "entries": [],
+            }
+            catalog["entries"].append(copy.deepcopy(definition))
+            entry = scope["coverage"][0]
+            entry["source_paths"].extend([source, test])
+            entry["cases"].extend({"path": test, **case} for case in definition["cases"])
+            operations, cases, _ = validate_scope(scope, value.binding, manifest, rules, paths, catalog)
+            self.assertEqual(set(operations), set(paths))
+            self.assertTrue({source, test}.issubset(scoped_original_paths(scope, cases, manifest)))
+            for kind in ("production-only", "invented-production-case", "unmapped-test", "unknown-case",
+                         "wrong-family", "stale-catalog", "unknown-source", "excluded-source", "stale-binding"):
+                altered, altered_catalog = copy.deepcopy(scope), copy.deepcopy(catalog)
+                coverage = altered["coverage"][0]
+                if kind == "production-only":
+                    coverage["source_paths"].remove(test)
+                    coverage["cases"] = [case for case in coverage["cases"] if case["path"] != test]
+                elif kind == "invented-production-case":
+                    coverage["cases"].append({"path": source, **definition["cases"][0]})
+                elif kind == "unmapped-test":
+                    coverage["cases"] = [case for case in coverage["cases"] if case["path"] != test]
+                elif kind == "unknown-case":
+                    coverage["cases"][-1]["id"] = "invented"
+                elif kind == "wrong-family":
+                    coverage["cases"][-1]["parameter_family"] = "invented"
+                elif kind == "stale-catalog":
+                    altered_catalog["entries"][-1]["blob_sha"] = "0" * 40
+                elif kind == "unknown-source":
+                    coverage["source_paths"].append("MC1/Unknown.swift")
+                elif kind == "excluded-source":
+                    coverage["source_paths"].append(next(
+                        item["path"] for item in manifest.data["inventory"] if item["exclusion"] is not None
+                    ))
+                else:
+                    altered["binding"]["source_sha"] = "0" * 40
+                with self.subTest(route=route, kind=kind), self.assertRaises(PortError):
+                    validate_scope(altered, value.binding, manifest, rules, paths, altered_catalog)
+
     def test_scoped_candidate_sources_include_consumer_tests_and_native_bindings_without_conflicts(self):
         _, _, _, scope = fixture()
         scope["coverage"][0]["production_bindings"] = {PATH: "5" * 40}
@@ -369,6 +463,354 @@ class RepairExecutionTests(unittest.TestCase):
         contents = {blobs[path]: data for path, data in sources.items()}
         executed = {"core/maps": [{"class": "sample.MapTest", "method": METHOD["id"]}]}
         return manifest, scope, blobs, contents, executed, {"core/maps": dict(blobs)}
+
+    def helper_inputs(self, helper_source, consumer_source, *, member=None):
+        helper = TEST.replace("MapTest.kt", "MapTestHelper.kt")
+        consumer = TEST.replace("MapTest.kt", "MapHelperConsumerTest.kt")
+        blobs = {
+            path: hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+            for path, data in ((helper, helper_source.encode()), (consumer, consumer_source.encode()))
+        }
+        manifest, _, _, scope = fixture()
+        coverage = scope["coverage"][0]
+        coverage["path"] = helper
+        coverage["modules"] = ["core/maps"]
+        method = {"path": consumer, "blob_sha": blobs[consumer], "id": "keepsListReachable"}
+        coverage["hosted_methods"] = [method]
+        consumer_binding = copy.deepcopy(method)
+        if member is not None:
+            consumer_binding["member"] = member
+        coverage["helper_consumers"] = [consumer_binding]
+        source_text = {blobs[path]: data.encode() for path, data in
+                       ((helper, helper_source), (consumer, consumer_source))}
+        return scope, helper, consumer, blobs, source_text, {
+            "core/maps": [{"class": "sample.MapHelperConsumerTest", "method": "keepsListReachable"}],
+        }, {"core/maps": dict(blobs)}
+
+    def test_helper_lineage_cannot_borrow_later_bodies_qualified_names_or_shadowed_members(self):
+        cases = (
+            ("expression-body", None,
+             "@Test fun keepsListReachable() = check(true)\nprivate fun unused() { MapTestHelper() }"),
+            ("expression-lambda", None,
+             "@Test fun keepsListReachable() = run { MapTestHelper() }"),
+            ("expression-run-test", None,
+             "@Test fun keepsListReachable() = runTest { MapTestHelper() }"),
+            ("unrelated-qualified-constructor", None,
+             "@Test fun keepsListReachable() { unrelated.MapTestHelper() }"),
+            ("shadowed-constructor", None,
+             "@Test fun keepsListReachable() { val MapTestHelper = { true }; check(MapTestHelper()) }"),
+            ("local-member-shadow", "fixture",
+             "@Test fun keepsListReachable() { val fixture = true; check(fixture) }"),
+            ("loop-member-shadow", "fixture",
+             "@Test fun keepsListReachable() { for (fixture in listOf(true)) check(fixture) }"),
+            ("destructured-member-shadow", "fixture",
+             "@Test fun keepsListReachable() { val (fixture, other) = true to false; check(fixture) }"),
+            ("lambda-member-shadow", "fixture",
+             "@Test fun keepsListReachable() { listOf(true).forEach { fixture -> check(fixture) } }"),
+            ("unrelated-qualified-member", "fixture",
+             "@Test fun keepsListReachable() { check(unrelated.fixture) }"),
+            ("named-argument-not-member-read", "fixture",
+             "@Test fun keepsListReachable() { unrelated(fixture = true) }"),
+            ("assignment-not-member-read", "fixture",
+             "@Test fun keepsListReachable() { fixture = MapTestHelper(); check(true) }"),
+            ("unexecuted-local-function", None,
+             "@Test fun keepsListReachable() { fun unused() { MapTestHelper() }; check(true) }"),
+        )
+        for label, member, method in cases:
+            scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
+                "package sample\nclass MapTestHelper { val enabled = true }",
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+                + ("private var fixture = MapTestHelper(); " if label == "assignment-not-member-read"
+                 else "private val fixture = MapTestHelper(); ") + method + " }", member=member,
+            )
+            other = consumer.replace("MapHelperConsumerTest.kt", "UnrelatedHelper.kt")
+            other_source = b"package unrelated\nclass MapTestHelper { val enabled = true }"
+            other_blob = hashlib.sha1(
+                b"blob " + str(len(other_source)).encode("ascii") + b"\0" + other_source,
+            ).hexdigest()
+            blobs[other] = other_blob
+            content[other_blob] = other_source
+            compiled["core/maps"][other] = other_blob
+            with self.subTest(label=label), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ), self.assertRaises(PortError):
+                validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
+    def test_helper_lineage_rejects_uncalled_expression_function_and_property_function_collision(self):
+        cases = (
+            (None, "", "fun unused() = MapTestHelper(); check(true)"),
+            ("fixture", "private fun fixture() = true;", "check(fixture())"),
+            ("fixture", "private fun <T> fixture(): Boolean = true;", "check(fixture<Boolean>())"),
+        )
+        for member, extra, body in cases:
+            scope, _, _, blobs, content, executed, compiled = self.helper_inputs(
+                "package sample\nclass MapTestHelper { val enabled = true }",
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+                "private val fixture = MapTestHelper(); " + extra
+                + "@Test fun keepsListReachable() { " + body + " } }", member=member,
+            )
+            with self.subTest(member=member, body=body), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ), self.assertRaises(PortError):
+                validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
+    def test_helper_lineage_rejects_compiled_sibling_and_inherited_callable_collisions(self):
+        for inherited, collision in ((False, True), (True, True), (False, False), (True, False)):
+            scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
+                "package sample\nclass MapTestHelper { val enabled = true }",
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest"
+                + (" : Parent()" if inherited else "") + " { "
+                "@Test fun keepsListReachable() { check(MapTestHelper("
+                + ("" if inherited or not collision else "1")
+                + (")" if collision else ").enabled") + ") } }",
+            )
+            sibling = consumer.replace("MapHelperConsumerTest.kt", "Sibling.kt")
+            source = (
+                "package sample\nopen class Parent { fun "
+                + ("MapTestHelper" if collision else "unrelated") + "() = true }"
+                if inherited else "package sample\nfun "
+                + ("MapTestHelper" if collision else "unrelated") + "(unused: Int): Boolean = true"
+            ).encode()
+            blob = hashlib.sha1(b"blob " + str(len(source)).encode("ascii") + b"\0" + source).hexdigest()
+            blobs[sibling] = blob
+            content[blob] = source
+            compiled["core/maps"][sibling] = blob
+            with self.subTest(inherited=inherited, collision=collision), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ):
+                if collision:
+                    with self.assertRaises(PortError):
+                        validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+                else:
+                    validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
+    def test_real_helper_shapes_keep_unproved_port_inheritance_blocked(self):
+        helpers = (
+            # ContainerHarness.kt has a top-level factory with a qualified anonymous port.
+            "package sample\n"
+            "private fun defaultLocation() = object : ports.LocationProducing { "
+            "override fun requestPermissionIfNeeded(): Unit = error(\"must not prompt\") }\n"
+            "class MapTestHelper { val enabled = true }",
+            # RemoteNodesFixture.kt implements production ports and returns a delegated anonymous port.
+            "package sample\nimport ports.RemoteNodeHistoryStore\n"
+            "class MapTestHelper : RemoteNodeHistoryStore { "
+            "fun historyStore(): RemoteNodeHistoryStore = object : RemoteNodeHistoryStore by this {} }",
+            # Even without an anonymous object, an absent compiled production parent stays unknown.
+            "package sample\nimport ports.RemoteNodeHistoryStore\n"
+            "class MapTestHelper : RemoteNodeHistoryStore { val enabled = true }",
+        )
+        for helper_source in helpers:
+            scope, _, _, blobs, content, executed, compiled = self.helper_inputs(
+                helper_source,
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+                "@Test fun keepsListReachable() { MapTestHelper() } }",
+            )
+            with self.subTest(helper=helper_source), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ), self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
+                validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
+    def test_helper_lineage_does_not_borrow_uncalled_local_constructor_defaults(self):
+        helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
+        for body, accepted in (
+            ("class Unused(val value: Any = MapTestHelper()); check(true)", False),
+            ("class Unused { constructor(value: Any = MapTestHelper()) }; check(true)", False),
+            ("val value = MapTestHelper(); check(value.enabled)", True),
+        ):
+            consumer_source = (
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+                "@Test fun keepsListReachable() { " + body + " } }"
+            )
+            scope, _, _, blobs, content, executed, compiled = self.helper_inputs(
+                helper_source, consumer_source,
+            )
+            with self.subTest(body=body), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ):
+                if accepted:
+                    validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+                else:
+                    with self.assertRaisesRegex(PortError, "Local .* declarations"):
+                        validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
+    def test_helper_member_lineage_does_not_borrow_custom_accessors(self):
+        helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
+        for declaration, accepted in (
+            ("private var fixture = true\n set(value) = check(MapTestHelper().enabled)", False),
+            ("private var fixture: Boolean\n get() = true\n"
+             " set(value) = check(MapTestHelper().enabled)", False),
+            ("private var fixture = true\n set(value) { check(MapTestHelper().enabled) }", False),
+            ("private var fixture: Boolean\n get() { return true }\n"
+             " set(value) { check(MapTestHelper().enabled) }", False),
+            ("private val fixture: Boolean\n get() = MapTestHelper().enabled", False),
+            ("private var fixture = MapTestHelper().enabled\n get() = true", False),
+            ("private val fixture = MapTestHelper().enabled", True),
+            ("private var fixture = MapTestHelper().enabled", True),
+        ):
+            consumer_source = (
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest {\n"
+                + declaration + "\n@Test fun keepsListReachable() { check(fixture) }\n}"
+            )
+            scope, _, _, blobs, content, executed, compiled = self.helper_inputs(
+                helper_source, consumer_source, member="fixture",
+            )
+            with self.subTest(declaration=declaration), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ):
+                if accepted:
+                    validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+                else:
+                    with self.assertRaisesRegex(PortError, "no direct or class-member lineage"):
+                        validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
+    def test_repair_helper_consumers_require_compiled_and_executed_source_lineage(self):
+        helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
+        direct_consumer = (
+            "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+            "@Test fun keepsListReachable() { assertTrue(MapTestHelper().enabled) } }"
+        )
+        member_consumer = (
+            "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+            "private val fixture = MapTestHelper(); "
+            "@Test fun keepsListReachable() { assertTrue(fixture.enabled) } }"
+        )
+        imported_consumer = direct_consumer.replace(
+            "import org.junit.Test\n",
+            "import org.junit.Test\nimport sample.MapTestHelper as Harness\n",
+        ).replace("MapTestHelper()", "Harness()")
+        for consumer_source, member in (
+            (direct_consumer, None), (member_consumer, "fixture"), (imported_consumer, None),
+            (direct_consumer.replace("keepsListReachable() {", "keepsListReachable(): Unit {"), None),
+            (member_consumer.replace("assertTrue(fixture.enabled)", "val unrelated = true; assertTrue(fixture.enabled)"),
+             "fixture"),
+            (member_consumer.replace(
+                "@Test fun", "private fun fixture() = true;\n@Test fun",
+            ), "fixture"),
+            (member_consumer.replace(
+                "private val fixture = MapTestHelper()", "private val fixture = MapTestHelper().enabled",
+            ).replace("assertTrue(fixture.enabled)", "check(fixture == true)"), "fixture"),
+            (member_consumer.replace(
+                "assertTrue(fixture.enabled)", "val value: Any = Any(); check(fixture === value)",
+            ), "fixture"),
+        ):
+            scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
+                helper_source, consumer_source, member=member,
+            )
+            candidate = {helper: blobs[helper], consumer: blobs[consumer]}
+            with self.subTest(member=member), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ):
+                validate_hosted_methods(scope, candidate, REPO, executed, compiled)
+                for kind in ("missing-helper", "stale-helper-compile", "missing-consumer", "stale-consumer",
+                             "missing-helper-compile", "missing-consumer-compile", "wrong-module", "unexecuted-consumer",
+                             "unrelated-consumer", "mention-only-consumer", "declared-test-masquerade",
+                             "inherited-test-masquerade", "wrong-import-target"):
+                    altered_candidate = dict(candidate)
+                    altered_compiled = copy.deepcopy(compiled)
+                    altered_executed = copy.deepcopy(executed)
+                    altered_scope = copy.deepcopy(scope)
+                    if kind == "missing-helper":
+                        altered_candidate.pop(helper)
+                    elif kind == "stale-helper-compile":
+                        altered_compiled["core/maps"][helper] = "0" * 40
+                    elif kind == "missing-consumer":
+                        altered_candidate.pop(consumer)
+                    elif kind == "stale-consumer":
+                        altered_candidate[consumer] = "0" * 40
+                    elif kind == "missing-helper-compile":
+                        altered_compiled["core/maps"].pop(helper)
+                    elif kind == "missing-consumer-compile":
+                        altered_compiled["core/maps"].pop(consumer)
+                    elif kind == "wrong-module":
+                        altered_scope["coverage"][0]["modules"] = ["feature/map"]
+                    elif kind == "unexecuted-consumer":
+                        altered_executed["core/maps"] = []
+                    elif kind == "unrelated-consumer":
+                        source = (
+                            direct_consumer.replace("assertTrue(MapTestHelper().enabled)", "assertTrue(true)")
+                            if member is None
+                            else member_consumer.replace("assertTrue(fixture.enabled)", "assertTrue(true)")
+                        )
+                        altered_candidate[consumer] = hashlib.sha1(
+                            b"blob " + str(len(source.encode())).encode("ascii") + b"\0" + source.encode()
+                        ).hexdigest()
+                        content[altered_candidate[consumer]] = source.encode()
+                        altered_scope["coverage"][0]["hosted_methods"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_scope["coverage"][0]["helper_consumers"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_compiled["core/maps"].pop(consumer)
+                        altered_compiled["core/maps"][consumer] = altered_candidate[consumer]
+                    elif kind == "mention-only-consumer":
+                        source = direct_consumer.replace(
+                            "assertTrue(MapTestHelper().enabled)", "assertTrue(MapTestHelper::class != null)",
+                        )
+                        altered_candidate[consumer] = hashlib.sha1(
+                            b"blob " + str(len(source.encode())).encode("ascii") + b"\0" + source.encode()
+                        ).hexdigest()
+                        content[altered_candidate[consumer]] = source.encode()
+                        altered_scope["coverage"][0]["hosted_methods"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_scope["coverage"][0]["helper_consumers"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_compiled["core/maps"].pop(consumer)
+                        altered_compiled["core/maps"][consumer] = altered_candidate[consumer]
+                    elif kind == "wrong-import-target":
+                        source = imported_consumer.replace(
+                            "import sample.MapTestHelper as Harness",
+                            "import unrelated.MapTestHelper as Harness",
+                        )
+                        altered_candidate[consumer] = hashlib.sha1(
+                            b"blob " + str(len(source.encode())).encode("ascii") + b"\0" + source.encode()
+                        ).hexdigest()
+                        content[altered_candidate[consumer]] = source.encode()
+                        altered_scope["coverage"][0]["hosted_methods"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_scope["coverage"][0]["helper_consumers"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_compiled["core/maps"].pop(consumer)
+                        altered_compiled["core/maps"][consumer] = altered_candidate[consumer]
+                    elif kind == "declared-test-masquerade":
+                        source = "package sample\nimport org.junit.Test\nclass MapTestHelper { @Test fun fake() {} }"
+                        altered_candidate[helper] = hashlib.sha1(
+                            b"blob " + str(len(source.encode())).encode("ascii") + b"\0" + source.encode()
+                        ).hexdigest()
+                        content[altered_candidate[helper]] = source.encode()
+                        altered_compiled["core/maps"][helper] = altered_candidate[helper]
+                    else:
+                        source = (
+                            "package sample\nimport org.junit.Test\n"
+                            "open class BaseTest { @Test fun inheritedFake() {} }\n"
+                            "class MapTestHelper : BaseTest() {}"
+                        )
+                        altered_candidate[helper] = hashlib.sha1(
+                            b"blob " + str(len(source.encode())).encode("ascii") + b"\0" + source.encode()
+                        ).hexdigest()
+                        content[altered_candidate[helper]] = source.encode()
+                        altered_compiled["core/maps"][helper] = altered_candidate[helper]
+                    with self.subTest(member=member, kind=kind), self.assertRaises(PortError), patch(
+                        "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+                    ):
+                        validate_hosted_methods(
+                            altered_scope, altered_candidate, REPO, altered_executed, altered_compiled,
+                        )
+
+        scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
+            helper_source, direct_consumer,
+        )
+        base = TEST.replace("MapTest.kt", "MapTestBase.kt")
+        base_source = (
+            "package sample\nimport org.junit.Test\n"
+            "open class MapTestBase { @Test fun inheritedFake() {} }"
+        ).encode()
+        base_blob = hashlib.sha1(
+            b"blob " + str(len(base_source)).encode("ascii") + b"\0" + base_source,
+        ).hexdigest()
+        inherited_helper = "package sample\nclass MapTestHelper : MapTestBase()"
+        inherited_blob = hashlib.sha1(
+            b"blob " + str(len(inherited_helper.encode())).encode("ascii") + b"\0" + inherited_helper.encode(),
+        ).hexdigest()
+        candidate = {helper: inherited_blob, consumer: blobs[consumer], base: base_blob}
+        compiled["core/maps"].update({helper: inherited_blob, base: base_blob})
+        content[inherited_blob] = inherited_helper.encode()
+        content[base_blob] = base_source
+        with patch("controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob]), \
+                self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
+            validate_hosted_methods(scope, candidate, REPO, executed, compiled)
 
     def test_compiled_superclass_lifecycle_and_transitive_aliases_in_both_modes(self):
         base = TEST.replace("MapTest.kt", "UnrelatedFilename.kt")
@@ -729,12 +1171,12 @@ class RepairExecutionTests(unittest.TestCase):
         scope["coverage"].append({
             "path": helper, "source_paths": scope["coverage"][0]["source_paths"], "cases": [],
             "native_methods": [], "hosted_methods": [METHOD], "adaptation": "Fixture consumed by unit test.",
-            "modules": ["core/maps"],
+            "modules": ["core/maps"], "helper_consumers": [copy.deepcopy(METHOD)],
         })
         validate_scope(scope, value.binding, manifest, rules, [PATH, helper], value.catalog)
         sources = {
-            "3" * 40: b"package com.meshcoreone.android.core.maps\nobject MapFixtures {}",
-            "4" * 40: b"package com.meshcoreone.android.core.maps\nclass MapTest { @Test fun keepsListReachable() {} }",
+            "3" * 40: b"package com.meshcoreone.android.core.maps\nclass MapFixtures {}",
+            "4" * 40: b"package com.meshcoreone.android.core.maps\nclass MapTest { @Test fun keepsListReachable() { MapFixtures() } }",
         }
         executed = {"core/maps": [{"class": "com.meshcoreone.android.core.maps.MapTest",
                                     "method": "keepsListReachable"}]}
@@ -1247,11 +1689,11 @@ class RepairExecutionTests(unittest.TestCase):
         scope["coverage"].append({
             "path": helper, "source_paths": scope["coverage"][0]["source_paths"], "cases": [],
             "native_methods": [], "hosted_methods": [METHOD], "adaptation": "Fixture used by a test.",
-            "modules": ["core/maps"],
+            "modules": ["core/maps"], "helper_consumers": [copy.deepcopy(METHOD)],
         })
         sources = {
             "3" * 40: b"package sample\nclass MapFixtures { @Suppress fun omitted() {} }",
-            "4" * 40: b"package sample\nclass MapTest { @Test fun keepsListReachable() {} }",
+            "4" * 40: b"package sample\nclass MapTest { @Test fun keepsListReachable() { MapFixtures() } }",
             "6" * 40: b"package sample\ntypealias Suppress = org.junit.Test",
         }
         candidate = {helper: "3" * 40, TEST: "4" * 40, aliases: "6" * 40}
@@ -1266,9 +1708,9 @@ class RepairExecutionTests(unittest.TestCase):
         scope["coverage"].append({
             "path": helper, "source_paths": scope["coverage"][0]["source_paths"], "cases": [],
             "native_methods": [], "hosted_methods": [METHOD], "adaptation": "Fixture used by a test.",
-            "modules": ["core/maps"],
+            "modules": ["core/maps"], "helper_consumers": [copy.deepcopy(METHOD)],
         })
-        sources = {"4" * 40: b"class MapTest { @Test fun keepsListReachable() {} }"}
+        sources = {"4" * 40: b"class MapTest { @Test fun keepsListReachable() { MapFixtures() } }"}
         executed = {"core/maps": [{"class": "MapTest", "method": "keepsListReachable"}]}
         for source in (
             b"class RequiredCasesTest : BaseCases()",
@@ -1292,9 +1734,9 @@ class RepairExecutionTests(unittest.TestCase):
         scope["coverage"].append({
             "path": helper, "source_paths": scope["coverage"][0]["source_paths"], "cases": [],
             "native_methods": [], "hosted_methods": [METHOD], "adaptation": "Fixture used by a test.",
-            "modules": ["core/maps"],
+            "modules": ["core/maps"], "helper_consumers": [copy.deepcopy(METHOD)],
         })
-        sources = {"4" * 40: b"class MapTest { @Test fun keepsListReachable() {} }"}
+        sources = {"4" * 40: b"class MapTest { @Test fun keepsListReachable() { MapFixtures() } }"}
         executed = {"core/maps": [{"class": "MapTest", "method": "keepsListReachable"}]}
         for source in (
             b'import other.Case\nclass MapFixtures { @Case public @Suppress("unused") fun omitted() {} }',
@@ -1703,12 +2145,16 @@ class RepairAuthorityTests(unittest.TestCase):
             validate_scope(altered, value_binding, native.manifest, native.policy, [consumer], None)
 
     def test_scoped_cross_owner_sources_are_staged_again_for_receipt_validation(self):
-        source = "MC1Services/Tests/MC1ServicesTests/SyncCoordinatorMessageHandlerTests.swift"
+        source = "MC1Tests/Views/Chats/ChatLinkRouterTests.swift"
+        production = "MC1/Views/Chats/Navigation/ChatLinkRouter.swift"
         definition = next(entry for entry in load_json(REPO / "docs" / "android" / "test-cases.json")["entries"]
                           if entry["path"] == source)
         case = definition["cases"][0]
-        for whole in (False, True):
-            native, api, prefix, value, scope, staged, entries = self.fixture()
+        for route in ("repair", "verification", "whole"):
+            whole = route == "whole"
+            native, api, prefix, value, scope, staged, entries = (
+                self.verification_fixture() if route == "verification" else self.fixture()
+            )
             if whole:
                 manifest, rules, value, scope = whole_fixture()
                 native.manifest, native.policy = manifest, rules
@@ -1717,7 +2163,7 @@ class RepairAuthorityTests(unittest.TestCase):
                 "schema_version": 1, "source_sha": value.binding.source_sha, "entries": [],
             }
             catalog["entries"].append(copy.deepcopy(definition))
-            scope["coverage"][0]["source_paths"].append(source)
+            scope["coverage"][0]["source_paths"].extend([source, production])
             scope["coverage"][0]["cases"].append({"path": source, **case})
             scope["native"] = [{
                 "revision": BASE, "transcript": "docs/android/evidence/WP-503/fixture.txt",
@@ -1753,14 +2199,16 @@ class RepairAuthorityTests(unittest.TestCase):
                 else:
                     native.stage_repair("WP-312", 123, 700)
                 self.assertIn(source, stage.call_args.kwargs["additional_original_paths"])
+                self.assertIn(production, stage.call_args.kwargs["additional_original_paths"])
                 self.assertEqual(stage.call_args.kwargs["additional_candidate_sources"],
-                                 {TEST: "4" * 40, PATH: "5" * 40})
+                                 {CONSUMER_TEST if route == "verification" else TEST: "4" * 40, PATH: "5" * 40})
                 self.assertEqual(stage.call_args.kwargs["additional_retained_sources"],
                                  {(BASE, CONSUMER_TEST): "8" * 40})
                 native.evaluate("WP-312", 123, 90)
                 self.assertIn(source, stage.call_args.kwargs["additional_original_paths"])
+                self.assertIn(production, stage.call_args.kwargs["additional_original_paths"])
                 self.assertEqual(stage.call_args.kwargs["additional_candidate_sources"],
-                                 {TEST: "4" * 40, PATH: "5" * 40})
+                                 {CONSUMER_TEST if route == "verification" else TEST: "4" * 40, PATH: "5" * 40})
                 self.assertEqual(stage.call_args.kwargs["additional_retained_sources"],
                                  {(BASE, CONSUMER_TEST): "8" * 40})
                 self.assertEqual(stage.call_count, 2)

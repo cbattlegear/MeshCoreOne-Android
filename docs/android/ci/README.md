@@ -987,7 +987,7 @@ receipt. The evidence contains all normal schema-2 fields plus
 | `binding`, `owner` | Exact repository/WP/base/head/source/manifest/policy binding and canonical owner |
 | `paths` | Every actual changed path as `{path, operation, capability}`, admitted by the trusted base policy |
 | `acceptance` | The complete, unchanged manifest acceptance list |
-| `coverage` | One `{path, source_paths, cases, native_methods, hosted_methods, adaptation, modules}` per changed Android behavior/test path |
+| `coverage` | One `{path, source_paths, cases, native_methods, hosted_methods, adaptation, modules}` per changed Android behavior/test path; helper-only unit test files may add `helper_consumers` |
 | `verification`, `native` | Exactly `["android-scaffold"]` and the required retained native observations, or `[]` when none apply |
 
 Use the case, method, and module shapes described in the bounded-repair section
@@ -1078,20 +1078,85 @@ and all other gates still apply. Its body is
 | `repair_pr`, `repair_issue`, `landed_pr`, `owner`, `summary` | Actual repair PR, issue or that same PR number, merged producer, canonical manifest owner and bounded scope |
 | `paths` | Every server-reported changed path, including both rename paths: `{path, operation, capability}` admitted by trusted typed rules |
 | `acceptance` | Nonempty `{id, description}` criteria, with IDs beginning `repair-<repair_issue>-`; do not reuse whole-WP criterion IDs |
-| `coverage` | `{path, modules, source_paths, cases, native_methods, hosted_methods, adaptation}` for each changed Android behavior/test file |
+| `coverage` | `{path, modules, source_paths, cases, native_methods, hosted_methods, adaptation}` for each changed Android behavior/test file; helper-only unit test files may add `helper_consumers` |
 | `verification` | Exactly `["android-scaffold"]`, mapping to the existing declared strict scaffold runner, not a guessed Gradle task |
 | `native` | Explicit immutable independently retained native observations, or `[]` when affected behavior has a reviewed hosted native adaptation |
 
-Coverage source paths must be nonexcluded pinned inputs. A cross-owner source
-must appear in the same coverage entry as at least one explicitly mapped
-original case from that source. Coverage `cases` items are
+Coverage source paths must be nonexcluded pinned inputs. A cross-owner test or
+support source must appear in the same coverage entry as at least one explicitly
+mapped original case from that source. A cross-owner production specification
+may also appear in `source_paths`, alongside explicitly mapped cross-owner
+test/support cases in that same entry; it is not itself a catalog case.
+Production-only cross-owner mappings, invented cases and unmapped cross-owner
+test/support inputs still fail closed. Coverage `cases` items are
 `{path, id, parameter_family}` from the trusted frozen catalog; the receipt
 must account for every selected parameter family. Independent source review
 must establish the relevance and completeness of cross-owner families against
 the assignment, and the original source retains its primary owner. Every affected
 module must be selected, including typed-capability-admitted support files.
-The staging and receipt revalidation paths include each selected cross-owner
-source's pinned bytes in the immutable reviewer inputs and staging digest.
+The staging and receipt revalidation paths include each selected production
+specification and original case source's pinned bytes in the immutable reviewer
+inputs and staging digest. They resolve identities from the trusted-base
+manifest and fixed reference tree, never author-supplied production blob IDs.
+This applies identically to bounded repairs, verification-only additions and
+whole-WP scopes; complete whole-WP case coverage is unchanged. Case relevance
+to the production specification remains an authenticated source-review duty,
+not a conclusion inferred from inventory ownership or the scope author.
+Existing receipts with unchanged staged inputs remain readable. A scope whose
+newly included foreign production bytes change the staging digest needs a fresh
+exact-bound review; neither a prior digest nor an author-supplied scope is a verdict.
+
+A changed Kotlin unit-test helper with no JUnit declarations may add
+`helper_consumers: [{path, blob_sha, id, member?}]` to its coverage entry.
+Those immutable consumer bindings must exactly match that entry's `hosted_methods`
+and point to different test files in the same module. The trusted validator
+requires the changed helper and each consumer source to match candidate blobs and
+the selected compilation; each consumer must be a declared test method that
+actually ran. It also binds use to that method's body by a direct helper-class
+constructor call resolved to the helper's same-package declaration or exact
+import, or to a same-class property initialized with that constructor and read
+by the method. A helper file with its own or inherited JUnit test declarations
+cannot use this route; inherited declarations are resolved against exact
+compiled candidate sources in the same module. Genuine changed test classes
+still account for their own declarations, including inherited methods. Unrelated passing
+methods, unreferenced helper classes, stale/missing sources, or compilation alone
+do not establish coverage. This syntactic lineage does not decide behavioral
+relevance: the independent reviewer must still verify that the helper change
+serves the mapped consumer and acceptance behavior.
+
+The bounded token reader accepts only parameterless consumer methods with an
+immediate block body (optionally explicit `: Unit`). Expression bodies cannot
+borrow a later declaration's block. Constructor references must be unqualified,
+resolve by same package or exact import/alias, and have no shadowing declaration.
+Property reads must be unqualified in the method's immediate block, without
+local/destructured/lambda-parameter shadowing; qualified names, named arguments
+and references inside nested blocks do not establish this lineage.
+Local function declarations in a selected consumer body are rejected, including
+expression-bodied locals: lexical brace depth cannot prove their execution.
+Local type declarations and object expressions are also rejected: a constructor
+default in an uninstantiated local class is not an executed helper call even
+when its tokens are at the method's immediate brace depth.
+A property-name call (including a generic call) does not establish a property
+read; a same-named class function can be called instead. An ordinary property
+read still qualifies even if that function exists.
+Member lineage supports ordinary initializer-backed properties only. A property
+slice containing an unqualified `get(...)` or `set(...)` form at class scope is
+excluded conservatively; custom getter/setter execution is not inferred from a
+JUnit property read. This prevents an uncalled setter's expression `=` or body
+from being borrowed as an initializer, including accessor-only properties.
+Ambiguous accessor-like syntax also fails closed; ordinary `val`/`var` helper
+initializers and their unshadowed reads remain supported.
+Equality (`==`) and identity (`===`) left operands remain property reads;
+only a single `=` is excluded as assignment/named-argument syntax.
+Helper constructor spelling is also checked against every candidate-bound Kotlin
+source in the authoritative compiled module inventory. A competing same-package
+top-level declaration or a colliding inherited member rejects the binding;
+unknown, stale, unsupported or ambiguous compiled symbol/parent inputs fail closed.
+This is conservative collision exclusion, not Kotlin overload or arity resolution.
+Unsupported or ambiguous binding requires a supported explicit consumer, not guessed
+execution. The original broad `/src/test` same-file guard remains in effect
+for unsupported test source forms such as Java; they cannot borrow an unrelated
+Kotlin method or claim the Kotlin-only helper exception.
 Referenced candidate test methods, unchanged production consumers and native
 source bindings are likewise staged at their exact candidate blob identities.
 Each retained native fixture is also staged from its immutable observation
@@ -1112,6 +1177,136 @@ the canonical WP marker or legacy `[WP-xxx] ` title. Its actual server path
 inventory must contain an actually repaired production path; added repair helpers
 still need exact typed admissions and behavioral coverage. Legacy title provenance
 does not manufacture a historical completion receipt or alter old reservations.
+
+Controller-only changes use the existing candidate controller/workflow CI lane
+and supervised source review, then merge to the trusted default branch before
+the publisher can execute the new code. The native scope contract still requires
+the declared Android scaffold job: controller-only CI is not that job, and this
+change does not introduce a controller-only native-acceptance route. Scoped
+acceptance also rejects changes to trusted verification/runtime inputs, including
+these controller readers; a repair cannot attest its own replacement validators.
+If a
+controller repair cannot satisfy native acceptance under the deployed base,
+report the missing check/gate for a separately authorized supervised source-merge
+decision; a previous candidate's exception is not reusable authority. Do not
+change policy, branch rules or synthesize a passing check. Once the source is
+reviewed and actually merged, stage the affected feature repair anew against
+current main, obtain its real exact-bound CI and authenticated review, and
+dispatch `android-parity-review.yml --ref main` with its WP/PR/review identity as
+documented above. Installed local execution runtimes are a separate deployment;
+no runtime installation or live operation is implied by a source merge.
+
+The documented `python tools/android-port/controller/native_review.py` entrypoint
+sets its `controller` package identity when bootstrapping its import path, so
+deferred relative imports work in file mode as well as
+`python -m controller.native_review`. Isolated subprocess fixtures load the actual file and
+exercise deferred staging imports without credentials or network access. They
+also exercise the deferred repair-receipt import through the publisher: an
+offline fake `parity-review` check is created in progress, then completed with
+failure on a controlled validation refusal. This catches the file-entrypoint
+import regression that previously escaped after check creation (#523), without
+broadening exception handling or repairing any live check. These fixtures do not
+establish a successful deployed publisher run or acceptance.
+
+An `ImportError` raised during publisher evaluation also completes the already
+created checks with failure, then is rethrown with its original traceback.
+An offline regression injects the exact deployed exception class/message and
+requires failure completion of both fake project checks, error-summary visibility
+and original exception identity/traceback. This is a narrow handled exception,
+not a catch-all or a live stranded-check recovery.
+
+Diagnostic use of the successful historical #519 run `41417389304`, job
+`125184548222`, at `bd1860ec013f0115169b73588da373a1cac501d4` found
+265 app compiled-source bindings and 1,891 executed method records. The existing
+hosted-log parser accepts that report, and all app compiled paths bind to that
+exact candidate. Nevertheless, actual `ContainerHarness.kt` / `AppMapFeatureTest.kt`
+and `RemoteNodesFixture.kt` / `RemoteNodesComposeTest.kt` helper-consumer probes
+are rejected by the current inherited-JUnit proof before symbol-collision
+indexing. The bounded token reader does not establish complete inherited
+declarations for those helper shapes. This is a known source-rule blocker,
+not #519 acceptance or evidence that the full helper repair is deployable.
+The historical successful run does not supersede #519's later red CI or missing
+API31/37 native evidence. No new Android/native job was run for this diagnostic.
+
+The follow-up trace of that same immutable evidence identifies independent
+proof gaps, not just an overbroad error message:
+
+- `ContainerHarness.kt` includes a top-level `defaultAdvertLocation` factory
+  with an anonymous qualified `LocationProducing` implementation. Its named
+  helper classes also inherit production ports such as
+  `core.runtime.ProcessConnectionPreferences`, absent from this test-source
+  registry.
+- `RemoteNodesFixture.kt` implements seven production ports via wildcard imports
+  and contains eight inherited anonymous objects, including
+  `object : RemoteNodeHistoryStore by this {}`. Anonymous bodies are not named
+  class-index entries, and the production parent identities cannot be resolved
+  from the compiled test registry.
+- The app registry covers `test`, `androidTest` and `shared`, not `main`
+  production dependencies. `AppMapFeatureTest`'s two real consumers additionally
+  have expression bodies `= runTest { ... }`, outside the deliberately bounded
+  immediate-block contract. `RemoteNodesComposeTest` has 21 block-bodied tests,
+  but its helper proof fails first.
+
+Faithful source regressions retain rejection of anonymous/delegated production
+port shapes, absent compiled parents and expression-bodied `runTest` consumers.
+No safe support fix is claimed from the existing evidence. Supporting these
+fixtures requires an exact compiler-bound production/dependency declaration
+closure (including resolved imports/interfaces), bounded anonymous/delegated
+inheritance proof, and a proved consumer execution contract for `runTest`.
+Reading arbitrary candidate `src/main` blobs or treating a successful aggregate
+build as that missing registry is not a substitute. The current gate and hold
+remain; the source proposal is not sufficient for #519.
+
+The existing producer is
+`tools/android-port/controller/verify_candidate_task_graph.gradle`: at the test
+task's `doFirst`, it selects Kotlin compiler tasks in that same project whose
+outputs intersect that test task's `testClassesDirs`, verifies their execution,
+then emits only `{task, sources: [{path, blob}]}`. `ci_evidence.read_test_sources`
+selects the exact runner, and `ci.py` / `local_scope.py` publish that inventory as
+`compiled_test_sources`. The emitter at the immutable #519 head has this same
+contract. It does not emit a production/dependency declaration closure, resolved
+symbol targets or compiler/classpath binding for those dependencies.
+
+Controller and controller-test paths are within WP-003's declared ownership, but
+path admission is not evidence that these missing outputs exist. A prospective
+producer must bind the selected test compilation and execution to exact
+production/dependency declarations and their resolution inputs, including
+non-source dependencies, before a validator can trust that closure. It must
+also distinguish the actual `runTest` target and executed lambda from an
+uncalled or shadowed lookalike. The current method inventory proves that a JUnit
+method ran, not which expression-body call target or lambda ran.
+
+An anonymous factory could only be excluded after proving it cannot affect
+either inherited-JUnit accounting or the selected consumer's symbol lineage.
+Its apparent lexical separation alone supplies neither parent resolution nor
+that reachability proof. No such output is available in this diagnostic, so
+anonymous/delegated-parent, inherited-test, collision and deferred-execution
+guards remain unchanged. Generating and validating a new compiler-bound output
+requires separately authorized actual compiler/runner execution; this
+source-only investigation neither runs that job nor substitutes synthetic
+controller fixtures for it.
+
+The missing closure is also a concrete unresolved false-acceptance case, not
+only a limitation on supporting #519. At source head `8716f02566a1edab7fbeffeaaf60e8e0a57c8adb`,
+a compiled test helper `class MapTestHelper` can coexist with a candidate
+production file in the same package declaring
+`fun MapTestHelper(unused: Int): Boolean = true`. A selected test containing
+`check(MapTestHelper(1))` passes the token validator when the production callable
+is absent from the compiled-test registry, although it calls the function, not
+the helper constructor. This was reproduced with exact-content source fixtures
+and simulated compiled/executed records, not an actual Kotlin execution.
+Rejecting local type declarations closes the separate uncalled-constructor
+default case; it does not repair production/dependency callable resolution.
+The helper route must not be represented as independently accepted or ready for
+deployment while this binding gap remains.
+
+Focused source-only regressions (native Windows pinned Python, no Gradle or
+shared Android execution) use the existing strict runner:
+
+```powershell
+$env:PYTHONPATH="$PWD\tools\android-port;$PWD\tools\android-port\tests"
+python -B -c "import unittest; from controller.test_runner import run_suite; raise SystemExit(run_suite(unittest.TestLoader().loadTestsFromNames(['test_repair_acceptance','test_gate_integration','test_native_review'])))"
+```
 
 For **verification-only additions** to an already-landed WP, keep that same
 authenticated issue-comment marker and every field above, but explicitly use
@@ -1199,6 +1394,27 @@ Every affected module requires an actual method inventory matching its suite
 counts, including separately collected app and contracts suites. Generic
 support admission also checks the actual module/source-set boundary, so a
 production file cannot qualify as a test through a nested path component.
+
+A changed `src/test` or `src/testDebug` helper without JUnit declarations may
+use `helper_consumers`: an array of `{path, blob_sha, id}` bindings for actual
+consumer test methods, optionally with `member` when the test class initializes
+the helper in that named class property and the method uses that property.
+This list must exactly equal the coverage entry's `hosted_methods`; each helper
+and consumer must be present at its exact candidate blob, compiled in the same
+module, and the consumer's declaring test method must actually execute in the
+authoritative method inventory. The trusted parser also requires a direct
+constructor call resolved to the helper's same-package declaration or exact
+import, or a same-class property initializer linked to that constructor and
+referenced by the method. Custom accessors do not establish this lineage; only
+ordinary initializer-backed properties qualify. A helper containing JUnit declarations cannot use
+this route; inherited declarations are resolved against exact compiled
+candidate sources in the same module. Changed test classes retain same-file
+accounting for every declaration, including inherited methods. Test-only
+compilation, unrelated passing tests, stale/missing sources, or a method that
+does not consume the helper cannot satisfy changed-helper coverage. This
+establishes syntactic consumer lineage; independent review still decides whether
+the helper change is behaviorally relevant to the mapped acceptance and original
+source cases.
 
 Each `native` observation supplies `{revision, transcript, sha256, api, methods,
 bindings, fixture, out_of_scope_failures, execution}`. The transcript is fetched at its

@@ -63,3 +63,6 @@ tasks.withType<Test>().configureEach {
         ),
     )
 }
+
+rootProject.tasks.named("verifyScaffoldTests") { dependsOn(":platform:notifications:testDebugUnitTest") }
+tasks.named("check") { dependsOn("testDebugUnitTest") }

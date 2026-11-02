@@ -2,6 +2,9 @@
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.content.ComponentName
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.ResolveInfo
@@ -9,6 +12,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
+import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
@@ -124,6 +128,63 @@ class NotificationOpenActivityTest {
             listOf(NotificationResponse(payload, null, null), NotificationResponse(secondPayload, null, null)),
             received,
         )
+    }
+
+    @Test
+    fun fullQueueRetainsNotificationForRetapWithoutDroppingBackgroundActions() = runTest {
+        var ready = false
+        val received = mutableListOf<NotificationResponse>()
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { response ->
+            if (!ready) false else true.also { received += response }
+        }
+        val queued = (0 until 32).map { index ->
+            NotificationResponse(
+                NotificationPayload.DirectMessage(contact, UUID(1, index.toLong())),
+                if (index % 2 == 0) NotificationAction.REPLY else NotificationAction.MARK_READ,
+                if (index % 2 == 0) "Reply $index" else null,
+            )
+        }
+        queued.forEach {
+            assertEquals(EnqueueResult.DELIVERED_OR_QUEUED, NotificationActionDispatcher.enqueue(it))
+        }
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                AndroidMessagingNotificationDelivery.CHANNEL_MESSAGES_SILENT,
+                "Messages",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        val request = request("full")
+        val notification = delivery.buildNotification(request)
+        assertEquals(0, notification.flags and Notification.FLAG_AUTO_CANCEL)
+        val tag = AndroidMessagingNotificationDelivery.TAG_PREFIX + request.id.value
+        manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, notification)
+
+        fun tap() {
+            notification.contentIntent.send()
+            val launched = shadowOf(context).nextStartedActivity
+            assertEquals(ComponentName(context, NotificationOpenActivity::class.java), launched.component)
+            val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, launched).create()
+            try {
+                assertTrue(controller.get().isFinishing)
+                assertEquals(launcher, shadowOf(controller.get()).nextStartedActivity.component)
+            } finally {
+                controller.destroy()
+            }
+        }
+
+        tap()
+        assertEquals(1, manager.activeNotifications.count { it.tag == tag })
+        assertFalse(NotificationActionDispatcher.drainOnce())
+        assertTrue(received.isEmpty())
+        ready = true
+        assertTrue(NotificationActionDispatcher.drainOnce())
+        assertEquals(queued, received)
+        tap()
+        assertEquals(0, manager.activeNotifications.count { it.tag == tag })
+        assertTrue(NotificationActionDispatcher.drainOnce())
+        assertEquals(queued + NotificationResponse(payload, null, null), received)
     }
 
     @Test

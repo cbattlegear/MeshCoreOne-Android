@@ -125,6 +125,37 @@ def build_log(modules, **changes):
 
 
 class RepairContractTests(unittest.TestCase):
+    def test_changed_helper_scope_binds_only_same_module_executed_consumers(self):
+        helper = "android/feature/map/src/test/kotlin/com/meshcoreone/android/feature/map/MapHarness.kt"
+        consumer = "android/feature/map/src/test/kotlin/com/meshcoreone/android/feature/map/MapHarnessConsumerTest.kt"
+        manifest, rules, value, scope = fixture()
+        scope["paths"] = [{"path": helper, "operation": "modify", "capability": "wp-owned"}]
+        coverage = scope["coverage"][0]
+        coverage["path"] = helper
+        method = {"path": consumer, "blob_sha": "4" * 40, "id": "usesHarness"}
+        coverage["hosted_methods"] = [method]
+        coverage["helper_consumers"] = [copy.deepcopy(method)]
+        validate_scope(scope, value.binding, manifest, rules, [helper], None)
+
+        for kind in ("missing-consumer-map", "unrelated-method", "stale-consumer", "wrong-module",
+                     "duplicate-consumer", "duplicate-hosted-method"):
+            altered = copy.deepcopy(scope)
+            changed = altered["coverage"][0]
+            if kind == "missing-consumer-map":
+                changed.pop("helper_consumers")
+            elif kind == "unrelated-method":
+                changed["helper_consumers"][0]["id"] = "unrelated"
+            elif kind == "stale-consumer":
+                changed["helper_consumers"][0]["blob_sha"] = "5" * 40
+            elif kind == "wrong-module":
+                changed["helper_consumers"][0]["path"] = consumer.replace("feature/map", "core/maps")
+            elif kind == "duplicate-consumer":
+                changed["helper_consumers"].append(copy.deepcopy(changed["helper_consumers"][0]))
+            else:
+                changed["hosted_methods"].append(copy.deepcopy(changed["hosted_methods"][0]))
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_scope(altered, value.binding, manifest, rules, [helper], None)
+
     def test_foreign_production_spec_requires_real_cross_owner_cases_in_each_scoped_route(self):
         source = "MC1/Views/Chats/Navigation/ChatLinkRouter.swift"
         test = "MC1Tests/Views/Chats/ChatLinkRouterTests.swift"
@@ -420,6 +451,166 @@ class RepairExecutionTests(unittest.TestCase):
         contents = {blobs[path]: data for path, data in sources.items()}
         executed = {"core/maps": [{"class": "sample.MapTest", "method": METHOD["id"]}]}
         return manifest, scope, blobs, contents, executed, {"core/maps": dict(blobs)}
+
+    def helper_inputs(self, helper_source, consumer_source, *, member=None):
+        helper = TEST.replace("MapTest.kt", "MapTestHelper.kt")
+        consumer = TEST.replace("MapTest.kt", "MapHelperConsumerTest.kt")
+        blobs = {
+            path: hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+            for path, data in ((helper, helper_source.encode()), (consumer, consumer_source.encode()))
+        }
+        manifest, _, _, scope = fixture()
+        coverage = scope["coverage"][0]
+        coverage["path"] = helper
+        coverage["modules"] = ["core/maps"]
+        method = {"path": consumer, "blob_sha": blobs[consumer], "id": "keepsListReachable"}
+        coverage["hosted_methods"] = [method]
+        consumer_binding = copy.deepcopy(method)
+        if member is not None:
+            consumer_binding["member"] = member
+        coverage["helper_consumers"] = [consumer_binding]
+        source_text = {blobs[path]: data.encode() for path, data in
+                       ((helper, helper_source), (consumer, consumer_source))}
+        return scope, helper, consumer, blobs, source_text, {
+            "core/maps": [{"class": "sample.MapHelperConsumerTest", "method": "keepsListReachable"}],
+        }, {"core/maps": dict(blobs)}
+
+    def test_repair_helper_consumers_require_compiled_and_executed_source_lineage(self):
+        helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
+        direct_consumer = (
+            "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+            "@Test fun keepsListReachable() { assertTrue(MapTestHelper().enabled) } }"
+        )
+        member_consumer = (
+            "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+            "private val fixture = MapTestHelper(); "
+            "@Test fun keepsListReachable() { assertTrue(fixture.enabled) } }"
+        )
+        imported_consumer = direct_consumer.replace(
+            "import org.junit.Test\n",
+            "import org.junit.Test\nimport sample.MapTestHelper as Harness\n",
+        ).replace("MapTestHelper()", "Harness()")
+        for consumer_source, member in (
+            (direct_consumer, None), (member_consumer, "fixture"), (imported_consumer, None),
+        ):
+            scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
+                helper_source, consumer_source, member=member,
+            )
+            candidate = {helper: blobs[helper], consumer: blobs[consumer]}
+            with self.subTest(member=member), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ):
+                validate_hosted_methods(scope, candidate, REPO, executed, compiled)
+                for kind in ("missing-helper", "stale-helper-compile", "missing-consumer", "stale-consumer",
+                             "missing-helper-compile", "missing-consumer-compile", "wrong-module", "unexecuted-consumer",
+                             "unrelated-consumer", "mention-only-consumer", "declared-test-masquerade",
+                             "inherited-test-masquerade", "wrong-import-target"):
+                    altered_candidate = dict(candidate)
+                    altered_compiled = copy.deepcopy(compiled)
+                    altered_executed = copy.deepcopy(executed)
+                    altered_scope = copy.deepcopy(scope)
+                    if kind == "missing-helper":
+                        altered_candidate.pop(helper)
+                    elif kind == "stale-helper-compile":
+                        altered_compiled["core/maps"][helper] = "0" * 40
+                    elif kind == "missing-consumer":
+                        altered_candidate.pop(consumer)
+                    elif kind == "stale-consumer":
+                        altered_candidate[consumer] = "0" * 40
+                    elif kind == "missing-helper-compile":
+                        altered_compiled["core/maps"].pop(helper)
+                    elif kind == "missing-consumer-compile":
+                        altered_compiled["core/maps"].pop(consumer)
+                    elif kind == "wrong-module":
+                        altered_scope["coverage"][0]["modules"] = ["feature/map"]
+                    elif kind == "unexecuted-consumer":
+                        altered_executed["core/maps"] = []
+                    elif kind == "unrelated-consumer":
+                        source = (
+                            direct_consumer.replace("assertTrue(MapTestHelper().enabled)", "assertTrue(true)")
+                            if member is None
+                            else member_consumer.replace("assertTrue(fixture.enabled)", "assertTrue(true)")
+                        )
+                        altered_candidate[consumer] = hashlib.sha1(
+                            b"blob " + str(len(source.encode())).encode("ascii") + b"\0" + source.encode()
+                        ).hexdigest()
+                        content[altered_candidate[consumer]] = source.encode()
+                        altered_scope["coverage"][0]["hosted_methods"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_scope["coverage"][0]["helper_consumers"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_compiled["core/maps"].pop(consumer)
+                        altered_compiled["core/maps"][consumer] = altered_candidate[consumer]
+                    elif kind == "mention-only-consumer":
+                        source = direct_consumer.replace(
+                            "assertTrue(MapTestHelper().enabled)", "assertTrue(MapTestHelper::class != null)",
+                        )
+                        altered_candidate[consumer] = hashlib.sha1(
+                            b"blob " + str(len(source.encode())).encode("ascii") + b"\0" + source.encode()
+                        ).hexdigest()
+                        content[altered_candidate[consumer]] = source.encode()
+                        altered_scope["coverage"][0]["hosted_methods"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_scope["coverage"][0]["helper_consumers"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_compiled["core/maps"].pop(consumer)
+                        altered_compiled["core/maps"][consumer] = altered_candidate[consumer]
+                    elif kind == "wrong-import-target":
+                        source = imported_consumer.replace(
+                            "import sample.MapTestHelper as Harness",
+                            "import unrelated.MapTestHelper as Harness",
+                        )
+                        altered_candidate[consumer] = hashlib.sha1(
+                            b"blob " + str(len(source.encode())).encode("ascii") + b"\0" + source.encode()
+                        ).hexdigest()
+                        content[altered_candidate[consumer]] = source.encode()
+                        altered_scope["coverage"][0]["hosted_methods"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_scope["coverage"][0]["helper_consumers"][0]["blob_sha"] = altered_candidate[consumer]
+                        altered_compiled["core/maps"].pop(consumer)
+                        altered_compiled["core/maps"][consumer] = altered_candidate[consumer]
+                    elif kind == "declared-test-masquerade":
+                        source = "package sample\nimport org.junit.Test\nclass MapTestHelper { @Test fun fake() {} }"
+                        altered_candidate[helper] = hashlib.sha1(
+                            b"blob " + str(len(source.encode())).encode("ascii") + b"\0" + source.encode()
+                        ).hexdigest()
+                        content[altered_candidate[helper]] = source.encode()
+                        altered_compiled["core/maps"][helper] = altered_candidate[helper]
+                    else:
+                        source = (
+                            "package sample\nimport org.junit.Test\n"
+                            "open class BaseTest { @Test fun inheritedFake() {} }\n"
+                            "class MapTestHelper : BaseTest() {}"
+                        )
+                        altered_candidate[helper] = hashlib.sha1(
+                            b"blob " + str(len(source.encode())).encode("ascii") + b"\0" + source.encode()
+                        ).hexdigest()
+                        content[altered_candidate[helper]] = source.encode()
+                        altered_compiled["core/maps"][helper] = altered_candidate[helper]
+                    with self.subTest(member=member, kind=kind), self.assertRaises(PortError), patch(
+                        "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+                    ):
+                        validate_hosted_methods(
+                            altered_scope, altered_candidate, REPO, altered_executed, altered_compiled,
+                        )
+
+        scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
+            helper_source, direct_consumer,
+        )
+        base = TEST.replace("MapTest.kt", "MapTestBase.kt")
+        base_source = (
+            "package sample\nimport org.junit.Test\n"
+            "open class MapTestBase { @Test fun inheritedFake() {} }"
+        ).encode()
+        base_blob = hashlib.sha1(
+            b"blob " + str(len(base_source)).encode("ascii") + b"\0" + base_source,
+        ).hexdigest()
+        inherited_helper = "package sample\nclass MapTestHelper : MapTestBase()"
+        inherited_blob = hashlib.sha1(
+            b"blob " + str(len(inherited_helper.encode())).encode("ascii") + b"\0" + inherited_helper.encode(),
+        ).hexdigest()
+        candidate = {helper: inherited_blob, consumer: blobs[consumer], base: base_blob}
+        compiled["core/maps"].update({helper: inherited_blob, base: base_blob})
+        content[inherited_blob] = inherited_helper.encode()
+        content[base_blob] = base_source
+        with patch("controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob]), \
+                self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
+            validate_hosted_methods(scope, candidate, REPO, executed, compiled)
 
     def test_compiled_superclass_lifecycle_and_transitive_aliases_in_both_modes(self):
         base = TEST.replace("MapTest.kt", "UnrelatedFilename.kt")
@@ -780,12 +971,12 @@ class RepairExecutionTests(unittest.TestCase):
         scope["coverage"].append({
             "path": helper, "source_paths": scope["coverage"][0]["source_paths"], "cases": [],
             "native_methods": [], "hosted_methods": [METHOD], "adaptation": "Fixture consumed by unit test.",
-            "modules": ["core/maps"],
+            "modules": ["core/maps"], "helper_consumers": [copy.deepcopy(METHOD)],
         })
         validate_scope(scope, value.binding, manifest, rules, [PATH, helper], value.catalog)
         sources = {
-            "3" * 40: b"package com.meshcoreone.android.core.maps\nobject MapFixtures {}",
-            "4" * 40: b"package com.meshcoreone.android.core.maps\nclass MapTest { @Test fun keepsListReachable() {} }",
+            "3" * 40: b"package com.meshcoreone.android.core.maps\nclass MapFixtures {}",
+            "4" * 40: b"package com.meshcoreone.android.core.maps\nclass MapTest { @Test fun keepsListReachable() { MapFixtures() } }",
         }
         executed = {"core/maps": [{"class": "com.meshcoreone.android.core.maps.MapTest",
                                     "method": "keepsListReachable"}]}
@@ -1298,11 +1489,11 @@ class RepairExecutionTests(unittest.TestCase):
         scope["coverage"].append({
             "path": helper, "source_paths": scope["coverage"][0]["source_paths"], "cases": [],
             "native_methods": [], "hosted_methods": [METHOD], "adaptation": "Fixture used by a test.",
-            "modules": ["core/maps"],
+            "modules": ["core/maps"], "helper_consumers": [copy.deepcopy(METHOD)],
         })
         sources = {
             "3" * 40: b"package sample\nclass MapFixtures { @Suppress fun omitted() {} }",
-            "4" * 40: b"package sample\nclass MapTest { @Test fun keepsListReachable() {} }",
+            "4" * 40: b"package sample\nclass MapTest { @Test fun keepsListReachable() { MapFixtures() } }",
             "6" * 40: b"package sample\ntypealias Suppress = org.junit.Test",
         }
         candidate = {helper: "3" * 40, TEST: "4" * 40, aliases: "6" * 40}
@@ -1317,9 +1508,9 @@ class RepairExecutionTests(unittest.TestCase):
         scope["coverage"].append({
             "path": helper, "source_paths": scope["coverage"][0]["source_paths"], "cases": [],
             "native_methods": [], "hosted_methods": [METHOD], "adaptation": "Fixture used by a test.",
-            "modules": ["core/maps"],
+            "modules": ["core/maps"], "helper_consumers": [copy.deepcopy(METHOD)],
         })
-        sources = {"4" * 40: b"class MapTest { @Test fun keepsListReachable() {} }"}
+        sources = {"4" * 40: b"class MapTest { @Test fun keepsListReachable() { MapFixtures() } }"}
         executed = {"core/maps": [{"class": "MapTest", "method": "keepsListReachable"}]}
         for source in (
             b"class RequiredCasesTest : BaseCases()",
@@ -1343,9 +1534,9 @@ class RepairExecutionTests(unittest.TestCase):
         scope["coverage"].append({
             "path": helper, "source_paths": scope["coverage"][0]["source_paths"], "cases": [],
             "native_methods": [], "hosted_methods": [METHOD], "adaptation": "Fixture used by a test.",
-            "modules": ["core/maps"],
+            "modules": ["core/maps"], "helper_consumers": [copy.deepcopy(METHOD)],
         })
-        sources = {"4" * 40: b"class MapTest { @Test fun keepsListReachable() {} }"}
+        sources = {"4" * 40: b"class MapTest { @Test fun keepsListReachable() { MapFixtures() } }"}
         executed = {"core/maps": [{"class": "MapTest", "method": "keepsListReachable"}]}
         for source in (
             b'import other.Case\nclass MapFixtures { @Case public @Suppress("unused") fun omitted() {} }',

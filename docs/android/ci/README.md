@@ -987,7 +987,7 @@ receipt. The evidence contains all normal schema-2 fields plus
 | `binding`, `owner` | Exact repository/WP/base/head/source/manifest/policy binding and canonical owner |
 | `paths` | Every actual changed path as `{path, operation, capability}`, admitted by the trusted base policy |
 | `acceptance` | The complete, unchanged manifest acceptance list |
-| `coverage` | One `{path, source_paths, cases, native_methods, hosted_methods, adaptation, modules}` per changed Android behavior/test path |
+| `coverage` | One `{path, source_paths, cases, native_methods, hosted_methods, adaptation, modules}` per changed Android behavior/test path; helper-only unit test files may add `helper_consumers` |
 | `verification`, `native` | Exactly `["android-scaffold"]` and the required retained native observations, or `[]` when none apply |
 
 Use the case, method, and module shapes described in the bounded-repair section
@@ -1078,7 +1078,7 @@ and all other gates still apply. Its body is
 | `repair_pr`, `repair_issue`, `landed_pr`, `owner`, `summary` | Actual repair PR, issue or that same PR number, merged producer, canonical manifest owner and bounded scope |
 | `paths` | Every server-reported changed path, including both rename paths: `{path, operation, capability}` admitted by trusted typed rules |
 | `acceptance` | Nonempty `{id, description}` criteria, with IDs beginning `repair-<repair_issue>-`; do not reuse whole-WP criterion IDs |
-| `coverage` | `{path, modules, source_paths, cases, native_methods, hosted_methods, adaptation}` for each changed Android behavior/test file |
+| `coverage` | `{path, modules, source_paths, cases, native_methods, hosted_methods, adaptation}` for each changed Android behavior/test file; helper-only unit test files may add `helper_consumers` |
 | `verification` | Exactly `["android-scaffold"]`, mapping to the existing declared strict scaffold runner, not a guessed Gradle task |
 | `native` | Explicit immutable independently retained native observations, or `[]` when affected behavior has a reviewed hosted native adaptation |
 
@@ -1105,6 +1105,24 @@ not a conclusion inferred from inventory ownership or the scope author.
 Existing receipts with unchanged staged inputs remain readable. A scope whose
 newly included foreign production bytes change the staging digest needs a fresh
 exact-bound review; neither a prior digest nor an author-supplied scope is a verdict.
+
+A changed Kotlin unit-test helper with no JUnit declarations may add
+`helper_consumers: [{path, blob_sha, id, member?}]` to its coverage entry.
+Those immutable consumer bindings must exactly match that entry's `hosted_methods`
+and point to different test files in the same module. The trusted validator
+requires the changed helper and each consumer source to match candidate blobs and
+the selected compilation; each consumer must be a declared test method that
+actually ran. It also binds use to that method's body by a direct helper-class
+constructor call resolved to the helper's same-package declaration or exact
+import, or to a same-class property initialized with that constructor and read
+by the method. A helper file with its own or inherited JUnit test declarations
+cannot use this route; inherited declarations are resolved against exact
+compiled candidate sources in the same module. Genuine changed test classes
+still account for their own declarations, including inherited methods. Unrelated passing
+methods, unreferenced helper classes, stale/missing sources, or compilation alone
+do not establish coverage. This syntactic lineage does not decide behavioral
+relevance: the independent reviewer must still verify that the helper change
+serves the mapped consumer and acceptance behavior.
 Referenced candidate test methods, unchanged production consumers and native
 source bindings are likewise staged at their exact candidate blob identities.
 Each retained native fixture is also staged from its immutable observation
@@ -1238,6 +1256,26 @@ Every affected module requires an actual method inventory matching its suite
 counts, including separately collected app and contracts suites. Generic
 support admission also checks the actual module/source-set boundary, so a
 production file cannot qualify as a test through a nested path component.
+
+A changed `src/test` or `src/testDebug` helper without JUnit declarations may
+use `helper_consumers`: an array of `{path, blob_sha, id}` bindings for actual
+consumer test methods, optionally with `member` when the test class initializes
+the helper in that named class property and the method uses that property.
+This list must exactly equal the coverage entry's `hosted_methods`; each helper
+and consumer must be present at its exact candidate blob, compiled in the same
+module, and the consumer's declaring test method must actually execute in the
+authoritative method inventory. The trusted parser also requires a direct
+constructor call resolved to the helper's same-package declaration or exact
+import, or a same-class property initializer linked to that constructor and
+referenced by the method. A helper containing JUnit declarations cannot use
+this route; inherited declarations are resolved against exact compiled
+candidate sources in the same module. Changed test classes retain same-file
+accounting for every declaration, including inherited methods. Test-only
+compilation, unrelated passing tests, stale/missing sources, or a method that
+does not consume the helper cannot satisfy changed-helper coverage. This
+establishes syntactic consumer lineage; independent review still decides whether
+the helper change is behaviorally relevant to the mapped acceptance and original
+source cases.
 
 Each `native` observation supplies `{revision, transcript, sha256, api, methods,
 bindings, fixture, out_of_scope_failures, execution}`. The transcript is fetched at its

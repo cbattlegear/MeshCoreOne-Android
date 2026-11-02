@@ -324,6 +324,7 @@ def validate_scope(scope, binding, manifest, policy, changed_paths, catalog):
     for entry in scope["coverage"]:
         fields(entry, {"path", "source_paths", "cases", "native_methods", "hosted_methods", "adaptation", "modules"}
                | ({"production_bindings"} if verification else set()),
+               optional={"helper_consumers"},
                label="repair behavioral coverage")
         path = entry["path"]
         if path not in admitted or path in covered:
@@ -363,9 +364,39 @@ def validate_scope(scope, binding, manifest, policy, changed_paths, catalog):
                 ):
                     raise PortError("Affected hosted test must bind an actual immutable test source")
                 nonempty(method["id"], "Affected hosted method ID")
-        if (not whole_wp and "/src/test" in path
-                and not any(method["path"] == path for method in entry["hosted_methods"])):
-            raise PortError("Changed unit-test sources need their own actual hosted method execution")
+        helper_consumers = entry.get("helper_consumers")
+        unit_test = re.fullmatch(ANDROID_MODULE + r"src/(?:test|testDebug)/kotlin/.+\.kt", path)
+        if helper_consumers is not None:
+            if unit_test is None or not isinstance(helper_consumers, list) or not helper_consumers:
+                raise PortError("Changed test helpers require explicit same-module consumer test methods")
+            consumers = []
+            for consumer in helper_consumers:
+                fields(consumer, {"path", "blob_sha", "id"}, {"member"}, label="changed test-helper consumer")
+                if (
+                    re.fullmatch(ANDROID_MODULE + r"src/(?:test|testDebug)/kotlin/.+\.kt",
+                                 git_path(consumer["path"])) is None
+                    or not isinstance(consumer["blob_sha"], str) or SHA.fullmatch(consumer["blob_sha"]) is None
+                    or not isinstance(consumer["id"], str) or not consumer["id"]
+                    or consumer.get("member") is not None
+                    and (not isinstance(consumer["member"], str) or not consumer["member"])
+                ):
+                    raise PortError("Malformed changed test-helper consumer binding")
+                consumer_module = re.match(ANDROID_MODULE, consumer["path"])[1]
+                if consumer_module != unit_test[1] or consumer["path"] == path:
+                    raise PortError("Changed test-helper consumer must be a separate source in the same module")
+                consumers.append((consumer["path"], consumer["blob_sha"], consumer["id"]))
+            methods = [(method["path"], method["blob_sha"], method["id"]) for method in entry["hosted_methods"]]
+            if (
+                len(set(consumers)) != len(consumers) or len(set(methods)) != len(methods)
+                or set(consumers) != set(methods)
+            ):
+                raise PortError("Test-helper consumers must exactly match its immutable hosted method bindings")
+            if any(method["path"] == path for method in entry["hosted_methods"]):
+                raise PortError("Changed helper sources cannot masquerade as their own executed test methods")
+        elif unit_test is not None and not whole_wp and not any(
+            method["path"] == path for method in entry["hosted_methods"]
+        ):
+            raise PortError("Changed unit-test sources need their own hosted method or explicit helper consumers")
         if whole_wp and "/src/test" in path and not entry["hosted_methods"]:
             raise PortError("Changed unit-test sources or helpers need actual hosted method execution")
         if "/src/androidTest/" in path and not entry["native_methods"]:
@@ -680,7 +711,8 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
 
 
 def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=False,
-                          inheritance=None, source_declarations=None):
+                          inheritance=None, source_declarations=None, method_body_tokens=None,
+                          class_member_tokens=None, symbol_context=None):
     def comment(index):
         if text.startswith("//", index):
             end = text.find("\n", index)
@@ -765,7 +797,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         raise PortError("Grouped Kotlin annotations are not supported in hosted test sources")
 
     class_bodies, package = {}, ""
-    if declaring_classes is not None or source_declarations is not None or inheritance is not None:
+    if (declaring_classes is not None or source_declarations is not None or inheritance is not None
+            or symbol_context is not None):
         for index, value in enumerate(tokens):
             if value != "package" or index and tokens[index - 1] == ".":
                 continue
@@ -991,6 +1024,32 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     if source_declarations is not None:
         source_declarations.update(declarations)
         return {}
+    if symbol_context is not None:
+        symbol_context.update({"package": package, "imports": imports})
+    if class_member_tokens is not None:
+        for body, name in class_bodies.items():
+            if scopes[body]:
+                continue
+            members = {}
+            direct_scope = (body,)
+            for start, value in enumerate(tokens):
+                if scopes[start] != direct_scope or value not in ("val", "var") or start + 1 >= len(tokens):
+                    continue
+                member = tokens[start + 1].strip("`")
+                if not name_token(tokens[start + 1]):
+                    continue
+                end = next((
+                    index for index in range(start + 2, len(tokens))
+                    if scopes[index] == direct_scope
+                    and tokens[index] in ("val", "var", "fun", "class", "object", "interface", "typealias", "init", "}")
+                ), len(tokens))
+                assignment = next((
+                    index for index in range(start + 2, end)
+                    if scopes[index] == direct_scope and tokens[index] == "="
+                ), None)
+                if assignment is not None:
+                    members[member] = tuple(tokens[assignment + 1:end])
+            class_member_tokens[(package + "." if package else "") + name] = members
     if reject_inherited and (inherited_scope or unresolved_scope):
         if (
             inheritance is None or unresolved_scope or bodyless_inheritance or not inherited_bodies
@@ -1074,6 +1133,35 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         "public", "internal", "private", "protected", "final", "open", "abstract", "override",
         "suspend", "inline", "tailrec", "external", "infix", "operator", "actual", "expect",
     }
+
+    def body_tokens(function):
+        cursor = function + 2
+        if cursor >= len(tokens) or tokens[cursor] != "(":
+            return None
+        depth = 1
+        cursor += 1
+        while cursor < len(tokens) and depth:
+            if tokens[cursor] == "(":
+                depth += 1
+            elif tokens[cursor] == ")":
+                depth -= 1
+            cursor += 1
+        if depth:
+            return None
+        signature_end = cursor
+        scope = scopes[function]
+        opening = next((
+            index for index in range(signature_end, len(tokens))
+            if scopes[index] == scope and tokens[index] == "{"
+        ), None)
+        if opening is None:
+            return None
+        closing = next((
+            index for index in range(opening + 1, len(tokens))
+            if tokens[index] == "}" and scopes[index] == (*scope, opening)
+        ), None)
+        return None if closing is None else tuple(tokens[signature_end:closing + 1])
+
     for start, value in enumerate(tokens):
         if (
             value != "@" or start in processed_annotations
@@ -1134,6 +1222,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             methods[name] = kind
             if declaring_classes is not None:
                 declaring_classes[name] = verify_declaring_class(index)
+            if method_body_tokens is not None:
+                method_body_tokens[name] = body_tokens(index)
     return methods
 
 
@@ -1282,6 +1372,40 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
             lineages[module] = _KotlinJUnitLineage(candidate_tree, sources, read_source)
         return lineages[module].resolve
 
+    def invokes_helper(tokens, names):
+        for index, value in enumerate(tokens):
+            if value not in names:
+                continue
+            cursor = index + 1
+            if cursor < len(tokens) and tokens[cursor] == "<":
+                depth = 1
+                cursor += 1
+                while cursor < len(tokens) and depth:
+                    if tokens[cursor] == "<":
+                        depth += 1
+                    elif tokens[cursor] == ">":
+                        depth -= 1
+                    cursor += 1
+                if depth:
+                    continue
+            if cursor < len(tokens) and tokens[cursor] == "(":
+                return True
+        return False
+
+    def helper_reference_names(declarations, context):
+        names = set()
+        for record in declarations.values():
+            qualified = record["name"]
+            simple = qualified.rsplit(".", 1)[-1]
+            if record["package"] == context["package"]:
+                imported = context["imports"].get(simple)
+                if imported is None or imported == {qualified}:
+                    names.add(simple)
+            names.update(
+                alias for alias, targets in context["imports"].items() if targets == {qualified}
+            )
+        return names
+
     for coverage in scope["coverage"]:
         if verification:
             if any(candidate_tree.get(path) != blob for path, blob in coverage["production_bindings"].items()):
@@ -1309,8 +1433,11 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                     if any(m not in {test_class + "#" + name for name, test_class in classes.items()}
                            for m in coverage["native_methods"] if m.rpartition("#")[0] in source_classes):
                         raise PortError("Native coverage method does not match its actual declaring class")
-                helper = (scope.get("kind") == "whole-wp" and "/src/androidTest/" not in path
-                          and not declared and coverage["hosted_methods"])
+                helper = (
+                    scope.get("kind") in ("landed-wp-verification", "whole-wp")
+                    and "/src/androidTest/" not in path and not declared
+                    and coverage.get("helper_consumers")
+                )
                 if (not declared and not helper) or len(set(identities)) != len(identities) or set(identities) != set(declared):
                     raise PortError("Verification coverage must include every actual changed JUnit method")
         for method in coverage["hosted_methods"]:
@@ -1346,6 +1473,51 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 for record in records
             ):
                 raise PortError("Selected hosted method did not actually execute; filtered/excluded tests are not accepted")
+
+    for coverage in scope["coverage"]:
+        consumers = coverage.get("helper_consumers")
+        if consumers is None:
+            continue
+        helper_path = coverage["path"]
+        helper_blob = candidate_tree.get(helper_path)
+        if helper_blob is None:
+            raise PortError("Changed test-helper source is absent from candidate")
+        require_compiled(helper_path, helper_blob)
+        helper_text = object_bytes(repo, helper_blob).decode("utf-8")
+        helper_methods = _kotlin_junit_methods(
+            helper_text, reject_inherited=True, inheritance=lineage(helper_path),
+        )
+        if helper_methods:
+            raise PortError("Changed test helper cannot contain or relabel JUnit test methods")
+        helper_declarations = {}
+        _kotlin_junit_methods(helper_text, source_declarations=helper_declarations)
+        helper_names = [record["name"].rsplit(".", 1)[-1] for record in helper_declarations.values()]
+        if not helper_names or len(set(helper_names)) != len(helper_names):
+            raise PortError("Changed test helper needs unambiguous compiled top-level class declarations")
+        for consumer in consumers:
+            path, blob, method = consumer["path"], consumer["blob_sha"], consumer["id"]
+            if candidate_tree.get(path) != blob:
+                raise PortError("Changed test-helper consumer is missing or stale in the candidate")
+            require_compiled(path, blob)
+            text = object_bytes(repo, blob).decode("utf-8")
+            classes, bodies, members, context = {}, {}, {}, {}
+            declarations = _kotlin_junit_methods(
+                text, classes, inheritance=lineage(path), method_body_tokens=bodies,
+                class_member_tokens=members, symbol_context=context,
+            )
+            if method not in declarations or bodies.get(method) is None:
+                raise PortError("Test-helper consumer must be an actual declared JUnit method with a block body")
+            body = set(bodies[method])
+            class_name = classes[method]
+            member = consumer.get("member")
+            accessible_helpers = helper_reference_names(helper_declarations, context)
+            if member is None:
+                linked = invokes_helper(bodies[method], accessible_helpers)
+            else:
+                initializer = members.get(class_name, {}).get(member, ())
+                linked = member in body and invokes_helper(initializer, accessible_helpers)
+            if not linked:
+                raise PortError("Executed consumer method has no direct or class-member lineage to the changed test helper")
 
 
 def retained_file(native, revision, path, expected_hash):

@@ -72,10 +72,17 @@ class ChatListActions(
     /** Local write only: the row is hidden optimistically and restored if the write throws. */
     fun deleteDirectConversation(contact: ContactDTO) {
         if (holder.isDeletePending(contact.id)) return
+        if (dependencies.connectionState.value != DeviceConnectionState.READY) {
+            holder.showError(ChatListMessage.Failure(ConversationActionError.NotConnected))
+            return
+        }
         clearNavigationIfActive(ChatRoute.Direct(contact))
         holder.removeConversation(Conversation.Direct(contact))
         scope.launch {
             try {
+                if (dependencies.connectionState.value != DeviceConnectionState.READY) {
+                    throw ConversationActionError.NotConnected
+                }
                 dependencies.data.deleteDirectConversation(contact)
                 // Confirm immediately: an inbound message re-setting lastMessageDate mid-delete would keep the row masked.
                 holder.confirmDirectRemoval(contact)

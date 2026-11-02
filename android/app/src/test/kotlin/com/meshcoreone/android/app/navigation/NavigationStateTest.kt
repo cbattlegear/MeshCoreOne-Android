@@ -362,7 +362,7 @@ class NavigationStateTest {
             ) { true })
             assertFalse(n.completeRoomAuthentication(
                 latestId, requireNotNull(latest.roomAuthenticationGeneration),
-                disconnected.copy(isConnected = true, publicKey = Bytes(ByteArray(32) { 0x7f }),
+                disconnected.copy(isConnected = true, publicKey = Bytes(ByteArray(32) { 0x7f })),
             ) { true })
             assertEquals(latestId, n.state.value.roomAuthenticationDeliveryId)
             val authenticated = disconnected.copy(isConnected = true)

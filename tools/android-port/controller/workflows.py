@@ -57,12 +57,12 @@ def workflow_text(value, label: str):
     return value
 
 
-def executable_lines(script: str, *, expression_lines=()):
+def executable_lines(script: str, *, expression_lines=(), powershell=False):
     script = workflow_text(script, "Workflow run script")
     lines = script.split("\n")
     if any("${{" in line and line.strip(" \t") not in expression_lines for line in lines):
         raise PortError("Workflow run script contains GitHub expression expansion")
-    if any(re.match(r"[ \t]*#requires", line, re.IGNORECASE) for line in lines):
+    if powershell and any(re.match(r"[ \t]*#requires", line, re.IGNORECASE) for line in lines):
         raise PortError("Workflow run script contains a PowerShell #requires directive")
     return [
         line.strip(" \t") for line in lines
@@ -79,7 +79,7 @@ def validate_fixed_steps(steps, expected, label: str):
             or {key: value for key, value in step.items() if key != "run"}
             != {key: value for key, value in fixed.items() if key != "run"}
             or ("run" in step) != ("run" in fixed)
-            or ("run" in fixed and executable_lines(step["run"]) != fixed["run"])
+            or ("run" in fixed and executable_lines(step["run"], powershell=True) != fixed["run"])
         ):
             raise PortError(f"{label} step {index + 1} differs from the fixed execution contract")
 
@@ -306,7 +306,7 @@ def validate_candidate(value: dict, text: str):
         set(stage_steps[0]) != {"id", "name", "env", "run"}
         or stage_steps[0].get("name") != "Run parallel Gradle validation and Android tasks"
         or stage_environment != expected_stage_environment
-        or executable_lines(stage_run) != stage_lines
+        or executable_lines(stage_run, powershell=True) != stage_lines
     ):
         raise PortError("Candidate Gradle stages must run selected benchmark verification and exact affected scaffold planning")
     selected_controller = (

@@ -614,8 +614,9 @@ class WorkflowTests(unittest.TestCase):
         gate = workflow["jobs"]["android-ci"]["steps"][0]
         scope = workflow["jobs"]["scope"]["steps"][1]
         gradle["run"] = comments + gradle["run"]
-        gate["run"] = comments + gate["run"]
-        scope["run"] = comments + scope["run"]
+        bash_comment = " \t#ReQuIrEs\t-MoDuLeS WorkflowGuardRegressionOnly\n"
+        gate["run"] = bash_comment + comments + gate["run"]
+        scope["run"] = bash_comment + comments + scope["run"]
         for step in workflow["jobs"]["build"]["steps"]:
             if "run" in step and step.get("id") != "gradle":
                 step["run"] = comments + step["run"]

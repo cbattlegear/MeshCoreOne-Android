@@ -30,6 +30,8 @@ COMPRESSED_REVIEW_MARKER = "<!-- android-port-native-review-zlib-v1 -->\n"
 RESULT_MARKER = "<!-- android-port-native-gates-v1 -->\n"
 PUBLICATION_MARKER = "android-port-native-publication-v1 "
 PUBLICATION_STEP = "Validate current server facts and publish exact-head checks"
+INDEPENDENT_REVIEW_MARKER = "android-port-independent-review-v1 "
+INDEPENDENT_REVIEW_CHECK = "MeshCore One independent read-only review"
 WORKFLOW_PATH = ".github/workflows/android-parity-review.yml"
 CI_PATH = ".github/workflows/android-ci.yml"
 
@@ -257,20 +259,76 @@ class NativeReview:
         repair = receipt.get("schema_version") == 2
         whole = receipt.get("schema_version") == 3
         infrastructure = receipt.get("schema_version") == 4
+        independent_infrastructure = receipt.get("schema_version") == 5
         fields(receipt, {"schema_version", "binding", "method", "staging_sha256",
-                         "review", "evidence", "approvals"} | ({"scope_comment_id"} if repair else set()),
+                         "review", "evidence", "approvals"}
+               | ({"scope_comment_id"} if repair else set())
+               | ({"independent_review"} if independent_infrastructure else set()),
                label="native source receipt")
         if (
-            type(receipt["schema_version"]) is not int or receipt["schema_version"] not in (1, 2, 3, 4)
+            type(receipt["schema_version"]) is not int or receipt["schema_version"] not in (1, 2, 3, 4, 5)
             or receipt["method"] != "authenticated-coordinator-read-only"
             or Binding.parse(receipt["binding"]) != binding
             or not isinstance(receipt["evidence"], dict)
             or receipt["evidence"].get("schema_version") != (
-                3 if repair else 4 if whole else 5 if infrastructure else 2
+                3 if repair else 4 if whole else 5 if infrastructure or independent_infrastructure else 2
             )
         ):
             raise PortError("Stale binding or unsupported native review method/schema")
         return body, receipt
+
+    def verify_independent_review(self, reference, binding, number, staging, review):
+        app_id = self.policy["review_policy"].get("trusted_read_only_reviewer_app_id")
+        if type(app_id) is not int or app_id < 1:
+            raise PortError(
+                "Missing capability: trusted independent read-only reviewer app is not configured in trusted policy"
+            )
+        fields(reference, {"check_run_id"}, label="independent read-only review reference")
+        check_run_id = positive_integer(reference["check_run_id"], "Independent review check-run ID")
+        checks = self.backend.pages(
+            f"{self.prefix}/commits/{binding.head_sha}/check-runs?filter=all", "check_runs",
+        )
+        selected = [item for item in checks if item.get("id") == check_run_id]
+        if len(selected) != 1:
+            raise PortError("Independent review check-run is missing or ambiguous")
+        check = selected[0]
+        app = check.get("app", {})
+        configured_publisher_app = self.policy.get("trusted_gate_publisher_app_id")
+        if (
+            check.get("name") != INDEPENDENT_REVIEW_CHECK
+            or check.get("head_sha") != binding.head_sha
+            or check.get("status") != "completed" or check.get("conclusion") != "success"
+            or app.get("id") != app_id or app.get("slug") in (None, "github-actions")
+            or type(configured_publisher_app) is int and app_id == configured_publisher_app
+        ):
+            raise PortError("Independent review check is stale, unsuccessful or from an unauthorized app")
+        suite_id = positive_integer(check.get("check_suite", {}).get("id"), "Independent review check suite ID")
+        suite = self.get(f"/check-suites/{suite_id}")
+        if (
+            suite.get("id") != suite_id or suite.get("head_sha") != binding.head_sha
+            or suite.get("app", {}).get("id") != app_id
+            or suite.get("app", {}).get("slug") != app.get("slug")
+        ):
+            raise PortError("Independent reviewer check-suite identity or candidate head mismatch")
+        summary = bounded_output(check.get("output", {}).get("summary"))
+        if not summary.startswith(INDEPENDENT_REVIEW_MARKER):
+            raise PortError("Independent reviewer check has no authenticated review result")
+        result = decode_json(summary[len(INDEPENDENT_REVIEW_MARKER):])
+        fields(result, {
+            "schema_version", "kind", "binding", "pr_number", "staging_sha256",
+            "verdict", "review", "review_sha256",
+        }, label="independent read-only review result")
+        if (
+            type(result["schema_version"]) is not int or result["schema_version"] != 1
+            or result["kind"] != "trusted-read-only-review"
+            or Binding.parse(result["binding"]) != binding
+            or result["pr_number"] != number
+            or result["staging_sha256"] != digest(staging)
+            or result["verdict"] != "PASS"
+            or result["review"] != review
+            or result["review_sha256"] != digest(review)
+        ):
+            raise PortError("Independent review does not bind this exact base/head/staging/review")
 
     def evaluate(self, wp_id, number, review_id):
         """Read server facts only; never publish, approve, merge, execute a candidate or launch a reviewer."""
@@ -309,7 +367,15 @@ class NativeReview:
         body, receipt = self.source_receipt(selected[0], binding)
         repair = receipt.get("schema_version") == 2
         whole = receipt.get("schema_version") == 3
-        infrastructure = receipt.get("schema_version") == 4
+        infrastructure = receipt.get("schema_version") in (4, 5)
+        independent_infrastructure = receipt.get("schema_version") == 5
+        if (
+            pr.get("merged") is not True
+            and isinstance(receipt.get("evidence"), dict)
+            and receipt["evidence"].get("schema_version") == 5
+            and not independent_infrastructure
+        ):
+            raise PortError("Infrastructure receipt lacks an independently authenticated read-only review")
         catalog = None
         scope = None
         if repair:
@@ -360,6 +426,10 @@ class NativeReview:
             staged = stage_review(self.manifest.repo, wp_id, base, binding.head_sha)
         if receipt["staging_sha256"] != digest(staged):
             raise PortError("Review does not attest the complete trusted-profile/data-only staged inputs")
+        if independent_infrastructure:
+            self.verify_independent_review(
+                receipt["independent_review"], binding, number, staged, receipt["review"],
+            )
         paths = set()
         for item in self.backend.pages(f"{self.prefix}/pulls/{number}/files"):
             paths.add(item["filename"])

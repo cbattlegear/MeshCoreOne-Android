@@ -22,7 +22,8 @@ from controller.gates import merge_decision, validate_evidence, verify_completio
 from controller.ledger import Identity, Ledger
 from controller.native_review import (
     CI_PATH, COMPRESSED_REVIEW_MARKER, PUBLICATION_MARKER, PUBLICATION_STEP, RESULT_MARKER,
-    REVIEW_MARKER, WORKFLOW_PATH, NativeReview, main,
+    INDEPENDENT_REVIEW_CHECK, INDEPENDENT_REVIEW_MARKER, REVIEW_MARKER, WORKFLOW_PATH,
+    NativeReview, main,
 )
 from controller.publication import encode_structured_body
 from controller.repair_acceptance import (
@@ -94,9 +95,11 @@ print("file/module deferred imports reached; no authority or network")
         candidate_tree.start()
         self.addCleanup(candidate_tree.stop)
 
-    def fixture(self, *, current=False):
+    def fixture(self, *, current=False, independent_review=False):
         manifest = test_manifest("WP-003")
         rules = policy()
+        if independent_review:
+            rules["review_policy"]["trusted_read_only_reviewer_app_id"] = 9001
         rules.update(trusted_gate_publisher_app_id=None, trusted_check_app_ids=[],
                      trusted_workflow_ids=[], branch_rules_proven=False,
                      paused=True, activation_approved=False, dispatch_mode="off")
@@ -179,7 +182,7 @@ print("file/module deferred imports reached; no authority or network")
         return NativeReview(backend, manifest, rules), api, prefix, value
 
     def infrastructure_fixture(self):
-        native, api, prefix, original = self.fixture(current=True)
+        native, api, prefix, original = self.fixture(current=True, independent_review=True)
         paths = sorted((
             ".github/workflows/android-ci.yml",
             "tools/android-port/controller/native_review.py",
@@ -216,9 +219,10 @@ print("file/module deferred imports reached; no authority or network")
         )
         self.staged = {"binding": asdict(value.binding), "changed_paths": paths}
         receipt = {
-            "schema_version": 4, "binding": asdict(value.binding),
+            "schema_version": 5, "binding": asdict(value.binding),
             "method": "authenticated-coordinator-read-only", "staging_sha256": digest(self.staged),
             "review": review, "evidence": evidence, "approvals": [approval],
+            "independent_review": {"check_run_id": 88},
         }
         body = REVIEW_MARKER + json.dumps(receipt)
         self.reviews(api, prefix)[0]["body"] = body
@@ -235,6 +239,25 @@ print("file/module deferred imports reached; no authority or network")
             "id": 81, "name": INFRASTRUCTURE_VERIFICATION["job_name"], "run_id": 1,
             "head_sha": HEAD, "status": "completed", "conclusion": "success",
         }]}
+        independent_result = {
+            "schema_version": 1, "kind": "trusted-read-only-review",
+            "binding": asdict(value.binding), "pr_number": 123,
+            "staging_sha256": digest(self.staged), "verdict": "PASS",
+            "review": review, "review_sha256": digest(review),
+        }
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        checks.append({
+            "id": 88, "name": INDEPENDENT_REVIEW_CHECK, "head_sha": HEAD,
+            "status": "completed", "conclusion": "success",
+            "check_suite": {"id": 73}, "app": {"id": 9001, "slug": "meshcoreone-reviewer"},
+            "output": {"summary": INDEPENDENT_REVIEW_MARKER + json.dumps(independent_result)},
+        })
+        api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")] = {
+            "check_runs": checks,
+        }
+        api.routes[("GET", prefix + "/check-suites/73")] = {
+            "id": 73, "head_sha": HEAD, "app": {"id": 9001, "slug": "meshcoreone-reviewer"},
+        }
         return native, api, prefix, value, scope
 
     @staticmethod
@@ -298,7 +321,53 @@ print("file/module deferred imports reached; no authority or network")
         self.assertEqual(read_log.call_args.args[1], 81)
         self.assertEqual(result["ci_run_ids"], [1])
         self.assertEqual(value.binding, actual.binding)
+        self.assertEqual(api.routes[("GET", prefix + "/pulls/123")]["user"]["login"],
+                         self.reviews(api, prefix)[0]["user"]["login"])
         self.assertFalse(any(call[0] != "GET" and not call[3] for call in api.calls))
+
+    def test_infrastructure_route_requires_trusted_independent_exact_staging_review(self):
+        for mutation in (
+            "missing-reviewer-capability", "missing-reference", "missing-review",
+            "forged-reviewer-app", "altered-review", "stale-base", "stale-head",
+            "stale-check-head", "stale-check-suite", "stale-staging", "publisher-app",
+            "author-only-self-review",
+        ):
+            native, api, prefix, _, _ = self.infrastructure_fixture()
+            source = self.reviews(api, prefix)[0]
+            receipt = json.loads(source["body"][len(REVIEW_MARKER):])
+            checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+            check = next(item for item in checks if item["id"] == 88)
+            if mutation == "missing-reviewer-capability":
+                del native.policy["review_policy"]["trusted_read_only_reviewer_app_id"]
+            elif mutation == "missing-reference":
+                del receipt["independent_review"]
+                source["body"] = REVIEW_MARKER + json.dumps(receipt)
+            elif mutation in ("missing-review", "author-only-self-review"):
+                checks.remove(check)
+            elif mutation == "forged-reviewer-app":
+                check["app"]["id"] = 9002
+            elif mutation == "publisher-app":
+                check["app"]["slug"] = "github-actions"
+            else:
+                result = json.loads(check["output"]["summary"][len(INDEPENDENT_REVIEW_MARKER):])
+                if mutation == "altered-review":
+                    result["review"]["summary"] = "coordinator-altered result"
+                elif mutation == "stale-base":
+                    result["binding"]["base_sha"] = HEAD
+                elif mutation == "stale-head":
+                    result["binding"]["head_sha"] = BASE
+                elif mutation == "stale-check-head":
+                    check["head_sha"] = BASE
+                elif mutation == "stale-check-suite":
+                    api.routes[("GET", prefix + "/check-suites/73")]["head_sha"] = BASE
+                else:
+                    result["staging_sha256"] = "0" * 64
+                check["output"]["summary"] = INDEPENDENT_REVIEW_MARKER + json.dumps(result)
+            with self.subTest(mutation=mutation), patch(
+                "controller.repair_acceptance.read_job_log",
+                return_value=self.infrastructure_controller_log(),
+            ), self.assertRaises(PortError):
+                native.evaluate("WP-003", 123, 90)
 
     def test_infrastructure_staging_is_data_only_and_binds_current_paths(self):
         native, api, _, _, scope = self.infrastructure_fixture()

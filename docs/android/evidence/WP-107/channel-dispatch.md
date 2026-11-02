@@ -85,10 +85,18 @@ credited original Swift families:
 - `python tools\android-port\portmap.py` - passed, exit 0.
 - `python android\scaffold\check_environment.py` - blocked by inherited
   non-allowlisted environment variables. This is not passing local readiness.
-- The declared exact-commit affected launcher must be attempted after the
-  candidate is committed. JVM execution and hosted verification are not yet
-  claimed by this document. The exact-commit hosted job/log, if obtained, is
-  authoritative; do not retain a duplicate CI-result bundle.
+- `python tools\android-port\local\check.py --commit
+  a83561d773f2d470a558ca2fcfed78429b3c6be7 --affected-base
+  5878b5357dc9fe9986f002fe68763aca0bc35303` - admitted the ordinary shared
+  execution lane but failed cloning its candidate into the WSL runner:
+  `fatal: write error: No space left on device`, `index-pack died`, exit 128.
+  No JVM tests ran. The supported status command subsequently reported no
+  retained hard locks. No shared storage was deleted, runtime replaced, or
+  execution interlock bypassed.
+- This is an explicitly locally unverified publication candidate. JVM and
+  hosted verification are not claimed by this document. The exact-commit hosted
+  job/log, if obtained, is authoritative; do not retain a duplicate CI-result
+  bundle.
 
 Acceptance IDs: bounded WP-107-behavior and WP-107-boundaries support.
 No whole-WP, actual service/Room consumer, device, hardware, signing, protected

@@ -1191,7 +1191,12 @@ sets its `controller` package identity when bootstrapping its import path, so
 deferred relative imports work in file mode as well as
 `python -m controller.native_review`. Isolated subprocess fixtures load the actual file and
 exercise deferred staging imports without credentials or network access. They
-do not establish a successful deployed publisher run or acceptance.
+also exercise the deferred repair-receipt import through the publisher: an
+offline fake `parity-review` check is created in progress, then completed with
+failure on a controlled validation refusal. This catches the file-entrypoint
+import regression that previously escaped after check creation (#523), without
+broadening exception handling or repairing any live check. These fixtures do not
+establish a successful deployed publisher run or acceptance.
 
 Diagnostic use of the successful historical #519 run `41417389304`, job
 `125184548222`, at `bd1860ec013f0115169b73588da373a1cac501d4` found

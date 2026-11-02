@@ -54,7 +54,7 @@ with patch.object(socket, "socket", no_network):
             else:
                 raise AssertionError("expected validation after deferred imports")
         from test_native_review import NativeReviewTests
-        fixture_native, api, prefix, value = NativeReviewTests().fixture()
+        fixture_native, api, prefix, value = NativeReviewTests().fixture(current=True)
         native = cls(fixture_native.backend, fixture_native.manifest, fixture_native.policy)
         with patch.object(native, "source_receipt", return_value=(
             "", {"schema_version": 2, "scope_comment_id": 1},
@@ -66,8 +66,25 @@ with patch.object(socket, "socket", no_network):
                 assert str(error) == "deferred repair receipt import reached", str(error)
             else:
                 raise AssertionError("expected stop immediately after deferred receipt import")
-        assert all(method == "GET" for method, *rest in api.calls), api.calls
-print("file/module deferred imports reached; no authority or network")
+            assert all(method == "GET" for method, *rest in api.calls), api.calls
+            api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"
+            api.routes[("POST", prefix + "/check-runs")] = {"id": 201}
+            api.routes[("PATCH", prefix + "/check-runs/201")] = {}
+            with patch.dict(native.publish.__globals__, {"git": lambda *args: value.binding.base_sha.encode()}):
+                try:
+                    native.publish("WP-003", 123, 90, 2, 1)
+                except namespace["PortError"] as error:
+                    assert str(error) == "deferred repair receipt import reached", str(error)
+                else:
+                    raise AssertionError("publisher must refuse invalid repair receipt")
+            created = [call for call in api.calls if call[0] == "POST"]
+            completed = [call for call in api.calls if call[0] == "PATCH"]
+            assert len(created) == len(completed) == 1, api.calls
+            assert created[0][2]["status"] == "in_progress", created
+            assert created[0][2]["name"] == "parity-review", created
+            assert completed[0][2]["status"] == "completed", completed
+            assert completed[0][2]["conclusion"] == "failure", completed
+print("file/module deferred imports reached; offline fake publisher completes failure; no authority or network")
 """
         environment = dict(os.environ)
         for name in tuple(environment):

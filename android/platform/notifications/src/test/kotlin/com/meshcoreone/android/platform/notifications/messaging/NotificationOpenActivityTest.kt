@@ -333,7 +333,7 @@ class NotificationOpenActivityTest {
 
         @Implementation
         fun startActivity(intent: Intent) {
-            Shadow.directlyOn<Unit>(
+            Shadow.directlyOn<Unit, Activity>(
                 activity,
                 Activity::class.java,
                 "startActivity",

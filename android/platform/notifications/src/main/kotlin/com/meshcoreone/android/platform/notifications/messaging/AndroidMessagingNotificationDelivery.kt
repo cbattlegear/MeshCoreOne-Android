@@ -93,6 +93,7 @@ class AndroidMessagingNotificationDelivery(
         return try {
             synchronized(postingLock) {
                 manager.notify(tag(request.id), NOTIFICATION_ID, notification)
+                submittedPosts[tag(request.id)] = requireNotNull(notification.extras.getString(EXTRA_POST_ID))
             }
             publishConversationShortcut(request)
             NotificationPostResult.Posted
@@ -114,7 +115,12 @@ class AndroidMessagingNotificationDelivery(
         })
 
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) {
-        ids.forEach { manager.cancel(tag(it), NOTIFICATION_ID) }
+        synchronized(postingLock) {
+            ids.forEach {
+                manager.cancel(tag(it), NOTIFICATION_ID)
+                submittedPosts.remove(tag(it))
+            }
+        }
     }
 
     fun retryPendingActions() {
@@ -289,19 +295,18 @@ class AndroidMessagingNotificationDelivery(
 
     companion object {
         private val postingLock = Any()
+        private val submittedPosts = mutableMapOf<String, String>()
         internal const val EXTRA_POST_ID = "mc1.notification.post-id"
 
         internal fun retireContentNotification(context: Context, notificationId: String, postId: String) {
             val manager = context.getSystemService(NotificationManager::class.java)
             val tag = TAG_PREFIX + notificationId
-            // Posting and conditional retirement share one boundary, including replacement posts.
+            // notify() returns before Android necessarily exposes the replacement as active.
+            // Unknown process history retains the notification rather than cancelling a newer post.
             synchronized(postingLock) {
-                if (manager.activeNotifications.any {
-                        it.tag == tag && it.id == NOTIFICATION_ID &&
-                            it.notification.extras.getString(EXTRA_POST_ID) == postId
-                    }
-                ) {
+                if (submittedPosts[tag] == postId) {
                     manager.cancel(tag, NOTIFICATION_ID)
+                    submittedPosts.remove(tag)
                 }
             }
         }

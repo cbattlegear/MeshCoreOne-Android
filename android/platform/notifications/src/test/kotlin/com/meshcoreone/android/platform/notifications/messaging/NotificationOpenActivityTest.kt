@@ -39,6 +39,7 @@ import org.robolectric.annotation.Implements
 import org.robolectric.annotation.RealObject
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowActivity
+import org.robolectric.shadows.ShadowNotificationManager
 import org.robolectric.util.ReflectionHelpers.ClassParameter
 
 @RunWith(RobolectricTestRunner::class)
@@ -226,7 +227,49 @@ class NotificationOpenActivityTest {
     }
 
     @Test
+    @Config(shadows = [DeferredPublicationShadow::class])
+    fun submittedReplacementSurvivesRetirementWhilePlatformStillExposesOldPost() = runTest {
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { true }
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                AndroidMessagingNotificationDelivery.CHANNEL_MESSAGES_SILENT,
+                "Messages",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        val original = request("pending-publication").copy(threadIdentifier = null)
+        delivery.post(original)
+        val oldNotification = manager.activeNotifications.single().notification
+        oldNotification.contentIntent.send()
+        val oldLaunch = shadowOf(context).nextStartedActivity
+        val publication = Shadow.extract<DeferredPublicationShadow>(manager)
+        publication.defer = true
+        delivery.post(original.copy(payload = NotificationPayload.DirectMessage(contact, UUID(0, 101))))
+        assertEquals(
+            oldNotification.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+            manager.activeNotifications.single().notification.extras
+                .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+        )
+        val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, oldLaunch).create()
+        try {
+            assertEquals(launcher, shadowOf(controller.get()).nextStartedActivity.component)
+            assertEquals(0, publication.cancellations)
+            publication.publish()
+            assertFalse(
+                oldNotification.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID) ==
+                    manager.activeNotifications.single().notification.extras
+                        .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+            )
+        } finally {
+            controller.destroy()
+        }
+    }
+
+    @Test
     fun fullQueueRetainsNotificationForRetapWithoutDroppingBackgroundActions() = runTest {
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         var ready = false
         val received = mutableListOf<NotificationResponse>()
         val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { response ->
@@ -251,10 +294,10 @@ class NotificationOpenActivityTest {
             ),
         )
         val request = request("full")
-        val notification = delivery.buildNotification(request)
+        delivery.post(request.copy(threadIdentifier = null))
+        val notification = manager.activeNotifications.single().notification
         assertEquals(0, notification.flags and Notification.FLAG_AUTO_CANCEL)
         val tag = AndroidMessagingNotificationDelivery.TAG_PREFIX + request.id.value
-        manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, notification)
 
         fun tap() {
             notification.contentIntent.send()
@@ -344,6 +387,30 @@ class NotificationOpenActivityTest {
 
         companion object {
             var afterLaunch: (() -> Unit)? = null
+        }
+
+        @Implements(NotificationManager::class)
+        class DeferredPublicationShadow : ShadowNotificationManager() {
+            var defer = false
+            var cancellations = 0
+                private set
+            private val waiting = mutableListOf<Triple<String?, Int, Notification>>()
+
+            @Implementation
+            override fun notify(tag: String?, id: Int, notification: Notification) {
+                if (defer) waiting += Triple(tag, id, notification) else super.notify(tag, id, notification)
+            }
+
+            @Implementation
+            override fun cancel(tag: String?, id: Int) {
+                cancellations++
+                super.cancel(tag, id)
+            }
+
+            fun publish() {
+                waiting.forEach { (tag, id, notification) -> super.notify(tag, id, notification) }
+                waiting.clear()
+            }
         }
     }
 }

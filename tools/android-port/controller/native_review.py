@@ -465,18 +465,22 @@ class NativeReview:
         run, suite = self.workflow_run(result["publisher_run_id"], result["publisher_run_attempt"],
                                        WORKFLOW_PATH, value.binding.base_sha, ("workflow_dispatch",),
                                        review_identity=(wp_id, number, result["review_id"]))
+        self.verify_published_checks(selected, summaries[0], value.binding, run, suite, number, result["review_id"])
+        return value
+
+    def verify_published_checks(self, selected, summary, binding, run, suite, number, review_id):
         normalized = False
         for check in selected:
             if (
-                check.get("head_sha") != value.binding.head_sha or check.get("status") != "completed"
+                check.get("head_sha") != binding.head_sha or check.get("status") != "completed"
                 or check.get("conclusion") != "success" or check.get("app", {}).get("id") != suite["app"]["id"]
-                or check.get("external_id") != f"{value.binding.key}:{run['id']}:{run['run_attempt']}"
+                or check.get("external_id") != f"{binding.key}:{run['id']}:{run['run_attempt']}"
             ):
                 raise PortError("Project check is not from the authenticated default-branch publisher run")
-            workflow_url = f"https://github.com/{value.binding.repository}/actions/runs/{run['id']}"
+            workflow_url = f"https://github.com/{binding.repository}/actions/runs/{run['id']}"
             if check.get("details_url") != workflow_url:
                 check_id = positive_integer(check.get("id"), "Project check ID")
-                if check.get("details_url") != f"https://github.com/{value.binding.repository}/runs/{check_id}":
+                if check.get("details_url") != f"https://github.com/{binding.repository}/runs/{check_id}":
                     raise PortError("Project check has an unrecognized publisher URL")
                 normalized = True
         if normalized:
@@ -486,8 +490,8 @@ class NativeReview:
                 f"{self.prefix}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs", "jobs",
             )
             if len(jobs) != 1 or (
-                jobs[0].get("name") != f"Native review {wp_id} PR {number} receipt {result['review_id']}"
-                or jobs[0].get("run_id") != run["id"] or jobs[0].get("head_sha") != value.binding.base_sha
+                jobs[0].get("name") != f"Native review {binding.work_package} PR {number} receipt {review_id}"
+                or jobs[0].get("run_id") != run["id"] or jobs[0].get("head_sha") != binding.base_sha
                 or jobs[0].get("status") != "completed" or jobs[0].get("conclusion") != "success"
             ):
                 raise PortError("Publisher log requires the exact successful publication job")
@@ -501,11 +505,10 @@ class NativeReview:
                         receipts.append(decode_json(text[len(PUBLICATION_MARKER):]))
             expected_receipt = {
                 "check_ids": sorted(positive_integer(c.get("id"), "Project check ID") for c in selected),
-                "result_sha256": hashlib.sha256(summaries[0].encode("utf-8")).hexdigest(),
+                "result_sha256": hashlib.sha256(summary.encode("utf-8")).hexdigest(),
             }
             if receipts != [expected_receipt]:
                 raise PortError("Missing or mismatched authenticated publisher check receipt")
-        return value
 
     def publish(self, wp_id, number, review_id, run_id, attempt):
         positive_integer(review_id, "Actual source review ID")

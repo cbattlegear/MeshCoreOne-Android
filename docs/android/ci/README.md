@@ -943,6 +943,10 @@ memory through the existing bounded hosted-log reader. App identity, current
 base/head, workflow, run/attempt, WP/PR/review job identity, external ID and result
 bindings are still mandatory. A copied check, another check's URL, missing or
 duplicate receipt, wrong digest, unavailable log or unsuccessful run fails closed.
+Live protected-gate and historical merged-scope recognition share this same
+check/URL/receipt verifier. Historical recognition still selects only checks
+completed before merge, binds the original successful run attempt and source
+review timestamp, and distinguishes bounded scope from whole-WP completion.
 The existing exact workflow-URL route remains unchanged.
 
 The observed check `125465865624` from run `41500266388` returned the normalized

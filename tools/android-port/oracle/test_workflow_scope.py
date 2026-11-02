@@ -80,6 +80,19 @@ class WorkflowScopeTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(classify([path]), {scope: scope in selected for scope in SCOPES})
 
+    def test_application_profile_and_variant_inputs_select_benchmark_and_scaffold(self):
+        for path in (
+            "android/app/src/main/baseline-prof.txt",
+            "android/app/src/main/AndroidManifest.xml",
+            "android/app/src/benchmark/kotlin/BenchmarkOnly.kt",
+            "android/app/src/profile/res/values/profile.xml",
+            "android/app/src/release/AndroidManifest.xml",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(classify([path]), {
+                    scope: scope in ("benchmark", "scaffold") for scope in SCOPES
+                })
+
     def test_codec_source_and_harness_schedule_codec(self):
         for path in (
             "MC1Services/Sources/MC1Services/Services/AppBackupEnvelope.swift",

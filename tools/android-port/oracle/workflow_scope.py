@@ -137,10 +137,14 @@ RULES = {
     "benchmark": {
         "exact": {
             "android/app/build.gradle.kts", "android/app/proguard-rules.pro",
+            "android/app/src/main/AndroidManifest.xml", "android/app/src/main/baseline-prof.txt",
             "tools/android-port/controller/apk_alignment.py",
             "tools/android-port/controller/performance.py",
         },
-        "prefix": ("android/benchmark/", "android/build-logic/"),
+        "prefix": (
+            "android/benchmark/", "android/build-logic/",
+            "android/app/src/benchmark/", "android/app/src/profile/", "android/app/src/release/",
+        ),
     },
 }
 

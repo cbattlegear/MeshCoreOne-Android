@@ -45,7 +45,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
-import org.robolectric.shadows.Shadows
+import org.robolectric.Shadows
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h1200dp-mdpi")

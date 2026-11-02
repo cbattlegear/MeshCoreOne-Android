@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -539,7 +540,9 @@ class SharedUiComposeTest {
                 assertTrue(canvasBounds.width / density < 600.0,
                     "The dialog content should remain below 600dp near the host-class boundary")
             }
-            assertCropCanvasShowsBothImageHalves(canvasNode, geometry.value.cropSize, density)
+            assertCropCanvasShowsBothImageHalves(
+                canvasNode.fetchSemanticsNode(), geometry.value.cropSize, density,
+            )
         }
 
         assertTallHostWidth(599, 300.0)
@@ -557,11 +560,12 @@ class SharedUiComposeTest {
             assertEquals(geometry.value, chosen)
             val cropped = cropAvatarImage(image, assertNotNull(chosen))
             assertEquals(512, cropped.width); assertEquals(512, cropped.height)
-            val left = cropped.getPixel(128, 256)
-            val right = cropped.getPixel(384, 256)
+            val croppedBitmap = cropped.asAndroidBitmap()
+            val left = croppedBitmap.getPixel(128, 256)
+            val right = croppedBitmap.getPixel(384, 256)
             assertTrue(android.graphics.Color.blue(left) > android.graphics.Color.green(left))
             assertTrue(android.graphics.Color.green(right) > android.graphics.Color.blue(right))
-            cropped.recycle()
+            croppedBitmap.recycle()
         }
     }
 
@@ -581,7 +585,10 @@ class SharedUiComposeTest {
             "avatar-crop-canvas", useUnmergedTree = true,
         ).fetchSemanticsNode().boundsInRoot
         compose.runOnIdle {
-            val actualCanvas = CropSize(canvasBounds.width / density, canvasBounds.height / density)
+            val actualCanvas = CropSize(
+                canvasBounds.width.toDouble() / density,
+                canvasBounds.height.toDouble() / density,
+            )
             assertEquals(AvatarCropGeometry.cropSize(actualCanvas, true), geometry.value.cropSize, 2.0)
             assertTrue(geometry.value.cropSize < 300.0,
                 "The crop should fit the measured short canvas, not the raw window height")

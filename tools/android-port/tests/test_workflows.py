@@ -24,6 +24,15 @@ class WorkflowTests(unittest.TestCase):
         text = (REPO / ".github" / "workflows" / name).read_text(encoding="utf-8")
         return parse_yaml(text), text
 
+    def guarded_step(self, workflow, target):
+        if target == "scope":
+            return workflow["jobs"]["scope"]["steps"][1]
+        if target == "stage":
+            return next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+        if target == "aggregate":
+            return workflow["jobs"]["android-ci"]["steps"][0]
+        raise ValueError(f"Unknown guarded workflow step: {target}")
+
     def test_actual_workflows_parse_and_have_the_real_trust_boundaries(self):
         self.assertEqual(validate_workflows(REPO)["result"], "valid")
 
@@ -442,19 +451,66 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(kind=kind), self.assertRaises(PortError):
                 validate_candidate(value, text)
 
+    def test_scope_classifier_and_outputs_cannot_be_removed_or_overridden(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for kind in (
+            "classifier-removed", "classifier-commented", "classifier-duplicated",
+            "classifier-output", "classifier-failure", "output-override",
+            "scope-output", "step-shell", "job-shell", "job-environment",
+            "checkout-ref", "additional-step", "selector-commented",
+        ):
+            value = copy.deepcopy(original)
+            scope = value["jobs"]["scope"]
+            step = scope["steps"][1]
+            classifier, selector = step["run"].splitlines()
+            if kind == "classifier-removed":
+                step["run"] = selector + "\n"
+            elif kind == "classifier-commented":
+                step["run"] = "# " + classifier + "\n" + selector + "\n"
+            elif kind == "classifier-duplicated":
+                step["run"] = classifier + "\n" + classifier + "\n" + selector + "\n"
+            elif kind == "classifier-output":
+                step["run"] = step["run"].replace('--output "$GITHUB_OUTPUT"', "--output /dev/null", 1)
+            elif kind == "classifier-failure":
+                step["run"] = classifier + " || true\n" + selector + "\n"
+            elif kind == "output-override":
+                step["run"] += 'echo "benchmark=false" >> "$GITHUB_OUTPUT"\n'
+            elif kind == "scope-output":
+                scope["outputs"]["scaffold"] = "${{ steps.changed.outputs.benchmark }}"
+            elif kind == "step-shell":
+                step["shell"] = "bash {0}"
+            elif kind == "job-shell":
+                scope["defaults"] = {"run": {"shell": "bash {0}"}}
+            elif kind == "job-environment":
+                scope["env"] = {"BASH_ENV": "fixture"}
+            elif kind == "checkout-ref":
+                scope["steps"][0]["with"]["ref"] = "${{ github.sha }}"
+            elif kind == "additional-step":
+                scope["steps"].insert(1, {"run": "echo benchmark=false"})
+            else:
+                step["run"] = classifier + "\n# " + selector + "\n"
+            self.assertNotEqual(value, original, f"Mutation {kind} did not change the workflow")
+            text = yaml.safe_dump(value, sort_keys=False)
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_candidate(parse_yaml(text), text)
+
     def test_workflow_guards_allow_comments_and_indentation_without_treating_comments_as_commands(self):
         workflow, text = self.read("android-ci.yml")
         gradle = next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "gradle")
         gate = workflow["jobs"]["android-ci"]["steps"][0]
+        scope = workflow["jobs"]["scope"]["steps"][1]
         gradle["run"] = "# Additional explanation\n\n" + gradle["run"]
         gate["run"] = "# Additional explanation\n\n" + gate["run"]
+        scope["run"] = "# Additional explanation\n\n" + scope["run"]
         validate_candidate(workflow, text)
 
     def test_workflow_guards_reject_encoded_non_lf_shell_line_separators(self):
         import yaml
 
         original, _ = self.read("android-ci.yml")
-        for target in ("stage", "aggregate", "build-condition"):
+        for target in ("scope", "stage", "aggregate", "build-condition"):
             for separator in ("\r", "\v", "\f", "\x85", "\u2028", "\u2029"):
                 value = copy.deepcopy(original)
                 if target == "build-condition":
@@ -462,20 +518,14 @@ class WorkflowTests(unittest.TestCase):
                     value["jobs"]["build"]["if"] = condition.replace("||", separator + "||", 1)
                     self.assertNotEqual(value["jobs"]["build"]["if"], condition)
                 else:
-                    step = (
-                        next(step for step in value["jobs"]["build"]["steps"] if step.get("id") == "gradle")
-                        if target == "stage" else value["jobs"]["android-ci"]["steps"][0]
-                    )
+                    step = self.guarded_step(value, target)
                     step["run"] = "".join("#" + separator + line + "\n" for line in step["run"].splitlines())
                 text = yaml.safe_dump(value, sort_keys=False)
                 parsed = parse_yaml(text)
                 if target == "build-condition":
                     self.assertEqual(parsed["jobs"]["build"]["if"], value["jobs"]["build"]["if"])
                 else:
-                    parsed_step = (
-                        next(step for step in parsed["jobs"]["build"]["steps"] if step.get("id") == "gradle")
-                        if target == "stage" else parsed["jobs"]["android-ci"]["steps"][0]
-                    )
+                    parsed_step = self.guarded_step(parsed, target)
                     self.assertEqual(parsed_step["run"], step["run"])
                 with self.subTest(target=target, separator=repr(separator)), self.assertRaises(PortError):
                     validate_candidate(parsed, text)
@@ -484,12 +534,9 @@ class WorkflowTests(unittest.TestCase):
         import yaml
 
         original, _ = self.read("android-ci.yml")
-        for target in ("stage", "aggregate"):
+        for target in ("scope", "stage", "aggregate"):
             value = copy.deepcopy(original)
-            step = (
-                next(step for step in value["jobs"]["build"]["steps"] if step.get("id") == "gradle")
-                if target == "stage" else value["jobs"]["android-ci"]["steps"][0]
-            )
+            step = self.guarded_step(value, target)
             step["run"] = "# ${{ github.event.pull_request.body }}\n" + step["run"]
             text = yaml.safe_dump(value, sort_keys=False)
             parsed = parse_yaml(text)

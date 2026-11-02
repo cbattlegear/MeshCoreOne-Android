@@ -57,12 +57,13 @@ def workflow_text(value, label: str):
     return value
 
 
-def executable_lines(script: str):
+def executable_lines(script: str, *, expression_lines=()):
     script = workflow_text(script, "Workflow run script")
-    if "${{" in script:
+    lines = script.split("\n")
+    if any("${{" in line and line.strip(" \t") not in expression_lines for line in lines):
         raise PortError("Workflow run script contains GitHub expression expansion")
     return [
-        line.strip(" \t") for line in script.split("\n")
+        line.strip(" \t") for line in lines
         if line.strip(" \t") and not line.lstrip(" \t").startswith("#")
     ]
 
@@ -99,13 +100,54 @@ def validate_candidate(value: dict, text: str):
     if set(jobs) != {"scope", "controller", "build", "external-oracle", "backup-oracle", "android-ci"}:
         raise PortError("Missing/unknown mandatory CI job")
     gate = jobs["android-ci"]
-    scope_outputs = jobs["scope"].get("outputs", {})
+    scope = jobs["scope"]
+    if not isinstance(scope, dict):
+        raise PortError("Candidate scope job is malformed")
+    event_arguments = (
+        '--candidate-event-name "${{ github.event_name }}" '
+        '--candidate-event-path "${{ github.event_path }}"'
+    )
+    selector_command = (
+        "python tools/android-port/controller/test_runner.py " + event_arguments + ' --scope-output "$GITHUB_OUTPUT"'
+    )
+    classifier_command = (
+        'python tools/android-port/oracle/workflow_scope.py --event-name "${{ github.event_name }}" '
+        '--event-path "${{ github.event_path }}" --output "$GITHUB_OUTPUT"'
+    )
+    scope_outputs = {
+        "controller": "${{ steps.changed.outputs.controller }}",
+        "accessibility-suite": "${{ steps.changed.outputs.accessibility-suite }}",
+        "scaffold": "${{ steps.changed.outputs.scaffold }}",
+        "protocol": "${{ steps.changed.outputs.protocol }}",
+        "backup": "${{ steps.changed.outputs.backup }}",
+        "benchmark": "${{ steps.changed.outputs.benchmark }}",
+        "external-oracle": "${{ steps.changed.outputs['external-oracle'] }}",
+    }
+    scope_steps = scope.get("steps")
     if (
-        scope_outputs.get("controller") != "${{ steps.changed.outputs.controller }}"
-        or scope_outputs.get("accessibility-suite") != "${{ steps.changed.outputs.accessibility-suite }}"
-        or scope_outputs.get("benchmark") != "${{ steps.changed.outputs.benchmark }}"
+        set(scope) != {"name", "runs-on", "timeout-minutes", "outputs", "steps"}
+        or scope.get("name") != "Classify candidate scopes"
+        or scope.get("runs-on") != "ubuntu-24.04" or scope.get("timeout-minutes") != "5"
+        or scope.get("outputs") != scope_outputs
+        or not isinstance(scope_steps, list) or len(scope_steps) != 2
+        or scope_steps[0] != {
+            "name": "Read-only exact candidate and immutable diff endpoints",
+            "uses": "actions/checkout@" + ACTION_PINS["actions/checkout"],
+            "with": {
+                "ref": "${{ github.event.pull_request.head.sha || github.sha }}",
+                "fetch-depth": "0",
+                "persist-credentials": "false",
+            },
+        }
+        or not isinstance(scope_steps[1], dict)
+        or set(scope_steps[1]) != {"id", "name", "run"}
+        or scope_steps[1]["id"] != "changed"
+        or scope_steps[1]["name"] != "Classify changed inputs with fail-safe defaults"
+        or executable_lines(
+            scope_steps[1]["run"], expression_lines=(classifier_command, selector_command),
+        ) != [classifier_command, selector_command]
     ):
-        raise PortError("Diff-derived scope outputs and committed accessibility-suite selection must remain separate")
+        raise PortError("Candidate scopes must come from the exact classifier and native selector without overrides")
     if (set(gate) != {"name", "if", "needs", "runs-on", "timeout-minutes", "steps"}
             or gate.get("name") != "android-ci" or gate.get("if") != "${{ always() }}"
             or gate.get("runs-on") != "ubuntu-24.04" or gate.get("timeout-minutes") != "5"
@@ -272,19 +314,12 @@ def validate_candidate(value: dict, text: str):
     )
     if all_runs.count("controller/test_runner.py") != 2:
         raise PortError("Controller requires one scope-only selector and exactly one strict test invocation")
-    event_arguments = (
-        '--candidate-event-name "${{ github.event_name }}" '
-        '--candidate-event-path "${{ github.event_path }}"'
-    )
     runner_command = (
         "python tools/android-port/controller/test_runner.py --include-tests tools/android-port/local "
         + event_arguments
     )
     parity_runner_command = runner_command.replace(
         " --candidate-event-name", " --include-tests android/parity-tests --candidate-event-name", 1,
-    )
-    selector_command = (
-        "python tools/android-port/controller/test_runner.py " + event_arguments + ' --scope-output "$GITHUB_OUTPUT"'
     )
     selectors = [step for step in jobs["scope"]["steps"] if "controller/test_runner.py" in step.get("run", "")]
     if (

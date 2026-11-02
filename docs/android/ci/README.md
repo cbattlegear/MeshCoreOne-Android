@@ -57,11 +57,14 @@ shared alignment producer additionally selects scaffold. The Linux build job run
 check requires that job to succeed. Workflow validation checks the actual
 guarded stage commands, exit handling and aggregate result bindings, rather than
 accepting command text inside comments or bypassable workflow-, job- or
-step-level shell overrides and global environment injection. Embedded control
-or non-LF line separators are rejected rather than being parsed differently
-from the shell.
-GitHub expression expansion is also forbidden in these scripts, including comments,
-because substitution occurs before shell parsing. Benchmark Gradle scripts,
+step-level shell overrides and global environment injection. It also requires
+the exact candidate checkout, classifier and native-suite selector, with their
+bound outputs and no additional scope-step commands or output overrides.
+Only the fixed event-name and event-path expressions are allowed in the scope
+script. Embedded control or non-LF line separators are rejected rather than
+being parsed differently from the shell. Other GitHub expression expansion is
+forbidden in these scripts, including comments, because substitution occurs
+before shell parsing. Benchmark Gradle scripts,
 lockfiles and Gradle properties also select full scaffold verification because
 they can change the shared task graph; benchmark-only source changes remain
 eligible for the narrower benchmark stage.

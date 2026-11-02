@@ -56,6 +56,11 @@ accepting command text inside comments or bypassable workflow-, job- or
 step-level shell overrides and global environment injection. Embedded control
 or non-LF line separators are rejected rather than being parsed differently
 from the shell.
+GitHub expression expansion is also forbidden in these scripts, including comments,
+because substitution occurs before shell parsing. Benchmark Gradle scripts,
+lockfiles and Gradle properties also select full scaffold verification because
+they can change the shared task graph; benchmark-only source changes remain
+eligible for the narrower benchmark stage.
 Mixed selections run the benchmark stage before scaffold so scaffold outputs
 remain authoritative. Merged acceptance requires the exact build-job log to
 contain both the successful benchmark task-graph report and the WP-504

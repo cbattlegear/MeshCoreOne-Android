@@ -59,6 +59,8 @@ def workflow_text(value, label: str):
 
 def executable_lines(script: str):
     script = workflow_text(script, "Workflow run script")
+    if "${{" in script:
+        raise PortError("Workflow run script contains GitHub expression expansion")
     return [
         line.strip(" \t") for line in script.split("\n")
         if line.strip(" \t") and not line.lstrip(" \t").startswith("#")

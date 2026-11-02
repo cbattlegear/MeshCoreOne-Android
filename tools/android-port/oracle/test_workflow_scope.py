@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from controller.errors import PortError
+from controller.local_scope import select_paths
 from oracle.workflow_scope import ALL_SCOPE_INPUTS, SCOPES, ZERO, classify, endpoints, evaluate
 
 BASE = "a" * 40
@@ -40,7 +41,6 @@ class WorkflowScopeTests(unittest.TestCase):
     def test_benchmark_sources_and_app_build_wiring_select_benchmark_verification(self):
         for path in (
             "android/benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt",
-            "android/benchmark/build.gradle.kts",
             "android/build-logic/convention/src/main/kotlin/AndroidConventionPlugin.kt",
             "android/app/proguard-rules.pro",
         ):
@@ -56,6 +56,21 @@ class WorkflowScopeTests(unittest.TestCase):
         self.assertTrue(app_build["scaffold"])
         self.assertTrue(app_build["benchmark"])
         self.assertFalse(app_build["external-oracle"])
+
+    def test_benchmark_build_graph_changes_also_select_full_scaffold(self):
+        for path in (
+            "android/benchmark/build.gradle.kts",
+            "android/benchmark/nested/settings.gradle",
+            "android/benchmark/gradle.lockfile",
+            "android/benchmark/gradle.properties",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(classify([path]), {
+                    scope: scope in ("benchmark", "scaffold") for scope in SCOPES
+                })
+                plan = select_paths([path])
+                self.assertTrue(plan["full_scaffold"])
+                self.assertIn("inspect", plan["stages"])
 
     def test_codec_source_and_harness_schedule_codec(self):
         for path in (

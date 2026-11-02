@@ -192,6 +192,12 @@ def classify(paths):
     ]
     if unclassified:
         raise PortError("Unclassified Android inputs require full verification: " + ", ".join(unclassified))
+    if any(
+        path.startswith("android/benchmark/")
+        and (path.endswith((".gradle", ".gradle.kts", ".lockfile")) or path.endswith("/gradle.properties"))
+        for path in normalized
+    ):
+        result["scaffold"] = True
     if set(normalized) & SHARED_GRADLE_INPUTS:
         result.update({"scaffold": True, "protocol": True, "backup": True, "benchmark": True})
     return result

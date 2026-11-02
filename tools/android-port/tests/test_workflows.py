@@ -454,23 +454,47 @@ class WorkflowTests(unittest.TestCase):
         import yaml
 
         original, _ = self.read("android-ci.yml")
-        for target in ("stage", "aggregate"):
+        for target in ("stage", "aggregate", "build-condition"):
             for separator in ("\r", "\v", "\f", "\x85", "\u2028", "\u2029"):
                 value = copy.deepcopy(original)
-                step = (
-                    next(step for step in value["jobs"]["build"]["steps"] if step.get("id") == "gradle")
-                    if target == "stage" else value["jobs"]["android-ci"]["steps"][0]
-                )
-                step["run"] = "".join("#" + separator + line + "\n" for line in step["run"].splitlines())
+                if target == "build-condition":
+                    condition = value["jobs"]["build"]["if"]
+                    value["jobs"]["build"]["if"] = condition.replace("||", separator + "||", 1)
+                    self.assertNotEqual(value["jobs"]["build"]["if"], condition)
+                else:
+                    step = (
+                        next(step for step in value["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+                        if target == "stage" else value["jobs"]["android-ci"]["steps"][0]
+                    )
+                    step["run"] = "".join("#" + separator + line + "\n" for line in step["run"].splitlines())
                 text = yaml.safe_dump(value, sort_keys=False)
                 parsed = parse_yaml(text)
-                parsed_step = (
-                    next(step for step in parsed["jobs"]["build"]["steps"] if step.get("id") == "gradle")
-                    if target == "stage" else parsed["jobs"]["android-ci"]["steps"][0]
-                )
-                self.assertEqual(parsed_step["run"], step["run"])
+                if target == "build-condition":
+                    self.assertEqual(parsed["jobs"]["build"]["if"], value["jobs"]["build"]["if"])
+                else:
+                    parsed_step = (
+                        next(step for step in parsed["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+                        if target == "stage" else parsed["jobs"]["android-ci"]["steps"][0]
+                    )
+                    self.assertEqual(parsed_step["run"], step["run"])
                 with self.subTest(target=target, separator=repr(separator)), self.assertRaises(PortError):
                     validate_candidate(parsed, text)
+
+    def test_workflow_guards_reject_expression_expansion_inside_comments(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for target in ("stage", "aggregate"):
+            value = copy.deepcopy(original)
+            step = (
+                next(step for step in value["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+                if target == "stage" else value["jobs"]["android-ci"]["steps"][0]
+            )
+            step["run"] = "# ${{ github.event.pull_request.body }}\n" + step["run"]
+            text = yaml.safe_dump(value, sort_keys=False)
+            parsed = parse_yaml(text)
+            with self.subTest(target=target), self.assertRaisesRegex(PortError, "expression"):
+                validate_candidate(parsed, text)
 
     def test_read_only_checkout_ephemeral_runners_pins_and_secret_absence(self):
         original, text = self.read("android-ci.yml")

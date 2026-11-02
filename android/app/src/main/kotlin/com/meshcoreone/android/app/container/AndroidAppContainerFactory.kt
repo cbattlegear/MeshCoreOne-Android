@@ -1,4 +1,5 @@
 // AndroidOnly: WP-303 Builds the production AppContainer from the Android context.
+// AndroidOnly: WP-214 Wires sync diagnostics into the production composition.
 package com.meshcoreone.android.app.container
 
 import android.app.Application
@@ -36,12 +37,15 @@ import com.meshcoreone.android.app.container.onboarding.OnboardingPlatform
 import com.meshcoreone.android.app.container.onboarding.WriteBehindOnboardingFlags
 import com.meshcoreone.android.app.container.onboarding.appSettingsOpener
 import com.meshcoreone.android.app.platform.AppLanguages
+import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.services.content.LocationService
 import com.meshcoreone.android.core.services.content.RegionResolver
+import com.meshcoreone.android.core.services.diagnostics.PersistentLogger
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueProgress
 import com.meshcoreone.android.core.services.notifications.didReceive
 import com.meshcoreone.android.core.services.rendering.DraftStore
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
+import com.meshcoreone.android.core.services.sync.SyncLogSink
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
 import com.meshcoreone.android.platform.notifications.messaging.AndroidNotificationStringProvider
 import kotlinx.coroutines.CoroutineScope
@@ -67,6 +71,20 @@ import com.meshcoreone.android.feature.nodes.deps.Announcer
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.deps.UserFacingMessages
 
+internal fun productionSyncLogSink(
+    loggerForCategory: (String) -> PersistentLogger = { PersistentLogger("com.mc1", it) },
+): SyncLogSink = SyncLogSink { level, category, message ->
+    val logger = loggerForCategory(category)
+    when (level) {
+        DebugLogLevel.DEBUG -> logger.debug(message)
+        DebugLogLevel.INFO -> logger.info(message)
+        DebugLogLevel.NOTICE -> logger.notice(message)
+        DebugLogLevel.WARNING -> logger.warning(message)
+        DebugLogLevel.ERROR -> logger.error(message)
+        DebugLogLevel.FAULT -> logger.fault(message)
+    }
+}
+
 /**
  * The production composition of [AppContainer]. Implemented platform services are bound here; remaining unavailable
  * roles and their owners are listed in WP-303.md.
@@ -89,7 +107,7 @@ object AndroidAppContainerFactory {
         val themeService = com.meshcoreone.android.core.designsystem.ThemeService.create(storage.preferences, mainScope)
         cleanup.addFirst { themeService.close() }
         // Demo mode reads its flags synchronously: bind the loaded snapshot before the first `shared` access.
-        DemoModeManager.installStandardDefaults(DataStoreDemoModeDefaults.load(storage.preferences, mainScope))
+        DemoModeManager.installStandardDefaults(DataStoreDemoModeDefaults.load(storage.preferences))
         val storeScope = CoroutineScope(SupervisorJob(mainScope.coroutineContext[kotlinx.coroutines.Job]) + Dispatchers.IO)
         cleanup.addFirst { storeScope.cancel() }
         val store = openRoomDatabaseOnIo(
@@ -172,6 +190,14 @@ object AndroidAppContainerFactory {
             application,
             reconnecting = { holder.get()?.connectionManager?.reconnectionCoordinator?.reconnectingDeviceId != null },
             lastDevice = { holder.get()?.connectionPort?.lastConnectedDeviceId },
+            simulator = {
+                val container = holder.get()
+                container != null && (container.connectionManager.isSimulatorConnection ||
+                    container.connectionManager.connectionState ==
+                    com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED &&
+                    container.connectionPort.lastConnectedDeviceId ==
+                    com.meshcoreone.android.core.services.simulator.MockDataProvider.simulatorDeviceID)
+            },
             lan = {
                 val current = holder.get()
                 usesLanHosting(current?.currentTransport, current?.connectionManager?.connectedDevice?.connectionMethods.orEmpty())
@@ -198,9 +224,11 @@ object AndroidAppContainerFactory {
                 linkProbe = probe,
                 scans = scanCoordinator,
                 linkFactory = linkFactory,
+                simulatorSeedStore = RoomSimulatorSeedStore(store),
                 chatSendQueueProgress = chatSendQueueProgress,
                 hostingStarter = AndroidForegroundServiceStarter(application),
                 hostEnvironment = environment,
+                logSink = productionSyncLogSink(),
                 ensureBonded = { deviceId ->
                     connectivity.endpointFor(deviceId)?.address?.let { address ->
                         addresses[deviceId] = address

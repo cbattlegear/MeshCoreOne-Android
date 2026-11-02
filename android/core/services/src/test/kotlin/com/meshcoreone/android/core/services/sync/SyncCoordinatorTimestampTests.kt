@@ -11,6 +11,8 @@ import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
@@ -37,12 +39,45 @@ class SyncCoordinatorTimestampTests {
         val result = SyncCoordinator.correctTimestampIfNeeded(timestamp, receive)
         assertFalse(result.wasCorrected)
         assertEquals(timestamp, result.correctedTimestamp)
+        assertNull(result.rangeError)
     }
 
     private fun assertCorrected(timestamp: UInt, receive: Instant) {
         val result = SyncCoordinator.correctTimestampIfNeeded(timestamp, receive)
         assertTrue(result.wasCorrected)
         assertEquals(receive.uint32Seconds(), result.correctedTimestamp)
+        assertNull(result.rangeError)
+    }
+
+    @TestFactory
+    fun receiveTimestampRange(): List<DynamicTest> {
+        data class Boundary(val receive: Instant, val expected: UInt?)
+        val maximum = UInt.MAX_VALUE.toLong()
+        return listOf(
+            Boundary(Instant.ofEpochSecond(-1), null),
+            Boundary(Instant.EPOCH.minusNanos(1), 0u),
+            Boundary(Instant.EPOCH, 0u),
+            Boundary(Instant.EPOCH.plusNanos(1), 0u),
+            Boundary(Instant.ofEpochSecond(maximum), UInt.MAX_VALUE),
+            Boundary(Instant.ofEpochSecond(maximum, 999_999_999), UInt.MAX_VALUE),
+            Boundary(Instant.ofEpochSecond(maximum + 1), null),
+            Boundary(Instant.MIN, null),
+            Boundary(Instant.MAX, null),
+        ).map { boundary ->
+            pureCase("WP-214", "receive-clock range at ${boundary.receive}") {
+                val original = 1_000_000u
+                val result = SyncCoordinator.correctTimestampIfNeeded(original, boundary.receive)
+                if (boundary.expected == null) {
+                    assertEquals(original, result.correctedTimestamp)
+                    assertFalse(result.wasCorrected)
+                    assertEquals(boundary.receive, assertIs<TimestampRangeError>(result.rangeError).receiveTime)
+                } else {
+                    assertEquals(boundary.expected, result.correctedTimestamp)
+                    assertTrue(result.wasCorrected)
+                    assertNull(result.rangeError)
+                }
+            }
+        }
     }
 
     @TestFactory

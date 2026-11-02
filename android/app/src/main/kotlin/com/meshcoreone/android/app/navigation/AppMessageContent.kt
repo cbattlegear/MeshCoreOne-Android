@@ -11,6 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.meshcoreone.android.app.container.AppChatContent
@@ -27,8 +29,20 @@ import com.meshcoreone.android.feature.chats.composer.ui.LinkPreviewRoute
 import com.meshcoreone.android.core.services.rendering.MessageFragment
 import com.meshcoreone.android.core.services.rendering.MessageItem
 import com.meshcoreone.android.core.services.rendering.PreviewLoadState
+import com.meshcoreone.android.core.services.simulator.DemoOfflineContent
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+
+internal suspend fun shareMountedImage(
+    content: AppChatContent,
+    image: ChatImage?,
+    share: suspend (ByteArray) -> Unit,
+) {
+    val mountedImage = requireNotNull(image as? ChatImage.Decoded) { "No mounted image is available to share" }
+    share(content.shareData(mountedImage))
+}
 
 @Composable
 internal fun AppMessageContent(
@@ -37,32 +51,110 @@ internal fun AppMessageContent(
     report: (String, Throwable?) -> Unit,
     onMap: (String) -> Unit,
     rendered: MessageItem? = null,
+    onShareImage: (suspend (ByteArray) -> Unit)? = null,
+    malwareCheck: suspend (String) -> Boolean = content.malware::isBlocked,
+    malwareRevisionSource: StateFlow<Long> = content.malware.revision,
 ) {
     val resolutions by content.resolutions.collectAsState()
-    val media = remember(content, message.text, resolutions) { content.media(message.text) }
+    val media = remember(content, message.radioId, message.id, message.text, resolutions) { content.media(message) }
     val scope = rememberCoroutineScope()
     val uri = LocalUriHandler.current
     val context = androidx.compose.ui.platform.LocalContext.current
+    val shareImage: suspend (ByteArray) -> Unit = onShareImage ?: { bytes ->
+        com.meshcoreone.android.app.platform.shareImage(context, bytes)
+    }
     val preferences by content.rendering.collectAsState()
+    val malwareRevision by malwareRevisionSource.collectAsState()
     val autoResolve = preferences[if (message.isChannelMessage) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM]
     (if (preferences[AppStorageKey.linkPreviewsEnabled]) media else emptyList()).forEach { entry ->
         val url = entry.url
-        key(url, autoResolve) {
+        val bundledPreview = DemoOfflineContent.preview(message, url) != null
+        val bundledImage = DemoOfflineContent.isInlineImage(message, url)
+        if (DemoOfflineContent.isSimulatorMessage(message) && !bundledPreview && !bundledImage) return@forEach
+        key(message.radioId, message.id, url, autoResolve) {
+            var previewRevision by remember(content, url) { mutableLongStateOf(0L) }
             var image by remember { mutableStateOf<ChatImage?>(null) }
+            var imageBlocked by remember { mutableStateOf(false) }
+            var verifiedMalwareRevision by remember { mutableLongStateOf(Long.MIN_VALUE) }
             var failure by remember { mutableStateOf<Throwable?>(null) }
             var manualImage by remember { mutableStateOf(false) }
             var retry by remember { mutableIntStateOf(0) }
             var fullscreen by remember { mutableStateOf(false) }
-            val inline = entry.isImage
-            val holder = remember(content, url, message.isChannelMessage,
+            val displayedImage = image.takeIf { verifiedMalwareRevision == malwareRevision }
+            val hasMalwareWarning = rendered?.content?.any {
+                it is MessageFragment.MalwareWarning && it.url.absoluteString == url
+            } == true
+            val renderedPrimary = rendered.takeIf { url == media.firstOrNull()?.url }
+            val cachedPreviewKnown = content.hasCachedPreview(url)
+            val needsPersistedPreviewLookup = entry.isImage && renderedPrimary == null && !cachedPreviewKnown
+            var persistedPreviewAvailable by remember(content, url, cachedPreviewKnown, previewRevision) {
+                mutableStateOf<Boolean?>(null)
+            }
+            LaunchedEffect(content, url, needsPersistedPreviewLookup, cachedPreviewKnown, previewRevision) {
+                if (needsPersistedPreviewLookup) {
+                    persistedPreviewAvailable = content.hasPersistedPreview(url)
+                }
+            }
+            val persistedPreviewPending = needsPersistedPreviewLookup && persistedPreviewAvailable == null
+            val hasCachedPreview = cachedPreviewKnown || persistedPreviewAvailable == true
+            val inline = if (renderedPrimary != null) {
+                bundledImage || renderedPrimary.content.any { it is MessageFragment.InlineImage } ||
+                    (entry.isImage && hasMalwareWarning)
+            } else {
+                bundledImage || (entry.isImage && !hasCachedPreview) || hasMalwareWarning
+            }
+            val shouldCheckImage = !bundledPreview && !bundledImage && entry.isImage && (inline || hasMalwareWarning)
+            val holder = remember(
+                content,
+                message.radioId,
+                message.id,
+                message.text,
+                url,
+                malwareRevision,
+                message.isChannelMessage,
+                malwareCheck,
                 preferences[AppStorageKey.linkPreviewsEnabled],
-                preferences[AppStorageKey.linkPreviewsAutoResolveDM], preferences[AppStorageKey.linkPreviewsAutoResolveChannels]) {
-                LinkPreviewStateHolder(url, message.isChannelMessage, content.previews(message.isChannelMessage),
-                    UrlSafetyPort { UrlSafetyChecker.isSafe(it) }, MalwareDomainPort(content.malware::isBlocked),
+                preferences[AppStorageKey.linkPreviewsAutoResolveDM],
+                preferences[AppStorageKey.linkPreviewsAutoResolveChannels],
+                previewRevision,
+            ) {
+                LinkPreviewStateHolder(
+                    url,
+                    message.isChannelMessage,
+                    content.previews(message, url),
+                    UrlSafetyPort { bundledPreview || UrlSafetyChecker.isSafe(it) },
+                    MalwareDomainPort { host -> if (bundledPreview) false else malwareCheck(host) },
                     scope, ComposerDiagnostics(report))
             }
+            var previewRefreshPending by remember(content, url, holder) { mutableStateOf(false) }
+            LaunchedEffect(content, url, holder) {
+                content.previewAvailability.collect { changedUrl ->
+                    if (changedUrl == url) {
+                        val state = holder.state.value
+                        if (state is LinkPreviewCardState.Loading) {
+                            previewRefreshPending = true
+                        } else {
+                            if (state !is LinkPreviewCardState.Loaded) {
+                                previewRevision = Math.incrementExact(previewRevision)
+                            }
+                        }
+                    }
+                }
+            }
+            LaunchedEffect(holder) {
+                holder.state.collect { state ->
+                    if (state !is LinkPreviewCardState.Loading && previewRefreshPending) {
+                        previewRefreshPending = false
+                        if (state !is LinkPreviewCardState.Loaded) {
+                            previewRevision = Math.incrementExact(previewRevision)
+                        }
+                    }
+                }
+            }
             DisposableEffect(holder) { onDispose { holder.close() } }
-            if (!inline || image == ChatImage.HtmlPage) {
+            if (persistedPreviewPending) {
+                CircularProgressIndicator(Modifier.size(24.dp))
+            } else if (!inline || displayedImage == ChatImage.HtmlPage || imageBlocked) {
                 val preview by holder.state.collectAsState()
                 SideEffect {
                     if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, preview)
@@ -70,12 +162,12 @@ internal fun AppMessageContent(
                 LinkPreviewRoute(holder, content.images, uri::openUri, onImageError = { _, problem ->
                     report("Preview image decode failed", problem)
                 })
-            } else if (!autoResolve && !manualImage) {
+            } else if (!autoResolve && !manualImage && displayedImage == null) {
                 SideEffect {
                     if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.DISABLED)
                 }
                 TextButton(onClick = { manualImage = true }) { Text(stringResource(AppChatsStrings.chatsPreviewTapToLoad)) }
-            } else if (image == null) {
+            } else if (displayedImage == null) {
                 val sharedAspect = if (url == media.firstOrNull()?.url) {
                     rendered?.content?.filterIsInstance<MessageFragment.InlineImage>()?.firstOrNull()?.image?.cachedAspect
                 } else null
@@ -83,14 +175,77 @@ internal fun AppMessageContent(
                     Spacer(Modifier.widthIn(max = InlineImageMetrics.MAX_WIDTH_DP.dp).fillMaxWidth().aspectRatio(aspect.toFloat()))
                 }
             }
-            LaunchedEffect(content, url, autoResolve, manualImage, retry) {
-                if (!inline || (!autoResolve && !manualImage)) return@LaunchedEffect
-                image = null
-                failure = null
-                if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.LOADING)
+            LaunchedEffect(
+                content,
+                message.radioId,
+                message.id,
+                message.text,
+                url,
+                autoResolve,
+                manualImage,
+                retry,
+                malwareRevision,
+                shouldCheckImage,
+                hasMalwareWarning,
+                inline,
+                persistedPreviewPending,
+                bundledImage,
+            ) {
+                if (persistedPreviewPending) return@LaunchedEffect
+                if (!inline) return@LaunchedEffect
                 try {
+                    if (bundledImage) {
+                        image = content.bundledInlineImage(message, url)
+                        imageBlocked = false
+                        failure = null
+                        verifiedMalwareRevision = malwareRevision
+                        if (url == media.firstOrNull()?.url) {
+                            content.recordPreviewState(message.id, PreviewLoadState.LOADED)
+                        }
+                        return@LaunchedEffect
+                    }
                     val host = LinkOpenPolicy.host(url) ?: error("Image link has no host")
-                    check(!content.malware.isBlocked(host)) { "Image host is blocked" }
+                    if (shouldCheckImage) {
+                        if (malwareCheck(host)) {
+                            image = null
+                            imageBlocked = true
+                            failure = null
+                            verifiedMalwareRevision = malwareRevision
+                            if (url == media.firstOrNull()?.url) {
+                                content.recordPreviewState(message.id, PreviewLoadState.MALWARE_WARNING)
+                            }
+                            return@LaunchedEffect
+                        }
+                    }
+                    imageBlocked = false
+                    verifiedMalwareRevision = malwareRevision
+                    if (image is ChatImage.Decoded) {
+                        if (url == media.firstOrNull()?.url) {
+                            content.recordPreviewState(message.id, PreviewLoadState.LOADED)
+                        }
+                        return@LaunchedEffect
+                    }
+                    val cached = content.cachedInline(url)
+                    if (cached != null) {
+                        image = cached
+                        failure = null
+                        if (url == media.firstOrNull()?.url) {
+                            content.recordPreviewState(message.id, PreviewLoadState.LOADED)
+                        }
+                        return@LaunchedEffect
+                    }
+                    if (!autoResolve && !manualImage) {
+                        failure = null
+                        if (url == media.firstOrNull()?.url) {
+                            content.recordPreviewState(message.id, PreviewLoadState.DISABLED)
+                        }
+                        return@LaunchedEffect
+                    }
+                    image = null
+                    failure = null
+                    if (url == media.firstOrNull()?.url) {
+                        content.recordPreviewState(message.id, PreviewLoadState.LOADING)
+                    }
                     check(UrlSafetyChecker.isSafe(url)) { "Unsafe image URL" }
                     if (retry > 0) content.retryInline(url)
                     image = content.inline(url)
@@ -103,11 +258,13 @@ internal fun AppMessageContent(
                     if (url == media.firstOrNull()?.url) content.recordPreviewState(message.id, PreviewLoadState.NO_PREVIEW)
                 }
             }
-            when (val loaded = image) {
+            when (val loaded = displayedImage) {
                 is ChatImage.Decoded -> {
                     val handle = loaded.handle
                     val size = InlineImageMetrics.displaySize(handle.width, handle.height)
-                    val modifier = Modifier.widthIn(max = size.width.dp).height(size.height.dp).clickable { fullscreen = true }
+                    val modifier = Modifier.widthIn(max = size.width.dp).height(size.height.dp)
+                        .clickable { fullscreen = true }
+                        .semantics { contentDescription = url }
                     when (handle) {
                         is BitmapDecodedImageHandle -> Image(handle.bitmap.asImageBitmap(), url, modifier)
                         is GifDecodedImageHandle -> {
@@ -137,7 +294,7 @@ internal fun AppMessageContent(
                 ChatImage.HtmlPage, null -> Unit
             }
             if (fullscreen) {
-                val loaded = image as? ChatImage.Decoded
+                val loaded = displayedImage as? ChatImage.Decoded
                 val bitmap = (loaded?.handle as? BitmapDecodedImageHandle)?.bitmap
                 androidx.compose.ui.window.Dialog(onDismissRequest = { fullscreen = false }) {
                     Surface {
@@ -161,7 +318,11 @@ internal fun AppMessageContent(
                             }
                             TextButton(onClick = {
                                 scope.launch {
-                                    try { com.meshcoreone.android.app.platform.shareImage(context, content.shareData(url)) }
+                                    try {
+                                        shareMountedImage(content, loaded) { bytes ->
+                                            shareImage(bytes)
+                                        }
+                                    }
                                     catch (cancelled: CancellationException) { throw cancelled }
                                     catch (problem: Exception) { report("Image sharing failed", problem); failure = problem }
                                 }
@@ -182,5 +343,6 @@ internal fun AppMessageContent(
             com.meshcoreone.android.core.model.Coordinate(shared.latitude, shared.longitude)
         } else chatMapPreviewCoordinate(message.text, preferences[AppStorageKey.showMapPreviewThumbnails])
     }
-    coordinate?.let { AppChatMapPreview(content.mapPreviews, it, onMap) }
+    coordinate?.let { AppChatMapPreview(content.mapPreviews, it, onMap,
+        forceOffline = DemoOfflineContent.isSimulatorMessage(message)) }
 }

@@ -33,12 +33,14 @@ class NativeReviewTests(unittest.TestCase):
         candidate_tree.start()
         self.addCleanup(candidate_tree.stop)
 
-    def fixture(self):
+    def fixture(self, *, current=False):
         manifest = test_manifest("WP-003")
         rules = policy()
         rules.update(trusted_gate_publisher_app_id=None, trusted_check_app_ids=[],
                      trusted_workflow_ids=[], branch_rules_proven=False,
                      paused=True, activation_approved=False, dispatch_mode="off")
+        if current:
+            rules["required_checks"] = ["android-ci", "parity-review"]
         value = bundle(manifest, rules, "WP-003", changed_paths=["tools/android-port/controller/native_review.py"],
                        merged=False)
         run_url = f"https://github.com/{rules['repository']}/actions/runs/1/attempts/1"
@@ -83,6 +85,7 @@ class NativeReviewTests(unittest.TestCase):
             ("GET", prefix + "/pulls/123/reviews?per_page=100&page=1"): [{
                 "id": 90, "state": "COMMENTED", "commit_id": HEAD,
                 "user": {"login": "cbattlegear", "type": "User"}, "body": body,
+                "submitted_at": "2026-10-10T11:00:00Z",
             }],
             ("GET", prefix + "/pulls/123/files?per_page=100&page=1"): [
                 {"filename": path} for path in value.pr["changed_paths"]
@@ -155,6 +158,69 @@ class NativeReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(PortError, "merged implementation"):
             verify_completion(actual.pr, actual.evidence, actual.review, actual.approvals,
                               actual.binding, native.manifest, native.policy)
+
+    def test_current_policy_requires_one_authentic_published_review_check(self):
+        native, api, prefix, value = self.fixture(current=True)
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        checks[:] = [check for check in checks if check["name"] != "gate-integrity"]
+        authority = GitHubGateAuthority(native.backend, native.manifest, native.policy)
+        proof = authority.reviewed_candidate("WP-003", Identity(pr_number=123), BASE)
+        self.assertEqual(proof["binding"], asdict(value.binding))
+        self.assertEqual(proof["ci_run_ids"], [1])
+        checks[-1]["conclusion"] = "failure"
+        with self.assertRaisesRegex(PortError, "authenticated default-branch publisher"):
+            authority.reviewed_candidate("WP-003", Identity(pr_number=123), BASE)
+        checks.pop()
+        with self.assertRaisesRegex(PortError, "Missing native project check: parity-review"):
+            authority.reviewed_candidate("WP-003", Identity(pr_number=123), BASE)
+
+    def test_current_review_check_rejects_forged_and_stale_publisher_provenance(self):
+        for kind in ("app", "binding", "run", "review"):
+            native, api, prefix, _ = self.fixture(current=True)
+            checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+            checks[:] = [check for check in checks if check["name"] != "gate-integrity"]
+            if kind == "app":
+                checks[-1]["app"]["id"] = 999
+            elif kind == "binding":
+                checks[-1]["external_id"] = "stale"
+            elif kind == "run":
+                api.routes[("GET", prefix + "/actions/runs/2")]["head_sha"] = HEAD
+            else:
+                self.mutate_receipt(api, prefix, lambda receipt: receipt["review"].update(summary="edited"))
+            authority = GitHubGateAuthority(native.backend, native.manifest, native.policy)
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                authority.reviewed_candidate("WP-003", Identity(pr_number=123), BASE)
+
+    def test_current_publisher_creates_only_the_review_check(self):
+        native, api, prefix, _ = self.fixture(current=True)
+        api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"
+        api.routes[("POST", prefix + "/check-runs")] = {"id": 201}
+        api.routes[("PATCH", prefix + "/check-runs/201")] = {}
+        with patch("controller.native_review.git", return_value=BASE.encode()):
+            native.publish("WP-003", 123, 90, 2, 1)
+        writes = [call for call in api.calls if call[0] == "POST" and call[1].endswith("/check-runs")]
+        self.assertEqual([call[2]["name"] for call in writes], ["parity-review"])
+        self.assertEqual(
+            [call[2]["conclusion"] for call in api.calls if call[0] == "PATCH"], ["success"],
+        )
+
+    def test_outstanding_review_request_cannot_publish_success(self):
+        native, api, prefix, _ = self.fixture(current=True)
+        self.reviews(api, prefix).append({
+            "id": 91, "state": "CHANGES_REQUESTED", "commit_id": HEAD,
+            "user": {"login": "other-reviewer", "type": "User"},
+            "body": "Please fix this.", "submitted_at": "2026-10-10T10:00:00Z",
+        })
+        with self.assertRaisesRegex(PortError, "outstanding requested changes"):
+            native.evaluate("WP-003", 123, 90)
+        api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"
+        api.routes[("POST", prefix + "/check-runs")] = {"id": 201}
+        api.routes[("PATCH", prefix + "/check-runs/201")] = {}
+        with patch("controller.native_review.git", return_value=BASE.encode()), \
+                self.assertRaisesRegex(PortError, "outstanding requested changes"):
+            native.publish("WP-003", 123, 90, 2, 1)
+        writes = [call for call in api.calls if call[0] == "PATCH"]
+        self.assertEqual([call[2]["conclusion"] for call in writes], ["failure"])
 
     def test_plain_feedback_bot_unregistered_dismissed_wrong_head_and_wrong_pr_are_not_receipts(self):
         for kind in ("plain", "bot", "login", "dismissed", "head", "id", "marker"):
@@ -242,7 +308,7 @@ class NativeReviewTests(unittest.TestCase):
             if kind in ("COMMENTED", "CHANGES_REQUESTED"):
                 self.reviews(api, prefix).append({
                     "id": 100, "state": kind, "commit_id": HEAD, "user": {"login": "cbattlegear"},
-                    "body": "Unresolved native behavior finding.",
+                    "body": "Unresolved native behavior finding.", "submitted_at": "2026-10-10T12:00:00Z",
                 })
             elif kind == "thread":
                 api.routes[("POST", "/graphql")]["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"] = [
@@ -267,6 +333,7 @@ class NativeReviewTests(unittest.TestCase):
         self.reviews(api, prefix).append({
             "id": 99, "state": "COMMENTED", "commit_id": HEAD, "user": {"login": "cbattlegear"},
             "body": f"<!-- android-port-acceptance:{value.binding.key} -->",
+            "submitted_at": "2026-10-10T12:00:00Z",
         })
         self.assertTrue(native.evaluate("WP-003", 123, 90)[0].authoritative)
         self.reviews(api, prefix)[1]["body"] = "Not an acceptance."
@@ -404,6 +471,7 @@ class NativeReviewTests(unittest.TestCase):
             self.reviews(api, prefix).append({
                 "id": 100, "state": "COMMENTED", "commit_id": HEAD,
                 "user": {"login": "cbattlegear"}, "body": "New blocker",
+                "submitted_at": "2026-10-10T12:00:00Z",
             })
             return value
         with patch("controller.native_review.git", return_value=BASE.encode()), \
@@ -421,7 +489,7 @@ class NativeReviewTests(unittest.TestCase):
                                    "--pr", "123", "--review-id", "90"]), 2)
         self.assertFalse(any(call[0] != "GET" for call in api.calls))
 
-    def test_merged_native_completion_uses_existing_accounting_and_revalidates_receipt(self):
+    def test_merged_native_completion_preserves_existing_accepted_receipt(self):
         from pathlib import Path
 
         native, api, prefix, _ = self.fixture()
@@ -438,8 +506,7 @@ class NativeReviewTests(unittest.TestCase):
                 self.assertEqual(ledger.get("WP-003")["state"], "completed")
                 original_body = self.reviews(api, prefix)[0]["body"]
                 self.mutate_receipt(api, prefix, lambda p: p["review"].update(summary="Changed"))
-                with self.assertRaises(PortError):
-                    controller.completed("WP-003")
+                self.assertEqual(controller.completed("WP-003"), proof)
                 self.reviews(api, prefix)[0]["body"] = original_body
 
     def test_native_acceptance_does_not_enable_paused_merges_or_waive_branch_rule_proof(self):

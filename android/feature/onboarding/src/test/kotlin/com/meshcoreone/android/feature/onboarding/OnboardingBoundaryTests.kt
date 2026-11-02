@@ -13,6 +13,8 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import org.junit.Test
 
 private val scope = CoroutineScope(Dispatchers.Unconfined)
@@ -102,6 +104,64 @@ class DeviceScanCoordinatorTest {
         assertTrue(c.state.value.showDemoAlert)
         c.onTitleTap()
         assertEquals(1, demo.unlocked)
+    }
+
+    @Test fun demoUnlockWaitsForCommitAndFailureCanBeRetried() {
+        val gate = CompletableDeferred<Unit>()
+        val demo = FakeDemo().apply { beforeUnlock = { gate.await() } }
+        val owner = Job()
+        try {
+            val c = DeviceScanCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), FakePairing(), demo, FakePermissions(granted)) {}
+            repeat(3) { c.onTitleTap() }
+            assertTrue(c.state.value.localBusy)
+            assertFalse(c.state.value.showDemoAlert)
+            assertEquals(0, c.state.value.successTick)
+            gate.completeExceptionally(IllegalStateException("write failed"))
+            assertFalse(c.state.value.localBusy)
+            assertNotNull(c.state.value.failure)
+            assertFalse(c.state.value.showDemoAlert)
+            assertFalse(demo.isEnabled.value)
+            demo.beforeUnlock = {}
+            repeat(3) { c.onTitleTap() }
+            assertTrue(c.state.value.showDemoAlert)
+            assertEquals(1, c.state.value.successTick)
+            assertEquals(1, demo.unlocked)
+        } finally {
+            owner.cancel()
+        }
+    }
+
+    @Test fun cancelledDemoUnlockNeverShowsSuccessAndAnotherAttemptCanRetry() {
+        val gate = CompletableDeferred<Unit>()
+        val demo = FakeDemo().apply { beforeUnlock = { gate.await() } }
+        val owner = Job()
+        val c = DeviceScanCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), FakePairing(), demo, FakePermissions(granted)) {}
+        repeat(3) { c.onTitleTap() }
+        assertTrue(c.state.value.localBusy)
+        owner.cancel()
+        assertFalse(c.state.value.localBusy)
+        assertFalse(c.state.value.showDemoAlert)
+        assertNull(c.state.value.failure)
+        assertFalse(demo.isEnabled.value)
+        demo.beforeUnlock = {}
+        val retryOwner = Job()
+        try {
+            val retry = DeviceScanCoordinator(CoroutineScope(Dispatchers.Unconfined + retryOwner), FakePairing(), demo, FakePermissions(granted)) {}
+            repeat(3) { retry.onTitleTap() }
+            assertTrue(retry.state.value.showDemoAlert)
+        } finally {
+            retryOwner.cancel()
+        }
+    }
+
+    @Test fun cancellationAtUnlockReturnDoesNotShowSuccess() {
+        val owner = Job()
+        val demo = FakeDemo().apply { beforeUnlock = { owner.cancel() } }
+        val c = DeviceScanCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), FakePairing(), demo, FakePermissions(granted)) {}
+        repeat(3) { c.onTitleTap() }
+        assertFalse(c.state.value.localBusy)
+        assertFalse(c.state.value.showDemoAlert)
+        assertEquals(0, c.state.value.successTick)
     }
 
     @Test fun demoConnectAdvancesToRegion() {

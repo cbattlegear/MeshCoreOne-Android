@@ -210,6 +210,12 @@ class CloudBackend:
         prs = []
         for pr in self.pages(f"{self.prefix}/pulls?state=all"):
             body = pr.get("body") or ""
+            if known.pr_number and pr.get("number") != known.pr_number:
+                if pr.get("state") == "open" and (
+                    marker(wp_id) in body or (pr.get("title") or "").startswith(f"[{wp_id}]")
+                ):
+                    raise PortError("Another open PR has the same WP; reconcile concurrent work")
+                continue
             if marker(wp_id) in body or known.pr_number == pr.get("number"):
                 if marker(wp_id) not in body or body.count(marker(wp_id)) != 1:
                     raise PortError("Existing PR identity lacks an unambiguous WP marker")
@@ -232,7 +238,9 @@ class CloudBackend:
             }
             if task["id"] == known.task_id or (pr and pr["id"] in pull_ids):
                 matching.append(task)
-            elif (task.get("name") or "").startswith(f"[{wp_id}]"):
+            elif (task.get("name") or "").startswith(f"[{wp_id}]") and (
+                not known.pr_number or task.get("state") not in ("completed", "failed", "timed_out", "cancelled")
+            ):
                 raise PortError("Unmapped WP cloud task exists; reconcile rather than relaunch")
         if len(matching) > 1:
             raise PortError("Ambiguous cloud task identity")

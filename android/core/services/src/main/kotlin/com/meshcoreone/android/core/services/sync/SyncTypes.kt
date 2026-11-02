@@ -82,8 +82,12 @@ sealed interface ContactWatermarkUse {
     data class Invalid(val stored: UInt) : ContactWatermarkUse
 }
 
-/** Swift `(correctedTimestamp:, wasCorrected:)` tuple from `correctTimestampIfNeeded`. */
-data class TimestampCorrection(val correctedTimestamp: UInt, val wasCorrected: Boolean)
+/** Swift correction tuple, with the approved native recoverable receive-clock error. */
+data class TimestampCorrection(
+    val correctedTimestamp: UInt,
+    val wasCorrected: Boolean,
+    val rangeError: TimestampRangeError? = null,
+)
 
 /** Swift `(senderNodeName:, messageText:)` tuple from `parseChannelMessage`. */
 data class ParsedChannelText(val senderNodeName: String?, val messageText: String)

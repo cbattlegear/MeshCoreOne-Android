@@ -106,6 +106,7 @@ internal class ContainerHarness(
     primerFactory: com.meshcoreone.android.app.state.ChatPrimerFactory? = com.meshcoreone.android.app.state.ChatPrimerFactory { null },
     chatContent: AppChatContent? = null,
     syncClock: com.meshcoreone.android.core.services.sync.SyncClock = com.meshcoreone.android.core.services.sync.SyncClock.SYSTEM,
+    syncLogSink: com.meshcoreone.android.core.services.sync.SyncLogSink = com.meshcoreone.android.core.services.sync.SyncLogSink.NONE,
     recoveryDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
     runtimeClock: RuntimeClock = SchedulerClock { test.testScheduler.currentTime },
     runtimeContext: CoroutineContext = test.backgroundScope.coroutineContext,
@@ -121,6 +122,7 @@ internal class ContainerHarness(
     observeBleLink: Boolean = false,
     regionStore: com.meshcoreone.android.app.state.RegionSelectionStore? = null,
     preferencesOverride: ProcessConnectionPreferences? = null,
+    simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -157,6 +159,7 @@ internal class ContainerHarness(
             linkProbe = NoSystemLinks,
             scans = newScans(),
             linkFactory = links,
+            simulatorSeedStore = simulatorSeedStore,
             notificationDelivery = delivery,
             notificationPreferences = FixedNotificationPreferences(),
             contactPreferences = MemoryFlags(),
@@ -165,6 +168,7 @@ internal class ContainerHarness(
             mainScope = mainScope,
             runtimeClock = runtimeClock,
             syncClock = syncClock,
+            logSink = syncLogSink,
             runtimeContext = runtimeContext,
             sessionConfiguration = sessionConfiguration,
             messageServiceConfig = messageServiceConfig,

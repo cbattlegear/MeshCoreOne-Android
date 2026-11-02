@@ -16,6 +16,7 @@ import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -103,6 +104,7 @@ class RadioSessionContainer private constructor(
     private val scope: CoroutineScope,
     private val ownership: FactoryOwnership,
 ) : RuntimeServices, AppSession {
+    override val transportType: TransportType get() = inputs.transportType
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
     private val lock = Any()
     private val knownRegionLock = Any()

@@ -4,7 +4,6 @@ package com.meshcoreone.android.core.ui
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.designsystem.MeshSymbol
-import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import kotlin.test.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -17,20 +16,20 @@ class SyncingPillTest : SourceCaseProof() {
     private val resources get() = ApplicationProvider.getApplicationContext<Context>().resources
     @OriginalCase("SyncingPillViewTests::Connecting state shows correct text and icon()")
     @Test fun connecting() = prove {
-        assertEquals(resources.getString(L.commonStatusConnecting), StatusPillState.Connecting.text.resolve(resources))
+        assertEquals("Connecting", StatusPillState.Connecting.text.resolve(resources))
         assertEquals(MeshSymbol.SYNC, StatusPillState.Connecting.symbol); assertFalse(StatusPillState.Connecting.isFailure)
         assertEquals(SharedStatusColorRole.PRIMARY, StatusPillState.Connecting.textColorRole)
         assertEquals(SharedStatusColorRole.PRIMARY, StatusPillState.Connecting.iconColorRole)
     }
     @OriginalCase("SyncingPillViewTests::Syncing state shows correct text and icon()")
     @Test fun syncing() = prove {
-        assertEquals(resources.getString(L.commonStatusSyncing), StatusPillState.Syncing.text.resolve(resources))
+        assertEquals("Syncing", StatusPillState.Syncing.text.resolve(resources))
         assertEquals(MeshSymbol.SYNC, StatusPillState.Syncing.symbol); assertFalse(StatusPillState.Syncing.isFailure)
         assertEquals(SharedStatusColorRole.PRIMARY, StatusPillState.Syncing.textColorRole)
     }
     @OriginalCase("SyncingPillViewTests::Ready state shows correct text and icon()")
     @Test fun ready() = prove {
-        assertEquals(resources.getString(L.commonStatusReady), StatusPillState.Ready.text.resolve(resources))
+        assertEquals("Ready", StatusPillState.Ready.text.resolve(resources))
         assertEquals(MeshSymbol.READY, StatusPillState.Ready.symbol); assertFalse(StatusPillState.Ready.isFailure)
         assertEquals(SharedStatusColorRole.PRIMARY, StatusPillState.Ready.textColorRole)
         assertEquals(SharedStatusColorRole.GREEN, StatusPillState.Ready.iconColorRole)
@@ -38,7 +37,7 @@ class SyncingPillTest : SourceCaseProof() {
     @OriginalCase("SyncingPillViewTests::Disconnected state shows orange warning icon and text()")
     @NativeAdaptation("native-warning-foreground-and-readable-surface")
     @Test fun disconnected() = prove {
-        assertEquals(resources.getString(L.commonStatusDisconnected), StatusPillState.Disconnected.text.resolve(resources))
+        assertEquals("Disconnected", StatusPillState.Disconnected.text.resolve(resources))
         assertEquals(MeshSymbol.WARNING, StatusPillState.Disconnected.symbol); assertFalse(StatusPillState.Disconnected.isFailure)
         assertEquals(SharedStatusColorRole.ORANGE, StatusPillState.Disconnected.textColorRole)
         assertEquals(SharedStatusColorRole.ORANGE, StatusPillState.Disconnected.iconColorRole)

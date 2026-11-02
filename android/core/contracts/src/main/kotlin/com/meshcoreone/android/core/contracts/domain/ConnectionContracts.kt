@@ -92,6 +92,7 @@ data class BluetoothPairingHandle(val address: BluetoothAddress, val association
 sealed interface ConnectionTarget {
     data class Bluetooth(val handle: BluetoothPairingHandle, val deviceId: UUID) : ConnectionTarget
     data class WiFi(val host: String, val port: UShort) : ConnectionTarget
+    data object Simulator : ConnectionTarget
 }
 enum class DisconnectReason { USER_REQUEST, DEVICE_SWITCH, TRANSPORT_LOST, PROCESS_SHUTDOWN, SESSION_FAILURE }
 

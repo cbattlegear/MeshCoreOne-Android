@@ -26,9 +26,15 @@ import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
 import com.meshcoreone.android.feature.chats.composer.LinkPreviewCardState
+import com.meshcoreone.android.core.services.simulator.DemoInlineImageCache
+import com.meshcoreone.android.core.services.simulator.DemoInlineImageSeeder
+import com.meshcoreone.android.core.services.simulator.DemoOfflineContent
+import com.meshcoreone.android.core.services.simulator.MockDataProvider
+import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 
 internal sealed interface ChatImage {
-    data class Decoded(val handle: DecodedImageHandle) : ChatImage
+    class Decoded(val handle: DecodedImageHandle, val encodedData: EncodedImageBytes) : ChatImage
     data object HtmlPage : ChatImage
 }
 
@@ -50,11 +56,13 @@ class AppChatContent internal constructor(
         throw failure
     }.stateIn(scope, SharingStarted.Eagerly, initialPreferences)
     private val previewCache = LinkPreviewCache(NativeLinkMetadataFetching(http), LinkPreviewPreferences(preferences), scope)
+    internal val previewAvailability: SharedFlow<String> = previewCache.previewAvailability
     private val imageCache = InlineImageCache(http, isUrlSafe = imageSafety)
     private val dimensions = inlineImageDimensionsStore(context).also(imageCache::attachDimensionsStore)
     private val mutableResolutions = MutableStateFlow(0L)
     internal val resolutions: StateFlow<Long> = mutableResolutions.asStateFlow()
     private val previewStates = android.util.LruCache<java.util.UUID, PreviewLoadState>(128)
+    @Volatile private var simulatorConnection: () -> Boolean = { false }
     private val dimensionSubscription = scope.launch(start = CoroutineStart.UNDISPATCHED) {
         dimensions.resolutionUpdates.collect { invalidateMedia() }
     }
@@ -103,7 +111,7 @@ class AppChatContent internal constructor(
     override val enabled get() = rendering.value[AppStorageKey.linkPreviewsEnabled]
     override fun containsUrls(text: String) = LinkUrlExtraction.extractAllUrls(text).isNotEmpty()
     override suspend fun prefetch(text: String, isChannelMessage: Boolean) {
-        if (!enabled) return
+        if (!enabled || simulatorConnection()) return
         prefetcher.prefetch(text, isChannelMessage, automatic(isChannelMessage))
         invalidateMedia()
     }
@@ -114,13 +122,40 @@ class AppChatContent internal constructor(
     internal val primerWarmer = object : com.meshcoreone.android.app.state.InlinePreviewPrefetching {
         override fun containsUrls(text: String) = this@AppChatContent.containsUrls(text)
         override suspend fun prefetch(text: String, isChannelMessage: Boolean, allowImageProbes: Boolean) {
-            if (!enabled) return
+            if (!enabled || simulatorConnection()) return
             prefetcher.prefetch(text, isChannelMessage, allowImageProbes && automatic(isChannelMessage))
             invalidateMedia()
         }
     }
     private fun invalidateMedia() {
         mutableResolutions.update(Math::incrementExact)
+    }
+
+    internal fun bindSimulatorConnection(isSimulator: () -> Boolean) {
+        simulatorConnection = isSimulator
+    }
+
+    internal suspend fun seedDemoInlineImage() {
+        DemoInlineImageSeeder.seed(object : DemoInlineImageCache<DecodedImageHandle> {
+            override suspend fun decodeImage(data: Bytes): DecodedImageHandle =
+                when (val result = thumbnails.decode(data.toByteArray())) {
+                    is ImageDecodeOutcome.Decoded -> result.handle
+                    is ImageDecodeOutcome.Failed -> error("Demo image decoding failed: ${result.reason}")
+                    is ImageDecodeOutcome.Unsupported -> error("Demo image format unsupported: ${result.reason}")
+                    ImageDecodeOutcome.Cancelled -> throw CancellationException("Demo image decoding cancelled")
+                }
+
+            override fun directImageURL(url: URI): URI = ImageUrlClassifier.directImageUrl(url)
+
+            override fun storeDecoded(image: DecodedImageHandle, isGIF: Boolean, data: Bytes, url: URI) {
+                check(url == ImageUrlClassifier.directImageUrl(URI(MockDataProvider.inlineImageURL))) {
+                    "Unexpected simulator image URL"
+                }
+                imageCache.storeDecoded(CachedDecodedImage(image, isGIF, data.toByteArray()), DEMO_IMAGE)
+            }
+        })
+        checkNotNull(imageCache.decoded(DEMO_IMAGE)) { "Bundled simulator image was not seeded" }
+        invalidateMedia()
     }
     internal val renderInvalidations: Flow<Unit> = merge(
         rendering.map { Unit }, resolutions.map { Unit }, mapPreviews.network.map { Unit },
@@ -135,7 +170,7 @@ class AppChatContent internal constructor(
         showIncomingSendTime = rendering.value[AppStorageKey.showIncomingSendTime],
         previewsEnabled = enabled,
         showMapPreviews = rendering.value[AppStorageKey.showMapPreviewThumbnails],
-        isOffline = mapPreviews.network.value != ChatMapNetwork.Online,
+        isOffline = simulatorConnection() || mapPreviews.network.value != ChatMapNetwork.Online,
         translationOffersEnabled = false,
     )
     internal data class RenderContent(
@@ -150,19 +185,41 @@ class AppChatContent internal constructor(
         val mapReady: Boolean,
     )
     internal suspend fun renderContent(message: MessageDTO, env: EnvInputs): RenderContent {
-        val media = media(message.text).firstOrNull()
+        val mediaEntries = media(message)
+        val media = mediaEntries.firstOrNull()
         val url = media?.url
-        val decoded = url?.let { imageCache.decoded(ImageUrlClassifier.directImageUrl(URI(it)).toString()) }
-        val preview = url?.let { previewCache.cachedPreview(it) }
+        val cachedPreviews = if (enabled && !DemoOfflineContent.isSimulatorMessage(message)) {
+            mediaEntries
+                .filter { entry -> entry.url == url || !previewCache.hasCachedPreview(entry.url) }
+                .associate { entry -> entry.url to previewCache.cachedPreview(entry.url, store) }
+        } else emptyMap()
+        val decoded = url?.let {
+            when {
+                DemoOfflineContent.isInlineImage(message, it) -> imageCache.decoded(DEMO_IMAGE)
+                DemoOfflineContent.isSimulatorMessage(message) -> null
+                else -> imageCache.decoded(ImageUrlClassifier.directImageUrl(URI(it)).toString())
+            }
+        }
+        val demoPreview = url?.let { DemoOfflineContent.preview(message, it) }
         val recorded = previewStates.get(message.id)
+        val preview = when {
+            !enabled || url == null -> null
+            demoPreview != null && (automatic(message.isChannelMessage) || recorded == PreviewLoadState.LOADED) ->
+                bundledPreview(message, url)
+            DemoOfflineContent.isSimulatorMessage(message) -> null
+            else -> cachedPreviews[url]
+        }
         val state = when {
             !enabled -> PreviewLoadState.DISABLED
             recorded == PreviewLoadState.MALWARE_WARNING -> recorded
             recorded == PreviewLoadState.NO_PREVIEW -> recorded
-            !automatic(message.isChannelMessage) && recorded != PreviewLoadState.LOADED &&
-                recorded != PreviewLoadState.LOADING -> PreviewLoadState.DISABLED
+            !automatic(message.isChannelMessage) && decoded == null && preview == null &&
+                recorded != PreviewLoadState.LOADED && recorded != PreviewLoadState.LOADING ->
+                PreviewLoadState.DISABLED
             recorded == PreviewLoadState.LOADING -> recorded
             decoded != null || preview != null -> PreviewLoadState.LOADED
+            DemoOfflineContent.isSimulatorMessage(message) && url != null &&
+                !DemoOfflineContent.isInlineImage(message, url) -> PreviewLoadState.NO_PREVIEW
             url == null -> PreviewLoadState.IDLE
             else -> recorded ?: PreviewLoadState.IDLE
         }
@@ -170,7 +227,7 @@ class AppChatContent internal constructor(
         val mapReady = coordinate?.let {
             mapPreviews.snapshots.isResolved(MapSnapshotRequest(it.latitude, it.longitude, env.isDark, env.isOffline))
         } ?: false
-        return RenderContent(url?.let(WebURL::parse), state, preview, media?.isImage == true,
+        return RenderContent(url?.let(WebURL::parse), state, preview, media?.isImage == true && preview == null,
             decoded != null, decoded?.isGif == true, media?.aspect, coordinate, mapReady)
     }
     internal fun recordPreviewState(id: java.util.UUID, state: LinkPreviewCardState) = recordPreviewState(id, when (state) {
@@ -193,8 +250,15 @@ class AppChatContent internal constructor(
         Media(url, ImageUrlClassifier.isImageUrl(uri) && !imageCache.servesHtmlPage(resolved),
             dimensions.aspect(resolved) ?: dimensions.aspect(url))
     }
+    internal fun media(message: MessageDTO): List<Media> = media(message.text).map { entry ->
+        if (DemoOfflineContent.isInlineImage(message, entry.url)) {
+            entry.copy(isImage = true, aspect = imageCache.decoded(DEMO_IMAGE)?.handle?.let { it.width.toDouble() / it.height })
+        } else entry
+    }
+    internal fun hasCachedPreview(url: String) = previewCache.hasCachedPreview(url)
+    internal suspend fun hasPersistedPreview(url: String) = previewCache.cachedPreview(url, store) != null
     private val previews = object : LinkPreviewPort {
-        override suspend fun cachedPreview(url: String) = previewCache.cachedPreview(url)?.forUi()
+        override suspend fun cachedPreview(url: String) = previewCache.cachedPreview(url, store)?.forUi()
         override suspend fun preview(url: String, isChannelMessage: Boolean) = previewCache.preview(url, store, isChannelMessage).forUi()
         override suspend fun manualFetch(url: String) = previewCache.manualFetch(url, store).forUi()
     }
@@ -203,13 +267,69 @@ class AppChatContent internal constructor(
         enabled = { rendering.value[AppStorageKey.linkPreviewsEnabled] },
         autoResolve = { rendering.value[if (isChannelMessage) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM] },
     )
+    internal fun previews(message: MessageDTO, url: String): LinkPreviewPort {
+        if (DemoOfflineContent.preview(message, url) == null) return previews(message.isChannelMessage)
+        val bundled = object : LinkPreviewPort {
+            private suspend fun load(requested: String): LinkPreviewData {
+                check(requested == url) { "Unexpected simulator preview URL" }
+                val preview = bundledPreview(message, requested)
+                return LinkPreviewData(preview.url, preview.title, DEMO_HERO, null,
+                    preview.imageWidth?.let(Math::toIntExact), preview.imageHeight?.let(Math::toIntExact))
+            }
+            override suspend fun cachedPreview(url: String): LinkPreviewData = load(url)
+            override suspend fun preview(url: String, isChannelMessage: Boolean) = LinkPreviewOutcome.Loaded(load(url))
+            override suspend fun manualFetch(url: String) = LinkPreviewOutcome.Loaded(load(url))
+        }
+        return PolicyPreviewPort(bundled,
+            enabled = { rendering.value[AppStorageKey.linkPreviewsEnabled] },
+            autoResolve = { automatic(message.isChannelMessage) })
+    }
+
+    private suspend fun bundledPreview(message: MessageDTO, url: String): LinkPreviewDataDTO {
+        val seed = checkNotNull(DemoOfflineContent.preview(message, url)) { "Unknown simulator preview" }
+        val stored = checkNotNull(store.fetchMessage(EntityKey(message.radioId, message.id))) {
+            "Simulator preview message is missing"
+        }
+        check(stored.text == message.text && stored.linkPreviewFetched && stored.linkPreviewURL == seed.url &&
+            stored.linkPreviewTitle == seed.title && stored.linkPreviewImageData == seed.imageData) {
+            "Simulator preview does not match the stored bundled fixture"
+        }
+        val (width, height) = checkNotNull(ImageHeaderDecoder.decodeDimensions(seed.imageData.toByteArray())) {
+            "Simulator preview image dimensions are invalid"
+        }
+        return LinkPreviewDataDTO(seed.url, seed.title, seed.imageData, stored.linkPreviewIconData,
+            width.toLong(), height.toLong(), fetchedAt = stored.createdAt)
+    }
+
+    internal suspend fun bundledInlineImage(message: MessageDTO, url: String): ChatImage.Decoded {
+        check(DemoOfflineContent.isInlineImage(message, url)) { "Unknown simulator inline image" }
+        var image = imageCache.decoded(DEMO_IMAGE)
+        if (image == null) {
+            seedDemoInlineImage()
+            image = imageCache.decoded(DEMO_IMAGE)
+        }
+        val cached = checkNotNull(image) { "Bundled simulator image is unavailable" }
+        return ChatImage.Decoded(cached.handle, requireNotNull(cached.encodedData) {
+            "Bundled simulator image is missing encoded bytes"
+        })
+    }
+
     val images = InlineImageSource { reference ->
+        if (reference == DEMO_HERO) {
+            var handle = imageCache.decoded(DEMO_IMAGE)?.handle
+            if (handle == null) {
+                seedDemoInlineImage()
+                handle = imageCache.decoded(DEMO_IMAGE)?.handle
+            }
+            val bitmap = checkNotNull(handle as? BitmapDecodedImageHandle) { "Bundled simulator image is unavailable" }
+            return@InlineImageSource bitmap.bitmap.asImageBitmap()
+        }
         imageCache.decoded(reference)?.handle?.let { handle ->
             if (handle is BitmapDecodedImageHandle) return@InlineImageSource handle.bitmap.asImageBitmap()
         }
         val data = when {
-            reference.startsWith(HERO) -> previewCache.cachedPreview(reference.removePrefix(HERO))?.imageData?.toByteArray()
-            reference.startsWith(ICON) -> previewCache.cachedPreview(reference.removePrefix(ICON))?.iconData?.toByteArray()
+            reference.startsWith(HERO) -> previewCache.cachedPreview(reference.removePrefix(HERO), store)?.imageData?.toByteArray()
+            reference.startsWith(ICON) -> previewCache.cachedPreview(reference.removePrefix(ICON), store)?.iconData?.toByteArray()
             else -> throw IllegalArgumentException("Unknown preview image reference")
         } ?: return@InlineImageSource null
         when (val result = thumbnails.decode(data, 900)) {
@@ -227,9 +347,19 @@ class AppChatContent internal constructor(
     fun isImage(url: String) = ImageUrlClassifier.isImageUrl(URI(url)) &&
         !imageCache.servesHtmlPage(ImageUrlClassifier.directImageUrl(URI(url)).toString())
     fun aspect(url: String) = dimensions.aspect(ImageUrlClassifier.directImageUrl(URI(url)).toString()) ?: dimensions.aspect(url)
-    internal fun shareData(url: String): ByteArray = requireNotNull(
-        imageCache.decoded(ImageUrlClassifier.directImageUrl(URI(url)).toString())?.data,
-    ) { "The displayed image is no longer cached; reload it before sharing" }
+    internal fun shareData(image: ChatImage.Decoded): ByteArray = image.encodedData.copy()
+    internal fun cachedInline(url: String): ChatImage.Decoded? {
+        val resolved = ImageUrlClassifier.directImageUrl(URI(url)).toString()
+        val cached = imageCache.decoded(resolved) ?: return null
+        return cached.encodedData?.let { ChatImage.Decoded(cached.handle, it) }
+    }
+    internal fun shareData(url: String, message: MessageDTO? = null): ByteArray {
+        val key = if (message != null && DemoOfflineContent.isInlineImage(message, url)) DEMO_IMAGE
+        else ImageUrlClassifier.directImageUrl(URI(url)).toString()
+        return requireNotNull(imageCache.decoded(key)?.data) {
+            "The displayed image is no longer cached; reload it before sharing"
+        }
+    }
     suspend fun recordReaction(emoji: String) {
         preferenceStore.update {
             this[AppStorageKey.recentReactionEmojis] =
@@ -243,7 +373,11 @@ class AppChatContent internal constructor(
     internal suspend fun inline(url: String): ChatImage {
         check(rendering.value[AppStorageKey.linkPreviewsEnabled]) { "Link content is disabled" }
         val resolved = ImageUrlClassifier.directImageUrl(URI(url)).toString()
-        imageCache.decoded(resolved)?.let { return ChatImage.Decoded(it.handle) }
+        imageCache.decoded(resolved)?.let { cached ->
+            return ChatImage.Decoded(cached.handle, requireNotNull(cached.encodedData) {
+                "The decoded image no longer has its original encoded bytes"
+            })
+        }
         val fetch = withTimeoutOrNull(30_000) {
             var result = imageCache.fetchImageData(resolved)
             while (result == InlineImageResult.Loading) {
@@ -255,9 +389,10 @@ class AppChatContent internal constructor(
         return when (fetch) {
             is InlineImageResult.Loaded -> when (val decoded = decoder.decode(fetch.data, 900)) {
                 is ImageDecodeOutcome.Decoded -> {
-                    imageCache.storeDecoded(CachedDecodedImage(decoded.handle, decoded.handle is GifDecodedImageHandle, fetch.data), resolved)
+                    val cached = CachedDecodedImage(decoded.handle, decoded.handle is GifDecodedImageHandle, fetch.data)
+                    imageCache.storeDecoded(cached, resolved)
                     invalidateMedia()
-                    ChatImage.Decoded(decoded.handle)
+                    ChatImage.Decoded(decoded.handle, requireNotNull(cached.encodedData))
                 }
                 is ImageDecodeOutcome.Failed -> throw IllegalStateException(decoded.reason)
                 is ImageDecodeOutcome.Unsupported -> throw IllegalStateException(decoded.reason)
@@ -286,6 +421,7 @@ class AppChatContent internal constructor(
     }
     fun trimMemory() {
         previewStates.evictAll()
+        previewCache.clearMemory()
         imageCache.clearDecodedMirror()
         imageCache.clearRawMemory()
         mapPreviews.snapshots.clear()
@@ -294,13 +430,15 @@ class AppChatContent internal constructor(
         dimensions.close()
         dimensionSubscription.cancel()
         mapPreviews.close()
+        trimMemory()
         previewCache.close()
         malware.close()
-        trimMemory()
     }
     companion object {
         private const val HERO = "mc1-preview-hero:"
         private const val ICON = "mc1-preview-icon:"
+        private const val DEMO_HERO = "mc1-simulator-bundled-hero"
+        private const val DEMO_IMAGE = "mc1-simulator-bundled-image"
     }
 
     internal class PolicyPreviewPort(
@@ -309,7 +447,7 @@ class AppChatContent internal constructor(
         private val autoResolve: () -> Boolean,
     ) : LinkPreviewPort {
         override suspend fun cachedPreview(url: String) =
-            if (enabled() && autoResolve()) delegate.cachedPreview(url) else null
+            if (enabled()) delegate.cachedPreview(url) else null
         override suspend fun preview(url: String, isChannelMessage: Boolean): LinkPreviewOutcome = when {
             !enabled() -> LinkPreviewOutcome.NoPreviewAvailable
             !autoResolve() -> LinkPreviewOutcome.Disabled

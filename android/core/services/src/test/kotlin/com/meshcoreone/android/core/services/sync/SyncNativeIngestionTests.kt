@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.model.BlockedChannelSenderDTO
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.DeliveryContext
+import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
@@ -35,6 +36,71 @@ private suspend fun SyncTestScope.wired(services: SyncTestServices, radioId: com
     coordinator().also { it.wireMessageHandlers(deps, radioId) }
 
 class SyncNativeIngestionTests {
+    @TestFactory
+    fun receiveClockRecovery(): List<DynamicTest> =
+        listOf(Instant.ofEpochSecond(-1), Instant.ofEpochSecond(UInt.MAX_VALUE.toLong() + 1)).flatMap { receiveTime ->
+            listOf(false, true).flatMap { direct ->
+                listOf(false, true).map { backlog ->
+                    nativeCase("range recovery receive=$receiveTime direct=$direct backlog=$backlog") {
+                        val radioId = newRadio()
+                        val store = SyncInMemoryStore.createTestDataStore(radioId)
+                        val contact = testContact(radioId, "Peer", key(0x31))
+                        val channel = ChannelDTO(radioId = radioId, index = 0u, name = "Public")
+                        store.saveContact(contact)
+                        store.saveChannel(channel)
+                        val services = SyncTestServices(store)
+                        val logs = mutableListOf<Pair<DebugLogLevel, String>>()
+                        val receiveClock = object : SyncClock by clock {
+                            override fun now() = receiveTime
+                        }
+                        val coordinator = SyncCoordinator(scope, receiveClock, SyncLogSink { level, _, message -> logs += level to message })
+                        coordinator.wireMessageHandlers(services.dependencies(), radioId)
+                        val received = ValueTracker<SyncDataEvent>()
+                        val events = coordinator.dataEvents()
+                        val collector = launch { events.collect { received.record(it) } }
+                        val context = if (backlog) DeliveryContext.InitialSync(clock.now()) else DeliveryContext.Live
+                        repeat(2) {
+                            if (direct) {
+                                checkNotNull(services.polling.capturedContactMessageHandler)(
+                                    contactMessage(contact.publicKey.prefix(6), "original text", Instant.ofEpochSecond(1000)),
+                                    contact, context,
+                                )
+                            } else {
+                                checkNotNull(services.polling.capturedChannelMessageHandler)(
+                                    channelMessage("Peer: original text", Instant.ofEpochSecond(1000)), channel, context,
+                                )
+                            }
+                        }
+                        settle()
+                        val saved = store.allMessages().single()
+                        assertEquals("original text", saved.text)
+                        assertEquals(1000u, saved.timestamp)
+                        assertFalse(saved.timestampCorrected)
+                        assertNull(saved.senderTimestamp)
+                        assertEquals(receiveTime, saved.createdAt)
+                        assertEquals(if (backlog) clock.now() else receiveTime, saved.sortDate)
+                        assertEquals(
+                            fakeDeduplicationKey.contentBased(
+                                if (direct) contact.id else null, if (direct) null else 0u,
+                                if (direct) null else "Peer", 1000u, "original text",
+                            ),
+                            saved.deduplicationKey,
+                        )
+                        assertEquals(1, services.notifications.posts.size)
+                        assertEquals(1, coordinator.conversationsVersion)
+                        assertEquals(1, received.values.count {
+                            it is SyncDataEvent.DirectMessageReceived || it is SyncDataEvent.ChannelMessageReceived
+                        })
+                        assertEquals(2, logs.count { (level, message) ->
+                            level == DebugLogLevel.ERROR && message.contains("TimestampRangeError") &&
+                                message.contains(receiveTime.toString())
+                        })
+                        collector.cancel()
+                    }
+                }
+            }
+        }
+
     @TestFactory
     fun ingestion(): List<DynamicTest> = listOf(
         nativeCase("direct message saves, bumps unread, notifies and broadcasts once") {
@@ -384,12 +450,13 @@ class SyncNativeIngestionTests {
             check("N\u200B: x", "N", "x")
             check("N\u180E: x", "N\u180E", "x")
         },
-        nativeCase("timestamp seconds clamp outside the UInt32 range instead of trapping") {
+        nativeCase("other date conversions retain their existing clamp independently of receive-clock recovery") {
             assertEquals(0u, Instant.ofEpochSecond(-50).uint32Seconds())
             assertEquals(UInt.MAX_VALUE, Instant.ofEpochSecond(1L shl 40).uint32Seconds())
             val result = SyncCoordinator.correctTimestampIfNeeded(1000u, Instant.ofEpochSecond(-100))
-            assertTrue(result.wasCorrected)
-            assertEquals(0u, result.correctedTimestamp)
+            assertFalse(result.wasCorrected)
+            assertEquals(1000u, result.correctedTimestamp)
+            assertEquals(Instant.ofEpochSecond(-100), checkNotNull(result.rangeError).receiveTime)
         },
         nativeCase("reaction timestamp window saturates at both UInt32 ends") {
             assertEquals(0u..400u, reactionTimestampWindow(100u))

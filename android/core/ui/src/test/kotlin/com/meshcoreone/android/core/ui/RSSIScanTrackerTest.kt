@@ -33,7 +33,8 @@ class RSSIScanTrackerTest : SourceCaseProof() {
         val tracker = tracker()
         tracker.consume(flowOf(ScanDiscovery(id, "Radio", -50), ScanDiscovery(id, null, -55)))
         prove { assertEquals("Radio", tracker.devices.value[id]?.discovery?.name)
-            assertEquals(RSSITuning.smooth(-55, -50), tracker.devices.value[id]?.discovery?.rssi) }
+            assertEquals(RSSITuning.smooth(-55, -50), tracker.devices.value[id]?.discovery?.rssi)
+            assertEquals(-51L, tracker.devices.value[id]?.discovery?.rssi) }
     }
     @OriginalCase("RSSIScanTrackerTests::unknown ids report no tier and are not advertising()")
     @Test fun unknown() = prove {

@@ -317,10 +317,7 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
         state.errorMessage?.let { error ->
             item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = error }) }
         }
-        val shownResult = state.displayedResult
-        if (shownResult != null || state.batchStatus != null) {
-            item { TraceResultCard(shownResult, state) }
-        }
+        item { TraceResults(state) }
         item {
             Button(
                 onClick = { if (state.isRunning) holder.cancelBatchTrace() else scope.launch { holder.runBatchTrace() } },
@@ -398,6 +395,12 @@ private fun TracePathMapContent(state: TracePathState) {
         onMarkerSelected = {},
         modifier = Modifier.fillMaxSize(),
     )
+}
+
+@Composable
+internal fun TraceResults(state: TracePathState) {
+    val result = state.displayedResult
+    if (result != null || state.batchStatus != null) TraceResultCard(result, state)
 }
 
 @Composable

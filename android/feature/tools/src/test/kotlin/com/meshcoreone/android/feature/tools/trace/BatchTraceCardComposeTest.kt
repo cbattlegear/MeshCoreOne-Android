@@ -1,20 +1,26 @@
 // AndroidOnly: WP-314 Mounted batch progress, aggregates and cancellation semantics.
 package com.meshcoreone.android.feature.tools.trace
 
+import android.app.Activity
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import java.time.Duration
 import kotlin.test.assertEquals
@@ -35,21 +41,33 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [31], qualifiers = "en-rUS-w360dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class BatchTraceCardComposeTest {
-    private lateinit var host: ActivityController<ComponentActivity>
-    private val state = mutableStateOf(TracePathState(batchEnabled = true, currentTraceIndex = 1))
+    private lateinit var host: ActivityController<Activity>
+    private lateinit var owner: ScreenOwner
+    private lateinit var content: ComposeView
+    private val state = mutableStateOf(
+        TracePathState(batchEnabled = true, currentTraceIndex = 1, batchPresentationActive = true),
+    )
 
     @Before fun mount() {
-        host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host = Robolectric.buildActivity(Activity::class.java).setup().visible()
         host.windowFocusChanged(true)
-        host.get().setContent {
-            CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
-                MaterialTheme { TraceResultCard(state.value.displayedResult, state.value) }
+        owner = ScreenOwner()
+        content = ComposeView(host.get()).apply {
+            setViewTreeLifecycleOwner(owner)
+            setViewTreeSavedStateRegistryOwner(owner)
+            setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+                    MaterialTheme { TraceResults(state.value) }
+                }
             }
         }
+        host.get().setContentView(content)
         advanceFrames()
     }
 
     @After fun destroy() {
+        content.disposeComposition()
+        owner.registry.currentState = Lifecycle.State.DESTROYED
         host.windowFocusChanged(false)
         host.pause().stop().destroy()
         Shadows.shadowOf(Looper.getMainLooper()).idle()
@@ -97,6 +115,34 @@ class BatchTraceCardComposeTest {
         assertFalse(descriptions().any { it.startsWith("Average round trip") })
     }
 
+    @Test fun actualEditsAndClearHideCompletedAndCancelledCardsWithoutDeletingHistory() {
+        for (cancelled in listOf(false, true)) for (clear in listOf(false, true)) {
+            val harness = TraceHarness()
+            harness.holder.addNode(contact(0xAA, name = "Old route"))
+            val success = result(
+                listOf(hop(0.0, start = true), hop(5.0)), 100, path = harness.state.fullPathData,
+            )
+            harness.holder.editStateForTesting {
+                it.copy(
+                    batchEnabled = true, batchSize = if (cancelled) 3 else 1,
+                    batchPresentationActive = true, currentTraceIndex = if (cancelled) 2 else 0,
+                    completedResults = listOf(success), result = success,
+                )
+            }
+            if (cancelled) harness.holder.cancelBatchTrace()
+            state.value = harness.state
+            advanceFrames()
+            assertTrue(descriptions().contains(C.contactsResultsAvgRTTLabel(host.get().resources, 100, 100, 100)))
+            if (clear) harness.holder.clearPath() else harness.holder.addNode(contact(0xBB, name = "New route"))
+            state.value = harness.state
+            advanceFrames()
+            assertFalse(descriptions().any { it.startsWith("Average round trip") || it.contains("successful") })
+            assertFalse(texts().any { it.contains("SNR") })
+            assertEquals(listOf(success), harness.state.completedResults)
+            assertEquals(100L, harness.state.averageRTT)
+        }
+    }
+
     private fun advanceFrames() {
         Snapshot.sendApplyNotifications()
         repeat(6) {
@@ -124,4 +170,15 @@ class BatchTraceCardComposeTest {
 
     private fun texts(): List<String> =
         nodes().flatMap { it.config.getOrElse(SemanticsProperties.Text) { emptyList() } }.map { it.text }
+
+    private class ScreenOwner : SavedStateRegistryOwner {
+        val registry = LifecycleRegistry(this)
+        override val lifecycle: Lifecycle get() = registry
+        private val savedState = SavedStateRegistryController.create(this).apply {
+            performAttach()
+            performRestore(null)
+        }
+        override val savedStateRegistry get() = savedState.savedStateRegistry
+        init { registry.currentState = Lifecycle.State.RESUMED }
+    }
 }

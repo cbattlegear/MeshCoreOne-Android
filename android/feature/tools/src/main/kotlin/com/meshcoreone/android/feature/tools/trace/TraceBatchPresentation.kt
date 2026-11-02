@@ -13,7 +13,7 @@ data class BatchRtt(val averageMs: Long, val minMs: Long, val maxMs: Long)
 
 /** A cancelled partial batch keeps its counts without being labelled complete or running. */
 val TracePathState.batchStatus: BatchStatus?
-    get() = if (batchEnabled && (isBatchInProgress || completedResults.isNotEmpty())) {
+    get() = if (batchEnabled && batchPresentationActive && (isBatchInProgress || completedResults.isNotEmpty())) {
         BatchStatus(isBatchComplete, currentTraceIndex, batchSize, successCount)
     } else {
         null
@@ -22,7 +22,7 @@ val TracePathState.batchStatus: BatchStatus?
 /** Aggregates over the successful traces, available while running, when complete and after a cancel. */
 val TracePathState.batchRtt: BatchRtt?
     get() {
-        if (!batchEnabled) return null
+        if (!batchEnabled || !batchPresentationActive) return null
         val average = averageRTT ?: return null
         val min = minRTT ?: return null
         val max = maxRTT ?: return null
@@ -30,8 +30,8 @@ val TracePathState.batchRtt: BatchRtt?
     }
 
 /** A batch has partial results to show even when it was cancelled before completing. */
-val TracePathState.hasBatchResults: Boolean get() = batchEnabled && completedResults.isNotEmpty()
+val TracePathState.hasBatchResults: Boolean get() = batchEnabled && batchPresentationActive && completedResults.isNotEmpty()
 
 /** Failed attempts must not hide an earlier successful batch response. */
 val TracePathState.displayedResult: TraceResult?
-    get() = if (batchEnabled) successfulResults.lastOrNull() ?: result else result
+    get() = if (batchEnabled && batchPresentationActive) successfulResults.lastOrNull() ?: result else result

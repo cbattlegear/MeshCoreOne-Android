@@ -27,7 +27,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         holder.update { it.copy(resultID = null) }
         holder.clearError()
         matchSavedPathIfNeeded()
-        holder.update { it.copy(isRunning = true, result = null) }
+        holder.update { it.copy(isRunning = true, result = null, batchPresentationActive = false) }
         val pathData = holder.current.fullPathData
         holder.pendingPathHash = pathData
         val tag = beginCorrelation()
@@ -74,7 +74,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         val sender = holder.deps.traceSender() ?: return
         if (holder.current.outboundPath.isEmpty()) return
         matchSavedPathIfNeeded()
-        holder.update { it.copy(isRunning = true, result = null) }
+        holder.update { it.copy(isRunning = true, result = null, batchPresentationActive = true) }
         val batchSize = holder.current.batchSize
         try {
             runTraces(sender, batchSize)

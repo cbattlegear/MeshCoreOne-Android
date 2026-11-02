@@ -34,8 +34,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -58,6 +60,8 @@ import com.meshcoreone.android.core.maps.MapPinStyle
 import com.meshcoreone.android.core.maps.MapPresentationState
 import com.meshcoreone.android.core.maps.boundingCamera
 import kotlinx.coroutines.launch
+import java.text.NumberFormat
+import com.meshcoreone.android.core.l10n.R as Strings
 
 @Composable
 private fun rememberTraceStrings(): TracePathStrings {
@@ -313,9 +317,7 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
         state.errorMessage?.let { error ->
             item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = error }) }
         }
-        state.result?.let { result ->
-            item { TraceResultCard(result, state) }
-        }
+        item { TraceResults(state) }
         item {
             Button(
                 onClick = { if (state.isRunning) holder.cancelBatchTrace() else scope.launch { holder.runBatchTrace() } },
@@ -396,16 +398,80 @@ private fun TracePathMapContent(state: TracePathState) {
 }
 
 @Composable
-private fun TraceResultCard(result: TraceResult, state: TracePathState) {
+internal fun TraceResults(state: TracePathState) {
+    val result = state.displayedResult
+    if (result != null || state.batchStatus != null) TraceResultCard(result, state)
+}
+
+@Composable
+internal fun TraceResultCard(result: TraceResult?, state: TracePathState) {
+    val resources = LocalContext.current.resources
+    val locale = LocalConfiguration.current.locales[0]
+    val snrFormat = remember(locale) {
+        NumberFormat.getNumberInstance(locale).apply {
+            minimumFractionDigits = 1
+            maximumFractionDigits = 1
+        }
+    }
+    val batchStatus = state.batchStatus
+    val batchRtt = state.batchRtt
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                if (result.success) "${result.durationMs} ms" else result.errorMessage.orEmpty(),
-                style = MaterialTheme.typography.titleMedium,
-                color = if (result.success) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
-            )
-            result.hops.forEachIndexed { index, hop ->
-                Text("${index + 1}. ${hop.resolvedName ?: hop.hashDisplayString ?: "Local"} — ${"%.1f".format(hop.snr)} dB")
+            if (batchRtt != null) {
+                val rttLabel = stringResource(
+                    Strings.string.l10n_app_contacts_contacts_results_avgrttlabel,
+                    batchRtt.averageMs, batchRtt.minMs, batchRtt.maxMs,
+                )
+                Column(Modifier.clearAndSetSemantics { contentDescription = rttLabel }) {
+                    Text(stringResource(C.contactsResultsAvgRoundTrip), style = MaterialTheme.typography.bodySmall)
+                    Text("${batchRtt.averageMs} ms", style = MaterialTheme.typography.titleMedium)
+                    Text("(${batchRtt.minMs} – ${batchRtt.maxMs})", style = MaterialTheme.typography.bodySmall)
+                }
+            } else if (result != null) {
+                Text(
+                    if (result.success) "${result.durationMs} ms" else result.errorMessage.orEmpty(),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (result.success) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+                )
+            }
+            if (batchStatus != null) {
+                val batchRunning = state.isBatchInProgress && !batchStatus.isComplete
+                val text = if (!batchRunning) {
+                    C.contactsResultsBatchSuccess(resources, batchStatus.successCount, batchStatus.size, batchStatus.successPercent)
+                } else {
+                    C.contactsResultsBatchProgress(resources, batchStatus.currentIndex, batchStatus.size)
+                }
+                val label = if (batchStatus.isComplete) {
+                    C.contactsResultsBatchCompleteLabel(resources, batchStatus.successCount, batchStatus.size, batchStatus.successPercent)
+                } else if (batchRunning) {
+                    C.contactsResultsBatchProgressLabel(resources, batchStatus.currentIndex, batchStatus.size)
+                } else text
+                Row(
+                    Modifier.clearAndSetSemantics { contentDescription = label },
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (batchRunning) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 16.dp, maxHeight = 16.dp), strokeWidth = 2.dp)
+                    Text(text, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            val showBatchStats = state.batchEnabled && state.batchPresentationActive
+            result?.takeIf { it.success }?.hops?.forEachIndexed { index, hop ->
+                val stats = if (showBatchStats) state.hopStats(index) else null
+                val latest = if (showBatchStats) state.latestHopSNR(index) else null
+                val snr = TraceHopDisplay.displaySnr(hop.snr, stats, latest, showBatchStats && state.isBatchInProgress)
+                val name = hop.resolvedName ?: hop.hashDisplayString ?: stringResource(C.contactsResultsHopMyDevice)
+                Text("${index + 1}. $name")
+                if (!hop.isStartNode) Text(C.contactsResultsHopSnr(resources, snrFormat.format(snr)))
+                if (stats != null) {
+                    val range = Triple(snrFormat.format(stats.avg), snrFormat.format(stats.min), snrFormat.format(stats.max))
+                    val hopLabel = C.contactsResultsHopAvgSNRLabel(resources, range.first, range.second, range.third)
+                    Text(
+                        C.contactsResultsHopAvgSNR(resources, range.first, range.second, range.third),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.clearAndSetSemantics { contentDescription = hopLabel },
+                    )
+                }
             }
             state.totalPathDistance?.let { Text("${"%.0f".format(it)} m") }
             if (state.isDistanceUsingFallback) Text(state.repeatersWithoutLocation.joinToString(), style = MaterialTheme.typography.bodySmall)

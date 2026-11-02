@@ -72,7 +72,8 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                 override fun <I, O> onLaunch(code: Int, contract: ActivityResultContract<I, O>, input: I, options: ActivityOptionsCompat?) {
                     val intent = contract.createIntent(host.get(), input)
                     assertEquals(Intent.ACTION_OPEN_DOCUMENT, intent.action)
-                    assertEquals("image/*", intent.type)
+                    assertEquals("*/*", intent.type)
+                    assertEquals(listOf("image/*"), intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES)?.toList())
                     requestCode = code
                 }
             }

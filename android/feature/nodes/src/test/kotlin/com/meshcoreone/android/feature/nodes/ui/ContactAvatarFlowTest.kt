@@ -90,8 +90,13 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         action(C.contactsDetailAvatarChooseSource)
         action(if (file) C.contactsDetailAvatarChooseFile else C.contactsDetailAvatarChoosePhoto)
         assertNotNull(launched)
-        assertEquals("image/*", launched?.type)
-        if (file) assertEquals(Intent.ACTION_OPEN_DOCUMENT, launched?.action)
+        if (file) {
+            assertEquals(Intent.ACTION_OPEN_DOCUMENT, launched?.action)
+            assertEquals("*/*", launched?.type)
+            assertEquals(listOf("image/*"), launched?.getStringArrayExtra(Intent.EXTRA_MIME_TYPES)?.toList())
+        } else {
+            assertEquals("image/*", launched?.type)
+        }
     }
 
     private fun result(data: ByteArray? = png(), cancelled: Boolean = false) {

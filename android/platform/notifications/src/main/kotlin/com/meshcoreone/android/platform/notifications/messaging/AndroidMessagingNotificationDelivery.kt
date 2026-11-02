@@ -295,7 +295,11 @@ class AndroidMessagingNotificationDelivery(
 
     companion object {
         private val postingLock = Any()
-        private val submittedPosts = mutableMapOf<String, String>()
+        private const val MAX_TRACKED_POSTS = 256
+        private val submittedPosts = object : LinkedHashMap<String, String>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
+                size > MAX_TRACKED_POSTS
+        }
         internal const val EXTRA_POST_ID = "mc1.notification.post-id"
 
         internal fun retireContentNotification(context: Context, notificationId: String, postId: String) {

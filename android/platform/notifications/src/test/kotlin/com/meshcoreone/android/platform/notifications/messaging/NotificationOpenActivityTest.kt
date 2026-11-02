@@ -41,6 +41,7 @@ import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowActivity
 import org.robolectric.shadows.ShadowNotificationManager
 import org.robolectric.util.ReflectionHelpers.ClassParameter
+import org.robolectric.util.ReflectionHelpers
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37])
@@ -224,6 +225,61 @@ class NotificationOpenActivityTest {
         } finally {
             controller.destroy()
         }
+    }
+
+    @Test
+    fun dismissedPostHistoryIsBoundedAndEvictionCannotRetireAnUnknownOrNewerPost() = runTest {
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val received = mutableListOf<NotificationResponse>()
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { received += it; true }
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                AndroidMessagingNotificationDelivery.CHANNEL_MESSAGES_SILENT,
+                "Messages",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        val original = request("evicted-history").copy(threadIdentifier = null)
+        delivery.post(original)
+        val originalNotification = manager.activeNotifications.single().notification
+        repeat(300) { index ->
+            val id = "dismissed-$index"
+            delivery.post(request(id).copy(threadIdentifier = null))
+            manager.cancel(
+                AndroidMessagingNotificationDelivery.TAG_PREFIX + id,
+                AndroidMessagingNotificationDelivery.NOTIFICATION_ID,
+            )
+        }
+        assertEquals(
+            256,
+            ReflectionHelpers.getStaticField<Map<String, String>>(
+                AndroidMessagingNotificationDelivery::class.java, "submittedPosts",
+            ).size,
+        )
+        originalNotification.contentIntent.send()
+        val originalLaunch = shadowOf(context).nextStartedActivity
+        val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, originalLaunch).create()
+        try {
+            assertEquals(launcher, shadowOf(controller.get()).nextStartedActivity.component)
+            assertEquals(1, manager.activeNotifications.size)
+            assertTrue(NotificationActionDispatcher.drainOnce())
+            assertEquals(listOf(NotificationResponse(payload, null, null)), received)
+        } finally {
+            controller.destroy()
+        }
+        delivery.post(original.copy(payload = NotificationPayload.DirectMessage(contact, UUID(0, 102))))
+        val replacementPostId = manager.activeNotifications.single().notification.extras
+            .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)
+        AndroidMessagingNotificationDelivery.retireContentNotification(
+            context, original.id.value,
+            requireNotNull(originalLaunch.getStringExtra(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)),
+        )
+        assertEquals(
+            replacementPostId,
+            manager.activeNotifications.single().notification.extras
+                .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+        )
     }
 
     @Test

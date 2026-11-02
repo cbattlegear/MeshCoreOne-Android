@@ -10,7 +10,6 @@ import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
@@ -76,7 +75,7 @@ class BatchTraceCardComposeTest {
             recomposer = createLifecycleAwareWindowRecomposer(coroutineContext = frameClock, lifecycle = owner.lifecycle)
             setParentCompositionContext(recomposer)
             setContent {
-                val snapshot by observedState.collectAsStateWithLifecycle(initialValue = state.value)
+                val snapshot = observedState.collectAsStateWithLifecycle(initialValue = state.value).value
                 SideEffect { renderedState = snapshot }
                 CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
                     MaterialTheme { TraceResults(snapshot) }

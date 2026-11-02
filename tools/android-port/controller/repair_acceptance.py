@@ -1631,6 +1631,8 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 raise PortError("Test-helper consumer must be an actual declared JUnit method with a block body")
             if "fun" in bodies[method]:
                 raise PortError("Local function declarations make test-helper consumer execution ambiguous")
+            if any(token in ("class", "interface", "object") for token in bodies[method]):
+                raise PortError("Local type declarations make test-helper consumer execution ambiguous")
             class_name = classes[method]
             member = consumer.get("member")
             accessible_helpers = helper_reference_names(helper_declarations, context)

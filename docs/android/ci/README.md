@@ -1133,6 +1133,9 @@ local/destructured/lambda-parameter shadowing; qualified names, named arguments
 and references inside nested blocks do not establish this lineage.
 Local function declarations in a selected consumer body are rejected, including
 expression-bodied locals: lexical brace depth cannot prove their execution.
+Local type declarations and object expressions are also rejected: a constructor
+default in an uninstantiated local class is not an executed helper call even
+when its tokens are at the method's immediate brace depth.
 A property-name call (including a generic call) does not establish a property
 read; a same-named class function can be called instead. An ordinary property
 read still qualifies even if that function exists.
@@ -1282,6 +1285,20 @@ guards remain unchanged. Generating and validating a new compiler-bound output
 requires separately authorized actual compiler/runner execution; this
 source-only investigation neither runs that job nor substitutes synthetic
 controller fixtures for it.
+
+The missing closure is also a concrete unresolved false-acceptance case, not
+only a limitation on supporting #519. At source head `8716f02566a1edab7fbeffeaaf60e8e0a57c8adb`,
+a compiled test helper `class MapTestHelper` can coexist with a candidate
+production file in the same package declaring
+`fun MapTestHelper(unused: Int): Boolean = true`. A selected test containing
+`check(MapTestHelper(1))` passes the token validator when the production callable
+is absent from the compiled-test registry, although it calls the function, not
+the helper constructor. This was reproduced with exact-content source fixtures
+and simulated compiled/executed records, not an actual Kotlin execution.
+Rejecting local type declarations closes the separate uncalled-constructor
+default case; it does not repair production/dependency callable resolution.
+The helper route must not be represented as independently accepted or ready for
+deployment while this binding gap remains.
 
 Focused source-only regressions (native Windows pinned Python, no Gradle or
 shared Android execution) use the existing strict runner:

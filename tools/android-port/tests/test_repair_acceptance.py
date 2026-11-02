@@ -610,6 +610,29 @@ class RepairExecutionTests(unittest.TestCase):
             ), self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
                 validate_hosted_methods(scope, blobs, REPO, executed, compiled)
 
+    def test_helper_lineage_does_not_borrow_uncalled_local_constructor_defaults(self):
+        helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
+        for body, accepted in (
+            ("class Unused(val value: Any = MapTestHelper()); check(true)", False),
+            ("class Unused { constructor(value: Any = MapTestHelper()) }; check(true)", False),
+            ("val value = MapTestHelper(); check(value.enabled)", True),
+        ):
+            consumer_source = (
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+                "@Test fun keepsListReachable() { " + body + " } }"
+            )
+            scope, _, _, blobs, content, executed, compiled = self.helper_inputs(
+                helper_source, consumer_source,
+            )
+            with self.subTest(body=body), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ):
+                if accepted:
+                    validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+                else:
+                    with self.assertRaisesRegex(PortError, "Local .* declarations"):
+                        validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
     def test_helper_member_lineage_does_not_borrow_custom_accessors(self):
         helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
         for declaration, accepted in (

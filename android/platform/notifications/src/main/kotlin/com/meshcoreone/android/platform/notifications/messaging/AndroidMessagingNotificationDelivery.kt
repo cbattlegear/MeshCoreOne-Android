@@ -126,7 +126,7 @@ class AndroidMessagingNotificationDelivery(
             .setContentTitle(request.title)
             .setContentText(request.body)
             .setContentIntent(contentIntent)
-            .setAutoCancel(true)
+            .setAutoCancel(false)
             .setOnlyAlertOnce(false)
             .setShowWhen(true)
             .setWhen(System.currentTimeMillis())

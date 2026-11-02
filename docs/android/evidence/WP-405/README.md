@@ -1,5 +1,34 @@
 # WP-405 evidence
 
+## Issue #504 related map-consumer synchronization follow-up
+
+Exact selection candidate `d2d85f1fbb6557d8cafc71756a89c096c1277287`
+compiled and executed in hosted run `41430849175`. All 29 selected
+router/replacement/pending/existing-channel cases passed, but the complete App
+suite failed: 1,865 completed, 1,863 passed, two failed, zero errors/skips.
+The unchanged failures were the malware refresh preference observation timeout
+and `ChatMapPreviewTest.rendererExceptionIsARecoverableFallbackRatherThanAStuckSpinner[31]`.
+That is not a passing candidate.
+
+The map test clicked Retry and immediately asserted a pin. The actual path is
+`AppChatMapPreviews.retry` -> `MapSnapshotStore.request` -> a launched rendering
+coroutine -> resolution flow -> Compose image state. Click completion does not
+await rendering or its UI publication. The directly related test now uses the
+same bounded 10-second real-pin semantics wait already used by neighboring
+cases before retaining the original displayed-pin and exact two-request
+assertions. The initial renderer exception, retry fallback and no-spinner
+assertions remain unchanged; no map production, timeout threshold or repeated
+attempt is added. This confirms a missing ordering barrier in source, not the
+sole cause of the historical failure or an executed failing baseline.
+
+Trusted admission is `reviewed-support-test` /
+`add-or-update-related-test`; the same stored advisory owner evolved revision
+7 to 8. WP-302 identified only a distinct unmerged edit in the neighboring
+`sharedLoadingFailureAndRetryReachBothCardsWithoutDuplicateRenders` method,
+which is unchanged here. New exact-head hosted results are pending; no local
+Android/Gradle is run. The separate WP-204 producer #521 remains unmerged and
+its candidate/evidence is not imported or attributed to this repair.
+
 ## Issue #504 selection follow-up: new execution pending
 
 The previous exact candidate `ab5e5fabf7413ba54fa24fd56c25d5d6d4760eb6`

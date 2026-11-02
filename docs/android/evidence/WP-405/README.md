@@ -1,6 +1,52 @@
 # WP-405 evidence
 
-## Issue #417 consumer-only follow-up: execution pending
+## Issue #417 mounted observation correction: new execution pending
+
+Exact head `ce5bf82f41e7e69aab05bea73c0f03d33551c4ed` failed
+[hosted run 41453274809](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41453274809)
+against base `5878b5357dc9fe9986f002fe68763aca0bc35303`.
+App discovered 1,881 cases: 1,873 passed, eight failed, zero errors/skips.
+All four `heldRealJoin` variants failed on SDK 31 and 37, at lines
+365/369/374: the expected committed/existing `pendingChannel.id` was null.
+The Android job `125303663630` log is authoritative; no duplicate result
+bundle is retained.
+
+The actual mounted root consumes `pendingChannel` after opening its route.
+The correction retains all 13 declared methods and their SDK families; it
+does not convert the failure into a null-only success assertion. Bounded
+observation of handoff consumption is paired with exact lasting selection,
+top destination, preserved prior stack/other stacks, one selected-conversation
+entry and its real editable composer. Existing confirmation identity,
+submitting/resize, metadata, packet and once-per-consent checks remain.
+This correction has not yet executed; the failed candidate is not accepted.
+No local Android/Gradle or manual workflow dispatch is authorized or run.
+
+The fixture still pauses after ACK and Room save, not before A's `0x20`
+reply. It cannot cover the separately recorded pre-ACK two-consent slot
+allocation race, late-ACK cancellation or service reconciliation.
+See the same #417 finding below. No allocation or protocol fix is claimed.
+
+Cold-start support assessment used exact trusted-main consumer operations
+for `MainActivity`, `MeshCoreApplication`, `AppContainer`,
+`ConnectionManagerAppPort` and `AppState`. The existing advisory attempt
+`d76f0641-87d4-4218-92e9-3cdf3f972471` evolved revision 11 -> 12 -> 13
+using production-only and then related-test-only calls. An initial mixed
+operation call was refused atomically because the CLI cross-products paths
+and operations; it did not deny the subsequently admitted exact pairs.
+Historical binding and authorization remained unchanged. No ledger rewrite,
+new identity, successor, #495 source/reservation change, or controller
+acceptance occurred.
+
+No startup source repair is claimed: cache initialization must not stand in
+for the initial foreground teardown/provenance boundary, and awaiting the
+existing foreground job can await a physical reconnect without conveying a
+successful outcome. The exact unresolved methods and required producer split
+are recorded in `docs/android/deviations/WP-405.md`. Required cold saved
+contact/channel, initialized-empty, failure/retry, cancellation and
+replacement regressions remain unexecuted; no full #398/#417 acceptance
+follows.
+
+## Issue #417 consumer-only follow-up: failed first execution
 
 Finding: https://github.com/cbattlegear/MeshCoreOne-Android/issues/417#issuecomment-6578143740.
 The original schedules were static/unexecuted. Source inspection at #508
@@ -42,8 +88,9 @@ Eight additional methods declare:
 
 The held-write gate wraps the production persistence protocol after the
 real firmware acknowledgement and Room save; it is not a replacement router,
-callback-only action or invented radio result. Hosted discovery/results are
-pending, and no local Android/Gradle is run. No physical-device or integrated
+callback-only action or invented radio result. The failed hosted execution
+and unexecuted correction are distinguished above. No local Android/Gradle
+is run. No physical-device or integrated
 lifecycle claim follows. External/chat held-lookup session replacement and
 confirmation/write session ownership remain blocked on WP-302's actual
 accepted shared boundary after #506; no full #417 completion or merge follows

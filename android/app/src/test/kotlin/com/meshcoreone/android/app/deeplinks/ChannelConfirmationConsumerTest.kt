@@ -16,9 +16,12 @@ import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
 import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
 import com.meshcoreone.android.app.navigation.AppPendingChannel
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
+import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
+import com.meshcoreone.android.app.navigation.NavigationDestination
+import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -317,6 +320,8 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 !compose.onNodeWithText(host.get().getString(L.commonOk))
                     .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
             }
+            assertEquals(ChatSelection.Channel(existing), navigation.state.value.chatsSelectedRoute)
+            assertEquals(priorStack, navigation.state.value.stacks)
             assertEquals(before, firmware.sent.count { it[0].toInt() == 0x20 }, "No write before consent")
             hold = true
             compose.onAllNodesWithText(host.get().getString(L.commonOk)).assertCountEquals(1)
@@ -333,6 +338,9 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             for (value in listOf(1080, 390, 1080)) {
                 compose.runOnIdle { width.value = value.dp }
                 compose.onAllNodesWithText(host.get().getString(L.commonOk)).assertCountEquals(1)
+                compose.waitUntil(10_000) { h.settle(); navigation.state.value.pendingChannel == null }
+                assertEquals(ChatSelection.Channel(existing), navigation.state.value.chatsSelectedRoute)
+                assertEquals(priorStack, navigation.state.value.stacks)
                 if (replacement == "hashtag") {
                     compose.onNodeWithText(host.get().getString(L.commonOk)).assertIsNotEnabled()
                     compose.onNodeWithText("#test").assertIsDisplayed()
@@ -360,18 +368,36 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             assertEquals(if (initialHashtag) ChannelFloodScope.Inherit else ChannelFloodScope.Region("testregion"), committed.floodScope)
             assertEquals(before + 1, firmware.sent.count { it[0].toInt() == 0x20 }, "One consent means one actual write")
             assertEquals(PacketBuilder.setChannel(committed.index, "#test", secret), firmware.sent.last { it[0].toInt() == 0x20 })
+            val navigates = initialHashtag || replacement == "hashtag"
+            val expected = ChatSelection.Channel(if (navigates) committed else existing)
+            compose.waitUntil(10_000) {
+                h.settle()
+                navigation.state.value.let { it.pendingChannel == null && it.chatsSelectedRoute == expected }
+            }
+            compose.waitForIdle()
+            val completed = navigation.state.value
+            assertEquals(AppTab.CHATS, completed.selectedTab)
+            assertEquals(expected, completed.chatsSelectedRoute)
+            assertEquals(NavigationDestination.Chat(expected), completed.activeStack.last().destination)
+            assertFalse(completed.tabBarVisible)
+            assertNull(completed.pendingChannel, "The mounted root consumes navigation, not the lasting selection")
+            if (navigates) {
+                assertEquals(priorStack.getValue(AppTab.CHATS).toList(), completed.activeStack.dropLast(1))
+                assertEquals(priorStack.filterKeys { it != AppTab.CHATS }, completed.stacks.filterKeys { it != AppTab.CHATS })
+            } else {
+                assertEquals(priorStack, completed.stacks)
+            }
+            val entry = hasTestTag("entry:${completed.activeStack.last().id}")
+            compose.onNode(entry).assertIsDisplayed()
+            compose.onNode(hasSetTextAction() and hasAnyAncestor(entry), useUnmergedTree = true).assertIsDisplayed()
             if (initialHashtag) {
                 assertEquals(pending.pendingChannelConfirmation, navigation.state.value.pendingChannelConfirmation)
-                assertEquals(committed.id, navigation.state.value.pendingChannel?.id)
                 compose.onNodeWithText("#replacement").assertIsDisplayed()
             } else if (replacement == "hashtag") {
                 assertEquals(pending.pendingHashtagConfirmation, navigation.state.value.pendingHashtagConfirmation)
-                assertEquals(committed.id, navigation.state.value.pendingChannel?.id)
                 compose.onNodeWithText("#unshown").assertIsDisplayed()
             } else {
                 assertEquals(pending.pendingChannelConfirmation, navigation.state.value.pendingChannelConfirmation)
-                assertEquals(priorStack, navigation.state.value.stacks)
-                assertEquals(existing.id, navigation.state.value.pendingChannel?.id)
                 compose.onNodeWithText(if (replacement == "identical") "#test" else "#replacement").assertIsDisplayed()
                 assertFalse(navigation.completeChannelConfirmation(old.deliveryId, committed))
             }

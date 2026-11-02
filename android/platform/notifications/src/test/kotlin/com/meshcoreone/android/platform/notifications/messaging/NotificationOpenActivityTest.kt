@@ -388,29 +388,29 @@ class NotificationOpenActivityTest {
         companion object {
             var afterLaunch: (() -> Unit)? = null
         }
+    }
 
-        @Implements(NotificationManager::class)
-        class DeferredPublicationShadow : ShadowNotificationManager() {
-            var defer = false
-            var cancellations = 0
-                private set
-            private val waiting = mutableListOf<Triple<String?, Int, Notification>>()
+    @Implements(NotificationManager::class)
+    class DeferredPublicationShadow : ShadowNotificationManager() {
+        var defer = false
+        var cancellations = 0
+            private set
+        private val waiting = mutableListOf<Triple<String?, Int, Notification>>()
 
-            @Implementation
-            override fun notify(tag: String?, id: Int, notification: Notification) {
-                if (defer) waiting += Triple(tag, id, notification) else super.notify(tag, id, notification)
-            }
+        @Implementation
+        override fun notify(tag: String?, id: Int, notification: Notification) {
+            if (defer) waiting += Triple(tag, id, notification) else super.notify(tag, id, notification)
+        }
 
-            @Implementation
-            override fun cancel(tag: String?, id: Int) {
-                cancellations++
-                super.cancel(tag, id)
-            }
+        @Implementation
+        override fun cancel(tag: String?, id: Int) {
+            cancellations++
+            super.cancel(tag, id)
+        }
 
-            fun publish() {
-                waiting.forEach { (tag, id, notification) -> super.notify(tag, id, notification) }
-                waiting.clear()
-            }
+        fun publish() {
+            waiting.forEach { (tag, id, notification) -> super.notify(tag, id, notification) }
+            waiting.clear()
         }
     }
 }

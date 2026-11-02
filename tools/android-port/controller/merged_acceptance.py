@@ -63,6 +63,66 @@ def log_objects(log, step):
     return objects
 
 
+def validate_benchmark_build_log(log):
+    from .ci_evidence import counts
+    from .local_scope import TASKS
+
+    objects = log_objects(log, "Run parallel Gradle validation and Android tasks")
+    reports = [item for item in objects if item.get("stage") == "benchmark"]
+    if len(reports) != 1:
+        raise PortError("Missing/ambiguous actual benchmark report in authoritative hosted log")
+    report = reports[0]
+    graph = report.get("resolved_task_graph")
+    phases = graph.get("phases") if isinstance(graph, dict) else None
+    if (
+        report.get("result") != "success" or report.get("strict_verification") is not True
+        or report.get("tasks") != TASKS["benchmark"] or report.get("scopes") != []
+        or not isinstance(graph, dict) or graph.get("result") != "no-duplicate-ci-evidence"
+        or type(graph.get("tasks")) is not int or graph["tasks"] <= 0
+        or not isinstance(phases, dict) or set(phases) != {"preflight", "build"}
+        or any(
+            not isinstance(value, dict) or value.get("result") != "no-duplicate-ci-evidence"
+            or type(value.get("tasks")) is not int or value["tasks"] <= 0
+            for value in phases.values()
+        )
+    ):
+        raise PortError("Hosted benchmark stage report is incomplete or does not bind declared harness tasks")
+
+    verification = [
+        item for item in objects if item.get("scope") == "WP-504 build infrastructure only"
+    ]
+    if len(verification) != 1:
+        raise PortError("Missing/ambiguous WP-504 build-infrastructure report in authoritative hosted log")
+    value = verification[0]
+    counts(value.get("dataset_assertions"), minimum=8)
+    artifacts = value.get("artifacts")
+    expected_packages = {
+        "benchmark": "com.meshcoreone.android.benchmark",
+        "profile": "com.meshcoreone.android.benchmark",
+        "release": "com.meshcoreone.android",
+    }
+    if (
+        value.get("instrumentation_producer_compiled") is not True
+        or not isinstance(value.get("instrumentation_producer_alignment"), dict)
+        or not value["instrumentation_producer_alignment"].get("elf_pt_load_alignment")
+        or not isinstance(artifacts, dict)
+        or set(artifacts) != set(expected_packages)
+        or any(
+            not isinstance(artifacts.get(variant), dict)
+            or artifacts[variant].get("package") != package
+            or artifacts[variant].get("min_sdk") != 31
+            or artifacts[variant].get("target_sdk") != 37
+            or artifacts[variant].get("debuggable") is not False
+            or not artifacts[variant].get("elf_pt_load_alignment")
+            for variant, package in expected_packages.items()
+        )
+        or value.get("performance_measured") is not False
+        or value.get("baseline_profiles_collected") is not False
+        or value.get("device_battery_anr_or_strictmode_verified") is not False
+    ):
+        raise PortError("Hosted benchmark build-infrastructure evidence is incomplete or overclaims measurements")
+
+
 def declares_completion(wp, body):
     """Distinguish a declared WP implementation from a change to part of one."""
     acceptance_ids = [item["id"] for item in wp["acceptance"]]
@@ -645,34 +705,42 @@ class MergedAcceptance:
                 or any(value.get(key) != 0 for key in ("failed", "errors", "skipped"))
             ):
                 raise PortError("Hosted controller tests were missing, skipped or failed")
-        build_selected = any(scopes[key] for key in ("scaffold", "protocol", "backup"))
+        benchmark_inputs = any(path.startswith("android/benchmark/") for path in paths)
+        if benchmark_inputs and not scopes["benchmark"]:
+            raise PortError("Android benchmark inputs lack selected benchmark verification")
+        non_benchmark_build_selected = any(scopes[key] for key in ("scaffold", "protocol", "backup"))
+        build_selected = non_benchmark_build_selected or scopes["benchmark"]
         product_changes = any(re.match(
             r"^android/(?:app|(?:core|feature|platform)/[^/]+)/src/"
             r"(?:main|debug|release|commonMain|androidMain)/.+\.(?:kt|java)$", path,
         ) for path in paths)
-        if product_changes and not build_selected:
+        if (product_changes or benchmark_inputs) and not build_selected:
             raise PortError("Android product changes have no selected hosted build or tests")
         if build_selected:
             build = job("One Linux Android build", "success")
-            plan = candidate_plan(self.manifest.repo, base, head, trusted_base=base, merge_base_only=True)
-            modules = []
-            for scope in plan["scopes"]:
-                if scope.startswith("module:"):
-                    module = scope.removeprefix("module:")
-                    prefix = ":" + module.replace("/", ":") + ":"
-                    if prefix + "test" in plan["tasks"] or prefix + "testDebugUnitTest" in plan["tasks"]:
-                        modules.append(module)
-            if not modules and "protocol" in plan["scopes"]:
-                modules.append("core/protocol")
-            if product_changes and not modules:
-                raise PortError("Android product changes have no selected runnable module tests")
-            validate_build_log(
-                read_job_log(self, build["id"]), modules,
-                plan_for_scopes=lambda selected: candidate_plan(
-                    self.manifest.repo, base, head, selected,
-                    trusted_base=base, merge_base_only=True,
-                ),
-            )
+            build_log = read_job_log(self, build["id"])
+            if non_benchmark_build_selected:
+                plan = candidate_plan(self.manifest.repo, base, head, trusted_base=base, merge_base_only=True)
+                modules = []
+                for scope in plan["scopes"]:
+                    if scope.startswith("module:"):
+                        module = scope.removeprefix("module:")
+                        prefix = ":" + module.replace("/", ":") + ":"
+                        if prefix + "test" in plan["tasks"] or prefix + "testDebugUnitTest" in plan["tasks"]:
+                            modules.append(module)
+                if not modules and "protocol" in plan["scopes"]:
+                    modules.append("core/protocol")
+                if product_changes and not modules:
+                    raise PortError("Android product changes have no selected runnable module tests")
+                validate_build_log(
+                    build_log, modules,
+                    plan_for_scopes=lambda selected: candidate_plan(
+                        self.manifest.repo, base, head, selected,
+                        trusted_base=base, merge_base_only=True,
+                    ),
+                )
+            if scopes["benchmark"]:
+                validate_benchmark_build_log(build_log)
         else:
             job("One Linux Android build", "skipped")
         job("Swift codec oracle", "success" if scopes["external-oracle"] else "skipped")

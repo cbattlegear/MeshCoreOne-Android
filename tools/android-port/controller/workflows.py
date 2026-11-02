@@ -79,8 +79,9 @@ def validate_candidate(value: dict, text: str):
     if (
         scope_outputs.get("controller") != "${{ steps.changed.outputs.controller }}"
         or scope_outputs.get("accessibility-suite") != "${{ steps.changed.outputs.accessibility-suite }}"
+        or scope_outputs.get("benchmark") != "${{ steps.changed.outputs.benchmark }}"
     ):
-        raise PortError("Diff-derived controller scope and committed accessibility-suite selection must remain separate")
+        raise PortError("Diff-derived scope outputs and committed accessibility-suite selection must remain separate")
     if (gate.get("name") != "android-ci" or gate.get("if") != "${{ always() }}"
             or gate.get("needs") != ["scope", "controller", "build", "external-oracle", "backup-oracle"]):
         raise PortError("android-ci must always report every selected build outcome")
@@ -91,18 +92,44 @@ def validate_candidate(value: dict, text: str):
             or build.get("needs") != ["scope"]
             or "needs.scope.outputs" not in build.get("if", "")):
         raise PortError("The selected Linux execution host must be mandatory, dependency-gated and unmatrixed")
+    if any(
+        f"needs.scope.outputs.{scope} == 'true'" not in build.get("if", "")
+        for scope in ("scaffold", "protocol", "backup", "benchmark")
+    ):
+        raise PortError("The Linux build job must include every selected Android build scope")
     steps = build["steps"]
     stage_steps = [step for step in steps if step.get("id") == "gradle"]
     if len(stage_steps) != 1:
-        raise PortError("Candidate workflow must use one consolidated scaffold Gradle invocation")
+        raise PortError("Candidate workflow must use one consolidated Gradle execution step")
     stage_run = stage_steps[0].get("run", "")
+    stage_environment = stage_steps[0].get("env", {})
+    expected_stage_environment = {
+        "RUN_SCAFFOLD": "${{ needs.scope.outputs.scaffold }}",
+        "RUN_PROTOCOL": "${{ needs.scope.outputs.protocol }}",
+        "RUN_BACKUP": "${{ needs.scope.outputs.backup }}",
+        "RUN_BENCHMARK": "${{ needs.scope.outputs.benchmark }}",
+        "RUN_CONTROLLER": "${{ needs.scope.outputs.controller }}",
+    }
+    benchmark_command = "python tools/android-port/controller/ci.py run --stage benchmark"
+    scaffold_command = "ci.py run --stage scaffold @affected @scopes"
     if (
-        stage_steps[0].get("env", {}).get("RUN_CONTROLLER") != "${{ needs.scope.outputs.controller }}"
+        not isinstance(stage_environment, dict)
+        or any(stage_environment.get(key) != value for key, value in expected_stage_environment.items())
         or "$affected = @()" not in stage_run
         or "if ($env:RUN_CONTROLLER -ne 'true') { $affected = @('--affected-candidate') }" not in stage_run
-        or "ci.py run --stage scaffold @affected @scopes" not in stage_run
+        or "if ($env:RUN_BENCHMARK -eq 'true') {" not in stage_run
+        or "if ($env:RUN_SCAFFOLD -eq 'true' -or $env:RUN_PROTOCOL -eq 'true' -or $env:RUN_BACKUP -eq 'true') {" not in stage_run
+        or any(
+            f"if ($env:RUN_{scope.upper()} -eq 'true') {{ $scopes += @('--scope', '{scope}') }}"
+            not in stage_run
+            for scope in ("scaffold", "protocol", "backup")
+        )
+        or stage_run.count(benchmark_command) != 1
+        or stage_run.count(scaffold_command) != 1
+        or stage_run.count("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }") != 2
+        or stage_run.index(benchmark_command) > stage_run.index(scaffold_command)
     ):
-        raise PortError("Candidate Gradle invocation must use exact affected planning outside controller changes")
+        raise PortError("Candidate Gradle stages must run selected benchmark verification and exact affected scaffold planning")
     selected_controller = (
         "${{ needs.scope.outputs.controller == 'true' || "
         "needs.scope.outputs.accessibility-suite == 'true' }}"
@@ -165,8 +192,14 @@ def validate_candidate(value: dict, text: str):
     gate_environment = {
         key: value for step in gate["steps"] for key, value in step.get("env", {}).items()
     }
+    selected_build_gate = (
+        'if [ "$SCAFFOLD_SELECTED" = "true" ] || [ "$PROTOCOL_SELECTED" = "true" ] '
+        '|| [ "$BACKUP_SELECTED" = "true" ] || [ "$BENCHMARK_SELECTED" = "true" ]; then'
+    )
     if (
         gate_environment.get("BUILD_RESULT") != "${{ needs.build.result }}"
+        or gate_environment.get("BENCHMARK_SELECTED") != "${{ needs.scope.outputs.benchmark }}"
+        or selected_build_gate not in gate_runs
         or "aggregate --artifacts" in gate_runs
         or any(step.get("uses", "").startswith(("actions/upload-artifact@", "actions/download-artifact@"))
                for step in gate["steps"])

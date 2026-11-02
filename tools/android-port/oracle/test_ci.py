@@ -142,10 +142,12 @@ class FoundationWorkflowTests(unittest.TestCase):
         runs = "\n".join(step.get("run", "") for job in self.workflow["jobs"].values() for step in job["steps"])
         for command in ("test_inventory.py --check", "extract_vectors.py --check",
                         "oracle/run_tests.py", "controller/ci.py provision",
-                        "controller/ci.py run --stage scaffold", "oracle/codec_harness.py run"):
+                        "controller/ci.py run --stage scaffold",
+                        "controller/ci.py run --stage benchmark", "oracle/codec_harness.py run"):
             self.assertIn(command, runs)
         validate_candidate(self.workflow, self.text)
         self.assertEqual(runs.count("controller/ci.py run --stage scaffold"), 1)
+        self.assertEqual(runs.count("controller/ci.py run --stage benchmark"), 1)
 
     def test_scope_selector_and_strict_runner_cannot_be_removed_duplicated_or_bypassed(self):
         for job in ("scope", "controller"):

@@ -38,6 +38,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("exit $LASTEXITCODE", selected[0]["run"])
         self.assertIn("$affected = @()", selected[0]["run"])
         self.assertIn("--affected-candidate", selected[0]["run"])
+        self.assertLess(
+            selected[0]["run"].index("controller/ci.py run --stage benchmark"),
+            selected[0]["run"].index("ci.py run --stage scaffold @affected @scopes"),
+        )
         self.assertEqual(workflow["jobs"]["android-ci"]["if"], "${{ always() }}")
         validate_candidate(workflow, text)
 
@@ -257,7 +261,7 @@ class WorkflowTests(unittest.TestCase):
         jobs = workflow["jobs"]
         self.assertEqual(
             set(jobs["scope"]["outputs"]),
-            {"controller", "accessibility-suite", "scaffold", "protocol", "backup", "external-oracle"},
+            {"controller", "accessibility-suite", "scaffold", "protocol", "backup", "benchmark", "external-oracle"},
         )
         self.assertEqual(jobs["scope"]["outputs"]["controller"], "${{ steps.changed.outputs.controller }}")
         self.assertEqual(
@@ -266,6 +270,12 @@ class WorkflowTests(unittest.TestCase):
         )
         gradle = next(step for step in jobs["build"]["steps"] if step.get("id") == "gradle")
         self.assertEqual(gradle["env"]["RUN_CONTROLLER"], "${{ needs.scope.outputs.controller }}")
+        self.assertEqual(gradle["env"]["RUN_BENCHMARK"], "${{ needs.scope.outputs.benchmark }}")
+        self.assertIn("needs.scope.outputs.benchmark == 'true'", jobs["build"]["if"])
+        aggregate = next(step for step in jobs["android-ci"]["steps"]
+                         if step.get("name") == "Require every selected scope to pass")
+        self.assertEqual(aggregate["env"]["BENCHMARK_SELECTED"], "${{ needs.scope.outputs.benchmark }}")
+        self.assertIn('[ "$BENCHMARK_SELECTED" = "true" ]', aggregate["run"])
         expected = {
             "external-oracle": ("external-oracle", ["scope"]),
             "backup-oracle": ("backup", ["scope", "build"]),
@@ -329,6 +339,7 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertIn("$affected = @()", gradle_runs[0])
         self.assertIn("ci.py run --stage scaffold @affected @scopes", gradle_runs[0])
+        self.assertIn("controller/ci.py run --stage benchmark", gradle_runs[0])
         self.assertNotIn(":convention:test", text)
         scoped = copy.deepcopy(original)
         scoped["on"]["pull_request"]["paths"] = ["android/**", "tools/android-port/**"]
@@ -351,6 +362,37 @@ class WorkflowTests(unittest.TestCase):
                 value["jobs"]["build"]["runs-on"] = "windows-2025"
             elif kind == "strategy":
                 value["jobs"]["build"]["strategy"] = {"matrix": {"host": ["linux", "windows"]}}
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_candidate(value, text)
+
+    def test_benchmark_scope_cannot_skip_its_stage_or_required_build_gate(self):
+        original, text = self.read("android-ci.yml")
+        for kind in ("scope-output", "build-condition", "stage-command", "stage-environment",
+                     "aggregate-environment", "aggregate-selection"):
+            value = copy.deepcopy(original)
+            gradle = next(step for step in value["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+            aggregate = next(step for step in value["jobs"]["android-ci"]["steps"]
+                             if step.get("name") == "Require every selected scope to pass")
+            if kind == "scope-output":
+                value["jobs"]["scope"]["outputs"].pop("benchmark")
+            elif kind == "build-condition":
+                value["jobs"]["build"]["if"] = value["jobs"]["build"]["if"].replace(
+                    "needs.scope.outputs.benchmark == 'true'",
+                    "needs.scope.outputs.backup == 'true'",
+                )
+            elif kind == "stage-command":
+                gradle["run"] = gradle["run"].replace(
+                    "python tools/android-port/controller/ci.py run --stage benchmark",
+                    "echo benchmark stage omitted",
+                )
+            elif kind == "stage-environment":
+                gradle["env"].pop("RUN_BENCHMARK")
+            elif kind == "aggregate-environment":
+                aggregate["env"].pop("BENCHMARK_SELECTED")
+            else:
+                aggregate["run"] = aggregate["run"].replace(
+                    ' || [ "$BENCHMARK_SELECTED" = "true" ]', "",
+                )
             with self.subTest(kind=kind), self.assertRaises(PortError):
                 validate_candidate(value, text)
 

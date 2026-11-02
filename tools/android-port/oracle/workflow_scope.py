@@ -16,7 +16,7 @@ from oracle.codec_harness import (
     SOURCE_TEST_PATH, WHOLE_FILES,
 )
 
-SCOPES = ("controller", "scaffold", "protocol", "backup", "external-oracle")
+SCOPES = ("controller", "scaffold", "protocol", "backup", "benchmark", "external-oracle")
 SHA = re.compile(r"[0-9a-f]{40}")
 ZERO = "0" * 40
 ALL_SCOPE_INPUTS = {
@@ -133,6 +133,10 @@ RULES = {
             "MeshCore/Tests/MeshCoreTests/",
         ),
     },
+    "benchmark": {
+        "exact": {"android/app/build.gradle.kts"},
+        "prefix": ("android/benchmark/", "android/build-logic/"),
+    },
 }
 
 
@@ -189,7 +193,7 @@ def classify(paths):
     if unclassified:
         raise PortError("Unclassified Android inputs require full verification: " + ", ".join(unclassified))
     if set(normalized) & SHARED_GRADLE_INPUTS:
-        result.update({"scaffold": True, "protocol": True, "backup": True})
+        result.update({"scaffold": True, "protocol": True, "backup": True, "benchmark": True})
     return result
 
 

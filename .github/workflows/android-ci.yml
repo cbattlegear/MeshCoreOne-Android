@@ -27,6 +27,7 @@ jobs:
       scaffold: ${{ steps.changed.outputs.scaffold }}
       protocol: ${{ steps.changed.outputs.protocol }}
       backup: ${{ steps.changed.outputs.backup }}
+      benchmark: ${{ steps.changed.outputs.benchmark }}
       external-oracle: ${{ steps.changed.outputs['external-oracle'] }}
     steps:
       - name: Read-only exact candidate and immutable diff endpoints
@@ -85,7 +86,8 @@ jobs:
       ${{
         needs.scope.outputs.scaffold == 'true' ||
         needs.scope.outputs.protocol == 'true' ||
-        needs.scope.outputs.backup == 'true'
+        needs.scope.outputs.backup == 'true' ||
+        needs.scope.outputs.benchmark == 'true'
       }}
     runs-on: ubuntu-24.04
     timeout-minutes: 75
@@ -139,16 +141,24 @@ jobs:
           RUN_SCAFFOLD: ${{ needs.scope.outputs.scaffold }}
           RUN_PROTOCOL: ${{ needs.scope.outputs.protocol }}
           RUN_BACKUP: ${{ needs.scope.outputs.backup }}
+          RUN_BENCHMARK: ${{ needs.scope.outputs.benchmark }}
           RUN_CONTROLLER: ${{ needs.scope.outputs.controller }}
         run: |
-          $scopes = @()
-          if ($env:RUN_SCAFFOLD -eq 'true') { $scopes += @('--scope', 'scaffold') }
-          if ($env:RUN_PROTOCOL -eq 'true') { $scopes += @('--scope', 'protocol') }
-          if ($env:RUN_BACKUP -eq 'true') { $scopes += @('--scope', 'backup') }
-          $affected = @()
-          if ($env:RUN_CONTROLLER -ne 'true') { $affected = @('--affected-candidate') }
-          & python tools/android-port/controller/ci.py run --stage scaffold @affected @scopes
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Keep scaffold last; it owns the final full_scaffold/localization outputs.
+          if ($env:RUN_BENCHMARK -eq 'true') {
+            & python tools/android-port/controller/ci.py run --stage benchmark
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          if ($env:RUN_SCAFFOLD -eq 'true' -or $env:RUN_PROTOCOL -eq 'true' -or $env:RUN_BACKUP -eq 'true') {
+            $scopes = @()
+            if ($env:RUN_SCAFFOLD -eq 'true') { $scopes += @('--scope', 'scaffold') }
+            if ($env:RUN_PROTOCOL -eq 'true') { $scopes += @('--scope', 'protocol') }
+            if ($env:RUN_BACKUP -eq 'true') { $scopes += @('--scope', 'backup') }
+            $affected = @()
+            if ($env:RUN_CONTROLLER -ne 'true') { $affected = @('--affected-candidate') }
+            & python tools/android-port/controller/ci.py run --stage scaffold @affected @scopes
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Validate localization discovery
         if: ${{ steps.gradle.outputs.localization == 'true' }}
         run: >-
@@ -236,6 +246,7 @@ jobs:
           SCAFFOLD_SELECTED: ${{ needs.scope.outputs.scaffold }}
           PROTOCOL_SELECTED: ${{ needs.scope.outputs.protocol }}
           BACKUP_SELECTED: ${{ needs.scope.outputs.backup }}
+          BENCHMARK_SELECTED: ${{ needs.scope.outputs.benchmark }}
           EXTERNAL_SELECTED: ${{ needs.scope.outputs['external-oracle'] }}
           CONTROLLER_RESULT: ${{ needs.controller.result }}
           BUILD_RESULT: ${{ needs.build.result }}
@@ -243,7 +254,7 @@ jobs:
           BACKUP_RESULT: ${{ needs.backup-oracle.result }}
         run: |
           test "$CONTROLLER_RESULT" = "success"
-          if [ "$SCAFFOLD_SELECTED" = "true" ] || [ "$PROTOCOL_SELECTED" = "true" ] || [ "$BACKUP_SELECTED" = "true" ]; then
+          if [ "$SCAFFOLD_SELECTED" = "true" ] || [ "$PROTOCOL_SELECTED" = "true" ] || [ "$BACKUP_SELECTED" = "true" ] || [ "$BENCHMARK_SELECTED" = "true" ]; then
             test "$BUILD_RESULT" = "success"
           else
             test "$BUILD_RESULT" = "skipped"

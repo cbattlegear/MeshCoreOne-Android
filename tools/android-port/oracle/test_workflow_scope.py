@@ -35,6 +35,26 @@ class WorkflowScopeTests(unittest.TestCase):
                 self.assertFalse(result["external-oracle"])
                 self.assertFalse(result["backup"])
                 self.assertFalse(result["protocol"])
+                self.assertFalse(result["benchmark"])
+
+    def test_benchmark_sources_and_app_build_wiring_select_benchmark_verification(self):
+        for path in (
+            "android/benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt",
+            "android/benchmark/build.gradle.kts",
+            "android/build-logic/convention/src/main/kotlin/AndroidConventionPlugin.kt",
+        ):
+            with self.subTest(path=path):
+                expected_scopes = (
+                    ("benchmark", "scaffold")
+                    if path.startswith("android/build-logic/") else ("benchmark",)
+                )
+                expected = {scope: scope in expected_scopes for scope in SCOPES}
+                self.assertEqual(classify([path]), expected)
+
+        app_build = classify(["android/app/build.gradle.kts"])
+        self.assertTrue(app_build["scaffold"])
+        self.assertTrue(app_build["benchmark"])
+        self.assertFalse(app_build["external-oracle"])
 
     def test_codec_source_and_harness_schedule_codec(self):
         for path in (
@@ -114,7 +134,7 @@ class WorkflowScopeTests(unittest.TestCase):
         self.assertEqual(result["paths"], ["android/core/protocol/src/main/kotlin/Protocol.kt"])
         self.assertEqual(result["scopes"], {
             "controller": False, "scaffold": False, "protocol": True,
-            "backup": False, "external-oracle": False,
+            "backup": False, "benchmark": False, "external-oracle": False,
         })
 
     def test_pull_request_merge_base_failure_selects_all_scopes(self):
@@ -208,7 +228,7 @@ class WorkflowScopeTests(unittest.TestCase):
         ])
         self.assertEqual(result, {
             "controller": False, "scaffold": False, "protocol": True,
-            "backup": False, "external-oracle": False,
+            "backup": False, "benchmark": False, "external-oracle": False,
         })
 
     def test_workflow_and_provenance_changes_schedule_all(self):
@@ -224,6 +244,7 @@ class WorkflowScopeTests(unittest.TestCase):
         self.assertTrue(shared["scaffold"])
         self.assertTrue(shared["protocol"])
         self.assertTrue(shared["backup"])
+        self.assertTrue(shared["benchmark"])
         self.assertFalse(shared["external-oracle"])
 
     def test_event_endpoints_are_exact(self):

@@ -46,6 +46,17 @@ and resolved task graph for failure evidence. Ctrl-C terminates the streamed
 process group, reaps Gradle and joins its output reader before propagating the
 interrupt.
 
+Benchmark inputs under `android/benchmark/`, shared build logic, changes to
+`android/app/build.gradle.kts`, and shared Gradle inputs select the declared
+`benchmark` scope. The Linux build job runs `ci.py run --stage benchmark` only
+when selected, and the required aggregate check requires that job to succeed.
+Mixed selections run the benchmark stage before scaffold so scaffold outputs
+remain authoritative. Merged acceptance requires the exact build-job log to
+contain both the successful benchmark task-graph report and the WP-504
+build-infrastructure report. These checks compile and inspect the harness,
+dataset assertions and APKs; they do not measure performance or claim WP-504
+device acceptance.
+
 Hosted Gradle task-output caching is enabled. Only `:core:data:testDebugUnitTest`
 is explicitly eligible for test-result caching; all other Gradle `Test` tasks
 are explicitly denied cache eligibility until their external inputs and side

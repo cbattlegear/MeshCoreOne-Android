@@ -21,7 +21,7 @@ from controller.gates import Binding, policy_revision
 from controller.ledger import Identity, validate_merged_implementation
 from controller.merged_acceptance import (
     BoundedRepair, HumanGateRequired, MergedAcceptance, NoImplementationFound,
-    declares_completion,
+    declares_completion, validate_benchmark_build_log,
 )
 from controller.model import REFERENCE_SHA, git
 from controller.native_review import RESULT_MARKER, REVIEW_MARKER, WORKFLOW_PATH
@@ -745,7 +745,7 @@ class MergedAcceptanceTests(unittest.TestCase):
     def test_scoped_run_checks_real_selection_and_positive_controller_discovery(self):
         reader, _, _, _, _ = self.fixture()
         scopes = {"controller": True, "scaffold": False, "protocol": False,
-                  "backup": False, "external-oracle": False}
+                  "backup": False, "benchmark": False, "external-oracle": False}
         report = {"base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
                   "paths": ["tools/android-port/controller/engine.py"], "scopes": scopes}
         native = {"suite": "android/accessibility-tests", "base": BASE, "head": HEAD, "selected": False,
@@ -782,7 +782,7 @@ class MergedAcceptanceTests(unittest.TestCase):
     def test_scoped_product_changes_cannot_pass_without_runnable_module_tests(self):
         reader, _, _, _, _ = self.fixture()
         scopes = {"controller": False, "scaffold": True, "protocol": False,
-                  "backup": False, "external-oracle": False}
+                  "backup": False, "benchmark": False, "external-oracle": False}
         paths = ["android/core/data/src/main/kotlin/Store.kt"]
         report = {"base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
                   "paths": paths, "scopes": scopes}
@@ -809,6 +809,169 @@ class MergedAcceptanceTests(unittest.TestCase):
                       return_value={"scopes": ["module:core/data"], "tasks": [":core:data:lint"]}):
             with self.assertRaisesRegex(PortError, "no selected runnable module tests"):
                 reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
+    def test_benchmark_scope_requires_exact_stage_and_build_infrastructure_reports(self):
+        from controller.local_scope import TASKS
+
+        reader, _, _, _, _ = self.fixture()
+        paths = [
+            "android/benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt"
+        ]
+        scopes = {"controller": False, "scaffold": False, "protocol": False,
+                  "backup": False, "benchmark": True, "external-oracle": False}
+        scope_report = {
+            "base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
+            "paths": paths, "scopes": scopes,
+        }
+        native_report = {
+            "suite": "android/accessibility-tests", "base": BASE, "head": HEAD,
+            "selected": False, "result": "NOT SELECTED", "committed_files": 0,
+        }
+        stage_report = {
+            "stage": "benchmark", "scopes": [], "result": "success",
+            "tasks": TASKS["benchmark"], "strict_verification": True,
+            "resolved_task_graph": {
+                "tasks": 2, "result": "no-duplicate-ci-evidence",
+                "phases": {
+                    "preflight": {"tasks": 1, "result": "no-duplicate-ci-evidence"},
+                    "build": {"tasks": 1, "result": "no-duplicate-ci-evidence"},
+                },
+            },
+        }
+        infrastructure_report = {
+            "scope": "WP-504 build infrastructure only",
+            "dataset_assertions": {
+                "discovered": 8, "run": 8, "passed": 8, "failed": 0, "errors": 0, "skipped": 0,
+            },
+            "artifacts": {
+                variant: {
+                    "package": package, "min_sdk": 31, "target_sdk": 37,
+                    "debuggable": False, "elf_pt_load_alignment": ["lib/arm64-v8a/libmaplibre.so"],
+                }
+                for variant, package in (
+                    ("benchmark", "com.meshcoreone.android.benchmark"),
+                    ("profile", "com.meshcoreone.android.benchmark"),
+                    ("release", "com.meshcoreone.android"),
+                )
+            },
+            "instrumentation_producer_compiled": True,
+            "instrumentation_producer_alignment": {"elf_pt_load_alignment": ["lib/arm64-v8a/libtest.so"]},
+            "performance_measured": False, "baseline_profiles_collected": False,
+            "device_battery_anr_or_strictmode_verified": False,
+        }
+
+        def line(step, value):
+            return f"job\t{step}\t2026-10-10T11:00:00Z {json.dumps(value)}\n"
+
+        scope_log = line("Classify changed inputs with fail-safe defaults", scope_report)
+        scope_log += line("Classify changed inputs with fail-safe defaults", native_report)
+        build_log = line("Run parallel Gradle validation and Android tasks", infrastructure_report)
+        build_log += line("Run parallel Gradle validation and Android tasks", stage_report)
+        validate_benchmark_build_log(build_log)
+
+        jobs = [
+            {"id": index, "name": name, "run_id": 1, "head_sha": HEAD,
+             "status": "completed", "conclusion": conclusion}
+            for index, (name, conclusion) in enumerate((
+                ("Classify candidate scopes", "success"), ("Controller and workflow policy", "success"),
+                ("One Linux Android build", "success"), ("Swift codec oracle", "skipped"),
+                ("SwiftData restore and export oracle", "skipped"),
+            ), 1)
+        ]
+
+        def read_log(_native, job_id):
+            return scope_log if job_id == 1 else build_log
+
+        with patch("controller.repair_acceptance.read_job_log", side_effect=read_log), \
+                patch("oracle.workflow_scope.merge_base", return_value=BASE), \
+                patch("oracle.workflow_scope.changed_paths", return_value=paths), \
+                patch("oracle.workflow_scope.classify", return_value=scopes), \
+                patch("controller.merged_acceptance.tree", return_value={}):
+            reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            jobs[2]["head_sha"] = "c" * 40
+            with self.assertRaisesRegex(PortError, "missing, skipped or failed"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
+        for kind in ("missing-stage", "skipped-stage", "wrong-tasks", "missing-infrastructure", "zero-dataset"):
+            changed_stage = copy.deepcopy(stage_report)
+            changed_infrastructure = copy.deepcopy(infrastructure_report)
+            if kind == "missing-stage":
+                changed_stage["stage"] = "scaffold"
+            elif kind == "skipped-stage":
+                changed_stage["result"] = "skipped"
+            elif kind == "wrong-tasks":
+                changed_stage["tasks"] = [":app:assembleDebug"]
+            elif kind == "missing-infrastructure":
+                changed_infrastructure.pop("artifacts")
+            else:
+                changed_infrastructure["dataset_assertions"]["passed"] = 0
+            changed_log = line(
+                "Run parallel Gradle validation and Android tasks", changed_infrastructure,
+            ) + line("Run parallel Gradle validation and Android tasks", changed_stage)
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_benchmark_build_log(changed_log)
+
+    def test_mixed_benchmark_and_scaffold_selection_requires_both_reports(self):
+        reader, _, _, _, _ = self.fixture()
+        paths = [
+            "android/benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt",
+            "android/core/model/src/main/kotlin/com/meshcoreone/android/core/model/Message.kt",
+        ]
+        scopes = {"controller": False, "scaffold": True, "protocol": False,
+                  "backup": False, "benchmark": True, "external-oracle": False}
+        scope_report = {
+            "base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
+            "paths": paths, "scopes": scopes,
+        }
+        native_report = {
+            "suite": "android/accessibility-tests", "base": BASE, "head": HEAD,
+            "selected": False, "result": "NOT SELECTED", "committed_files": 0,
+        }
+        build_log = (
+            "job\tRun parallel Gradle validation and Android tasks\t"
+            "2026-10-10T11:00:00Z benchmark and scaffold log\n"
+        )
+        scope_log = (
+            "job\tClassify changed inputs with fail-safe defaults\t"
+            f"2026-10-10T11:00:00Z {json.dumps(scope_report)}\n"
+            "job\tClassify changed inputs with fail-safe defaults\t"
+            f"2026-10-10T11:00:00Z {json.dumps(native_report)}\n"
+        )
+        jobs = [
+            {"id": index, "name": name, "run_id": 1, "head_sha": HEAD,
+             "status": "completed", "conclusion": conclusion}
+            for index, (name, conclusion) in enumerate((
+                ("Classify candidate scopes", "success"),
+                ("Controller and workflow policy", "success"),
+                ("One Linux Android build", "success"),
+                ("Swift codec oracle", "skipped"),
+                ("SwiftData restore and export oracle", "skipped"),
+            ), 1)
+        ]
+
+        def read_log(_native, job_id):
+            return scope_log if job_id == 1 else build_log
+
+        with patch("controller.repair_acceptance.read_job_log", side_effect=read_log), \
+                patch("controller.repair_acceptance.validate_build_log") as validate_scaffold, \
+                patch("controller.merged_acceptance.validate_benchmark_build_log") as validate_benchmark, \
+                patch("controller.local_scope.candidate_plan",
+                      return_value={
+                          "scopes": ["module:core/model"],
+                          "tasks": [":core:model:testDebugUnitTest"],
+                      }) as candidate_plan, \
+                patch("oracle.workflow_scope.merge_base", return_value=BASE), \
+                patch("oracle.workflow_scope.changed_paths", return_value=paths), \
+                patch("oracle.workflow_scope.classify", return_value=scopes), \
+                patch("controller.merged_acceptance.tree", return_value={}):
+            reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
+        candidate_plan.assert_called_once_with(
+            reader.manifest.repo, BASE, HEAD, trusted_base=BASE, merge_base_only=True,
+        )
+        self.assertEqual(validate_scaffold.call_args.args[:2], (build_log, ["core/model"]))
+        self.assertEqual(validate_scaffold.call_args.kwargs.keys(), {"plan_for_scopes"})
+        validate_benchmark.assert_called_once_with(build_log)
 
 
 if __name__ == "__main__":

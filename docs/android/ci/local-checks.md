@@ -262,7 +262,10 @@ still held, its path must match this host's local temporary execution directory 
 its recorded acquisition must predate the verified boot; the command archives its raw row before removing
 only that row. A missing row is recorded as missing, never recreated. A newer
 invocation, even with the same owner token, is refused. Repeating the operation
-returns the original emergency audit without changing newer work.
+returns the original emergency audit while the lane remains quiescent; it refuses
+newer or unrelated owners instead of changing them. After an emergency audit,
+`recover --owner` and `check --owner` also refuse a reappeared same-token row
+before cleanup, cancellation or launching a check.
 
 This is **explicit abandonment**, not a fabricated supervisor completion.
 `status` exposes its separate `execution_emergencies` audit, identifying the actual

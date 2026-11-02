@@ -23,6 +23,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from controller.errors import PortError
+from controller.schema import decode_json
 
 HEX = re.compile(r"[0-9a-f]{40}")
 TOKEN = re.compile(r"[0-9a-f]{32}")
@@ -550,20 +551,29 @@ def recover(ledger, receipt, *, cancel=False, distribution=None, repo=None):
 def recover_owner(ledger, owner, *, cancel=False, distribution=None, repo=None):
     if not isinstance(owner, str) or re.fullmatch(r"local-check:[0-9a-f]{32}", owner) is None:
         raise PortError("Recovery requires the exact local-check invocation owner from status")
-    receipts = [row for row in ledger.hard_lock_records() if row["owner"] == owner]
-    if len(receipts) > 1:
-        raise PortError("Ambiguous execution ownership; select an exact receipt rather than unrelated resources")
-    if receipts:
-        return recover(ledger, receipts[0], cancel=cancel, distribution=distribution, repo=repo)
     with ledger.transaction() as connection:
-        audits = [dict(row) for row in connection.execute(
-            "SELECT * FROM execution_recoveries WHERE repository=?",
-            (ledger.repository,),
-        ) if json.loads(row["original_row"])["owner"] == owner]
+        receipts = [
+            {**dict(row), "payload": decode_json(row["payload"]), "record_state": "hard"}
+            for row in connection.execute(
+                "SELECT * FROM hard_locks WHERE repository=? AND owner=?", (ledger.repository, owner),
+            )
+        ]
         emergency = connection.execute(
             "SELECT * FROM execution_emergencies WHERE repository=? AND owner=?",
             (ledger.repository, owner),
         ).fetchone()
+        if emergency is not None and receipts:
+            raise PortError("Emergency-abandoned owner reappeared; refusing to recover another invocation")
+        if len(receipts) > 1:
+            raise PortError("Ambiguous execution ownership; select an exact receipt rather than unrelated resources")
+        audits = [
+            dict(row) for row in connection.execute(
+                "SELECT * FROM execution_recoveries WHERE repository=?",
+                (ledger.repository,),
+            ) if json.loads(row["original_row"])["owner"] == owner
+        ] if not receipts else []
+    if receipts:
+        return recover(ledger, receipts[0], cancel=cancel, distribution=distribution, repo=repo)
     if len(audits) == 1:
         return {"recovered": True, "already_recovered": True, "audit": audits[0]}
     if not audits and emergency is not None:

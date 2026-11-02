@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -281,7 +282,6 @@ class ExecutionRecoveryTests(unittest.TestCase):
                 CREATE TRIGGER reject_reconciliation BEFORE INSERT ON execution_emergencies
                 BEGIN SELECT RAISE(ABORT, 'fixture audit write refused'); END
             """)
-        import sqlite3
         with self.reboot_authority(observation), \
                 self.assertRaisesRegex(sqlite3.IntegrityError, "audit write refused"):
             self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
@@ -328,17 +328,22 @@ class ExecutionRecoveryTests(unittest.TestCase):
         self.ledger.acquire_hard_lock(
             "gradle-execution", self.receipt["owner"], self.receipt["payload"], boundary - 120,
         )
-        observing, peer_attempting = threading.Event(), threading.Event()
+        observing, peer_contended = threading.Event(), threading.Event()
         proof = recovery.emergency_reboot_proof
 
         def verify_boot(host):
             observing.set()
-            self.assertTrue(peer_attempting.wait(5), "New execution did not contend with emergency transaction")
+            self.assertTrue(peer_contended.wait(5), "New execution did not contend with emergency transaction")
             return proof(host)
 
         def acquire_new_execution():
             self.assertTrue(observing.wait(5), "Emergency transaction never reached boot verification")
-            peer_attempting.set()
+            with contextlib.closing(sqlite3.connect(
+                self.ledger.path, timeout=0, isolation_level=None,
+            )) as connection:
+                with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                    connection.execute("BEGIN IMMEDIATE")
+            peer_contended.set()
             return self.ledger.acquire_hard_lock("native-execution", "new-owner", {"new": True}, time.time())
 
         with self.reboot_authority(observation), \
@@ -421,6 +426,51 @@ class ExecutionRecoveryTests(unittest.TestCase):
         self.assertNotIn("--emergency", check.call_args.args[0])
         self.assertEqual(self.audit_rows(), [])
         self.assertEqual(self.ledger.hard_lock_records(), current)
+
+    def test_owner_recovery_and_check_refuse_reappeared_owner_before_cleanup_or_launch(self):
+        observation, boundary = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        with self.reboot_authority(observation):
+            emergency = self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        self.ledger.acquire_hard_lock(
+            "gradle-execution", self.receipt["owner"], self.receipt["payload"], boundary + 1,
+        )
+        completion = Path(self.receipt["payload"]["completion"])
+        valid_cleanup = {
+            "schema_version": 1, "token": self.token,
+            "status": "owned-children-reaped", "returncode": 0,
+        }
+        completion.write_text(json.dumps(valid_cleanup), encoding="utf-8")
+        current = self.ledger.hard_lock_records()
+        with patch.object(recovery, "launcher_alive", return_value=False):
+            self.assertEqual(recovery.cleanup_proof(current[0]), valid_cleanup)
+        with patch.object(recovery, "trusted_context", return_value=self.ledger), \
+                patch.object(recovery, "cleanup_proof") as cleanup, \
+                patch.object(recovery, "cancel_owned") as cancel, \
+                patch.object(recovery.subprocess, "run") as process:
+            for cleanup_state in ("valid", "missing"):
+                if cleanup_state == "missing":
+                    completion.unlink()
+                for command in ("recover", "check"):
+                    with self.subTest(command=command, cleanup_state=cleanup_state):
+                        stderr = io.StringIO()
+                        arguments = [command, "--owner", self.receipt["owner"], "--cancel-owned"]
+                        if command == "check":
+                            arguments += ["--commit", "b" * 40]
+                        with contextlib.redirect_stderr(stderr):
+                            self.assertEqual(recovery.main(arguments), 1)
+                        self.assertIn("owner reappeared", stderr.getvalue())
+                        self.assertEqual(self.ledger.hard_lock_records(), current)
+                        with self.ledger.transaction() as connection:
+                            audit = connection.execute(
+                                "SELECT * FROM execution_emergencies WHERE repository=? AND owner=?",
+                                (self.ledger.repository, self.receipt["owner"]),
+                            ).fetchone()
+                        self.assertEqual(dict(audit), emergency["audit"])
+            cleanup.assert_not_called()
+            cancel.assert_not_called()
+            process.assert_not_called()
+        self.assertEqual(self.audit_rows(), [])
 
     def test_emergency_help_states_unverified_operator_attribution_without_opening_ledger(self):
         output = io.StringIO()

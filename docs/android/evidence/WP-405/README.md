@@ -29,8 +29,11 @@ The synchronous-write method additionally asserts that both real contact
 navigation and confirmation effects hold the exact submission-invalidation
 monitor, rather than relying on an unprotected check/write sequence.
 `PendingExternalRouteTest` retains all five original assertions and adds
-failure/retry and A/B/C pre-router replacement methods. Total targeted
-definitions: 18 methods across these two classes and `AppDeepLinkRouterTest`;
+failure/retry, A/B/C pre-router replacement and a forced queued-submission
+caller-ownership regression. The latter queues B from the initial child's
+cancellation handler while A holds the staging mutex, checking that staging
+and routing claim cannot interleave across callers. Total targeted
+definitions: 19 methods across these two classes and `AppDeepLinkRouterTest`;
 this is an inventory, **not a discovered/passed test count**.
 
 Light validation performed:

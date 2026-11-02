@@ -33,34 +33,29 @@ class PendingExternalRoute(
     private var pending: Delivery? = null
     private var inFlight: Routing? = null
 
-    suspend fun submit(delivery: Delivery): SubmitOutcome {
-        mutex.withLock {
-            currentCoroutineContext().ensureActive()
-            if (delivery.id in consumed || delivery.id == pending?.id) return SubmitOutcome.Duplicate
-            pending?.let { rememberConsumed(it.id) }
-            inFlight?.let {
-                it.guard.invalidate()
-                it.superseded = true
-                it.execution.cancel(CancellationException("External link delivery superseded"))
-                inFlight = null
-            }
-            pending = delivery
-            if (!ready) return SubmitOutcome.Staged
-        }
-        return drain()
-    }
-
-    suspend fun markReady(): SubmitOutcome {
-        mutex.withLock { ready = true }
-        return drain()
-    }
-
+    suspend fun submit(delivery: Delivery): SubmitOutcome = drain(delivery)
+    suspend fun markReady(): SubmitOutcome = drain(becomeReady = true)
     suspend fun retry(): SubmitOutcome = drain()
 
     suspend fun snapshot(): Delivery? = mutex.withLock { pending }
 
-    private suspend fun drain(): SubmitOutcome = coroutineScope {
+    private suspend fun drain(delivery: Delivery? = null, becomeReady: Boolean = false): SubmitOutcome = coroutineScope {
         val routing = mutex.withLock {
+            currentCoroutineContext().ensureActive()
+            if (delivery != null) {
+                if (delivery.id in consumed || delivery.id == pending?.id) {
+                    return@coroutineScope SubmitOutcome.Duplicate
+                }
+                pending?.let { rememberConsumed(it.id) }
+                inFlight?.let {
+                    it.guard.invalidate()
+                    it.superseded = true
+                    it.execution.cancel(CancellationException("External link delivery superseded"))
+                    inFlight = null
+                }
+                pending = delivery
+            }
+            if (becomeReady) ready = true
             val next = pending ?: return@coroutineScope SubmitOutcome.Staged
             if (!ready || inFlight != null) return@coroutineScope SubmitOutcome.Staged
             val guard = CommitGuard()

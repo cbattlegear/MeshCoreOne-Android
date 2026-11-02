@@ -70,9 +70,10 @@ class ChannelServiceNativeTest {
                 pending.cancelAndJoin()
                 assertTrue(pending.isCancelled)
                 assertEquals(ChannelWriteCancellationDisposition.UNKNOWN, dispatch.cancellationDisposition)
-                assertFailsWith<ChannelMutationError.ReconciliationRequired> {
+                val failure = assertFailsWith<ChannelMutationError.ReconciliationRequired> {
                     service.setChannelWithSecret(radio, 1u, "Must not retry", channelsSecret(0x33))
                 }
+                assertIs<CancellationException>(failure.cause)
                 assertEquals(original, rows.fetchChannel(radio, 1u))
                 assertEquals(1, base.recordedSetChannels.size)
             },
@@ -126,7 +127,11 @@ class ChannelServiceNativeTest {
                     assertFailsWith<ChannelMutationError.ReconciliationRequired> {
                         service.setChannelWithSecret(radio, 1u, "Must not retry", channelsSecret(0x33))
                     }
+                    assertFailsWith<ChannelMutationError.ReconciliationRequired> { service.clearChannel(radio, 1u) }
+                    assertFailsWith<ChannelMutationError.ReconciliationRequired> { service.syncChannels(radio, 3u, false) }
                     assertEquals(1, dispatches.size)
+                    assertEquals(1, transport.sentData.count { it[0].toInt() == 0x20 })
+                    assertEquals(original, rows.fetchChannel(radio, 1u))
                 } else {
                     assertTrue(transport.sentData.none { it[0].toInt() == 0x20 })
                     transport.simulateReceive(channelsChannelInfoPacket(0, "", channelsSecret(0)))

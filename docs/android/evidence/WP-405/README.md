@@ -26,12 +26,25 @@ both operations, real queued/sent transport schedules and an UNKNOWN negative
 control. Existing delegated wrappers retain their actual holds by forwarding
 the new overload. No producer test result is consumer acceptance.
 
-Dependency-free validation passes, but Kotlin compilation and discovery of the
-resumed candidate are not yet established. The capacity owner's reported
-cleanup is not a slot grant or proof this build fits. Required execution uses
-the supported interlocked affected launcher against the committed candidate
-and current trusted base; there is no direct Gradle, unsafe WSL invocation,
-blind hosted retry or publication of untested source.
+Dependency-free commands actually passed:
+`python .\tools\android-port\controller\validate.py` (valid);
+`python .\tools\android-port\portmap.py` (2,003 implementation records);
+`git --no-pager diff --check` (no whitespace errors).
+These do not establish Kotlin compilation or test discovery.
+
+The exact supported execution attempt was:
+
+```powershell
+python .\tools\android-port\local\check.py --commit 43c8fb940ca3cfd0fd6fde566b922ea89abb6b6d --affected-base 1e1ff70345f203b41f9a8b04836c2cc4640500c9
+```
+
+Result: **BLOCKED**, exit 1, `Installed execution runtime is old or mismatched:
+controller/merged_acceptance.py`. No product compilation or test discovery/
+execution occurred. This is a runtime readiness refusal, not an App test
+failure or a passing consumer result. The separately assigned execution owner
+was notified; no runtime installation, direct Gradle, unsafe WSL invocation,
+blind hosted retry or publication is substituted. Capacity cleanup alone is
+neither a slot grant nor proof that this build fits.
 
 ## Form-instance follow-up: historical source-only held candidate
 

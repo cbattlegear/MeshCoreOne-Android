@@ -97,3 +97,20 @@ owner or weaken verification. A separately authorized trusted runtime deployment
 is required before rerunning the affected lane on the then-current exact candidate.
 The subsequent documentation-only commit records this refusal; it is not a
 verified replacement candidate.
+
+### Actual existing-channel link persistence follow-up
+
+On current trusted main `99919a0a8049c2da2bfab4c6cdc08bca787b3045`, the
+unexecuted working-tree candidate adds
+`ExistingChannelLinkPersistenceTest.existingChatLinkNavigatesStoredChannelWithoutApplyingLinkRegion`.
+It routes a channel link with an attacker-supplied `region_scope` through the
+actual `AppChatsFeature.list.links` adapter and `RoomPersistenceStore`, then
+asserts that the selected route is the existing Germany-scoped channel, no
+confirmation or radio channel-write is created, and a fresh Room read still
+returns Germany. This supplements the feature-level fake-link assertion for
+`CHAT-LINK-PERSISTENCE-ORACLE`; it does not claim that concern accepted.
+
+The test has not been executed. Local Android/Gradle execution remains paused
+while runner recovery is in progress. Do not infer compilation, JUnit discovery,
+or a passing store readback from the source assertions; obtain real positive
+hosted test discovery on the exact candidate before counting this evidence.

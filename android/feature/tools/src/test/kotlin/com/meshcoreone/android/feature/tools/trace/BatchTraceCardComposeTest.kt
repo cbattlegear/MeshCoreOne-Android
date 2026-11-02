@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshots.Snapshot
@@ -53,6 +54,7 @@ class BatchTraceCardComposeTest {
     private lateinit var host: ActivityController<Activity>
     private lateinit var owner: ScreenOwner
     private lateinit var content: ComposeView
+    private lateinit var recomposer: Recomposer
     private val frameClock = BroadcastFrameClock()
     private var frameNanos = 0L
     private val state = MutableStateFlow(
@@ -71,9 +73,8 @@ class BatchTraceCardComposeTest {
             setViewTreeLifecycleOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
             // Keep the real lifecycle-aware recomposer while advancing its frames deterministically.
-            setParentCompositionContext(
-                createLifecycleAwareWindowRecomposer(coroutineContext = frameClock, lifecycle = owner.lifecycle),
-            )
+            recomposer = createLifecycleAwareWindowRecomposer(coroutineContext = frameClock, lifecycle = owner.lifecycle)
+            setParentCompositionContext(recomposer)
             setContent {
                 val snapshot by observedState.collectAsStateWithLifecycle(initialValue = state.value)
                 SideEffect { renderedState = snapshot }
@@ -84,6 +85,7 @@ class BatchTraceCardComposeTest {
         }
         host.get().setContentView(content)
         advanceFrames()
+        assertTrue(recomposer.currentState.value >= Recomposer.State.Idle, "The lifecycle-aware recomposer must run")
         assertEquals(state.value, renderedState, "The mounted results must observe the initial state")
     }
 
@@ -212,7 +214,7 @@ class BatchTraceCardComposeTest {
             state.value = snapshot
             updateRan.set(true)
         }
-        advanceFrames()
+        advanceFrames { renderedState == snapshot }
         assertTrue(updateRan.get(), "The UI-thread state update must execute")
         assertEquals(snapshot, state.value, "The source flow must contain the updated state")
         assertTrue(state.subscriptionCount.value > 0, "The lifecycle-aware collector must be active")
@@ -220,14 +222,15 @@ class BatchTraceCardComposeTest {
         assertEquals(snapshot, renderedState, "The mounted results must observe every state transition")
     }
 
-    private fun advanceFrames() {
-        repeat(6) {
+    private fun advanceFrames(until: () -> Boolean = { true }) {
+        for (frame in 0 until 120) {
             host.get().runOnUiThread {
                 Snapshot.sendApplyNotifications()
                 frameNanos += 16_000_000L
                 frameClock.sendFrame(frameNanos)
             }
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
+            if (frame >= 5 && until()) break
         }
         host.get().runOnUiThread {
             val root = composeRoot()

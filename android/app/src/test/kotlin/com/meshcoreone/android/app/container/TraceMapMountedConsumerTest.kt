@@ -90,6 +90,7 @@ class TraceMapMountedConsumerTest {
             tableContacts = listOf(north.copy(latitude = 36.0), south)
             tableVersion.intValue++
         }
+        compose.waitForIdle()
         compose.waitUntil(5_000) { latest?.lines?.singleOrNull()?.points?.firstOrNull() == GeoPoint(36.0, -122.0) }
         assertEquals(panned, latest!!.camera)
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)).performClick()

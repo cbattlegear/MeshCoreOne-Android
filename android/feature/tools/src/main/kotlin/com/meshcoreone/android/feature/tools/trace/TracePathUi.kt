@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -391,7 +392,7 @@ internal fun TracePathMapContent(
     var camera by remember(holder) { mutableStateOf<MapCamera?>(null) }
     var presentation by remember(holder) { mutableStateOf(MapPresentationState()) }
     var confirmClear by remember { mutableStateOf(false) }
-    val locale = LocalContext.current.resources.configuration.locales[0]
+    val locale = LocalConfiguration.current.locales[0]
     val unit = stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesStatusSnrBadgeUnit)
     val distanceFormat = remember(locale) { MeasureFormat.getInstance(locale, MeasureFormat.FormatWidth.SHORT) }
     val snrFormat = remember(locale) { NumberFormat.getNumberInstance(locale).apply {

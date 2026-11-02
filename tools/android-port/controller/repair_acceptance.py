@@ -1411,7 +1411,8 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 continue
             if index and tokens[index - 1] in (".", ":"):
                 continue
-            if index + 1 < len(tokens) and tokens[index + 1] == "=":
+            if (index + 1 < len(tokens) and tokens[index + 1] == "="
+                    and (index + 2 >= len(tokens) or tokens[index + 2] != "=")):
                 continue
             yield index
 

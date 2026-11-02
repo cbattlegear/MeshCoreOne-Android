@@ -509,6 +509,8 @@ class RepairExecutionTests(unittest.TestCase):
              "@Test fun keepsListReachable() { check(unrelated.fixture) }"),
             ("named-argument-not-member-read", "fixture",
              "@Test fun keepsListReachable() { unrelated(fixture = true) }"),
+            ("assignment-not-member-read", "fixture",
+             "@Test fun keepsListReachable() { fixture = MapTestHelper(); check(true) }"),
             ("unexecuted-local-function", None,
              "@Test fun keepsListReachable() { fun unused() { MapTestHelper() }; check(true) }"),
         )
@@ -516,7 +518,8 @@ class RepairExecutionTests(unittest.TestCase):
             scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
                 "package sample\nclass MapTestHelper { val enabled = true }",
                 "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
-                "private val fixture = MapTestHelper(); " + method + " }", member=member,
+                + ("private var fixture = MapTestHelper(); " if label == "assignment-not-member-read"
+                 else "private val fixture = MapTestHelper(); ") + method + " }", member=member,
             )
             other = consumer.replace("MapHelperConsumerTest.kt", "UnrelatedHelper.kt")
             other_source = b"package unrelated\nclass MapTestHelper { val enabled = true }"
@@ -601,6 +604,12 @@ class RepairExecutionTests(unittest.TestCase):
              "fixture"),
             (member_consumer.replace(
                 "@Test fun", "private fun fixture() = true;\n@Test fun",
+            ), "fixture"),
+            (member_consumer.replace(
+                "private val fixture = MapTestHelper()", "private val fixture = MapTestHelper().enabled",
+            ).replace("assertTrue(fixture.enabled)", "check(fixture == true)"), "fixture"),
+            (member_consumer.replace(
+                "assertTrue(fixture.enabled)", "val value: Any = Any(); check(fixture === value)",
             ), "fixture"),
         ):
             scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(

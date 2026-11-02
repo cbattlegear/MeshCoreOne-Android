@@ -1136,6 +1136,8 @@ expression-bodied locals: lexical brace depth cannot prove their execution.
 A property-name call (including a generic call) does not establish a property
 read; a same-named class function can be called instead. An ordinary property
 read still qualifies even if that function exists.
+Equality (`==`) and identity (`===`) left operands remain property reads;
+only a single `=` is excluded as assignment/named-argument syntax.
 Helper constructor spelling is also checked against every candidate-bound Kotlin
 source in the authoritative compiled module inventory. A competing same-package
 top-level declaration or a colliding inherited member rejects the binding;
@@ -1190,6 +1192,19 @@ deferred relative imports work in file mode as well as
 `python -m controller.native_review`. Isolated subprocess fixtures load the actual file and
 exercise deferred staging imports without credentials or network access. They
 do not establish a successful deployed publisher run or acceptance.
+
+Diagnostic use of the successful historical #519 run `41417389304`, job
+`125184548222`, at `bd1860ec013f0115169b73588da373a1cac501d4` found
+265 app compiled-source bindings and 1,891 executed method records. The existing
+hosted-log parser accepts that report, and all app compiled paths bind to that
+exact candidate. Nevertheless, actual `ContainerHarness.kt` / `AppMapFeatureTest.kt`
+and `RemoteNodesFixture.kt` / `RemoteNodesComposeTest.kt` helper-consumer probes
+are rejected by the current inherited-JUnit proof before symbol-collision
+indexing. The bounded token reader does not establish complete inherited
+declarations for those helper shapes. This is a known source-rule blocker,
+not #519 acceptance or evidence that the full helper repair is deployable.
+The historical successful run does not supersede #519's later red CI or missing
+API31/37 native evidence. No new Android/native job was run for this diagnostic.
 
 Focused source-only regressions (native Windows pinned Python, no Gradle or
 shared Android execution) use the existing strict runner:

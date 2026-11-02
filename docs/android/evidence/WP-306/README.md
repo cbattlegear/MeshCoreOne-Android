@@ -121,3 +121,23 @@ run `41389610630` approved this same head with no open inline findings.
 No local Android/Gradle execution occurred; the prior local runner mismatch
 remains unresolved. Swift codec and SwiftData restore/export oracle jobs were
 skipped by workflow selection and are not claimed as verified.
+
+### Foundation substring-boundary repair candidate
+
+Based on trusted main
+`d85ac9f8a5367615099bc215acc8d022c11eb75b`, the next WP-306 candidate updates
+`ChatTextMatching.standardContains` and tests its actual
+`Conversation.filtered` search consumer across every filter. It rejects
+`straße`/`stras`, `ﬁle`/`f`, `한글`/`하`, and `ıstanbul`/`istanbul`, while
+retaining full `Straße`/`strasse` folding, folded suffix matches, normal search,
+fullwidth digit `１２`/`12`, and the Foundation-standard ZWJ emoji substring
+`👨‍👩‍👧`/`👨`.
+
+Independent expected values come from the captured outputs
+`docs/android/evidence/WP-311/oracle/wp311_more.output.txt` and
+`wp311_strings.output.txt`. The former records `std=true` and `noloc=false` for
+the ZWJ example but does not stamp a locale; the latter records
+`localizedStandardContains=true` for the digit example under `en_US`. These
+are Foundation reference outputs, not Android execution results. No broader
+locale-policy or device claim is made. Exact candidate hosted execution and
+review are pending; local Android/Gradle execution remains unrun.

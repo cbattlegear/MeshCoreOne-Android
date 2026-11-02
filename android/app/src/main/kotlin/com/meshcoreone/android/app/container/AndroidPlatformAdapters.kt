@@ -34,6 +34,10 @@ object UnavailableNotificationDelivery : NotificationDeliveryPort {
     override suspend fun setBadgeCount(count: Long) = Unit
     override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> = SnapshotList.empty()
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) = Unit
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+    ): SnapshotList<com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome> =
+        throw UnsupportedOperationException("Notification snapshot cleanup is unavailable")
 }
 
 /** Boolean flags (the favorites migration marker) in a private preference file; reads and writes are synchronous. */

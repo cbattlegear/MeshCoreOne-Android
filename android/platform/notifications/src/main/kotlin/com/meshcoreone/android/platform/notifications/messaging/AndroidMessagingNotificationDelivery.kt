@@ -19,6 +19,8 @@ import android.os.Build
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.notifications.DeliveredNotification
+import com.meshcoreone.android.core.contracts.notifications.DeliveredPostIdentity
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
@@ -111,8 +113,31 @@ class AndroidMessagingNotificationDelivery(
             val platformTag = active.tag?.takeIf { it.startsWith(TAG_PREFIX) } ?: return@mapNotNull null
             val tag = platformTag.removePrefix(TAG_PREFIX)
             val payload = NotificationPayloadCodec.read(Intent().putExtras(active.notification.extras))
-            DeliveredNotification(NotificationId(tag), payload)
+            val rawIdentity = active.notification.extras.getString(EXTRA_POST_ID)
+            val identity = rawIdentity?.let {
+                try { DeliveredPostIdentity(UUID.fromString(it)) } catch (_: IllegalArgumentException) { null }
+            }
+            DeliveredNotification(NotificationId(tag), payload, identity)
         })
+
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+    ): SnapshotList<SnapshotRemovalOutcome> = SnapshotList(selected.map { notification ->
+        synchronized(postingLock) {
+            val identity = notification.postIdentity?.value?.toString()
+            val key = tag(notification.id)
+            val submitted = submittedPosts[key]
+            when {
+                identity == null || submitted == null -> SnapshotRemovalOutcome.UNKNOWN_IDENTITY
+                submitted != identity -> SnapshotRemovalOutcome.SUPERSEDED
+                else -> {
+                    manager.cancel(key, NOTIFICATION_ID)
+                    submittedPosts.remove(key)
+                    SnapshotRemovalOutcome.REMOVED
+                }
+            }
+        }
+    })
 
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) {
         synchronized(postingLock) {

@@ -79,7 +79,16 @@ data class NotificationRequest(
 )
 
 /** A notification still shown by the platform. [payload] is null for notifications this policy did not post. */
-data class DeliveredNotification(val id: NotificationId, val payload: NotificationPayload?)
+data class DeliveredNotification(
+    val id: NotificationId,
+    val payload: NotificationPayload?,
+    val postIdentity: DeliveredPostIdentity? = null,
+)
+
+/** Android concurrency adaptation: opaque identity of one submitted platform post, not a logical ID. */
+data class DeliveredPostIdentity(val value: UUID)
+
+enum class SnapshotRemovalOutcome { REMOVED, SUPERSEDED, UNKNOWN_IDENTITY }
 
 /** The user's interaction with a posted notification; a null [action] is the default tap. */
 data class NotificationResponse(val payload: NotificationPayload, val action: NotificationAction?, val userText: String?)
@@ -114,4 +123,6 @@ interface NotificationDeliveryPort {
     suspend fun setBadgeCount(count: Long)
     suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification>
     suspend fun removeDelivered(ids: SnapshotList<NotificationId>)
+    /** One outcome per selected snapshot; unknown identity must never fall back to logical-ID removal. */
+    suspend fun removeDeliveredSnapshot(selected: SnapshotList<DeliveredNotification>): SnapshotList<SnapshotRemovalOutcome>
 }

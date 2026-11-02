@@ -10,6 +10,8 @@ import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.notifications.DeliveredNotification
+import com.meshcoreone.android.core.contracts.notifications.DeliveredPostIdentity
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategoryDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
@@ -106,6 +108,10 @@ internal class FakeDelivery(private val journal: Journal = Journal()) : Notifica
     var cancelling: String? = null
     private val postedRequests = ArrayList<NotificationRequest>()
     private val shown = LinkedHashMap<NotificationId, NotificationPayload?>()
+    private val identities = LinkedHashMap<NotificationId, DeliveredPostIdentity>()
+    var beforeSnapshotRemoval: (suspend () -> Unit)? = null
+    var lastSnapshotOutcomes: List<SnapshotRemovalOutcome> = emptyList()
+        private set
     private val badges = ArrayList<Long>()
     private val removed = ArrayList<List<NotificationId>>()
     private var categories: SnapshotList<NotificationCategoryDefinition>? = null
@@ -126,7 +132,12 @@ internal class FakeDelivery(private val journal: Journal = Journal()) : Notifica
     /** A notification some other owner posted (no WP-215 payload). */
     fun showForeign(id: String) = synchronized(lock) { shown[NotificationId(id)] = null }
 
-    fun show(id: String, payload: NotificationPayload) = synchronized(lock) { shown[NotificationId(id)] = payload }
+    fun show(id: String, payload: NotificationPayload) = synchronized(lock) {
+        shown[NotificationId(id)] = payload
+        identities[NotificationId(id)] = DeliveredPostIdentity(UUID.randomUUID())
+    }
+
+    fun forgetPostIdentity(id: String) = synchronized(lock) { identities.remove(NotificationId(id)) }
 
     override suspend fun authorizationStatus(): NotificationAuthorizationStatus {
         maybeFail("authorizationStatus")
@@ -147,7 +158,7 @@ internal class FakeDelivery(private val journal: Journal = Journal()) : Notifica
         synchronized(lock) { postedRequests += request }
         journal.record("post")
         maybeFail("post")
-        if (postResult == NotificationPostResult.Posted) synchronized(lock) { shown[request.id] = request.payload }
+        if (postResult == NotificationPostResult.Posted) show(request.id.value, request.payload)
         return postResult
     }
 
@@ -160,14 +171,34 @@ internal class FakeDelivery(private val journal: Journal = Journal()) : Notifica
     override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> {
         synchronized(lock) { listCalls += 1 }
         maybeFail("deliveredNotifications")
-        return synchronized(lock) { shown.map { DeliveredNotification(it.key, it.value) }.snapshot() }
+        return synchronized(lock) { shown.map { DeliveredNotification(it.key, it.value, identities[it.key]) }.snapshot() }
+    }
+
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+    ): SnapshotList<SnapshotRemovalOutcome> {
+        beforeSnapshotRemoval?.invoke()
+        maybeFail("removeDeliveredSnapshot")
+        return synchronized(lock) {
+            selected.map {
+                when {
+                    it.postIdentity == null || identities[it.id] == null -> SnapshotRemovalOutcome.UNKNOWN_IDENTITY
+                    identities[it.id] != it.postIdentity -> SnapshotRemovalOutcome.SUPERSEDED
+                    else -> {
+                        shown.remove(it.id)
+                        identities.remove(it.id)
+                        SnapshotRemovalOutcome.REMOVED
+                    }
+                }
+            }.also { lastSnapshotOutcomes = it }.snapshot()
+        }
     }
 
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) {
         synchronized(lock) { removed += ids.toList() }
         journal.record("removeDelivered")
         maybeFail("removeDelivered")
-        synchronized(lock) { ids.forEach { shown.remove(it) } }
+        synchronized(lock) { ids.forEach { shown.remove(it); identities.remove(it) } }
     }
 }
 

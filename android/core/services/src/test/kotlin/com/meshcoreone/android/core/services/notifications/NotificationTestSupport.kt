@@ -178,6 +178,7 @@ internal class FakeDelivery(private val journal: Journal = Journal()) : Notifica
         selected: SnapshotList<DeliveredNotification>,
     ): SnapshotList<SnapshotRemovalOutcome> {
         beforeSnapshotRemoval?.invoke()
+        journal.record("removeDelivered")
         maybeFail("removeDeliveredSnapshot")
         return synchronized(lock) {
             selected.map {

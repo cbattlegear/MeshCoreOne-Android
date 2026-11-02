@@ -4,6 +4,10 @@ package com.meshcoreone.android.core.datastore
 import android.content.Context
 import androidx.datastore.core.DataStoreFactory
 import androidx.datastore.core.FileStorage
+import androidx.datastore.core.ReadScope
+import androidx.datastore.core.Storage
+import androidx.datastore.core.StorageConnection
+import androidx.datastore.core.WriteScope
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import java.io.File
 import java.io.IOException
@@ -39,7 +43,9 @@ class MeshCoreStorage private constructor(
 
     val preferences = PreferenceStore(
         PreferenceDataStoreFactory.create(
-            storage = FileStorage(BoundedPreferencesSerializer()) { File(directory, PREFERENCE_FILENAME) },
+            storage = SerializedFileStorage(
+                FileStorage(BoundedPreferencesSerializer()) { File(directory, PREFERENCE_FILENAME) },
+            ),
             corruptionHandler = null,
             migrations = emptyList(),
             scope = scope,
@@ -52,9 +58,10 @@ class MeshCoreStorage private constructor(
     val backupPreferences = BackupPreferenceStore(preferences)
     val secrets = SecretStore(
         DataStoreFactory.create(
-            serializer = SecretArchiveSerializer(),
+            storage = SerializedFileStorage(
+                FileStorage(SecretArchiveSerializer()) { File(directory, SECRET_FILENAME) },
+            ),
             scope = scope,
-            produceFile = { File(directory, SECRET_FILENAME) },
         ),
         cryptography, secretGuard, reporter, aliasPrefix,
     )
@@ -138,6 +145,23 @@ class MeshCoreStorage private constructor(
                     canonical, preferenceAccess, secretAccess, cryptography, reporter, dispatcher,
                     aliasPrefix,
                 ).also { owners[canonical.path] = it }
+            }
+        }
+    }
+}
+
+internal class SerializedFileStorage<T>(private val storage: Storage<T>) : Storage<T> {
+    override fun createConnection(): StorageConnection<T> {
+        val connection = storage.createConnection()
+        val transactions = Mutex()
+        return object : StorageConnection<T> by connection {
+            override suspend fun <R> readScope(block: suspend ReadScope<T>.(Boolean) -> R): R =
+                transactions.withLock { connection.readScope(block) }
+
+            // DataStore 1.2.1 increments its version inside this scope, before file replacement.
+            // Keep a starting collector from pairing that new version with the previous file.
+            override suspend fun writeScope(block: suspend WriteScope<T>.() -> Unit) {
+                transactions.withLock { connection.writeScope(block) }
             }
         }
     }

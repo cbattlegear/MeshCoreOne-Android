@@ -150,7 +150,7 @@ class TracePathStateHolder(
         clearError()
         val hop = TracePathEditing.hopFor(node, hashSize)
         pendingPathHash = null
-        update { it.copy(outboundPath = it.outboundPath + hop, activeSavedPath = null, result = null) }
+        update { it.copy(outboundPath = it.outboundPath + hop, activeSavedPath = null, result = null, batchPresentationActive = false) }
     }
 
     /** Uniform-width rebuild for a per-trace override; the flags byte declares one size for the path. */
@@ -160,7 +160,7 @@ class TracePathStateHolder(
         val size = hashSize
         pendingPathHash = null
         update {
-            it.copy(outboundPath = TracePathEditing.rehash(it.outboundPath, size), activeSavedPath = null, result = null)
+            it.copy(outboundPath = TracePathEditing.rehash(it.outboundPath, size), activeSavedPath = null, result = null, batchPresentationActive = false)
         }
     }
 
@@ -185,7 +185,7 @@ class TracePathStateHolder(
         update { it.copy(outboundPath = it.outboundPath + appended) }
         if (result.added.isNotEmpty()) {
             pendingPathHash = null
-            update { it.copy(activeSavedPath = null, result = null) }
+            update { it.copy(activeSavedPath = null, result = null, batchPresentationActive = false) }
             clearError()
         }
         return result
@@ -196,7 +196,7 @@ class TracePathStateHolder(
         if (index !in current.outboundPath.indices) return
         pendingPathHash = null
         update {
-            it.copy(outboundPath = it.outboundPath.filterIndexed { i, _ -> i != index }, activeSavedPath = null, result = null)
+            it.copy(outboundPath = it.outboundPath.filterIndexed { i, _ -> i != index }, activeSavedPath = null, result = null, batchPresentationActive = false)
         }
     }
 
@@ -204,7 +204,7 @@ class TracePathStateHolder(
         clearError()
         pendingPathHash = null
         update {
-            it.copy(outboundPath = TracePathEditing.move(it.outboundPath, fromOffsets, toOffset), activeSavedPath = null, result = null)
+            it.copy(outboundPath = TracePathEditing.move(it.outboundPath, fromOffsets, toOffset), activeSavedPath = null, result = null, batchPresentationActive = false)
         }
     }
 
@@ -218,7 +218,7 @@ class TracePathStateHolder(
     fun clearPath() {
         clearError()
         pendingPathHash = null
-        update { it.copy(activeSavedPath = null, outboundPath = emptyList(), result = null, traceHashMode = null) }
+        update { it.copy(activeSavedPath = null, outboundPath = emptyList(), result = null, traceHashMode = null, batchPresentationActive = false) }
     }
 
     // MARK: - Saved paths
@@ -226,7 +226,7 @@ class TracePathStateHolder(
     /** Restores a saved path at its saved width; a mirrored palindrome turns auto-return on. */
     fun loadSavedPath(savedPath: SavedTracePathDTO) {
         pendingPathHash = null
-        update { it.copy(outboundPath = emptyList(), result = null) }
+        update { it.copy(outboundPath = emptyList(), result = null, batchPresentationActive = false) }
         if (savedPath.pathBytes.isEmpty) return
         val size = savedPath.hashSize.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
         val mode = if (deps.connectedDevice()?.supportsTraceHashSizeOverride == true) {
@@ -352,7 +352,7 @@ class TracePathStateHolder(
 
     fun cancelBatchTrace() = batch.cancelBatchTrace()
 
-    fun clearBatchState() = update { it.copy(currentTraceIndex = 0, completedResults = emptyList()) }
+    fun clearBatchState() = update { it.copy(currentTraceIndex = 0, completedResults = emptyList(), batchPresentationActive = false) }
 
     /** Turning batch mode off clears batch progress and results (the source's `didSet`). */
     fun setBatchEnabled(enabled: Boolean) {

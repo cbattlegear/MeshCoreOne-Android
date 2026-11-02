@@ -10,6 +10,7 @@ import android.content.ContextWrapper
 import android.content.res.Configuration
 import android.content.pm.ApplicationInfo
 import android.os.Looper
+import android.view.Display
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
@@ -36,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -133,6 +135,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowDialog
+import org.robolectric.shadows.ShadowDisplayManager
 import org.robolectric.shadows.ShadowViewRootImpl
 
 @RunWith(RobolectricTestRunner::class)
@@ -505,21 +508,167 @@ class SharedUiComposeTest {
         paint.color = android.graphics.Color.GREEN
         canvas.drawRect(100f, 0f, 200f, 100f, paint)
         val image = bitmap.asImageBitmap()
-        val geometry = mutableStateOf(AvatarCropGeometry(300.0, CropSize(200.0, 100.0)))
+        val geometry = mutableStateOf(AvatarCropGeometry(
+            300.0, CropSize(200.0, 100.0), 2.0, CropOffset(10.0, 0.0),
+        ))
         var chosen: AvatarCropGeometry? = null
+        var hostWidthDp = 0f
+        var density = 1f
         content {
+            val currentDensity = LocalDensity.current
+            val hostWidth = LocalWindowInfo.current.containerSize.width
+            SideEffect {
+                density = currentDensity.density
+                hostWidthDp = with(currentDensity) { hostWidth.toDp().value }
+            }
             MeshCoreTheme(motionScale = 0f) {
                 AvatarCropView(image, geometry.value, { geometry.value = it }, {}, { chosen = it })
             }
         }
-        resize(360)
+        fun assertTallHostWidth(widthDp: Int, expectedCropSize: Double) {
+            resizeDp(widthDp, 900, density)
+            compose.runOnIdle {
+                assertEquals(widthDp.toFloat(), hostWidthDp, 0.5f)
+                assertEquals(expectedCropSize, geometry.value.cropSize, 0.01)
+                assertEquals(2.0, geometry.value.scale)
+                assertEquals(CropOffset(10.0, 0.0), geometry.value.offset)
+                assertEquals(CropSize(200.0, 100.0), geometry.value.imageSize)
+            }
+            val canvasNode = compose.onNodeWithTag("avatar-crop-canvas", useUnmergedTree = true)
+            val canvasBounds = canvasNode.fetchSemanticsNode().boundsInRoot
+            assertTrue(canvasBounds.width / density < hostWidthDp,
+                "The crop canvas should remain constrained inside the host window")
+            if (widthDp <= 631) {
+                assertTrue(canvasBounds.width / density < 600.0,
+                    "The dialog content should remain below 600dp near the host-class boundary")
+            }
+            assertCropCanvasShowsBothImageHalves(
+                canvasNode.fetchSemanticsNode(), geometry.value.cropSize, density,
+            )
+        }
+
+        assertTallHostWidth(599, 300.0)
+        assertTallHostWidth(600, 480.0)
+        assertTallHostWidth(601, 480.0)
+        assertTallHostWidth(630, 480.0)
+        assertTallHostWidth(631, 480.0)
+        assertTallHostWidth(632, 480.0)
+        assertTallHostWidth(633, 480.0)
         compose.onNodeWithText(resources.getString(AppContactsStrings.contactsDetailAvatarCropChoose)).assertIsDisplayed()
         capture("crop", dialog = true)
         compose.onNodeWithText(resources.getString(AppContactsStrings.contactsDetailAvatarCropChoose)).performClick()
         compose.runOnIdle {
             assertNotNull(chosen)
+            assertEquals(geometry.value, chosen)
             val cropped = cropAvatarImage(image, assertNotNull(chosen))
             assertEquals(512, cropped.width); assertEquals(512, cropped.height)
+            val croppedBitmap = cropped.asAndroidBitmap()
+            val left = croppedBitmap.getPixel(128, 256)
+            val right = croppedBitmap.getPixel(384, 256)
+            assertTrue(android.graphics.Color.blue(left) > android.graphics.Color.green(left))
+            assertTrue(android.graphics.Color.green(right) > android.graphics.Color.blue(right))
+            croppedBitmap.recycle()
+        }
+    }
+
+    @Test fun cropDialogFitsTheMeasuredCanvasInAShortLandscapeWindow() {
+        val image = Bitmap.createBitmap(200, 100, Bitmap.Config.ARGB_8888).asImageBitmap()
+        val geometry = mutableStateOf(AvatarCropGeometry(300.0, CropSize(200.0, 100.0), 2.0))
+        var density = 1f
+        content {
+            val currentDensity = LocalDensity.current
+            SideEffect { density = currentDensity.density }
+            MeshCoreTheme(motionScale = 0f) {
+                AvatarCropView(image, geometry.value, { geometry.value = it }, {}, {})
+            }
+        }
+        resizeDp(840, 280, density)
+        val canvasBounds = compose.onNodeWithTag(
+            "avatar-crop-canvas", useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        compose.runOnIdle {
+            val actualCanvas = CropSize(
+                canvasBounds.width.toDouble() / density,
+                canvasBounds.height.toDouble() / density,
+            )
+            assertEquals(AvatarCropGeometry.cropSize(actualCanvas, true), geometry.value.cropSize, 2.0)
+            assertTrue(geometry.value.cropSize < 300.0,
+                "The crop should fit the measured short canvas, not the raw window height")
+            assertEquals(2.0, geometry.value.scale)
+            assertEquals(CropSize(200.0, 100.0), geometry.value.imageSize)
+        }
+    }
+
+    @Test fun cropCancelInvokesOnlyTheCancelActionAndDismissesTheMountedDialog() {
+        val image = Bitmap.createBitmap(200, 100, Bitmap.Config.ARGB_8888).asImageBitmap()
+        val geometry = mutableStateOf(AvatarCropGeometry(300.0, CropSize(200.0, 100.0)))
+        var shown by mutableStateOf(true)
+        var cancellations = 0
+        var chosen: AvatarCropGeometry? = null
+        content {
+            MeshCoreTheme(motionScale = 0f) {
+                if (shown) AvatarCropView(
+                    image = image,
+                    geometry = geometry.value,
+                    onGeometryChange = { geometry.value = it },
+                    onCancel = { cancellations++; shown = false },
+                    onConfirm = { chosen = it },
+                )
+            }
+        }
+        resizeDp(360, 900, 1f)
+        compose.onNodeWithText(resources.getString(AppContactsStrings.contactsCommonCancel)).performClick()
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals(1, cancellations)
+            assertNull(chosen)
+            assertTrue(shown.not())
+        }
+        compose.onNodeWithText(resources.getString(AppContactsStrings.contactsCommonCancel)).assertDoesNotExist()
+    }
+
+    private fun resizeDp(widthDp: Int, heightDp: Int, density: Float) {
+        val orientation = if (widthDp > heightDp) "land" else "port"
+        ShadowDisplayManager.changeDisplay(
+            Display.DEFAULT_DISPLAY, "+w${widthDp}dp-h${heightDp}dp-$orientation",
+        )
+        compose.runOnUiThread {
+            val activity = controller.get()
+            val configuration = Configuration(activity.resources.configuration).apply {
+                screenWidthDp = widthDp
+                screenHeightDp = heightDp
+                smallestScreenWidthDp = minOf(widthDp, heightDp)
+                this.orientation = if (widthDp > heightDp) {
+                    Configuration.ORIENTATION_LANDSCAPE
+                } else {
+                    Configuration.ORIENTATION_PORTRAIT
+                }
+            }
+            activity.resources.updateConfiguration(configuration, activity.resources.displayMetrics)
+            activity.onConfigurationChanged(configuration)
+            activity.window.decorView.dispatchConfigurationChanged(configuration)
+        }
+        resize((widthDp * density).roundToInt(), (heightDp * density).roundToInt())
+    }
+
+    private fun assertCropCanvasShowsBothImageHalves(
+        node: SemanticsNode,
+        cropSizeDp: Double,
+        density: Float,
+    ) {
+        val pixels = nativeGlyphPixels(node)
+        try {
+            val centerX = pixels.width / 2
+            val centerY = pixels.height / 2
+            val offset = (cropSizeDp * density / 4).roundToInt()
+            val blueHalf = pixels.getPixel(centerX - offset, centerY)
+            val greenHalf = pixels.getPixel(centerX + offset, centerY)
+            assertTrue(android.graphics.Color.blue(blueHalf) > android.graphics.Color.green(blueHalf),
+                "The left side of the crop preview should retain the blue source pixels")
+            assertTrue(android.graphics.Color.green(greenHalf) > android.graphics.Color.blue(greenHalf),
+                "The right side of the crop preview should retain the green source pixels")
+        } finally {
+            pixels.recycle()
         }
     }
 

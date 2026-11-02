@@ -2,10 +2,15 @@
 
 import copy
 import hashlib
+import io
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from dataclasses import asdict, replace
+from pathlib import Path
 from unittest.mock import patch
 
 from fixtures import BASE, HEAD, MERGE, FakeApi, bundle, policy, settings, test_manifest
@@ -16,7 +21,8 @@ from controller.engine import Controller
 from controller.gates import merge_decision, validate_evidence, verify_completion, verify_pr_gates
 from controller.ledger import Identity, Ledger
 from controller.native_review import (
-    CI_PATH, COMPRESSED_REVIEW_MARKER, RESULT_MARKER, REVIEW_MARKER, WORKFLOW_PATH, NativeReview, main,
+    CI_PATH, COMPRESSED_REVIEW_MARKER, PUBLICATION_MARKER, PUBLICATION_STEP, RESULT_MARKER,
+    REVIEW_MARKER, WORKFLOW_PATH, NativeReview, main,
 )
 from controller.publication import encode_structured_body
 from controller.render import marker
@@ -25,6 +31,57 @@ from controller.workflows import parse_yaml, validate_publisher
 
 
 class NativeReviewTests(unittest.TestCase):
+    def test_isolated_file_and_module_loading_reach_deferred_staging_imports(self):
+        source = Path(__file__).resolve().parents[1] / "controller" / "native_review.py"
+        script = """
+import importlib, runpy, socket, sys
+from unittest.mock import patch
+def no_network(*args, **kwargs):
+    raise AssertionError("entrypoint fixture must not use the network")
+with patch.object(socket, "socket", no_network):
+    sys.path.insert(0, str(__import__("pathlib").Path(sys.argv[1]).parents[1] / "tests"))
+    for mode in ("file", "module"):
+        if mode == "file":
+            namespace = runpy.run_path(sys.argv[1], run_name="entrypoint_fixture")
+        else:
+            namespace = vars(importlib.import_module("controller.native_review"))
+        cls = namespace["NativeReview"]
+        native = cls.__new__(cls)
+        for action, args in (("stage_repair", ("WP-003", 0, 0)),
+                             ("stage_whole", ("WP-003", 0, {}))):
+            try:
+                getattr(native, action)(*args)
+            except namespace["PortError"]:
+                pass
+            else:
+                raise AssertionError("expected validation after deferred imports")
+        from test_native_review import NativeReviewTests
+        fixture_native, api, prefix, value = NativeReviewTests().fixture(current=True)
+        native = cls(fixture_native.backend, fixture_native.manifest, fixture_native.policy)
+        with patch.object(native, "source_receipt", return_value=(
+            "", {"schema_version": 2, "scope_comment_id": 1},
+        )), patch("controller.repair_acceptance.authenticated_scope",
+                  side_effect=namespace["PortError"]("deferred repair receipt import reached")):
+            try:
+                native.evaluate("WP-003", 123, 90)
+            except namespace["PortError"] as error:
+                assert str(error) == "deferred repair receipt import reached", str(error)
+            else:
+                raise AssertionError("expected stop immediately after deferred receipt import")
+            assert all(method == "GET" for method, *rest in api.calls), api.calls
+print("file/module deferred imports reached; no authority or network")
+"""
+        environment = dict(os.environ)
+        for name in tuple(environment):
+            if "TOKEN" in name.upper() or name.startswith("GITHUB_"):
+                environment.pop(name)
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", script, str(source)], env=environment,
+            cwd=source.parent, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("file/module deferred imports reached", result.stdout)
+
     def setUp(self):
         stage = patch("controller.native_review.stage_review", side_effect=lambda *args: self.staged)
         stage.start()
@@ -203,6 +260,109 @@ class NativeReviewTests(unittest.TestCase):
         self.assertEqual(
             [call[2]["conclusion"] for call in api.calls if call[0] == "PATCH"], ["success"],
         )
+
+    def normalized_publication(self, *, current=True):
+        native, api, prefix, value = self.fixture(current=current)
+        run = api.routes[("GET", prefix + "/actions/runs/2")]
+        run["status"] = "in_progress"
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        checks[:] = [check for check in checks if check["name"] == "android-ci"]
+        next_id = iter((201, 202))
+
+        def create(payload):
+            check_id = next(next_id)
+            check = {
+                **copy.deepcopy(payload), "id": check_id, "app": {"id": 10},
+                "details_url": f"https://github.com/{native.policy['repository']}/runs/{check_id}",
+            }
+            checks.append(check)
+            api.routes[("PATCH", prefix + f"/check-runs/{check_id}")] = (
+                lambda update: check.update(copy.deepcopy(update)) or copy.deepcopy(check)
+            )
+            return copy.deepcopy(check)
+
+        api.routes[("POST", prefix + "/check-runs")] = create
+        stdout = io.StringIO()
+        with patch("controller.native_review.git", return_value=BASE.encode()), patch("sys.stdout", stdout):
+            native.publish("WP-003", 123, 90, 2, 1)
+        run["status"] = "completed"
+        log = f"Native review WP-003 PR 123 receipt 90\t{PUBLICATION_STEP}\t2026-11-02T18:25:20Z {stdout.getvalue()}"
+        return native, api, prefix, value, checks, log
+
+    def test_normalized_server_checks_roundtrip_only_with_authenticated_job_receipt(self):
+        for current in (True, False):
+            with self.subTest(current=current):
+                native, api, _, value, checks, log = self.normalized_publication(current=current)
+                self.assertIn(PUBLICATION_MARKER, log)
+                self.assertTrue(all("/runs/" in check["details_url"] for check in checks[1:]))
+                with patch("controller.repair_acceptance.read_job_log", return_value=log) as reader:
+                    actual = GitHubGateAuthority(native.backend, native.manifest, native.policy).reviewed_candidate(
+                        "WP-003", Identity(pr_number=123), BASE,
+                    )
+                reader.assert_called_once()
+                self.assertIs(reader.call_args.args[0].backend, native.backend)
+                self.assertEqual(reader.call_args.args[1], 80)
+                self.assertEqual(actual["binding"], asdict(value.binding))
+                post = next(call for call in api.calls if call[0] == "POST" and call[1].endswith("/check-runs"))
+                self.assertEqual(post[2]["details_url"],
+                                 f"https://github.com/{value.binding.repository}/actions/runs/2")
+
+    def test_normalized_url_alone_or_forged_job_receipt_cannot_establish_provenance(self):
+        for kind in ("missing", "duplicate", "wrong-step", "wrong-check", "wrong-result",
+                     "wrong-job", "wrong-url", "foreign-url", "wrong-app", "wrong-external",
+                     "wrong-head", "failed-run", "stale-attempt", "changed-summary", "unreadable"):
+            with self.subTest(kind=kind):
+                native, api, prefix, _, checks, log = self.normalized_publication()
+                if kind == "missing":
+                    log = ""
+                elif kind == "duplicate":
+                    log *= 2
+                elif kind == "wrong-step":
+                    log = log.replace(PUBLICATION_STEP, "Fetch candidate objects as data only")
+                elif kind == "wrong-check":
+                    log = log.replace('"check_ids":[201]', '"check_ids":[202]')
+                elif kind == "wrong-result":
+                    log = log.replace('"result_sha256":"', '"result_sha256":"0')
+                elif kind == "wrong-job":
+                    api.routes[("GET", prefix + "/actions/runs/2/attempts/1/jobs?per_page=100&page=1")]["jobs"][0]["run_id"] = 3
+                elif kind in ("wrong-url", "foreign-url"):
+                    checks[-1]["details_url"] = (
+                        f"https://github.com/{native.policy['repository']}/runs/202" if kind == "wrong-url"
+                        else "https://github.com/other/repo/runs/201"
+                    )
+                elif kind == "wrong-app":
+                    checks[-1]["app"]["id"] = 999
+                elif kind == "wrong-external":
+                    checks[-1]["external_id"] = "copied:3:1"
+                elif kind == "wrong-head":
+                    checks[-1]["head_sha"] = BASE
+                elif kind == "failed-run":
+                    api.routes[("GET", prefix + "/actions/runs/2")]["conclusion"] = "failure"
+                elif kind == "stale-attempt":
+                    api.routes[("GET", prefix + "/actions/runs/2")]["run_attempt"] = 2
+                elif kind == "changed-summary":
+                    checks[-1]["output"]["summary"] += " "
+                with patch("controller.repair_acceptance.read_job_log", return_value=log,
+                           side_effect=PortError("Hosted log reader unavailable") if kind == "unreadable" else None), \
+                        self.assertRaises((PortError, json.JSONDecodeError)):
+                    native.bundle("WP-003", Identity(pr_number=123))
+
+    def test_partial_terminal_publication_never_emits_a_check_receipt(self):
+        native, api, prefix, _ = self.fixture()
+        api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"
+        ids = iter((201, 202))
+        api.routes[("POST", prefix + "/check-runs")] = lambda payload: {"id": next(ids)}
+        api.routes[("PATCH", prefix + "/check-runs/201")] = {}
+
+        def failed_write(payload):
+            raise PortError("Terminal check write refused")
+
+        api.routes[("PATCH", prefix + "/check-runs/202")] = failed_write
+        stdout = io.StringIO()
+        with patch("controller.native_review.git", return_value=BASE.encode()), patch("sys.stdout", stdout), \
+                self.assertRaisesRegex(PortError, "Terminal check write refused"):
+            native.publish("WP-003", 123, 90, 2, 1)
+        self.assertNotIn(PUBLICATION_MARKER, stdout.getvalue())
 
     def test_outstanding_review_request_cannot_publish_success(self):
         native, api, prefix, _ = self.fixture(current=True)
@@ -419,6 +579,41 @@ class NativeReviewTests(unittest.TestCase):
         writes = [call for call in api.calls if call[0] == "PATCH"]
         self.assertEqual(len(writes), 2)
         self.assertTrue(all(call[2]["conclusion"] == "failure" for call in writes))
+
+    def test_deferred_import_failure_completes_created_checks_and_preserves_exception(self):
+        native, api, prefix, _ = self.fixture(current=True)
+        api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"
+        ids = iter((201,))
+        api.routes[("POST", prefix + "/check-runs")] = lambda payload: {"id": next(ids)}
+        api.routes[("PATCH", prefix + "/check-runs/201")] = {}
+        error = ImportError("attempted relative import with no known parent package")
+
+        def deferred_import(*args):
+            raise error
+
+        traceback_names = []
+        with patch("controller.native_review.git", return_value=BASE.encode()), \
+                patch.object(native, "evaluate", side_effect=deferred_import):
+            try:
+                native.publish("WP-003", 123, 90, 2, 1)
+            except ImportError as raised:
+                self.assertIs(raised, error)
+                traceback = raised.__traceback__
+                while traceback is not None:
+                    traceback_names.append(traceback.tb_frame.f_code.co_name)
+                    traceback = traceback.tb_next
+            else:
+                self.fail("Publisher must rethrow the original import failure")
+        self.assertIn("deferred_import", traceback_names)
+        created = [call for call in api.calls if call[0] == "POST"]
+        writes = [call for call in api.calls if call[0] == "PATCH"]
+        self.assertEqual(len(created), 1)
+        self.assertEqual({call[1] for call in writes}, {prefix + "/check-runs/201"})
+        self.assertEqual(len(writes), 1)
+        for call in writes:
+            self.assertEqual(call[2]["status"], "completed")
+            self.assertEqual(call[2]["conclusion"], "failure")
+            self.assertEqual(call[2]["output"]["summary"], str(error))
 
     def test_publisher_authority_is_server_bound_not_a_worktree_lease(self):
         native, api, prefix, _ = self.fixture()

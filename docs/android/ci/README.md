@@ -1136,6 +1136,13 @@ expression-bodied locals: lexical brace depth cannot prove their execution.
 A property-name call (including a generic call) does not establish a property
 read; a same-named class function can be called instead. An ordinary property
 read still qualifies even if that function exists.
+Member lineage supports ordinary initializer-backed properties only. A property
+slice containing an unqualified `get(...)` or `set(...)` form at class scope is
+excluded conservatively; custom getter/setter execution is not inferred from a
+JUnit property read. This prevents an uncalled setter's expression `=` or body
+from being borrowed as an initializer, including accessor-only properties.
+Ambiguous accessor-like syntax also fails closed; ordinary `val`/`var` helper
+initializers and their unshadowed reads remain supported.
 Equality (`==`) and identity (`===`) left operands remain property reads;
 only a single `=` is excluded as assignment/named-argument syntax.
 Helper constructor spelling is also checked against every candidate-bound Kotlin
@@ -1381,7 +1388,8 @@ module, and the consumer's declaring test method must actually execute in the
 authoritative method inventory. The trusted parser also requires a direct
 constructor call resolved to the helper's same-package declaration or exact
 import, or a same-class property initializer linked to that constructor and
-referenced by the method. A helper containing JUnit declarations cannot use
+referenced by the method. Custom accessors do not establish this lineage; only
+ordinary initializer-backed properties qualify. A helper containing JUnit declarations cannot use
 this route; inherited declarations are resolved against exact compiled
 candidate sources in the same module. Changed test classes retain same-file
 accounting for every declaration, including inherited methods. Test-only

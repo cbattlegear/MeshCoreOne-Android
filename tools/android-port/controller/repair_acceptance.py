@@ -1047,6 +1047,14 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     if scopes[index] == direct_scope
                     and tokens[index] in ("val", "var", "fun", "class", "object", "interface", "typealias", "init", "}")
                 ), len(tokens))
+                # Custom accessors need execution/target proof beyond initializer lineage.
+                if any(
+                    scopes[index] == direct_scope and tokens[index] in ("get", "set")
+                    and tokens[index - 1] not in (".", ":")
+                    and index + 1 < end and tokens[index + 1] == "("
+                    for index in range(start + 2, end)
+                ):
+                    continue
                 assignment = next((
                     index for index in range(start + 2, end)
                     if scopes[index] == direct_scope and tokens[index] == "="

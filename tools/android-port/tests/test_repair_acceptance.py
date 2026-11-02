@@ -610,6 +610,36 @@ class RepairExecutionTests(unittest.TestCase):
             ), self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
                 validate_hosted_methods(scope, blobs, REPO, executed, compiled)
 
+    def test_helper_member_lineage_does_not_borrow_custom_accessors(self):
+        helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
+        for declaration, accepted in (
+            ("private var fixture = true\n set(value) = check(MapTestHelper().enabled)", False),
+            ("private var fixture: Boolean\n get() = true\n"
+             " set(value) = check(MapTestHelper().enabled)", False),
+            ("private var fixture = true\n set(value) { check(MapTestHelper().enabled) }", False),
+            ("private var fixture: Boolean\n get() { return true }\n"
+             " set(value) { check(MapTestHelper().enabled) }", False),
+            ("private val fixture: Boolean\n get() = MapTestHelper().enabled", False),
+            ("private var fixture = MapTestHelper().enabled\n get() = true", False),
+            ("private val fixture = MapTestHelper().enabled", True),
+            ("private var fixture = MapTestHelper().enabled", True),
+        ):
+            consumer_source = (
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest {\n"
+                + declaration + "\n@Test fun keepsListReachable() { check(fixture) }\n}"
+            )
+            scope, _, _, blobs, content, executed, compiled = self.helper_inputs(
+                helper_source, consumer_source, member="fixture",
+            )
+            with self.subTest(declaration=declaration), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ):
+                if accepted:
+                    validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+                else:
+                    with self.assertRaisesRegex(PortError, "no direct or class-member lineage"):
+                        validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
     def test_repair_helper_consumers_require_compiled_and_executed_source_lineage(self):
         helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
         direct_consumer = (

@@ -30,7 +30,9 @@ class NotificationOpenActivity : Activity() {
             // Only this non-exported Activity stages a content tap; the exported launcher gets no payload.
             NotificationActionDispatcher.enqueue(NotificationResponse(payload, null, null))
             startActivity(
-                launcher.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                launcher.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                ),
             )
         } finally {
             finish()

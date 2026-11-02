@@ -154,6 +154,7 @@ class AndroidMessagingNotificationDelivery(
 
     internal fun buildNotification(request: NotificationRequest): Notification {
         val launchIntent = contentLaunchIntent(request)
+        val postId = requireNotNull(launchIntent.getStringExtra(EXTRA_POST_ID))
         val contentIntent = contentPendingIntent(request, launchIntent)
         val payloadExtras = launchIntent.extras
         val builder = Notification.Builder(context, channelFor(request.payload, request.soundEnabled))
@@ -197,7 +198,7 @@ class AndroidMessagingNotificationDelivery(
                         Notification.Action.Builder(
                             null,
                             definition.title,
-                            actionPendingIntent(request, definition.action, mutable = true),
+                            actionPendingIntent(request, definition.action, postId, mutable = true),
                         ).addRemoteInput(remoteInput).build(),
                     )
                 }
@@ -205,7 +206,7 @@ class AndroidMessagingNotificationDelivery(
                     Notification.Action.Builder(
                         null,
                         definition.title,
-                        actionPendingIntent(request, definition.action, mutable = false),
+                        actionPendingIntent(request, definition.action, postId, mutable = false),
                     ).build(),
                 )
                 NotificationAction.DISMISS -> Unit
@@ -229,13 +230,18 @@ class AndroidMessagingNotificationDelivery(
     internal fun actionPendingIntent(
         request: NotificationRequest,
         action: NotificationAction,
+        postId: String,
         mutable: Boolean,
     ): PendingIntent {
         val actionName = action.rawValue
         val intent = NotificationPayloadCodec.write(
             Intent(context, NotificationActionReceiver::class.java)
                 .setAction(ACTION_PREFIX + actionName)
-                .setData(Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$actionName"))
+                .setData(
+                    Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$actionName")
+                        .buildUpon().appendQueryParameter("post", postId).build(),
+                )
+                .putExtra(EXTRA_POST_ID, postId)
                 .putExtra(NotificationActionReceiver.EXTRA_ACTION, action.rawValue),
             request.payload,
         )

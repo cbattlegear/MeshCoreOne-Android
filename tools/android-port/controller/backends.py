@@ -366,13 +366,18 @@ class LocalHostBackend:
         self.prepared_wp = None
 
     def current_base(self):
-        value = self.host.capabilities().get("default_branch_sha")
+        capabilities = self.host.capabilities()
+        if not isinstance(capabilities, dict):
+            raise PortError("Native host capabilities are missing or malformed")
+        value = capabilities.get("default_branch_sha")
         if not isinstance(value, str) or SHA.fullmatch(value) is None:
             raise PortError("Native host did not supply a verified immutable default-branch SHA")
         return value
 
     def preflight(self, wp_id: str, base_sha: str):
         value = self.host.capabilities()
+        if not isinstance(value, dict):
+            raise PortError("Native host capabilities are missing or malformed")
         required = (
             "isolated_worktrees", "shared_ledger", "advisory_reservations",
             "read_only_reference", "credential_isolation", "authenticated",
@@ -385,7 +390,8 @@ class LocalHostBackend:
             raise PortError("Native host default branch changed")
         owner = self.manifest.wp(wp_id)["owner"]
         expected = next(a["sha256"] for a in self.manifest.data["agents"] if a["name"] == owner)
-        if value.get("profiles", {}).get(owner) != expected:
+        profiles = value.get("profiles")
+        if not isinstance(profiles, dict) or profiles.get(owner) != expected:
             raise PortError("Native host custom agent is not the trusted installed profile")
         self.prepared_base, self.prepared_wp = base_sha, wp_id
 
@@ -395,6 +401,49 @@ class LocalHostBackend:
             raise PortError("Native host reconciliation is missing/unverified")
         known.reconcile(result.identity)
         return result
+
+    def require_policy_owner(self, wp_id: str, record: dict):
+        raise PortError(
+            "Authenticated app-native caller attestation is unavailable; "
+            "injected callbacks and authority flags alone cannot establish ownership"
+        )
+
+    def same_task(self, wp_id: str, record: dict):
+        known = Identity.parse(record["identity"])
+        if not known.session_id or not record["branch"] or not record["worktree"]:
+            raise PortError("Policy reconciliation requires the stored session, branch and worktree")
+        capabilities = self.host.capabilities()
+        if (
+            not isinstance(capabilities, dict) or capabilities.get("caller_session_id") != known.session_id
+            or capabilities.get("branch") != record["branch"]
+            or capabilities.get("worktree") != record["worktree"]
+        ):
+            raise PortError("Authenticated native caller is not the existing session/branch/worktree owner")
+        observation = self.reconcile(wp_id, known)
+        if (
+            observation.ambiguous or not observation.pr_open
+            or observation.worker_state not in ("queued", "in_progress", "idle", "waiting_for_user")
+            or any(
+                value is not None and observation.identity.as_dict()[key] != value
+                for key, value in known.as_dict().items()
+            )
+            or observation.identity.session_id != known.session_id
+            or type(observation.identity.pr_number) is not int or observation.identity.pr_number < 1
+        ):
+            raise PortError("Policy reconciliation requires the same unambiguous active session and open PR")
+        actual = self.host.get_session(known.session_id)
+        if (
+            not isinstance(actual, dict)
+            or actual.get("session_id") != known.session_id
+            or actual.get("repository") != self.policy["repository"]
+            or actual.get("branch") != record["branch"]
+            or actual.get("worktree") != record["worktree"]
+            or actual.get("pr_number") != observation.identity.pr_number
+            or actual.get("pr_open") is not True
+            or actual.get("worker_state") not in ("queued", "in_progress", "idle", "waiting_for_user")
+        ):
+            raise PortError("Native session lookup does not confirm the stored owner and open PR")
+        return observation
 
     def launch(self, wp_id: str, attempt: str):
         if self.prepared_wp != wp_id or self.prepared_base is None:

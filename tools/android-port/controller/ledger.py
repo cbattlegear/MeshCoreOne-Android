@@ -444,6 +444,85 @@ class Ledger:
                 "SELECT * FROM leases WHERE repository=? AND wp=?", (self.repository, wp)
             ).fetchone())
 
+    def _reconcile_policy_binding(self, previous: dict, binding: dict, witness: dict, now: float):
+        """Retain the original record and update its binding plus the verified missing PR identity."""
+        if (
+            not isinstance(previous, dict) or previous.get("repository") != self.repository
+            or not isinstance(binding, dict) or not isinstance(witness, dict)
+            or type(now) not in (int, float) or not math.isfinite(now)
+        ):
+            raise PortError("Malformed policy reconciliation transaction")
+        wp, attempt, revision = previous.get("wp"), previous.get("attempt"), previous.get("revision")
+        if (
+            not isinstance(wp, str) or not wp or not isinstance(attempt, str) or not attempt
+            or type(revision) is not int or revision < 1
+        ):
+            raise PortError("Policy reconciliation requires an existing attempt and revision")
+        previous_identity = Identity.parse(previous.get("identity"))
+        if (
+            witness.get("session_id") != previous_identity.session_id
+            or previous_identity.session_id is None
+            or type(witness.get("pr_number")) is not int or witness["pr_number"] < 1
+        ):
+            raise PortError("Policy reconciliation witness lacks the original session and actual PR")
+        identity = previous_identity.reconcile(Identity(
+            session_id=witness["session_id"], pr_number=witness["pr_number"],
+        ))
+        previous_binding = previous.get("binding")
+        keys = {"repository", "work_package", "base_sha", "source_sha", "manifest_sha256", "policy_revision"}
+        if (
+            not isinstance(previous_binding, dict) or set(previous_binding) != keys or set(binding) != keys
+            or any(binding[key] != previous_binding[key] for key in
+                   ("repository", "work_package", "source_sha", "manifest_sha256"))
+            or binding["repository"] != self.repository or binding["work_package"] != wp
+            or binding["source_sha"] != REFERENCE_SHA
+            or not isinstance(binding["base_sha"], str) or SHA.fullmatch(binding["base_sha"]) is None
+            or not isinstance(binding["manifest_sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", binding["manifest_sha256"]) is None
+            or not isinstance(binding["policy_revision"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", binding["policy_revision"]) is None
+            or binding["policy_revision"] == previous_binding["policy_revision"]
+        ):
+            raise PortError("Policy reconciliation may change only the base and policy revision")
+        with self.transaction() as connection:
+            row = self.unpack(connection.execute(
+                "SELECT * FROM leases WHERE repository=? AND wp=?", (self.repository, wp)
+            ).fetchone())
+            if row != previous:
+                raise PortError("Policy reconciliation record changed or was already reconciled")
+            if row["state"] not in ("leased", "dispatching", "running", "repair_wait", "review_wait", "gate_wait"):
+                raise PortError("Policy reconciliation requires a held, nonterminal worker")
+            if row["completion"] is not None:
+                raise PortError("Policy reconciliation cannot replace completion evidence")
+            lane = connection.execute(
+                "SELECT state FROM operations WHERE repository=? AND key='merge-lane'", (self.repository,)
+            ).fetchone()
+            if lane is not None and lane["state"] == "intent":
+                raise PortError("An in-flight merge must reconcile before policy binding can change")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS policy_reconciliations (
+                    repository TEXT NOT NULL, wp TEXT NOT NULL, attempt TEXT NOT NULL,
+                    previous_revision INTEGER NOT NULL, previous_record TEXT NOT NULL,
+                    new_binding TEXT NOT NULL, witness TEXT NOT NULL, reconciled_at REAL NOT NULL,
+                    PRIMARY KEY (repository,wp,attempt,previous_revision)
+                )
+            """)
+            connection.execute("""
+                INSERT INTO policy_reconciliations
+                (repository,wp,attempt,previous_revision,previous_record,new_binding,witness,reconciled_at)
+                VALUES (?,?,?,?,?,?,?,?)
+            """, (self.repository, wp, attempt, revision, json.dumps(previous), json.dumps(binding),
+                  json.dumps(witness), now))
+            updated = connection.execute("""
+                UPDATE leases SET binding=?,identity=?,revision=revision+1
+                WHERE repository=? AND wp=? AND attempt=? AND revision=?
+            """, (json.dumps(binding), json.dumps(identity.as_dict()), self.repository, wp, attempt, revision))
+            if updated.rowcount != 1:
+                raise PortError("Policy reconciliation lost the reservation compare-and-swap")
+            return self.unpack(connection.execute(
+                "SELECT * FROM leases WHERE repository=? AND wp=?", (self.repository, wp)
+            ).fetchone())
+
     def overlap_report(self):
         # The policy is intentionally not stored in the ledger; this report uses path identity only.
         records = self.records()

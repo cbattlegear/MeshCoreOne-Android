@@ -12,7 +12,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from controller.authority import GitHubGateAuthority
-from controller.backends import CloudBackend, GitHubApi
+from controller.backends import CloudBackend, GitHubApi, LocalHostBackend, NativeHost
 from controller.engine import Controller
 from controller.errors import PortError
 from controller.gates import Binding, verify_completion
@@ -65,6 +65,34 @@ def live_controller(manifest, policy, settings, backend):
     return Controller(manifest, policy, settings, ledger, cloud, GitHubGateAuthority(cloud, manifest, policy))
 
 
+def native_policy_controller(manifest, policy, settings, host, wp_id, attempt, expected_revision):
+    if not isinstance(host, NativeHost):
+        raise PortError(
+            "Policy reconciliation requires an authenticated app-native host adapter; "
+            "standalone Python cannot establish the calling session."
+        )
+    if settings.paused or policy["paused"]:
+        raise PortError("Paused policy blocks live policy reconciliation")
+    if settings.ledger_path is None or not settings.ledger_path.is_file():
+        raise PortError("Policy reconciliation requires an existing shared ledger")
+    if not settings.token or not settings.user_login:
+        raise PortError("Policy reconciliation requires an authenticated GitHub user credential")
+    record = ledger_snapshot(settings, policy["repository"]).get(wp_id)
+    if (
+        type(expected_revision) is not int or expected_revision < 1
+        or record is None or record["attempt"] != attempt
+        or record["revision"] != expected_revision or record["backend"] != "local"
+    ):
+        raise PortError("Missing or stale same-task policy reservation")
+    backend = LocalHostBackend(host, manifest, policy)
+    LocalHostBackend.require_policy_owner(backend, wp_id, record)
+    cloud = CloudBackend(GitHubApi(settings.token), manifest, policy, settings)
+    cloud.authenticate()
+    require_trusted_controller(manifest.repo, cloud)
+    ledger = Ledger(settings.ledger_path, policy["repository"])
+    return Controller(manifest, policy, settings, ledger, backend, GitHubGateAuthority(cloud, manifest, policy))
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="Paused Android-port controller; every command defaults to dry-run")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[3])
@@ -75,6 +103,12 @@ def build_parser():
     commands.add_parser("status")
     commands.add_parser("overlaps", help="Report advisory path/capability overlaps; never blocks local edits")
     commands.add_parser("migrate-reservations", help="Migrate legacy receipts in one ledger transaction")
+    reconcile = commands.add_parser(
+        "reconcile-policy", help="Reconcile a reviewed policy change for the same authenticated local task",
+    )
+    reconcile.add_argument("--wp", required=True)
+    reconcile.add_argument("--attempt", required=True)
+    reconcile.add_argument("--expected-revision", required=True, type=int)
     files = commands.add_parser("files")
     files.add_argument("--wp")
     files.add_argument("--primary-only", action="store_true")
@@ -112,7 +146,7 @@ def build_parser():
     return parser
 
 
-def main(argv=None, environment=None):
+def main(argv=None, environment=None, native_host=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -186,6 +220,26 @@ def main(argv=None, environment=None):
                 print(render(manifest, policy, args.wp), end="")
                 return 0
             result = factories[args.format]()
+        elif args.command == "reconcile-policy":
+            if dry_run:
+                record = records.get(args.wp)
+                result = {
+                    "dry_run": True, "action": "preview-same-task-policy-reconciliation",
+                    "side_effects": False, "work_package": args.wp,
+                    "attempt": args.attempt, "expected_revision": args.expected_revision,
+                    "current_revision": record["revision"] if record else None,
+                    "binding": record["binding"] if record else None,
+                    "requires": [
+                        "reviewed current default-branch controller and policy transition",
+                        "authenticated calling session, existing shared ledger and open PR",
+                        "explicit live authorization",
+                    ],
+                }
+            else:
+                controller = native_policy_controller(
+                    manifest, policy, settings, native_host, args.wp, args.attempt, args.expected_revision,
+                )
+                result = controller.reconcile_policy(args.wp, args.attempt, args.expected_revision, time.time())
         elif args.command == "report":
             paths = (args.binding, args.pr, args.evidence, args.review, args.approvals)
             if args.inspect_merged:

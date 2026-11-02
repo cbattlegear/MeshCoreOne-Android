@@ -66,6 +66,24 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(result, 2)
                 self.assertIn("cannot call app-native create_session", errors)
 
+    def test_policy_reconciliation_preview_is_read_only_and_live_requires_native_host(self):
+        arguments = ["reconcile-policy", "--wp", "WP-302", "--attempt", "existing", "--expected-revision", "1"]
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory) / "not-created.sqlite"
+            environment = {"ANDROID_PORT_LEDGER": str(ledger)}
+            with patch("controller.dispatch.GitHubApi", side_effect=AssertionError("preview must not access network")):
+                result, output, errors = self.command(arguments, environment)
+            self.assertEqual((result, errors), (0, ""))
+            preview = json.loads(output)
+            self.assertTrue(preview["dry_run"])
+            self.assertFalse(preview["side_effects"])
+            self.assertIsNone(preview["current_revision"])
+            self.assertFalse(ledger.exists())
+            result, _, errors = self.command(["--live", *arguments], environment)
+            self.assertEqual(result, 2)
+            self.assertIn("authenticated app-native host adapter", errors)
+            self.assertFalse(ledger.exists())
+
     def test_status_and_report_do_not_claim_ported_features(self):
         for command in ("status", "report"):
             result, output, _ = self.command([command])

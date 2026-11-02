@@ -10,14 +10,18 @@ from contextlib import closing
 from unittest.mock import Mock, patch
 
 from fixtures import (
-    BASE, HEAD, MERGE, NOW, FakeAuthority, FakeBackend, base_manifest, bundle,
+    BASE, HEAD, MERGE, NOW, REPO, FakeApi, FakeAuthority, FakeBackend, base_manifest, bundle,
     policy, settings, test_manifest,
 )
-from controller.backends import Observation
+from controller.authority import GitHubGateAuthority
+from controller.backends import CloudBackend, GitHubApi, LocalHostBackend, NativeHost, Observation
 from controller.engine import Controller, TerminalMerge
 from controller.errors import PortError, ReceiptError
+from controller.gates import policy_revision
 from controller.ledger import Identity, Ledger
 from controller.merged_acceptance import BoundedRepair
+from controller.native_review import trusted_inputs
+from controller.render import marker
 from controller.schema import digest
 from controller.settings import Budget, Settings, Usage
 
@@ -1009,3 +1013,392 @@ class StateTests(unittest.TestCase):
         self.assert_successor_history_and_replay()
         with self.assertRaisesRegex(PortError, "Merge intent"):
             self.ledger.begin_merge(payload)
+
+
+class FixturePolicyApi(GitHubApi):
+    def __init__(self, routes):
+        self.fake = FakeApi(routes)
+
+    def request(self, method, path, payload=None, *, readonly=False):
+        return self.fake.request(method, path, payload, readonly=readonly)
+
+
+class PolicyReconciliationTests(unittest.TestCase):
+    OLD_BASE = "d7f35bbe938ca79d3bc8ab5510fb5cfa9cf8a808"
+    CURRENT_BASE = "d85ac9f8a5367615099bc215acc8d022c11eb75b"
+    ATTEMPT = "same-attempt"
+    WP = "WP-302"
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="policy-reconcile-")
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name) / "ledger.sqlite"
+        self.worktree = str(Path(self.temporary.name) / "worker")
+        self.branch = "fixture-navigation"
+        self.manifest, self.policy = trusted_inputs(REPO, self.CURRENT_BASE)
+        old_manifest, self.old_policy = trusted_inputs(REPO, self.OLD_BASE)
+        self.settings = settings(self.path)
+        self.ledger = Ledger(self.path, self.policy["repository"])
+        owner = self.manifest.wp(self.WP)["owner"]
+        profile = next(item["sha256"] for item in self.manifest.data["agents"] if item["name"] == owner)
+        self.capabilities = {
+            "repository": self.policy["repository"], "default_branch_sha": self.CURRENT_BASE,
+            "profiles": {owner: profile}, "branch": self.branch, "worktree": self.worktree,
+            "caller_session_id": "session-1", "ledger_path": str(self.path),
+            "isolated_worktrees": True, "shared_ledger": True, "advisory_reservations": True,
+            "read_only_reference": True, "credential_isolation": True, "authenticated": True,
+        }
+        self.session = {
+            "session_id": "session-1", "repository": self.policy["repository"],
+            "branch": self.branch, "worktree": self.worktree, "pr_number": 123,
+            "pr_open": True, "worker_state": "in_progress",
+        }
+        self.observation = Observation(Identity(session_id="session-1", pr_number=123), "in_progress", True, True)
+        self.create = Mock(side_effect=AssertionError("policy reconciliation must not create sessions"))
+        self.send = Mock(side_effect=AssertionError("policy reconciliation must not send repair messages"))
+        self.host = NativeHost(
+            lambda: self.capabilities, lambda wp, identity: self.observation, self.create,
+            lambda session: copy.deepcopy(self.session), self.send,
+            Mock(side_effect=AssertionError("policy reconciliation must not spend a worker budget")),
+        )
+        self.backend = LocalHostBackend(self.host, self.manifest, self.policy)
+        prefix = f"/repos/{self.policy['repository']}"
+        self.pr_path = prefix + "/pulls/123"
+        self.pr = {
+            "number": 123, "state": "open", "merged": False, "body": marker(self.WP),
+            "head": {"ref": self.branch, "sha": HEAD, "repo": {"full_name": self.policy["repository"]}},
+            "base": {
+                "ref": self.policy["default_branch"], "sha": self.CURRENT_BASE,
+                "repo": {"full_name": self.policy["repository"]},
+            },
+        }
+        self.api = FixturePolicyApi({
+            ("GET", "/user"): {"login": self.settings.user_login, "type": "User"},
+            ("GET", prefix): {
+                "full_name": self.policy["repository"], "default_branch": self.policy["default_branch"],
+                "permissions": {"push": True},
+            },
+            ("GET", prefix + "/git/ref/heads/main"): {"object": {"sha": self.CURRENT_BASE}},
+            ("GET", self.pr_path): self.pr,
+        })
+        self.cloud = CloudBackend(self.api, self.manifest, self.policy, self.settings)
+        self.controller = Controller(
+            self.manifest, self.policy, self.settings, self.ledger, self.backend,
+            GitHubGateAuthority(self.cloud, self.manifest, self.policy),
+        )
+        scoped = {
+            "wp-owned": ["android/app/src/main/kotlin/com/meshcoreone/android/app/navigation/Fixture.kt"],
+            "app-build-launcher": ["android/app/src/main/kotlin/com/meshcoreone/android/app/AppContainer.kt"],
+            "reviewed-support-consumer": [
+                "android/feature/chats/src/main/kotlin/com/meshcoreone/android/chats/Fixture.kt",
+            ],
+            "reviewed-support-test": [
+                "android/feature/chats/src/test/kotlin/com/meshcoreone/android/chats/FixtureTest.kt",
+            ],
+        }
+        paths = sorted(path for values in scoped.values() for path in values)
+        operations = ["modify", "add-direct-support-wiring", "modify-related-consumer", "add-or-update-related-test"]
+        binding = {
+            "repository": self.policy["repository"], "work_package": self.WP, "base_sha": self.OLD_BASE,
+            "source_sha": old_manifest.data["reference"]["commit"], "manifest_sha256": old_manifest.sha256,
+            "policy_revision": policy_revision(old_manifest, self.old_policy),
+        }
+        self.ledger.claim(
+            {**self.manifest.wp(self.WP), "write_paths": paths}, binding, "local", self.ATTEMPT,
+            NOW, 1800, 5, 0, 100, 5, capabilities=scoped, operations=operations,
+            authorization_context={"original": "immutable user authorization"}, branch=self.branch,
+            worktree=self.worktree, initial_identity=Identity(session_id="session-1"),
+        )
+        self.trusted = patch("controller.dispatch.require_trusted_controller", return_value=self.CURRENT_BASE)
+        self.trusted.start()
+        self.addCleanup(self.trusted.stop)
+        self.attestation = patch.object(LocalHostBackend, "require_policy_owner", return_value=None)
+        self.attestation.start()
+        self.addCleanup(self.attestation.stop)
+
+    def reconcile(self):
+        return self.controller.reconcile_policy(self.WP, self.ATTEMPT, 1, NOW)
+
+    def audits(self):
+        with closing(sqlite3.connect(self.path)) as connection:
+            exists = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='policy_reconciliations'"
+            ).fetchone()[0]
+            return list(connection.execute(
+                "SELECT previous_record,new_binding,witness FROM policy_reconciliations"
+            )) if exists else []
+
+    def test_same_task_preserves_record_scope_and_audits_without_launch_or_old_gate_authority(self):
+        before = self.ledger.get(self.WP)
+        result = self.reconcile()
+        after = self.ledger.get(self.WP)
+        self.assertEqual(result["action"], "same-task-policy-reconciled")
+        self.assertFalse(result["previous_binding_evidence_valid"])
+        self.assertEqual(after, {
+            **before, "binding": self.controller.binding(self.WP, self.CURRENT_BASE), "revision": 2,
+            "identity": {**before["identity"], "pr_number": 123},
+        })
+        self.assertEqual(len(self.audits()), 1)
+        previous, binding, witness = map(json.loads, self.audits()[0])
+        self.assertEqual(previous, before)
+        self.assertEqual(binding, after["binding"])
+        self.assertEqual(witness["session_id"], "session-1")
+        self.assertEqual(witness["pr_number"], 123)
+        self.assertEqual(witness["pr_head"], HEAD)
+        self.create.assert_not_called()
+        self.send.assert_not_called()
+        self.assertTrue(all(call[0] == "GET" for call in self.api.fake.calls))
+        old_review = {"binding": {**before["binding"], "head_sha": HEAD}, "ci_run_ids": [1], "approval_id": None}
+        with patch.dict(self.policy, {"dispatch_mode": "local", "activation_approved": True}), \
+                patch.object(Settings, "require_live"), \
+                patch.object(self.controller.authority, "reviewed_candidate", return_value=old_review), \
+                self.assertRaisesRegex(PortError, "disagrees"):
+            self.controller.decide_merge(self.WP)
+        with self.assertRaisesRegex(PortError, "stale"):
+            self.reconcile()
+        self.assertEqual(len(self.audits()), 1)
+
+    def test_stale_attempt_revision_unknown_authority_and_paused_policy_refuse_without_writes(self):
+        before = self.ledger.get(self.WP)
+        for attempt, revision in (("other-attempt", 1), (self.ATTEMPT, 2)):
+            with self.subTest(attempt=attempt, revision=revision), self.assertRaises(PortError):
+                self.controller.reconcile_policy(self.WP, attempt, revision, NOW)
+        self.controller.authority = None
+        with self.assertRaisesRegex(PortError, "authorities"):
+            self.reconcile()
+        self.controller.authority = GitHubGateAuthority(self.cloud, self.manifest, self.policy)
+        self.controller.settings = replace(self.settings, paused=True)
+        with self.assertRaisesRegex(PortError, "Paused"):
+            self.reconcile()
+        self.assertEqual(self.ledger.get(self.WP), before)
+        self.assertEqual(self.audits(), [])
+
+    def test_injected_callbacks_and_authority_flags_cannot_impersonate_a_native_owner(self):
+        before = self.ledger.get(self.WP)
+        self.attestation.stop()
+        try:
+            with self.assertRaisesRegex(PortError, "caller attestation is unavailable"):
+                self.reconcile()
+        finally:
+            self.attestation.start()
+        self.assertEqual(self.api.fake.calls, [])
+        self.assertEqual(self.ledger.get(self.WP), before)
+        self.assertEqual(self.audits(), [])
+
+    def test_native_entry_refuses_before_network_or_ledger_initialization(self):
+        from controller.dispatch import native_policy_controller
+
+        before = self.ledger.get(self.WP)
+        self.attestation.stop()
+        try:
+            with patch("controller.dispatch.GitHubApi", side_effect=AssertionError("network before attestation")), \
+                    patch.object(Ledger, "__init__", side_effect=AssertionError("ledger initialized")), \
+                    self.assertRaisesRegex(PortError, "caller attestation is unavailable"):
+                native_policy_controller(
+                    self.manifest, self.policy, self.settings, self.host, self.WP, self.ATTEMPT, 1,
+                )
+        finally:
+            self.attestation.start()
+        self.assertEqual(self.ledger.get(self.WP), before)
+        self.assertEqual(self.audits(), [])
+
+    def test_manual_reconciliation_does_not_activate_dispatch_or_consume_a_budget(self):
+        self.controller.settings = replace(self.settings, mode="off", max_inflight=None, budget=None)
+        self.cloud.settings = self.controller.settings
+        result = self.reconcile()
+        self.assertFalse(result["dispatched"])
+        self.assertFalse(result["merged"])
+        self.assertEqual(self.policy["dispatch_mode"], "off")
+        self.assertFalse(self.policy["activation_approved"])
+        self.create.assert_not_called()
+        self.send.assert_not_called()
+
+    def test_github_authority_must_use_the_same_settings_and_complete_manifest(self):
+        before = self.ledger.get(self.WP)
+        self.cloud.settings = replace(self.settings, user_login="other-user")
+        with self.assertRaisesRegex(PortError, "authority differs"):
+            self.reconcile()
+        self.cloud.settings = self.settings
+        self.cloud.manifest = replace(self.manifest, exclusions={"reference_sha": HEAD})
+        with self.assertRaisesRegex(PortError, "authority differs"):
+            self.reconcile()
+        self.cloud.manifest = replace(self.manifest, repo=self.path.parent)
+        with self.assertRaisesRegex(PortError, "authority differs"):
+            self.reconcile()
+        self.assertEqual(self.ledger.get(self.WP), before)
+        self.assertEqual(self.audits(), [])
+
+    def test_foreign_or_missing_owner_session_pr_and_host_refuse(self):
+        before = self.ledger.get(self.WP)
+        for key, bad in (
+            ("caller_session_id", "other-session"), ("branch", "other-branch"),
+            ("worktree", self.worktree + "-other"), ("ledger_path", str(self.path.parent / "missing.sqlite")),
+            ("authenticated", False), ("profiles", None), ("profiles", []),
+        ):
+            original = self.capabilities[key]
+            self.capabilities[key] = bad
+            with self.subTest(key=key), self.assertRaises((PortError, OSError)):
+                self.reconcile()
+            self.capabilities[key] = original
+        for key, bad in (
+            ("session_id", "other-session"), ("repository", "other/repo"), ("branch", "other-branch"),
+            ("worktree", self.worktree + "-other"), ("pr_number", 999), ("pr_open", False),
+            ("worker_state", "completed"),
+        ):
+            original = self.session[key]
+            self.session[key] = bad
+            with self.subTest(key=key), self.assertRaises(PortError):
+                self.reconcile()
+            self.session[key] = original
+        for observation in (
+            Observation(Identity(session_id="other", pr_number=123), "in_progress", True, True),
+            Observation(Identity(session_id="session-1", pr_number=123), "in_progress", True, False),
+            Observation(Identity(session_id="session-1", pr_number=123), "in_progress", True, True, True),
+            Observation(Identity(session_id="session-1", pr_number=123), "completed", True, True),
+            Observation(Identity(session_id="session-1"), "in_progress", True, True),
+        ):
+            self.observation = observation
+            with self.subTest(observation=observation), self.assertRaises(PortError):
+                self.reconcile()
+        self.assertEqual(self.ledger.get(self.WP), before)
+        self.assertEqual(self.audits(), [])
+
+    def test_github_pr_identity_and_head_are_independently_rechecked(self):
+        before = self.ledger.get(self.WP)
+        route = ("GET", self.pr_path)
+        for change in (
+            {"state": "closed"}, {"merged": True}, {"body": ""},
+            {"head": {**self.pr["head"], "ref": "foreign"}}, {"base": {**self.pr["base"], "ref": "foreign"}},
+            {"head": {**self.pr["head"], "repo": None}}, {"base": {**self.pr["base"], "sha": HEAD}},
+        ):
+            self.api.fake.routes[route] = {**self.pr, **change}
+            with self.subTest(change=change), self.assertRaises(PortError):
+                self.reconcile()
+        heads = iter((HEAD, MERGE))
+        self.api.fake.routes[route] = lambda _: {**self.pr, "head": {**self.pr["head"], "sha": next(heads)}}
+        with self.assertRaisesRegex(PortError, "head changed"):
+            self.reconcile()
+        self.assertEqual(self.ledger.get(self.WP), before)
+        self.assertEqual(self.audits(), [])
+
+    def test_unchanged_mixed_scope_is_validated_without_cartesian_admission(self):
+        record = self.ledger.get(self.WP)
+        self.controller._validate_reconciliation_scope(self.WP, record, self.manifest, self.old_policy, self.policy)
+        changed_policy = copy.deepcopy(self.policy)
+        changed_policy["reservation_policy"]["capabilities"][0]["operations"].append("new-operation")
+        with self.assertRaisesRegex(PortError, "capability scope"):
+            self.controller._validate_reconciliation_scope(
+                self.WP, record, self.manifest, self.old_policy, changed_policy,
+            )
+        for mutate in (
+            lambda row: row["capabilities"]["wp-owned"].append("android/unowned/Fixture.kt"),
+            lambda row: row["reservation_operations"].append("invented-operation"),
+            lambda row: row["paths"].append("android/unowned/Fixture.kt"),
+            lambda row: row["capabilities"].update({"invented": [row["paths"][0]]}),
+        ):
+            bad = copy.deepcopy(record)
+            mutate(bad)
+            with self.subTest(bad=bad), self.assertRaises(PortError):
+                self.controller._validate_reconciliation_scope(self.WP, bad, self.manifest, self.old_policy, self.policy)
+
+    def test_unreviewed_policy_source_or_manifest_drift_refuses(self):
+        before = self.ledger.get(self.WP)
+        with patch.dict("controller.engine.REVIEWED_POLICY_TRANSITIONS", {}, clear=True), \
+                self.assertRaisesRegex(PortError, "Unreviewed"):
+            self.reconcile()
+        old_manifest, old_policy = trusted_inputs(REPO, self.OLD_BASE)
+        for kind in ("source", "manifest", "policy"):
+            altered_manifest = copy.deepcopy(old_manifest.data)
+            altered_policy = copy.deepcopy(old_policy)
+            if kind == "source":
+                altered_manifest["reference"]["commit"] = HEAD
+            elif kind == "manifest":
+                altered_manifest["work_packages"][0]["title"] = "Unreviewed fixture"
+            else:
+                altered_policy["repair_limit"] += 1
+            changed = replace(old_manifest, data=altered_manifest)
+            def inputs(repo, revision):
+                return (changed, altered_policy) if revision == self.OLD_BASE else (self.manifest, self.policy)
+            with self.subTest(kind=kind), patch("controller.native_review.trusted_inputs", side_effect=inputs), \
+                    self.assertRaises(PortError):
+                self.reconcile()
+        self.assertEqual(self.ledger.get(self.WP), before)
+        self.assertEqual(self.audits(), [])
+
+    def test_complete_record_race_and_inflight_merge_refuse_without_overwriting(self):
+        before = self.ledger.get(self.WP)
+        actual_get = self.host.get_session
+        def transition_during_lookup(session):
+            self.ledger.transition(self.WP, self.ATTEMPT, "running")
+            return actual_get(session)
+        self.host.get_session = transition_during_lookup
+        with self.assertRaisesRegex(PortError, "record changed"):
+            self.reconcile()
+        raced = self.ledger.get(self.WP)
+        self.assertEqual(raced, {**before, "state": "running"})
+        self.assertEqual(self.audits(), [])
+        self.host.get_session = actual_get
+        with self.ledger.transaction() as connection:
+            connection.execute(
+                "INSERT INTO operations VALUES (?,?,?,?,NULL)",
+                (self.policy["repository"], "merge-lane", "intent", "fixture-hash"),
+            )
+        with self.assertRaisesRegex(PortError, "in-flight merge"):
+            self.reconcile()
+        self.assertEqual(self.ledger.get(self.WP), raced)
+        self.assertEqual(self.audits(), [])
+
+    def test_default_branch_race_refuses_before_mutation(self):
+        before = self.ledger.get(self.WP)
+        with patch.object(self.cloud, "current_base", return_value=HEAD), \
+                self.assertRaisesRegex(PortError, "advanced"):
+            self.reconcile()
+        self.assertEqual(self.ledger.get(self.WP), before)
+        self.assertEqual(self.audits(), [])
+
+    def test_failed_update_rolls_back_original_record_and_audit(self):
+        before = self.ledger.get(self.WP)
+        with self.ledger.transaction() as connection:
+            connection.execute("""
+                CREATE TRIGGER fixture_abort_policy_update BEFORE UPDATE OF binding ON leases
+                BEGIN SELECT RAISE(ABORT, 'fixture policy update failure'); END
+            """)
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "fixture policy update failure"):
+            self.reconcile()
+        self.assertEqual(self.ledger.get(self.WP), before)
+        self.assertEqual(self.audits(), [])
+
+    def test_shared_ledger_transaction_never_waits_on_network_or_native_host(self):
+        commit = self.ledger._reconcile_policy_binding
+        def without_external_calls(*args):
+            with patch.object(self.api, "request", side_effect=AssertionError("network under ledger lock")), \
+                    patch.object(self.host, "capabilities", side_effect=AssertionError("host under ledger lock")), \
+                    patch.object(self.host, "get_session", side_effect=AssertionError("host under ledger lock")):
+                return commit(*args)
+        with patch.object(self.ledger, "_reconcile_policy_binding", side_effect=without_external_calls):
+            self.reconcile()
+        self.assertEqual(self.ledger.get(self.WP)["revision"], 2)
+
+    def test_concurrent_replays_allow_only_one_atomic_transition(self):
+        def run(_):
+            try:
+                self.reconcile()
+                return "reconciled"
+            except PortError:
+                return "stale"
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(run, range(2)))
+        self.assertCountEqual(results, ["reconciled", "stale"])
+        self.assertEqual(self.ledger.get(self.WP)["revision"], 2)
+        self.assertEqual(len(self.audits()), 1)
+
+    def test_candidate_controller_cannot_authorize_its_own_policy_transition(self):
+        before = self.ledger.get(self.WP)
+        self.trusted.stop()
+        try:
+            with self.assertRaisesRegex(PortError, "current default-branch|immutable Git input"):
+                self.reconcile()
+        finally:
+            self.trusted.start()
+        self.assertEqual(self.ledger.get(self.WP), before)
+        self.assertEqual(self.audits(), [])

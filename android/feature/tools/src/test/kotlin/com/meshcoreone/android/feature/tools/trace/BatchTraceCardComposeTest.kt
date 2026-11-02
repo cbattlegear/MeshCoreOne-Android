@@ -80,7 +80,7 @@ class BatchTraceCardComposeTest {
         )
         advanceFrames()
         assertTrue(descriptions().contains(C.contactsResultsBatchCompleteLabel(host.get().resources, 2, 3, 66)))
-        assertTrue(texts().contains(C.contactsResultsBatchSuccess(host.get().resources, 2, 3, 66)))
+        assertFalse(descriptions().any { it.startsWith("Batch progress") })
         assertTrue(descriptions().contains(C.contactsResultsAvgRTTLabel(host.get().resources, 150, 100, 200)))
         assertEquals(1, descriptions().count { it.startsWith("Average round trip") })
     }

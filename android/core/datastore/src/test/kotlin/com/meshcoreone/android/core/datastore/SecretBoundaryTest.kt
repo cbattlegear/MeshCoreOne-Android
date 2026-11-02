@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.datastore
 
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import androidx.datastore.core.DataStoreFactory
+import androidx.datastore.core.FileStorage
 import androidx.datastore.core.Serializer
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.io.File
@@ -426,6 +427,7 @@ class SecretBoundaryTest {
     }
 
     @Test
+    @Config(sdk = [31, 37])
     fun realDataStoreWriteFailureKeepsOldCiphertextAndKey() = runBlocking<Unit> {
         val directory = temporary.newFolder()
         val lifetime = SupervisorJob()
@@ -443,8 +445,10 @@ class SecretBoundaryTest {
             }
         }
         val data = DataStoreFactory.create(
-            failing, scope = CoroutineScope(lifetime + Dispatchers.IO),
-            produceFile = { File(directory, MeshCoreStorage.SECRET_FILENAME) },
+            storage = SerializedFileStorage(
+                FileStorage(failing) { File(directory, MeshCoreStorage.SECRET_FILENAME) },
+            ),
+            scope = CoroutineScope(lifetime + Dispatchers.IO),
         )
         val store = SecretStore(data, cryptography, StorageAccess {}, reporter, "test.io")
         try {

@@ -11,6 +11,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    __package__ = "controller"
 
 from controller.backends import CloudBackend, GitHubApi
 from controller.engine import GateBundle
@@ -27,6 +28,8 @@ from controller.staging import object_bytes, stage_review
 REVIEW_MARKER = "<!-- android-port-native-review-v1 -->\n"
 COMPRESSED_REVIEW_MARKER = "<!-- android-port-native-review-zlib-v1 -->\n"
 RESULT_MARKER = "<!-- android-port-native-gates-v1 -->\n"
+PUBLICATION_MARKER = "android-port-native-publication-v1 "
+PUBLICATION_STEP = "Validate current server facts and publish exact-head checks"
 WORKFLOW_PATH = ".github/workflows/android-parity-review.yml"
 CI_PATH = ".github/workflows/android-ci.yml"
 
@@ -462,15 +465,50 @@ class NativeReview:
         run, suite = self.workflow_run(result["publisher_run_id"], result["publisher_run_attempt"],
                                        WORKFLOW_PATH, value.binding.base_sha, ("workflow_dispatch",),
                                        review_identity=(wp_id, number, result["review_id"]))
+        self.verify_published_checks(selected, summaries[0], value.binding, run, suite, number, result["review_id"])
+        return value
+
+    def verify_published_checks(self, selected, summary, binding, run, suite, number, review_id):
+        normalized = False
         for check in selected:
             if (
-                check.get("head_sha") != value.binding.head_sha or check.get("status") != "completed"
+                check.get("head_sha") != binding.head_sha or check.get("status") != "completed"
                 or check.get("conclusion") != "success" or check.get("app", {}).get("id") != suite["app"]["id"]
-                or check.get("external_id") != f"{value.binding.key}:{run['id']}:{run['run_attempt']}"
-                or check.get("details_url") != f"https://github.com/{value.binding.repository}/actions/runs/{run['id']}"
+                or check.get("external_id") != f"{binding.key}:{run['id']}:{run['run_attempt']}"
             ):
                 raise PortError("Project check is not from the authenticated default-branch publisher run")
-        return value
+            workflow_url = f"https://github.com/{binding.repository}/actions/runs/{run['id']}"
+            if check.get("details_url") != workflow_url:
+                check_id = positive_integer(check.get("id"), "Project check ID")
+                if check.get("details_url") != f"https://github.com/{binding.repository}/runs/{check_id}":
+                    raise PortError("Project check has an unrecognized publisher URL")
+                normalized = True
+        if normalized:
+            from .repair_acceptance import read_job_log
+
+            jobs = self.backend.pages(
+                f"{self.prefix}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs", "jobs",
+            )
+            if len(jobs) != 1 or (
+                jobs[0].get("name") != f"Native review {binding.work_package} PR {number} receipt {review_id}"
+                or jobs[0].get("run_id") != run["id"] or jobs[0].get("head_sha") != binding.base_sha
+                or jobs[0].get("status") != "completed" or jobs[0].get("conclusion") != "success"
+            ):
+                raise PortError("Publisher log requires the exact successful publication job")
+            log = read_job_log(self, positive_integer(jobs[0].get("id"), "Publisher job ID"))
+            receipts = []
+            for line in log.splitlines():
+                columns = line.split("\t", 2)
+                if len(columns) == 3 and columns[1] == PUBLICATION_STEP:
+                    text = re.sub(r"^\S+\s?", "", columns[2])
+                    if text.startswith(PUBLICATION_MARKER):
+                        receipts.append(decode_json(text[len(PUBLICATION_MARKER):]))
+            expected_receipt = {
+                "check_ids": sorted(positive_integer(c.get("id"), "Project check ID") for c in selected),
+                "result_sha256": hashlib.sha256(summary.encode("utf-8")).hexdigest(),
+            }
+            if receipts != [expected_receipt]:
+                raise PortError("Missing or mismatched authenticated publisher check receipt")
 
     def publish(self, wp_id, number, review_id, run_id, attempt):
         positive_integer(review_id, "Actual source review ID")
@@ -505,7 +543,7 @@ class NativeReview:
                 raise PortError("Source findings, review, head or base changed during publication")
             result.update(publisher_run_id=run_id, publisher_run_attempt=attempt)
             summary = bounded_output(RESULT_MARKER + json.dumps(result, sort_keys=True, separators=(",", ":")))
-        except (PortError, KeyError, ValueError, OSError) as error:
+        except (PortError, KeyError, ValueError, OSError, ImportError) as error:
             for check_id in created:
                 self.backend.api.request("PATCH", f"{self.prefix}/check-runs/{check_id}", {
                     "status": "completed", "conclusion": "failure",
@@ -522,6 +560,10 @@ class NativeReview:
                     "summary": summary,
                 },
             })
+        print(PUBLICATION_MARKER + json.dumps({
+            "check_ids": sorted(created),
+            "result_sha256": hashlib.sha256(summary.encode("utf-8")).hexdigest(),
+        }, sort_keys=True, separators=(",", ":")))
         return result
 
 

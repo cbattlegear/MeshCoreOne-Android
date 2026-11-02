@@ -25,6 +25,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -106,6 +107,7 @@ class AndroidMessagingNotificationDeliveryTest {
             assertEquals("meshcore-notification://action/content%2F$index/OPEN", launch.dataString)
             assertEquals(payload, NotificationPayloadCodec.read(launch))
             assertFalse(launch.hasExtra(NotificationActionReceiver.EXTRA_ACTION))
+            assertTrue(launch.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
             assertFalse(launch.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
         }
     }
@@ -132,6 +134,7 @@ class AndroidMessagingNotificationDeliveryTest {
             0,
         )
         assertFalse(info.exported)
+        assertNull(info.taskAffinity)
         assertTrue(info.flags and android.content.pm.ActivityInfo.FLAG_NO_HISTORY != 0)
         assertTrue(info.flags and android.content.pm.ActivityInfo.FLAG_EXCLUDE_FROM_RECENTS != 0)
     }

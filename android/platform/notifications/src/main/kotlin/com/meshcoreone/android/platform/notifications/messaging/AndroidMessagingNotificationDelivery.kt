@@ -221,6 +221,7 @@ class AndroidMessagingNotificationDelivery(
     internal fun contentLaunchIntent(request: NotificationRequest): Intent = NotificationPayloadCodec.write(
         Intent(context, NotificationOpenActivity::class.java)
             .setAction(ACTION_PREFIX + ACTION_OPEN)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             .setData(Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$ACTION_OPEN")),
         request.payload,
     )

@@ -16,6 +16,8 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -214,28 +216,57 @@ class ContactDetailStateHolder(
         mutableState.update { it.copy(isEditingNickname = false, isSaving = false) }
     }
 
-    /** Stores an already re-encoded avatar ([AvatarProcessing]); null means the image could not be decoded. */
-    suspend fun saveAvatar(jpeg: Bytes?) {
-        mutableState.update { it.copy(isSavingAvatar = true) }
-        if (jpeg == null) {
-            mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_avatar_invalidimage), isSavingAvatar = false) }
-            return
-        }
-        updateAvatar(jpeg)
+    fun avatarFailure(error: Exception) {
+        mutableState.update { it.copy(errorMessage = failure(error)) }
     }
 
-    suspend fun removeAvatar() {
-        mutableState.update { it.copy(isSavingAvatar = true) }
-        updateAvatar(null)
+    fun invalidAvatar() {
+        mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_avatar_invalidimage)) }
     }
 
-    private suspend fun updateAvatar(imageData: Bytes?) {
-        reporting {
-            session.contactService()?.updateContactAvatar(current.key, imageData)
-            refreshContact()
-        }
-        mutableState.update { it.copy(isSavingAvatar = false) }
+    /** Encoding is part of the saving operation, before any store mutation. */
+    suspend fun saveAvatar(encode: suspend () -> Bytes?): Boolean = updateAvatar {
+        encode() ?: throw InvalidAvatar()
     }
+
+    suspend fun saveAvatar(jpeg: Bytes?): Boolean = saveAvatar { jpeg }
+
+    suspend fun removeAvatar(): Boolean = updateAvatar { null }
+
+    private suspend fun updateAvatar(encode: suspend () -> Bytes?): Boolean {
+        if (state.value.isSavingAvatar) return false
+        val target = current
+        mutableState.update { it.copy(isSavingAvatar = true, errorMessage = null) }
+        return try {
+            currentCoroutineContext().ensureActive()
+            val imageData = encode()
+            currentCoroutineContext().ensureActive()
+            val service = session.contactService()
+            val store = session.servicesDataStore()
+            if (session.currentRadioId() != target.radioId || service == null || store == null) {
+                mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable)) }
+                false
+            } else {
+                service.updateContactAvatar(target.key, imageData)
+                val updated = store.fetchContact(target.key) ?: throw NodesContactFailure.ContactNotFound()
+                check(updated.key == target.key && updated.publicKey == target.publicKey)
+                mutableState.update { it.copy(contact = updated) }
+                true
+            }
+        } catch (_: InvalidAvatar) {
+            invalidAvatar()
+            false
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            avatarFailure(error)
+            false
+        } finally {
+            mutableState.update { it.copy(isSavingAvatar = false) }
+        }
+    }
+
+    private class InvalidAvatar : Exception()
 
     /** Runs [block], reporting a failure as the error message; true when it completed. */
     private suspend fun reporting(block: suspend () -> Unit): Boolean = try {

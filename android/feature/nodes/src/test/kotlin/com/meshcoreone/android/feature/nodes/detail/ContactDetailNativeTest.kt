@@ -25,6 +25,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Test
 
 class ContactDetailNativeTest {
@@ -181,16 +182,91 @@ class ContactDetailNativeTest {
     @Test
     fun `avatar save rejects an undecodable image and stores bytes otherwise`() = scenario {
         val harness = Harness(clock).connect()
-        val detail = ContactDetailStateHolder(contact(name = "Alice"), harness.dependencies, scope)
+        val alice = contact(radioId = checkNotNull(harness.session.radioId), name = "Alice")
+        harness.store.contacts += alice
+        val detail = ContactDetailStateHolder(alice, harness.dependencies, scope)
         detail.saveAvatar(null)
         assertEquals(NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_avatar_invalidimage), detail.state.value.errorMessage)
         detail.saveAvatar(Bytes.of(1, 2, 3))
+        assertEquals(Bytes.of(1, 2, 3), detail.state.value.contact.avatarImageData)
         detail.removeAvatar()
+        assertNull(detail.state.value.contact.avatarImageData)
         assertEquals(listOf("avatar:3", "avatar:null"), harness.contactService.calls)
         assertFalse(detail.state.value.isSavingAvatar)
         assertEquals(512 to 256, AvatarProcessing.targetSize(2048.0, 1024.0))
         assertEquals(300 to 200, AvatarProcessing.targetSize(300.0, 200.0))
         assertNull(AvatarProcessing.targetSize(0.0, 0.0))
+    }
+
+    @Test
+    fun `avatar unavailable service and changed radio never report a no-op as saved`() = scenario {
+        val harness = Harness(clock).connect()
+        val alice = contact(radioId = checkNotNull(harness.session.radioId))
+        val detail = ContactDetailStateHolder(alice, harness.dependencies, scope)
+        harness.session.contacts = null
+        assertFalse(detail.saveAvatar(Bytes.of(1)))
+        assertEquals(NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable), detail.state.value.errorMessage)
+        harness.session.contacts = harness.contactService
+        harness.session.radioId = Fixtures.radio()
+        assertFalse(detail.removeAvatar())
+        assertTrue(harness.contactService.avatars.isEmpty())
+        assertFalse(detail.state.value.isSavingAvatar)
+    }
+
+    @Test
+    fun `avatar encoding and save failures preserve the old image and reset saving`() = scenario {
+        val harness = Harness(clock).connect()
+        val alice = contact(radioId = checkNotNull(harness.session.radioId)).copy(avatarImageData = Bytes.of(9))
+        harness.store.contacts += alice
+        val detail = ContactDetailStateHolder(alice, harness.dependencies, scope)
+        assertFalse(detail.saveAvatar { null })
+        assertEquals(alice, detail.state.value.contact)
+        assertTrue(harness.contactService.avatars.isEmpty())
+        harness.contactService.avatarBehavior = { _, _ -> error("disk full") }
+        assertFalse(detail.saveAvatar(Bytes.of(1)))
+        assertEquals(NodesMessage.Text("failed: disk full"), detail.state.value.errorMessage)
+        assertEquals(alice, detail.state.value.contact)
+        assertFalse(detail.state.value.isSavingAvatar)
+    }
+
+    @Test
+    fun `avatar cancellation during encoding or persistence resets saving and propagates`() = scenario {
+        val harness = Harness(clock).connect()
+        val alice = contact(radioId = checkNotNull(harness.session.radioId))
+        val detail = ContactDetailStateHolder(alice, harness.dependencies, scope)
+        val encodeGate = CompletableDeferred<Bytes?>()
+        val encoding = scope.launch { detail.saveAvatar { encodeGate.await() } }
+        settle()
+        assertTrue(detail.state.value.isSavingAvatar)
+        assertFalse(detail.removeAvatar(), "A second operation cannot overlap encoding")
+        encoding.cancel()
+        encoding.join()
+        assertTrue(encoding.isCancelled)
+        assertFalse(detail.state.value.isSavingAvatar)
+        assertTrue(harness.contactService.avatars.isEmpty())
+        harness.contactService.avatarBehavior = { _, _ -> CompletableDeferred<Unit>().await() }
+        val saving = scope.launch { detail.saveAvatar(Bytes.of(1)) }
+        settle()
+        assertTrue(detail.state.value.isSavingAvatar)
+        saving.cancel()
+        saving.join()
+        assertTrue(saving.isCancelled)
+        assertFalse(detail.state.value.isSavingAvatar)
+        assertNull(detail.state.value.errorMessage)
+    }
+
+    @Test
+    fun `radio changing during encoding rejects the result before persistence`() = scenario {
+        val harness = Harness(clock).connect()
+        val alice = contact(radioId = checkNotNull(harness.session.radioId))
+        val detail = ContactDetailStateHolder(alice, harness.dependencies, scope)
+        assertFalse(detail.saveAvatar {
+            harness.session.radioId = Fixtures.radio()
+            Bytes.of(1)
+        })
+        assertTrue(harness.contactService.avatars.isEmpty())
+        assertEquals(alice, detail.state.value.contact)
+        assertFalse(detail.state.value.isSavingAvatar)
     }
 
     @Test

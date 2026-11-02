@@ -129,6 +129,13 @@ internal class FakeContactService(private val store: FakeDataStore? = null) : No
     }
     var shareBehavior: suspend () -> Unit = { }
     var clearMessagesBehavior: suspend () -> Unit = { }
+    val avatars = mutableListOf<Pair<EntityKey, Bytes?>>()
+    var avatarBehavior: suspend (EntityKey, Bytes?) -> Unit = { key, bytes ->
+        store?.let { data ->
+            val index = data.contacts.indexOfFirst { it.id == key.id && it.radioId == key.radioId }
+            if (index >= 0) data.contacts[index] = data.contacts[index].copy(avatarImageData = bytes)
+        }
+    }
     var getContactBehavior: suspend (RadioId, Bytes) -> ContactDTO? = { radioId, key -> store?.fetchContact(radioId, key) }
     val setPaths = mutableListOf<Pair<Bytes, UByte>>()
 
@@ -151,7 +158,11 @@ internal class FakeContactService(private val store: FakeDataStore? = null) : No
         calls += "prefs:nickname=$nickname,isBlocked=$isBlocked"
         preferencesBehavior(contact, nickname, isBlocked)
     }
-    override suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) { calls += "avatar:${imageData?.size}" }
+    override suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) {
+        calls += "avatar:${imageData?.size}"
+        avatars += contact to imageData
+        avatarBehavior(contact, imageData)
+    }
     override suspend fun setContactFavorite(contact: EntityKey, isFavorite: Boolean) { calls += "favorite:$isFavorite"; favoriteBehavior(contact, isFavorite) }
 
     companion object {

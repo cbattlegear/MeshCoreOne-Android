@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -86,7 +87,7 @@ internal fun ContactDetailScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val holder = remember(initialContact.id, dependencies) {
+    val holder = remember(initialContact.id, initialContact.radioId, initialContact.publicKey, dependencies) {
         ContactDetailStateHolder(initialContact, dependencies, scope)
     }
     val state by holder.state.collectAsStateWithLifecycle()
@@ -112,6 +113,9 @@ internal fun ContactDetailScreen(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(contact.displayName, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
+                key(holder) {
+                    ContactAvatarEditor(holder)
+                }
                 Text(stringResource(contact.type.localizedNameRes()), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     contact.publicKey.uppercaseHexString(" "),

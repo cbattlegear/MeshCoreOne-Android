@@ -64,7 +64,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     // AndroidOnly: WP-302 Called only by a newly created host, not on resize or connection changes.
     fun restoreHostState(restored: NavigationState) {
         val current = mutableState.snapshot()
-        check(current.revision == 0L && current.value == NavigationState() && mutableState.compareAndSet(current, restored)) {
+        check(current.revision == 0L && current.value == NavigationState() &&
+            mutableState.compareAndSet(current, restored, forceRevision = true)
+        ) {
             "A live navigation host cannot be overwritten by restoration"
         }
     }

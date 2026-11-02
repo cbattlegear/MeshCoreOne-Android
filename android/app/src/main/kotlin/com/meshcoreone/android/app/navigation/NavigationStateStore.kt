@@ -45,8 +45,13 @@ internal class NavigationStateStore(initial: NavigationState) {
 
     fun snapshot(): Snapshot = current.get()
 
-    fun compareAndSet(expected: Snapshot, next: NavigationState, deferred: Publication? = null): Boolean {
-        val updated = if (expected.value == next) expected else Snapshot(
+    fun compareAndSet(
+        expected: Snapshot,
+        next: NavigationState,
+        deferred: Publication? = null,
+        forceRevision: Boolean = false,
+    ): Boolean {
+        val updated = if (!forceRevision && expected.value == next) expected else Snapshot(
             revision = Math.incrementExact(expected.revision),
             value = next,
             // Later commits must not expose a guarded commit before its lifecycle boundary exits.

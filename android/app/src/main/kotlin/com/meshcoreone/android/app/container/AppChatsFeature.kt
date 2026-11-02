@@ -213,7 +213,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 get() = container.navigation.state.value.selectedTab
                 set(value) = container.navigation.selectTab(value)
             override val currentRadioId get() = app.currentRadioId
-            override val contactLinkGeneration get() = container.navigation.state.value.generation
+            override val contactLinkGeneration get() = container.navigation.currentState.generation
             override fun captureContactLinkSession(generation: Long) = container.captureContactLinkSession(generation)
             override val connectedDevicePublicKey get() = app.connectedDevice?.publicKey
             override val parser = MeshCoreLinkParser

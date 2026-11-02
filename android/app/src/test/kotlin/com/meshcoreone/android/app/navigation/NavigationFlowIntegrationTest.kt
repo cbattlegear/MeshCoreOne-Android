@@ -795,6 +795,78 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun contactProducersCaptureTheCommittedGenerationBeforeItsPublication() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Published contact") }
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        try {
+            connect(h)
+            val session = assertNotNull(h.sessions.current)
+            val radio = session.token.radioId
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val navigation = h.container.navigation
+            val previousGeneration = navigation.state.value.generation
+            val holdingBinding = ThreadLocal<Boolean>()
+            navigation.installCommitBoundary { action ->
+                h.manager.withNavigationCommitBoundary {
+                    h.sessions.withNavigationCommitBoundary { current ->
+                        if (current == null) action() else current.withNavigationCommitBoundary(action)
+                    }
+                }
+                if (holdingBinding.get() == true && navigation.currentState.generation == previousGeneration + 1) {
+                    entered.countDown()
+                    check(release.await(30, TimeUnit.SECONDS)) { "Publication was not released" }
+                }
+            }
+            val binding = async(Dispatchers.IO) {
+                holdingBinding.set(true)
+                try {
+                    navigation.bindNotificationSession(radio, h.appState.connectedDevice?.publicKey, session.token) {
+                        h.container.isCurrentSession(session)
+                    }
+                } finally {
+                    holdingBinding.remove()
+                }
+            }
+            assertTrue(entered.await(10, TimeUnit.SECONDS), "The session commit must precede its publication")
+            val currentGeneration = navigation.currentState.generation
+            assertEquals(previousGeneration + 1, currentGeneration)
+            assertEquals(previousGeneration, navigation.state.value.generation)
+
+            val externalEnvironment = ContainerDeepLinkEnvironment(h.container, navigation)
+            val chatEnvironment = h.container.chatsFeature.list.links
+            assertEquals(currentGeneration, externalEnvironment.contactLinkGeneration)
+            assertEquals(currentGeneration, chatEnvironment.contactLinkGeneration)
+            val savedUri = h.container.nodesFeature.uriCodec.exportContactUri("Saved claim", key(20), ContactType.ROOM)
+            val external = async(Dispatchers.IO) { AppDeepLinkRouter(externalEnvironment).routeExternal(savedUri) }
+            assertEquals(DeepLinkRouteOutcome.Navigated, external.await())
+            assertEquals(contact.id, navigation.currentState.selectedContact?.id)
+
+            val unknownKey = key(30)
+            val pendingUri = h.container.nodesFeature.uriCodec.exportContactUri("New claim", unknownKey, ContactType.REPEATER)
+            val chat = ChatLinkRouter(chatEnvironment, backgroundScope)
+            assertTrue(chat.route(pendingUri))
+            h.eventually("chat link stages against the committed, unpublished generation") {
+                navigation.currentState.pendingContactLink?.publicKey == unknownKey
+            }
+            val pending = assertNotNull(navigation.currentState.pendingContactLink)
+            assertEquals("New claim", pending.name)
+            assertEquals(ContactType.REPEATER, pending.type)
+            assertEquals(radio, pending.targetRadioId)
+            assertEquals(currentGeneration, pending.generation)
+            assertEquals(previousGeneration, navigation.state.value.generation)
+
+            release.countDown()
+            assertTrue(binding.await())
+            assertEquals(navigation.currentState, navigation.state.value)
+            assertEquals(pending, navigation.state.value.pendingContactLink)
+        } finally {
+            release.countDown()
+            h.container.close()
+        }
+    }
+
     @Test fun newerContactLookupsAndDirectStagingSupersedeOlderInFlightLookups() = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = {

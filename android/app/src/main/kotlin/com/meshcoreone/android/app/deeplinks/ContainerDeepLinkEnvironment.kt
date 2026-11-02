@@ -21,7 +21,7 @@ class ContainerDeepLinkEnvironment(
         set(value) = navigation.selectTab(value)
 
     override val currentRadioId: RadioId? get() = container.appState.currentRadioId
-    override val contactLinkGeneration get() = navigation.state.value.generation
+    override val contactLinkGeneration get() = navigation.currentState.generation
     override fun captureContactLinkSession(generation: Long) = container.captureContactLinkSession(generation)
     override val connectedDevicePublicKey: Bytes? get() = container.appState.connectedDevice?.publicKey
 

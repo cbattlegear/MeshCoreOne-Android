@@ -503,6 +503,11 @@ class NavigationStateTest {
         assertSame(restored, cold.state.value)
         assertThrows(IllegalStateException::class.java) { cold.restoreHostState(NavigationState()) }
         assertSame("Rejected restoration must not change the live state", restored, cold.state.value)
+        val emptyHost = NavigationCoordinator()
+        val emptyRestoration = NavigationState()
+        emptyHost.restoreHostState(emptyRestoration)
+        assertSame(emptyRestoration, emptyHost.state.value)
+        assertThrows(IllegalStateException::class.java) { emptyHost.restoreHostState(NavigationState()) }
         val n = NavigationCoordinator(); n.navigateToChat(contact)
         assertThrows(IllegalStateException::class.java) { n.restoreHostState(NavigationState()) }
         for (width in listOf(Float.NaN, Float.POSITIVE_INFINITY, -1f)) {

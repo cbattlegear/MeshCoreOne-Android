@@ -9,8 +9,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.Snapshot
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -22,10 +22,12 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -50,6 +52,7 @@ class BatchTraceCardComposeTest {
 
     @Before fun mount() {
         host = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        host.get().actionBar?.hide()
         host.windowFocusChanged(true)
         owner = ScreenOwner()
         content = ComposeView(host.get()).apply {
@@ -143,15 +146,77 @@ class BatchTraceCardComposeTest {
         }
     }
 
+    @Test fun responseAfterActiveBatchEditDoesNotMixRouteStatistics() {
+        val harness = TraceHarness(configureDependencies = true)
+        val sender = FakeTraceSender()
+        harness.deps.device = device()
+        harness.deps.sender = sender
+        harness.holder.addNode(contact(0xAA, name = "Old route"))
+        harness.holder.setBatchEnabled(true)
+        harness.holder.setBatchSize(3)
+
+        val job = harness.start { harness.holder.runBatchTrace() }
+        assertTrue(harness.state.batchPresentationActive)
+        state.value = harness.state
+        advanceFrames()
+        assertTrue(descriptions().contains(C.contactsResultsBatchProgressLabel(host.get().resources, 1, 3)))
+
+        harness.respond(sender.sent.single().tag, listOf(node(0xAA, 5.0), node(null, 0.0)), RADIO)
+        harness.holder.removeRepeater(0)
+        harness.holder.addNode(contact(0xBB, name = "New route"))
+        harness.time.advanceBy(500.milliseconds)
+        assertEquals(Bytes.of(0xBB), sender.sent.last().path)
+        harness.respond(sender.sent.last().tag, listOf(node(0xBB, 9.0), node(null, 0.0)), RADIO)
+
+        assertTrue(job.isActive)
+        assertFalse(harness.state.batchPresentationActive)
+        assertEquals(HopStats(7.0, 5.0, 9.0), harness.state.hopStats(1))
+        assertEquals(2, harness.state.completedResults.size)
+        state.value = harness.state
+        advanceFrames()
+        assertTrue(texts().contains("SNR: 9.0 dB"))
+        assertFalse(descriptions().any { it.startsWith("Average signal to noise ratio") })
+        assertFalse(descriptions().any { it.startsWith("Average round trip") || it.startsWith("Batch progress") })
+
+        harness.holder.cancelBatchTrace()
+        harness.time.advanceBy(500.milliseconds)
+        assertTrue(job.isCompleted)
+        assertEquals(2, harness.state.completedResults.size)
+        state.value = harness.state
+        advanceFrames()
+        assertTrue(texts().contains("SNR: 9.0 dB"))
+        assertFalse(descriptions().any { it.startsWith("Average signal to noise ratio") })
+
+        val next = harness.start { harness.holder.runBatchTrace() }
+        assertTrue(harness.state.batchPresentationActive)
+        assertTrue(harness.state.completedResults.isEmpty())
+        state.value = harness.state
+        advanceFrames()
+        assertTrue(descriptions().contains(C.contactsResultsBatchProgressLabel(host.get().resources, 1, 3)))
+        harness.holder.cancelBatchTrace()
+        harness.main.runCurrent()
+        assertTrue(next.isCompleted)
+    }
+
     private fun advanceFrames() {
-        Snapshot.sendApplyNotifications()
         repeat(6) {
-            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            Snapshot.sendApplyNotifications()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
+        }
+        val root = composeRoot()
+        root.javaClass.methods.filter { it.name == "measureAndLayout" }.forEach { method ->
+            if (method.parameterCount == 1) method.invoke(root, true) else method.invoke(root)
         }
     }
 
     private fun nodes(): List<SemanticsNode> {
+        val root = composeRoot()
+        val owner = root.javaClass.getMethod("getSemanticsOwner").invoke(root) as SemanticsOwner
+        fun descendants(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::descendants)
+        return descendants(owner.rootSemanticsNode)
+    }
+
+    private fun composeRoot(): View {
         fun composeView(view: View): View? {
             if (view.javaClass.name == "androidx.compose.ui.platform.AndroidComposeView") return view
             if (view is ViewGroup) repeat(view.childCount) { index ->
@@ -159,10 +224,7 @@ class BatchTraceCardComposeTest {
             }
             return null
         }
-        val root = checkNotNull(composeView(host.get().window.decorView))
-        val owner = root.javaClass.getMethod("getSemanticsOwner").invoke(root) as SemanticsOwner
-        fun descendants(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::descendants)
-        return descendants(owner.rootSemanticsNode)
+        return checkNotNull(composeView(content)) { "Production Compose results must be attached" }
     }
 
     private fun descriptions(): List<String> =

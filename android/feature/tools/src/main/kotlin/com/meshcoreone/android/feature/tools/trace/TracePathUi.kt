@@ -455,10 +455,11 @@ internal fun TraceResultCard(result: TraceResult?, state: TracePathState) {
                     Text(text, style = MaterialTheme.typography.bodyMedium)
                 }
             }
+            val showBatchStats = state.batchEnabled && state.batchPresentationActive
             result?.takeIf { it.success }?.hops?.forEachIndexed { index, hop ->
-                val stats = if (state.batchEnabled) state.hopStats(index) else null
-                val latest = if (state.batchEnabled) state.latestHopSNR(index) else null
-                val snr = TraceHopDisplay.displaySnr(hop.snr, stats, latest, state.isBatchInProgress)
+                val stats = if (showBatchStats) state.hopStats(index) else null
+                val latest = if (showBatchStats) state.latestHopSNR(index) else null
+                val snr = TraceHopDisplay.displaySnr(hop.snr, stats, latest, showBatchStats && state.isBatchInProgress)
                 val name = hop.resolvedName ?: hop.hashDisplayString ?: stringResource(C.contactsResultsHopMyDevice)
                 Text("${index + 1}. $name")
                 if (!hop.isStartNode) Text(C.contactsResultsHopSnr(resources, snrFormat.format(snr)))

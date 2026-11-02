@@ -155,12 +155,13 @@ class MapMountedConsumerTest {
         host.get().getSharedPreferences("shared-map", 0).edit()
             .putString("camera-v1", saved.encode()).commit()
         val focus = GeoPoint(10.0, 20.0)
+        val pendingFocus = mutableStateOf<GeoPoint?>(focus)
         val dispatched = mutableListOf<MapPresentationState>()
         var consumed = 0
         mount(
             MapFeatureDependencies(source { content() }, offline()),
-            focus = { focus },
-            onFocusConsumed = { consumed++ },
+            focus = { pendingFocus.value },
+            onFocusConsumed = { consumed++; pendingFocus.value = null },
             onPresentation = { dispatched += it },
         )
         assertTrue(dispatched.isNotEmpty())

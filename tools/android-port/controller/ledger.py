@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import re
 import sqlite3
 import time
@@ -201,6 +202,14 @@ class Ledger:
                     receipt_sha256 TEXT NOT NULL, original_row TEXT NOT NULL,
                     actor TEXT NOT NULL, cleanup TEXT NOT NULL, recovered_at REAL NOT NULL,
                     PRIMARY KEY (repository, resource, receipt_sha256)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS execution_emergencies (
+                    repository TEXT NOT NULL, owner TEXT NOT NULL,
+                    original_row TEXT, actor TEXT NOT NULL, reboot_evidence TEXT NOT NULL,
+                    reconciled_at REAL NOT NULL,
+                    PRIMARY KEY (repository, owner)
                 )
             """)
 
@@ -1085,6 +1094,63 @@ class Ledger:
                     "actor": json.dumps(actor), "cleanup": json.dumps(proof), "recovered_at": now,
                 },
             }
+
+    def emergency_recover(self, owner: str, confirm_host: str):
+        """Explicitly abandon one pre-reboot local invocation; never invent its missing history."""
+        from .execution_recovery import emergency_reboot_proof, operator_identity, receipt_key
+
+        if not isinstance(owner, str) or re.fullmatch(r"local-check:[0-9a-f]{32}", owner) is None:
+            raise PortError("Emergency recovery requires an exact local-check invocation owner")
+        with self.transaction() as connection:
+            held = connection.execute("""
+                SELECT * FROM hard_locks WHERE repository=? AND
+                (resource IN ('native-execution','gradle-execution','disposable-native-execution',
+                              'installed-git-common-runtime') OR resource LIKE 'gradle-execution:%')
+                ORDER BY resource
+            """, (self.repository,)).fetchall()
+            if any(row["resource"] != "gradle-execution" or row["owner"] != owner for row in held):
+                raise PortError(
+                    "Emergency recovery refuses other ownership: "
+                    + ", ".join(f"{row['resource']} by {row['owner']}" for row in held)
+                )
+            evidence = emergency_reboot_proof(confirm_host)
+            row = held[0] if held else None
+            if row is not None:
+                receipt = {**dict(row), "payload": decode_json(row["payload"]), "record_state": "hard"}
+                receipt_key(receipt)
+                if not 0 < receipt["acquired"] < evidence["boot_timestamp"]:
+                    raise PortError("Emergency recovery refuses an invocation acquired after the current boot")
+                completion = Path(receipt["payload"]["completion"])
+                temp = Path(os.environ.get("TEMP", ""))
+                if (
+                    not temp.is_absolute() or completion.parent.parent != temp.resolve()
+                    or not completion.parent.name.startswith("meshcore-execution-")
+                    or completion.parent.resolve() != completion.parent
+                ):
+                    raise PortError("Emergency recovery cannot identify this receipt as original-host local work")
+            previous = connection.execute("""
+                SELECT * FROM execution_emergencies WHERE repository=? AND owner=?
+            """, (self.repository, owner)).fetchone()
+            if previous is not None:
+                if row is not None:
+                    raise PortError("Previously abandoned owner reappeared; emergency recovery refuses newer work")
+                return {"emergency_reconciled": True, "already_reconciled": True, "audit": dict(previous)}
+            audit = {
+                "repository": self.repository, "owner": owner,
+                "original_row": json.dumps(dict(row)) if row is not None else None,
+                "actor": json.dumps(operator_identity()),
+                "reboot_evidence": json.dumps(evidence), "reconciled_at": time.time(),
+            }
+            connection.execute("""
+                INSERT INTO execution_emergencies
+                (repository,owner,original_row,actor,reboot_evidence,reconciled_at)
+                VALUES (:repository,:owner,:original_row,:actor,:reboot_evidence,:reconciled_at)
+            """, audit)
+            if row is not None:
+                connection.execute("""
+                    DELETE FROM hard_locks WHERE repository=? AND resource='gradle-execution' AND owner=?
+                """, (self.repository, owner))
+            return {"emergency_reconciled": True, "already_reconciled": False, "audit": audit}
 
     def transition(self, wp: str, attempt: str, state: str, identity: Identity | None = None):
         if state not in STATES:

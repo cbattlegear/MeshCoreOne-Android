@@ -3,6 +3,7 @@
 import contextlib
 from concurrent.futures import ThreadPoolExecutor
 import copy
+from datetime import datetime, timezone
 import io
 import json
 import os
@@ -15,6 +16,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 from controller import execution_recovery as recovery
 from controller.errors import PortError
@@ -23,6 +25,17 @@ from controller.ledger import Ledger
 
 class ExecutionRecoveryTests(unittest.TestCase):
     def setUp(self):
+        original_path = list(sys.path)
+        original_reserve = sys.modules.get("reserve")
+
+        def restore_imports():
+            sys.path[:] = original_path
+            if original_reserve is None:
+                sys.modules.pop("reserve", None)
+            else:
+                sys.modules["reserve"] = original_reserve
+
+        self.addCleanup(restore_imports)
         self.temporary = tempfile.TemporaryDirectory(prefix="recovery-fixture-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
@@ -114,6 +127,288 @@ class ExecutionRecoveryTests(unittest.TestCase):
             recovery.recover(self.ledger, self.receipt)
         self.assertEqual(self.audit_rows(), [])
         self.assertEqual(self.ledger.hard_lock_records(), [])
+
+    def reboot_fixture(self):
+        directory = self.root / "meshcore-execution-emergency-fixture"
+        directory.mkdir()
+        self.receipt["payload"]["completion"] = str(directory / "cleanup.json")
+        boundary = time.time() - 60
+
+        def stamp(value):
+            return datetime.fromtimestamp(value, timezone.utc).isoformat()
+
+        def event(provider, event_id, record_id, timestamp, values):
+            namespace = "http://schemas.microsoft.com/win/2004/08/events/event"
+            root = ET.Element("Event", xmlns=namespace)
+            system = ET.SubElement(root, "System")
+            ET.SubElement(system, "Provider", Name=provider)
+            ET.SubElement(system, "EventID").text = str(event_id)
+            ET.SubElement(system, "EventRecordID").text = str(record_id)
+            ET.SubElement(system, "Computer").text = "fixture-host"
+            ET.SubElement(system, "TimeCreated", SystemTime=stamp(timestamp))
+            data = ET.SubElement(root, "EventData")
+            for name, value in values.items():
+                ET.SubElement(data, "Data", Name=name).text = value
+            return ET.tostring(root, encoding="unicode")
+
+        observation = {
+            "host": "fixture-host", "boot": stamp(boundary), "boot_event": 42,
+            "boot_xml": event("Microsoft-Windows-Kernel-Boot", 27, 42, boundary, {
+                "BootType": "0",
+            }),
+        }
+        return observation, boundary
+
+    @contextlib.contextmanager
+    def reboot_authority(self, observation):
+        with patch.object(recovery, "windows_reboot_observation", return_value=observation), \
+                patch.object(recovery, "operator_identity", return_value={
+                    "host": "fixture-host", "principal": "fixture-sid",
+                }), \
+                patch.dict(os.environ, {"TEMP": str(self.root)}):
+            yield
+
+    def test_emergency_recovery_needs_no_history_admission_or_supervisor(self):
+        observation, _ = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        self.admission.unlink()
+        with self.reboot_authority(observation):
+            result = self.ledger.emergency_recover(self.receipt["owner"], "FIXTURE-HOST")
+            again = self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        self.assertTrue(result["emergency_reconciled"])
+        self.assertNotIn("recovered", result)
+        self.assertTrue(again["already_reconciled"])
+        self.assertEqual(result["audit"], again["audit"])
+        evidence = json.loads(result["audit"]["reboot_evidence"])
+        self.assertIsNone(evidence["supervisor_cleanup"])
+        self.assertEqual(evidence["historical_release"], "unknown")
+        self.assertIsNone(result["audit"]["original_row"])
+        self.assertEqual(self.ledger.hard_lock_records(), [])
+        self.assertEqual(self.audit_rows(), [])
+        self.assertFalse(Path(self.receipt["payload"]["completion"]).exists())
+
+    def test_emergency_recovery_rejects_wrong_host_hybrid_and_stale_boot(self):
+        observation, _ = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        alterations = [
+            {**observation, "host": "other-host"},
+            {**observation, "boot": "2000-01-01T00:00:00+00:00"},
+            {**observation, "boot_xml": observation["boot_xml"].replace(
+                "<EventRecordID>42", "<EventRecordID>43"
+            )},
+            {**observation, "boot_xml": observation["boot_xml"].replace(
+                'Name="BootType">0', 'Name="BootType">1'
+            )},
+            {**observation, "boot_xml": "<malformed"},
+        ]
+        for observed in alterations:
+            with self.subTest(observed=observed), \
+                    self.reboot_authority(observed), self.assertRaises(PortError):
+                self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        with self.ledger.transaction() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM execution_emergencies").fetchone()[0], 0)
+        self.assertEqual(self.audit_rows(), [])
+
+    def test_emergency_recovery_preserves_current_and_newer_execution_owners(self):
+        observation, boundary = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        for index, resource in enumerate((
+            "gradle-execution", "native-execution", "installed-git-common-runtime",
+            "disposable-native-execution", "gradle-execution:" + "d" * 64 + ":0",
+        )):
+            ledger = Ledger(self.root / f"preserved-{index}.sqlite3", self.ledger.repository)
+            # Seed historical fixture rows without allocating a guest or starting execution.
+            with ledger.transaction() as connection:
+                connection.execute("INSERT INTO hard_locks VALUES (?,?,?,?,?)", (
+                    ledger.repository, resource, "new-owner", '{"fixture":true}', boundary,
+                ))
+            held = ledger.hard_lock_records()
+            with patch.object(recovery, "emergency_reboot_proof") as proof, \
+                    self.assertRaisesRegex(PortError, "new-owner"):
+                ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+            proof.assert_not_called()
+            self.assertEqual(held, ledger.hard_lock_records())
+        with self.reboot_authority(observation):
+            self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        self.ledger.acquire_hard_lock("gradle-execution", "newer-owner", {"next": True}, boundary + 120)
+        with self.assertRaisesRegex(PortError, "newer-owner"):
+            self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+
+    def test_emergency_recovery_failure_leaves_absence_and_evidence_unchanged(self):
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        with patch.object(recovery, "windows_reboot_observation", side_effect=PortError(
+            "Current Windows boot observation unavailable"
+        )), self.assertRaisesRegex(PortError, "observation unavailable"):
+            self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        with self.ledger.transaction() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM execution_emergencies").fetchone()[0], 0)
+        self.assertEqual(self.ledger.hard_lock_records(), [])
+        self.assertEqual(self.audit_rows(), [])
+
+    def test_emergency_recovery_is_atomic_concurrent_and_rolls_back(self):
+        observation, boundary = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        self.ledger.acquire_hard_lock(
+            "gradle-execution", self.receipt["owner"], self.receipt["payload"], boundary - 120,
+        )
+        original = self.ledger.hard_lock_records()
+        with self.ledger.transaction() as connection:
+            connection.execute("""
+                CREATE TRIGGER reject_reconciliation BEFORE INSERT ON execution_emergencies
+                BEGIN SELECT RAISE(ABORT, 'fixture audit write refused'); END
+            """)
+        import sqlite3
+        with self.reboot_authority(observation), \
+                self.assertRaisesRegex(sqlite3.IntegrityError, "audit write refused"):
+            self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        with self.ledger.transaction() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM execution_emergencies").fetchone()[0], 0)
+            connection.execute("DROP TRIGGER reject_reconciliation")
+        self.assertEqual(original, self.ledger.hard_lock_records())
+        with self.ledger.transaction() as connection:
+            connection.execute("""
+                CREATE TRIGGER reject_removal BEFORE DELETE ON hard_locks
+                BEGIN SELECT RAISE(ABORT, 'fixture removal refused'); END
+            """)
+        with self.reboot_authority(observation), \
+                self.assertRaisesRegex(sqlite3.IntegrityError, "removal refused"):
+            self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        with self.ledger.transaction() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM execution_emergencies").fetchone()[0], 0)
+            connection.execute("DROP TRIGGER reject_removal")
+        self.assertEqual(original, self.ledger.hard_lock_records())
+        with self.reboot_authority(observation), ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: self.ledger.emergency_recover(
+                self.receipt["owner"], "fixture-host"
+            ), range(2)))
+        self.assertEqual(sorted(row["already_reconciled"] for row in results), [False, True])
+        self.assertEqual(self.ledger.hard_lock_records(), [])
+        self.assertEqual(self.audit_rows(), [])
+
+    def test_emergency_recovery_requires_exact_owner_and_explicit_original_host_confirmation(self):
+        observation, _ = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        with self.reboot_authority(observation):
+            for owner in ("", "local-check:", "foreign", self.receipt["owner"] + "suffix", None):
+                with self.subTest(owner=owner), self.assertRaisesRegex(PortError, "exact local-check"):
+                    self.ledger.emergency_recover(owner, "fixture-host")
+            for host in ("", "other-host", None):
+                with self.subTest(host=host), self.assertRaisesRegex(PortError, "Confirm the actual"):
+                    self.ledger.emergency_recover(self.receipt["owner"], host)
+        with self.ledger.transaction() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM execution_emergencies").fetchone()[0], 0)
+
+    def test_emergency_recovery_rejects_foreign_or_malformed_retained_receipt(self):
+        observation, boundary = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        for payload in (
+            {**self.receipt["payload"], "token": "b" * 32},
+            {**self.receipt["payload"], "completion": "/tmp/foreign/cleanup.json"},
+            {**self.receipt["payload"], "completion": str(self.root / "foreign" / "cleanup.json")},
+        ):
+            with self.subTest(payload=payload):
+                self.ledger.acquire_hard_lock("gradle-execution", self.receipt["owner"], payload, boundary - 120)
+                original = self.ledger.hard_lock_records()
+                with self.reboot_authority(observation), self.assertRaises(PortError):
+                    self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+                self.assertEqual(original, self.ledger.hard_lock_records())
+                self.ledger.release_hard_lock("gradle-execution", self.receipt["owner"])
+
+    def test_emergency_recovery_reappeared_owner_and_future_boot_never_remove_work(self):
+        observation, boundary = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        with self.reboot_authority(observation):
+            self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+            self.ledger.acquire_hard_lock(
+                "gradle-execution", self.receipt["owner"], self.receipt["payload"], boundary - 120,
+            )
+            original = self.ledger.hard_lock_records()
+            with self.assertRaisesRegex(PortError, "reappeared"):
+                self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        self.assertEqual(original, self.ledger.hard_lock_records())
+        future = {
+            **observation, "boot": datetime.fromtimestamp(time.time() + 3600, timezone.utc).isoformat(),
+        }
+        with self.reboot_authority(future), self.assertRaisesRegex(PortError, "full Windows restart"):
+            self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        self.assertEqual(original, self.ledger.hard_lock_records())
+
+    def test_emergency_audit_is_visible_and_check_still_uses_normal_immutable_launcher(self):
+        observation, _ = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        with self.reboot_authority(observation):
+            result = self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        self.assertEqual(recovery.recover_owner(self.ledger, self.receipt["owner"])["audit"], result["audit"])
+        output = io.StringIO()
+        with patch.object(recovery, "trusted_context", return_value=self.ledger), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(recovery.main(["status"]), 0)
+        self.assertEqual(json.loads(output.getvalue())["emergencies"], [result["audit"]])
+        with patch.object(recovery, "trusted_context", return_value=self.ledger), \
+                patch.object(recovery.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    [], 19,
+                )) as check, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(recovery.main([
+                "check", "--owner", self.receipt["owner"], "--commit", "b" * 40,
+            ]), 19)
+        self.assertEqual(check.call_args.args[0], [
+            sys.executable, str(Path.cwd() / "tools/android-port/local/check.py"), "--commit", "b" * 40,
+        ])
+        self.assertNotIn("--emergency", check.call_args.args[0])
+        self.assertEqual(self.audit_rows(), [])
+
+    def test_emergency_recovery_archives_exact_preboot_row_and_refuses_postboot_row(self):
+        observation, boundary = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        self.ledger.acquire_hard_lock(
+            "gradle-execution", self.receipt["owner"], self.receipt["payload"], boundary - 120,
+        )
+        original = self.ledger.hard_lock_records()
+        with self.ledger.transaction() as connection:
+            original_raw = dict(connection.execute("SELECT * FROM hard_locks").fetchone())
+        with self.reboot_authority(observation):
+            result = self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        archived = json.loads(result["audit"]["original_row"])
+        self.assertEqual(archived, original_raw)
+        self.assertEqual(json.loads(archived["payload"]), original[0]["payload"])
+        self.assertEqual(archived["acquired"], original[0]["acquired"])
+        self.assertEqual(self.ledger.hard_lock_records(), [])
+        self.ledger.acquire_hard_lock(
+            "gradle-execution", self.receipt["owner"], self.receipt["payload"], boundary + 1,
+        )
+        current = self.ledger.hard_lock_records()
+        with self.reboot_authority(observation), self.assertRaisesRegex(PortError, "after the current boot"):
+            self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        self.assertEqual(current, self.ledger.hard_lock_records())
+
+    def test_emergency_cli_never_cancels_installs_or_launches_checks(self):
+        with patch.object(recovery, "trusted_context", return_value=self.ledger), \
+                patch.object(self.ledger, "emergency_recover", return_value={"emergency_reconciled": True}) as reconcile, \
+                patch.object(recovery.subprocess, "run") as process, \
+                patch.object(recovery, "cancel_owned") as cancel, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(recovery.main([
+                "emergency-recover", "--owner", self.receipt["owner"], "--confirm-host-reboot", "fixture-host",
+            ]), 0)
+        reconcile.assert_called_once_with(self.receipt["owner"], "fixture-host")
+        process.assert_not_called()
+        cancel.assert_not_called()
+
+    def test_reboot_observation_requires_native_windows_and_current_boot_access(self):
+        with patch.object(recovery.sys, "platform", "linux"), \
+                self.assertRaisesRegex(PortError, "original native Windows host"):
+            recovery.windows_reboot_observation()
+        for output in ("{}", "{", "[]"):
+            with patch.object(recovery.sys, "platform", "win32"), \
+                    patch.object(recovery.subprocess, "run", return_value=subprocess.CompletedProcess(
+                        [], 0, stdout=output,
+                    )), self.assertRaisesRegex(PortError, "Malformed native"):
+                recovery.windows_reboot_observation()
+        with patch.object(recovery.sys, "platform", "win32"), \
+                patch.object(recovery.subprocess, "run", side_effect=subprocess.CalledProcessError(
+                    1, [], stderr="No matching event"
+                )), self.assertRaisesRegex(PortError, "No matching event"):
+            recovery.windows_reboot_observation()
 
     def test_stale_wrong_invocation_and_foreign_receipts_leave_all_bytes_unchanged(self):
         self.proof()

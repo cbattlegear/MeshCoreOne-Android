@@ -3,6 +3,7 @@
 import argparse
 import csv
 import ctypes
+from datetime import datetime
 import hashlib
 import json
 import math
@@ -16,6 +17,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -147,6 +149,102 @@ def admission_binding(admission, receipt):
     }
     if data != expected or any(type(data.get(key)) is not int for key in ("schema_version", "interlock_version")):
         raise PortError("Admission differs from the original execution invocation")
+
+
+def windows_reboot_observation():
+    if sys.platform != "win32":
+        raise PortError("Emergency recovery requires the original native Windows host")
+    command = (
+        "$ErrorActionPreference='Stop'; "
+        "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); "
+        "$b=Get-WinEvent -FilterHashtable @{LogName='System'; "
+        "ProviderName='Microsoft-Windows-Kernel-Boot'; Id=27} -MaxEvents 1; "
+        "$o=Get-CimInstance Win32_OperatingSystem; "
+        "@{host=$o.CSName; boot=$o.LastBootUpTime.ToUniversalTime().ToString('o'); "
+        "boot_event=$b.RecordId; boot_xml=$b.ToXml()} | ConvertTo-Json -Compress"
+    )
+    try:
+        output = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            text=True, encoding="utf-8", capture_output=True, check=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        detail = getattr(error, "stderr", None) or str(error)
+        raise PortError(f"Current Windows boot observation unavailable: {detail.strip()}") from error
+    try:
+        result = json.loads(output.stdout)
+    except ValueError as error:
+        raise PortError("Malformed native Windows reboot observation") from error
+    if (
+        not isinstance(result, dict)
+        or set(result) != {"host", "boot", "boot_event", "boot_xml"}
+        or any(not isinstance(result.get(key), str) or not result[key] for key in ("host", "boot", "boot_xml"))
+        or type(result.get("boot_event")) is not int or result["boot_event"] < 1
+    ):
+        raise PortError("Malformed native Windows reboot observation")
+    return result
+
+
+def event_identity(xml, provider, event_id, record_id, host):
+    try:
+        root = ET.fromstring(xml)
+        namespace = "{http://schemas.microsoft.com/win/2004/08/events/event}"
+        system = root.find(namespace + "System")
+        if (
+            root.tag != namespace + "Event" or system is None
+            or system.find(namespace + "Provider").get("Name") != provider
+            or system.findtext(namespace + "EventID") != str(event_id)
+            or system.findtext(namespace + "EventRecordID") != str(record_id)
+            or system.findtext(namespace + "Computer").casefold() != host.casefold()
+        ):
+            raise PortError("Windows audit host/provider/event identity differs")
+        values = {}
+        for item in root.findall(namespace + "EventData/" + namespace + "Data"):
+            name = item.get("Name")
+            if not name or name in values or item.text is None:
+                raise PortError("Ambiguous Windows audit event data")
+            values[name] = item.text
+        timestamp = system.find(namespace + "TimeCreated").get("SystemTime")
+        return values, utc_seconds(timestamp)
+    except (ET.ParseError, AttributeError, TypeError) as error:
+        raise PortError("Malformed Windows audit event") from error
+
+
+def utc_seconds(value):
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.utcoffset() is None or parsed.utcoffset().total_seconds() != 0:
+            raise ValueError("UTC required")
+        return parsed.timestamp()
+    except (AttributeError, TypeError, ValueError, OverflowError) as error:
+        raise PortError("Windows audit timestamp must be explicit UTC") from error
+
+
+def emergency_reboot_proof(confirm_host):
+    """Verify a full reboot; the operator, not missing runner history, identifies the abandoned work."""
+    observation = windows_reboot_observation()
+    actor = operator_identity()
+    host = observation["host"]
+    if (
+        not isinstance(confirm_host, str) or confirm_host.casefold() != host.casefold()
+        or host.casefold() != actor["host"].casefold()
+    ):
+        raise PortError("Confirm the actual original execution host with --confirm-host-reboot")
+    boot, reported = event_identity(
+        observation["boot_xml"], "Microsoft-Windows-Kernel-Boot", 27, observation["boot_event"], host,
+    )
+    boundary = utc_seconds(observation["boot"])
+    if (
+        boot.get("BootType") != "0" or not boundary <= reported <= boundary + 120
+        or not 0 < boundary <= time.time()
+    ):
+        raise PortError("A verified full Windows restart is required; hybrid boot/resume is insufficient")
+    return {
+        "kind": "operator-confirmed-emergency-after-full-reboot", "host": host,
+        "boot_utc": observation["boot"], "boot_timestamp": boundary, "observation": observation,
+        "operator_confirmed_original_host": confirm_host,
+        "supervisor_cleanup": None, "historical_release": "unknown",
+    }
 
 
 def process_stat(pid):
@@ -459,8 +557,14 @@ def recover_owner(ledger, owner, *, cancel=False, distribution=None, repo=None):
             "SELECT * FROM execution_recoveries WHERE repository=?",
             (ledger.repository,),
         ) if json.loads(row["original_row"])["owner"] == owner]
+        emergency = connection.execute(
+            "SELECT * FROM execution_emergencies WHERE repository=? AND owner=?",
+            (ledger.repository, owner),
+        ).fetchone()
     if len(audits) == 1:
         return {"recovered": True, "already_recovered": True, "audit": audits[0]}
+    if not audits and emergency is not None:
+        return {"emergency_reconciled": True, "already_reconciled": True, "audit": dict(emergency)}
     raise PortError("Owner is not held and has no unique recovery audit; cleanup is not established")
 
 
@@ -564,6 +668,15 @@ def main(argv=None):
     status = commands.add_parser("status", help="Inspect receipts and genuine completion without transport")
     status.add_argument("--resource")
     status.add_argument("--receipt-output", type=Path)
+    emergency = commands.add_parser(
+        "emergency-recover",
+        help="Abandon an old local invocation after a verified full host reboot; no runner history required",
+    )
+    emergency.add_argument("--owner", required=True)
+    emergency.add_argument(
+        "--confirm-host-reboot", required=True,
+        help="Name of the original Windows host; confirms this invocation was abandoned before its full reboot",
+    )
     for name in ("recover", "check"):
         command = commands.add_parser(name)
         target = command.add_mutually_exclusive_group(required=name == "recover")
@@ -586,6 +699,10 @@ def main(argv=None):
                 raise PortError("Check requires immutable candidate/base and the existing JVM lane contract")
         repo = args.repo.resolve()
         ledger = trusted_context(repo)
+        if args.command == "emergency-recover":
+            result = ledger.emergency_recover(args.owner, args.confirm_host_reboot)
+            print(json.dumps(result, indent=2))
+            return 0
         if args.command == "status":
             rows = ledger.hard_lock_records()
             if args.resource:
@@ -602,7 +719,12 @@ def main(argv=None):
                     raise PortError("Receipt export requires one explicit held resource and an absolute new file")
                 with args.receipt_output.open("x", encoding="utf-8") as output:
                     json.dump(rows[0], output, indent=2)
-            print(json.dumps({"executions": inspections}, indent=2))
+            with ledger.transaction() as connection:
+                emergencies = [dict(row) for row in connection.execute(
+                    "SELECT * FROM execution_emergencies WHERE repository=? ORDER BY reconciled_at",
+                    (ledger.repository,),
+                )] if args.resource in (None, "gradle-execution") else []
+            print(json.dumps({"executions": inspections, "emergencies": emergencies}, indent=2))
             return 0
         if args.cancel_owned and not (args.receipt or args.owner):
             raise PortError("Cancellation requires the exact invocation owner or receipt")

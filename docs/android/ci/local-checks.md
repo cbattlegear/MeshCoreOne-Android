@@ -21,7 +21,7 @@ Do not hand-edit state, pins, package metadata or checks to turn a failure green
 | `Explicit absolute --output/ANDROID_CI_WORK directory is required` | Allocate a fresh absolute output directory for this run; do not share one between workers. |
 | Exact Python, Java or SDK revision mismatch | Select the pinned interpreter and actual matching installations. If tools are missing/outdated, use the reviewed provisioner below rather than changing the pins. |
 | Missing, old or mismatched installed execution runtime | Report the exact runtime blocker for separately authorized, quiescent deployment. Do not install/upgrade it as an incidental test repair. |
-| Native/Gradle ownership collision or unproven child cleanup | Retain the incumbent receipt and recovery inputs; the actual owner must prove cleanup and release through the supported path. Never force-release or infer idleness. |
+| Native/Gradle ownership collision or unproven child cleanup | Use ordinary invocation recovery when cleanup survives. For abandoned local Windows checks after a full reboot, use the explicit emergency procedure below. Never clear another active owner or infer cleanup from PID absence. |
 
 The suffix `failed cloud setup is not readiness` explains the missing-state guard;
 it does not establish that a cloud setup job failed. A readiness refusal means the
@@ -229,11 +229,49 @@ runtime integrity, readiness, admission, nonzero discovery and actual outcomes.
 An installation-interlocked runtime update remains a separately authorized,
 quiescent operation after recovery, never a side effect of this command.
 
-Legacy executions whose supervisor, completion and resource identity are all lost
-cannot be reconstructed from PIDs. They still require authoritative original-owner
-or host-bound cleanup evidence; this tool does not add a force-unlock escape hatch.
-In particular, #440's unexplained absent receipt and #444's remote invocation with
-missing control directory are not retroactively accepted by adding recovery code.
+### Emergency recovery without runner history
+
+For an abandoned **local Windows-to-WSL check**, missing sessions, supervisors,
+receipts, admission files or old process logs need not block the runner forever.
+After a full Windows **Restart**, use this explicit operator escape hatch on the
+original host and canonical ledger:
+
+```powershell
+python .\tools\android-port\controller\execution_recovery.py emergency-recover --owner local-check:bed26c5e533a4e26a2c166d0716ab314 --confirm-host-reboot BATTLEGEAR
+```
+
+Replace the owner and host for another invocation. `--confirm-host-reboot` confirms
+that this was the original local host and the selected invocation was abandoned
+before its current full reboot. It is not a request to restart the machine.
+Use **Restart**, not shutdown with Fast Startup, sleep, hibernate or restarting WSL.
+The controller reads the current native Windows boot time and Kernel-Boot event 27,
+requires a matching host and cold boot (`BootType=0`), and refuses missing,
+hybrid/resume or inconsistent boot observations. No original invocation logs are
+required, and the command does not kill processes, reboot, install or run tests.
+
+The ledger transaction refuses every unrelated native/Gradle/JVM-slot,
+disposable or runtime-install owner. If the exact old `gradle-execution` row is
+still held, it must belong to this host's local temporary execution directory and
+predate the verified boot; the command archives its raw row before removing
+only that row. A missing row is recorded as missing, never recreated. A newer
+invocation, even with the same owner token, is refused. Repeating the operation
+returns the original emergency audit without changing newer work.
+
+This is **explicit abandonment**, not a fabricated supervisor completion.
+`status` exposes its separate `execution_emergencies` audit, identifying the actual
+operator and current boot while retaining `supervisor_cleanup=null` and historical
+release `unknown`. Ordinary recovery still requires genuine cleanup; no existing
+history, completion files or original receipts are rewritten. The unexplained old
+Windows owner in #440 can use this route even when all runner history is missing.
+It does not recover the separate remote Linux invocation in #444.
+
+The source must first land on the reviewed origin default branch: the existing
+source guard still refuses candidate code. A runtime update is a separate,
+authorized `install-runtime` operation under its installation interlock, not part
+of emergency recovery. After that update, use the existing `check --commit` command
+above; `check --owner` also recognizes the emergency audit without demanding the
+missing history again. All normal runtime, readiness and execution-admission checks
+still run. Emergency reconciliation does not establish product-test success.
 
 Focused source-only regression command (no real Gradle, deployment or device work):
 

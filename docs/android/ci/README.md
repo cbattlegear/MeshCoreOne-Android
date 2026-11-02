@@ -1198,6 +1198,13 @@ import regression that previously escaped after check creation (#523), without
 broadening exception handling or repairing any live check. These fixtures do not
 establish a successful deployed publisher run or acceptance.
 
+An `ImportError` raised during publisher evaluation also completes the already
+created checks with failure, then is rethrown with its original traceback.
+An offline regression injects the exact deployed exception class/message and
+requires failure completion of both fake project checks, error-summary visibility
+and original exception identity/traceback. This is a narrow handled exception,
+not a catch-all or a live stranded-check recovery.
+
 Diagnostic use of the successful historical #519 run `41417389304`, job
 `125184548222`, at `bd1860ec013f0115169b73588da373a1cac501d4` found
 265 app compiled-source bindings and 1,891 executed method records. The existing

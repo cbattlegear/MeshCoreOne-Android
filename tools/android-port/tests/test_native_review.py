@@ -492,6 +492,44 @@ print("file/module deferred imports reached; offline fake publisher completes fa
         self.assertEqual(len(writes), 2)
         self.assertTrue(all(call[2]["conclusion"] == "failure" for call in writes))
 
+    def test_deferred_import_failure_completes_created_checks_and_preserves_exception(self):
+        native, api, prefix, _ = self.fixture()
+        api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"
+        ids = iter((201, 202))
+        api.routes[("POST", prefix + "/check-runs")] = lambda payload: {"id": next(ids)}
+        for check_id in (201, 202):
+            api.routes[("PATCH", prefix + f"/check-runs/{check_id}")] = {}
+        error = ImportError("attempted relative import with no known parent package")
+
+        def deferred_import(*args):
+            raise error
+
+        traceback_names = []
+        with patch("controller.native_review.git", return_value=BASE.encode()), \
+                patch.object(native, "evaluate", side_effect=deferred_import):
+            try:
+                native.publish("WP-003", 123, 90, 2, 1)
+            except ImportError as raised:
+                self.assertIs(raised, error)
+                traceback = raised.__traceback__
+                while traceback is not None:
+                    traceback_names.append(traceback.tb_frame.f_code.co_name)
+                    traceback = traceback.tb_next
+            else:
+                self.fail("Publisher must rethrow the original import failure")
+        self.assertIn("deferred_import", traceback_names)
+        created = [call for call in api.calls if call[0] == "POST"]
+        writes = [call for call in api.calls if call[0] == "PATCH"]
+        self.assertEqual(len(created), 2)
+        self.assertEqual({call[1] for call in writes}, {
+            prefix + "/check-runs/201", prefix + "/check-runs/202",
+        })
+        self.assertEqual(len(writes), 2)
+        for call in writes:
+            self.assertEqual(call[2]["status"], "completed")
+            self.assertEqual(call[2]["conclusion"], "failure")
+            self.assertEqual(call[2]["output"]["summary"], str(error))
+
     def test_publisher_authority_is_server_bound_not_a_worktree_lease(self):
         native, api, prefix, _ = self.fixture()
         api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"

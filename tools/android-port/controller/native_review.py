@@ -510,7 +510,7 @@ class NativeReview:
                 raise PortError("Source findings, review, head or base changed during publication")
             result.update(publisher_run_id=run_id, publisher_run_attempt=attempt)
             summary = bounded_output(RESULT_MARKER + json.dumps(result, sort_keys=True, separators=(",", ":")))
-        except (PortError, KeyError, ValueError, OSError) as error:
+        except (PortError, KeyError, ValueError, OSError, ImportError) as error:
             for check_id in created:
                 self.backend.api.request("PATCH", f"{self.prefix}/check-runs/{check_id}", {
                     "status": "completed", "conclusion": "failure",

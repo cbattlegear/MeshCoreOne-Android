@@ -100,17 +100,24 @@ verified replacement candidate.
 
 ### Actual existing-channel link persistence follow-up
 
-On current trusted main `99919a0a8049c2da2bfab4c6cdc08bca787b3045`, the
-unexecuted working-tree candidate adds
+Based on current trusted main `99919a0a8049c2da2bfab4c6cdc08bca787b3045`,
+candidate head `02ad1af7a848ddaabc0c053d66eda8b6c8a0d3c8` adds
 `ExistingChannelLinkPersistenceTest.existingChatLinkNavigatesStoredChannelWithoutApplyingLinkRegion`.
 It routes a channel link with an attacker-supplied `region_scope` through the
 actual `AppChatsFeature.list.links` adapter and `RoomPersistenceStore`, then
 asserts that the selected route is the existing Germany-scoped channel, no
 confirmation or radio channel-write is created, and a fresh Room read still
 returns Germany. This supplements the feature-level fake-link assertion for
-`CHAT-LINK-PERSISTENCE-ORACLE`; it does not claim that concern accepted.
+`CHAT-LINK-PERSISTENCE-ORACLE`.
 
-The test has not been executed. Local Android/Gradle execution remains paused
-while runner recovery is in progress. Do not infer compilation, JUnit discovery,
-or a passing store readback from the source assertions; obtain real positive
-hosted test discovery on the exact candidate before counting this evidence.
+Hosted Android candidate CI run `41389598668`, bound to base
+`99919a0a8049c2da2bfab4c6cdc08bca787b3045` and head
+`02ad1af7a848ddaabc0c053d66eda8b6c8a0d3c8`, passed scope classification,
+controller/workflow policy, the Linux Android build and aggregate `android-ci`.
+The hosted JUnit log records the method above with outcome `passed`. The
+required checklist passed in run `41389598814`; the fresh Copilot review in
+run `41389610630` approved this same head with no open inline findings.
+
+No local Android/Gradle execution occurred; the prior local runner mismatch
+remains unresolved. Swift codec and SwiftData restore/export oracle jobs were
+skipped by workflow selection and are not claimed as verified.

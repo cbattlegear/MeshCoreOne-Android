@@ -68,6 +68,102 @@ def executable_lines(script: str, *, expression_lines=()):
     ]
 
 
+def validate_fixed_steps(steps, expected, label: str):
+    if len(steps) != len(expected):
+        raise PortError(f"{label} has missing or additional steps")
+    for index, (step, fixed) in enumerate(zip(steps, expected)):
+        if (
+            not isinstance(step, dict)
+            or {key: value for key, value in step.items() if key != "run"}
+            != {key: value for key, value in fixed.items() if key != "run"}
+            or ("run" in step) != ("run" in fixed)
+            or ("run" in fixed and executable_lines(step["run"]) != fixed["run"])
+        ):
+            raise PortError(f"{label} step {index + 1} differs from the fixed execution contract")
+
+
+def validate_build_setup(steps):
+    toolchain_hash = (
+        "${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', "
+        "'android/gradle/wrapper/gradle-wrapper.jar', 'tools/android-port/controller/toolchain-pins.json') }}"
+    )
+    dependencies_hash = (
+        "${{ hashFiles('android/gradle/libs.versions.toml', 'android/gradle/verification-metadata.xml', "
+        "'android/gradle/dependency-locks/*.lockfile', 'android/**/gradle.lockfile') }}"
+    )
+    cache_prefix = "android-gradle-v4-${{ runner.os }}-" + toolchain_hash + "-" + dependencies_hash + "-"
+    validate_fixed_steps(steps, [
+        {
+            "name": "Read-only exact candidate",
+            "uses": "actions/checkout@" + ACTION_PINS["actions/checkout"],
+            "with": {
+                "ref": "${{ github.event.pull_request.head.sha || github.sha }}",
+                "fetch-depth": "0",
+                "persist-credentials": "false",
+            },
+        },
+        {
+            "uses": "actions/setup-python@" + ACTION_PINS["actions/setup-python"],
+            "with": {"python-version": "3.12.4", "architecture": "x64"},
+        },
+        {
+            "name": "Install checksum-pinned workflow parser",
+            "run": [
+                "python -m pip install --disable-pip-version-check --require-hashes "
+                "--no-deps --only-binary=:all: -r tools/android-port/controller/requirements-ci.txt --quiet",
+            ],
+        },
+        {
+            "name": "Declare one toolchain, work and Gradle cache root",
+            "run": [
+                "$root = Join-Path $env:RUNNER_TEMP 'meshcoreone-ci'",
+                '"ANDROID_CI_WORK=$(Join-Path $root \'work\')" | Out-File $env:GITHUB_ENV -Append -Encoding utf8',
+                '"ANDROID_CI_STATE=$(Join-Path (Join-Path $root \'toolchain\') \'environment.json\')" '
+                '| Out-File $env:GITHUB_ENV -Append -Encoding utf8',
+                '"GRADLE_USER_HOME=$(Join-Path $root \'gradle-home\')" | Out-File $env:GITHUB_ENV -Append -Encoding utf8',
+            ],
+        },
+        {
+            "name": "Restore verified Gradle and task-output cache",
+            "uses": "actions/cache@" + ACTION_PINS["actions/cache"],
+            "with": {
+                "path": "${{ env.GRADLE_USER_HOME }}",
+                "key": cache_prefix + "${{ github.run_id }}-${{ github.run_attempt }}",
+                "restore-keys": (
+                    cache_prefix + "\n"
+                    "android-gradle-v3-${{ runner.os }}-\n"
+                    "android-gradle-${{ runner.os }}-\n"
+                ),
+            },
+        },
+        {
+            "name": "Validate frozen source inputs",
+            "run": [
+                "python tools/android-port/test_inventory.py --check",
+                "python tools/android-port/extract_vectors.py --check",
+            ],
+        },
+        {
+            "name": "Run selected Python oracle assertions",
+            "if": "${{ needs.scope.outputs.scaffold == 'true' }}",
+            "run": [
+                "python tools/android-port/oracle/run_tests.py --output (Join-Path $env:RUNNER_TEMP 'oracle-tests.json')",
+            ],
+        },
+        {
+            "name": "Provision exact first-party JDK and SDK archives",
+            "run": [
+                "python tools/android-port/controller/ci.py provision --root "
+                "(Split-Path $env:ANDROID_CI_STATE -Parent) --accept-sdk-license",
+            ],
+        },
+        {
+            "name": "Check worker readiness",
+            "run": ["python tools/android-port/controller/ci.py preflight"],
+        },
+    ], "Linux build setup")
+
+
 def validate_boundary(value: dict, text: str):
     if value.get("permissions") != {"contents": "read"}:
         raise PortError("Workflow token must have contents:read only")
@@ -171,9 +267,13 @@ def validate_candidate(value: dict, text: str):
             or " ".join(re.split(r"[ \t\n]+", condition.strip(" \t\n"))) != build_condition):
         raise PortError("The selected Linux execution host must be mandatory, dependency-gated and unmatrixed")
     steps = build["steps"]
+    if not isinstance(steps, list) or any(not isinstance(step, dict) for step in steps):
+        raise PortError("Candidate Linux build steps are malformed")
     stage_steps = [step for step in steps if step.get("id") == "gradle"]
     if len(stage_steps) != 1:
         raise PortError("Candidate workflow must use one consolidated Gradle execution step")
+    stage = steps.index(stage_steps[0])
+    validate_build_setup(steps[:stage])
     stage_run = stage_steps[0].get("run", "")
     stage_environment = stage_steps[0].get("env", {})
     expected_stage_environment = {
@@ -223,48 +323,52 @@ def validate_candidate(value: dict, text: str):
         or len(unselected_steps) != 1 or unselected_steps[0].get("if") != unselected_controller
     ):
         raise PortError("Controller execution must honor either diff-selected inputs or the mandatory accessibility suite")
-    inspections = [
-        index for index, step in enumerate(steps)
-        if "ci.py inspect" in step.get("run", "")
-    ]
-    apk_uploads = [
-        index for index, step in enumerate(steps)
-        if step.get("name") == "Upload inspected debug APK for human testing"
-    ]
-    if len(inspections) != 1 or len(apk_uploads) != 1:
-        raise PortError("Candidate requires one inspected debug APK handoff")
-    inspection, upload = inspections[0], apk_uploads[0]
-    stage = steps.index(stage_steps[0])
-    localization_checks = [
-        (index, step) for index, step in enumerate(steps)
-        if step.get("name") == "Validate localization discovery"
-    ]
-    if (
-        steps[inspection].get("run") != "python tools/android-port/controller/ci.py inspect"
-        or steps[inspection].get("if") != "${{ steps.gradle.outputs.full_scaffold == 'true' }}"
-        or steps[inspection].get("continue-on-error")
-        or upload != inspection + 1
-        or stage >= inspection or "if" in steps[stage] or steps[stage].get("continue-on-error")
-        or len(localization_checks) != 1
-        or localization_checks[0][1].get("if") != "${{ steps.gradle.outputs.localization == 'true' }}"
-        or not stage < localization_checks[0][0] < inspection
-    ):
-        raise PortError("Debug APK upload must immediately follow successful scaffold APK inspection")
-    if steps[upload] != {
-        "name": "Upload inspected debug APK for human testing",
-        "if": "${{ success() && steps.gradle.outputs.full_scaffold == 'true' }}",
-        "uses": "actions/upload-artifact@" + ACTION_PINS["actions/upload-artifact"],
-        "with": {
-            "name": (
-                "debug-apk-${{ github.event.pull_request.head.sha || github.sha }}"
-                "-${{ github.run_id }}-${{ github.run_attempt }}"
-            ),
-            "path": "android/app/build/outputs/apk/debug/app-debug.apk",
-            "if-no-files-found": "error",
-            "retention-days": "7",
+    validate_fixed_steps(steps[stage + 1:stage + 5], [
+        {
+            "name": "Validate localization discovery",
+            "if": "${{ steps.gradle.outputs.localization == 'true' }}",
+            "run": [
+                "python tools/android-port/l10n_convert.py --check "
+                "--verify-android-tests android/core/l10n/build/test-results/testDebugUnitTest",
+            ],
         },
-    }:
-        raise PortError("Debug APK handoff must be successful, scaffold-only, exact-candidate/run-bound and fail on absence")
+        {
+            "name": "Inspect exact APK and static alignment",
+            "if": "${{ steps.gradle.outputs.full_scaffold == 'true' }}",
+            "run": ["python tools/android-port/controller/ci.py inspect"],
+        },
+        {
+            "name": "Upload inspected debug APK for human testing",
+            "if": "${{ success() && steps.gradle.outputs.full_scaffold == 'true' }}",
+            "uses": "actions/upload-artifact@" + ACTION_PINS["actions/upload-artifact"],
+            "with": {
+                "name": (
+                    "debug-apk-${{ github.event.pull_request.head.sha || github.sha }}"
+                    "-${{ github.run_id }}-${{ github.run_attempt }}"
+                ),
+                "path": "android/app/build/outputs/apk/debug/app-debug.apk",
+                "if-no-files-found": "error",
+                "retention-days": "7",
+            },
+        },
+        {
+            "name": "Transfer actual backup bytes to the platform oracle",
+            "if": "${{ needs.scope.outputs.backup == 'true' }}",
+            "uses": "actions/upload-artifact@" + ACTION_PINS["actions/upload-artifact"],
+            "with": {
+                "name": "backup-input-${{ github.run_id }}-${{ github.run_attempt }}",
+                "path": "android/core/data/build/reports/wp203/interop/",
+                "if-no-files-found": "error",
+                "retention-days": "1",
+            },
+        },
+    ], "Linux build handoff")
+    if (
+        sum("ci.py inspect" in step.get("run", "") for step in steps) != 1
+        or sum(step.get("name") == "Upload inspected debug APK for human testing" for step in steps) != 1
+        or sum(step.get("name") == "Validate localization discovery" for step in steps) != 1
+    ):
+        raise PortError("Candidate requires one localization check and one inspected debug APK handoff")
     selected_build_gate = (
         'if [ "$SCAFFOLD_SELECTED" = "true" ] || [ "$PROTOCOL_SELECTED" = "true" ] '
         '|| [ "$BACKUP_SELECTED" = "true" ] || [ "$BENCHMARK_SELECTED" = "true" ]; then'

@@ -31,6 +31,13 @@ class WorkflowTests(unittest.TestCase):
             return next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "gradle")
         if target == "aggregate":
             return workflow["jobs"]["android-ci"]["steps"][0]
+        if target in ("setup", "localization", "inspection"):
+            names = {
+                "setup": "Check worker readiness",
+                "localization": "Validate localization discovery",
+                "inspection": "Inspect exact APK and static alignment",
+            }
+            return next(step for step in workflow["jobs"]["build"]["steps"] if step.get("name") == names[target])
         raise ValueError(f"Unknown guarded workflow step: {target}")
 
     def test_actual_workflows_parse_and_have_the_real_trust_boundaries(self):
@@ -504,21 +511,86 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(kind=kind), self.assertRaises(PortError):
                 validate_candidate(parse_yaml(text), text)
 
+    def test_build_setup_and_handoffs_cannot_replace_the_selected_verifier(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for kind in (
+            "insert-verifier-replacement", "insert-path-override", "replace-in-preflight",
+            "inject-environment", "preflight-shell", "preflight-working-directory",
+            "checkout-ref", "python-version", "cache-path", "cache-key", "cache-restore",
+            "remove-preflight", "between-stage-and-localization",
+            "between-localization-and-inspection", "localization-command", "inspection-shell",
+            "inspection-environment", "backup-condition",
+        ):
+            value = copy.deepcopy(original)
+            steps = value["jobs"]["build"]["steps"]
+            stage = next(index for index, step in enumerate(steps) if step.get("id") == "gradle")
+            preflight = next(step for step in steps if step.get("name") == "Check worker readiness")
+            localization = next(step for step in steps if step.get("name") == "Validate localization discovery")
+            inspection = next(step for step in steps if step.get("name") == "Inspect exact APK and static alignment")
+            backup = next(step for step in steps if step.get("name") == "Transfer actual backup bytes to the platform oracle")
+            replacement = "Set-Content -LiteralPath 'tools/android-port/controller/ci.py' -Value 'raise SystemExit(0)'"
+            if kind == "insert-verifier-replacement":
+                steps.insert(stage, {"name": "Replace verifier", "run": replacement})
+            elif kind == "insert-path-override":
+                steps.insert(stage, {"name": "Override Python", "run": "'fixture' | Out-File $env:GITHUB_PATH -Append"})
+            elif kind == "replace-in-preflight":
+                preflight["run"] += "\n" + replacement
+            elif kind == "inject-environment":
+                preflight["env"] = {"PYTHONPATH": "fixture"}
+            elif kind == "preflight-shell":
+                preflight["shell"] = "bash"
+            elif kind == "preflight-working-directory":
+                preflight["working-directory"] = "fixture"
+            elif kind == "checkout-ref":
+                steps[0]["with"]["ref"] = "${{ github.sha }}"
+            elif kind == "python-version":
+                steps[1]["with"]["python-version"] = "3.13"
+            elif kind in ("cache-path", "cache-key", "cache-restore"):
+                cache = next(step for step in steps if step.get("name") == "Restore verified Gradle and task-output cache")
+                key = {"cache-path": "path", "cache-key": "key", "cache-restore": "restore-keys"}[kind]
+                cache["with"][key] = "fixture"
+            elif kind == "remove-preflight":
+                steps.remove(preflight)
+            elif kind == "between-stage-and-localization":
+                steps.insert(stage + 1, {"run": replacement})
+            elif kind == "between-localization-and-inspection":
+                steps.insert(steps.index(inspection), {"run": replacement})
+            elif kind == "localization-command":
+                localization["run"] += "\n" + replacement
+            elif kind == "inspection-shell":
+                inspection["shell"] = "bash"
+            elif kind == "inspection-environment":
+                inspection["env"] = {"PYTHONPATH": "fixture"}
+            else:
+                backup["if"] = "${{ false }}"
+            self.assertNotEqual(value, original, f"Mutation {kind} did not change the workflow")
+            text = yaml.safe_dump(value, sort_keys=False)
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_candidate(parse_yaml(text), text)
+
     def test_workflow_guards_allow_comments_and_indentation_without_treating_comments_as_commands(self):
-        workflow, text = self.read("android-ci.yml")
+        import yaml
+
+        workflow, _ = self.read("android-ci.yml")
         gradle = next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "gradle")
         gate = workflow["jobs"]["android-ci"]["steps"][0]
         scope = workflow["jobs"]["scope"]["steps"][1]
         gradle["run"] = "# Additional explanation\n\n" + gradle["run"]
         gate["run"] = "# Additional explanation\n\n" + gate["run"]
         scope["run"] = "# Additional explanation\n\n" + scope["run"]
-        validate_candidate(workflow, text)
+        for step in workflow["jobs"]["build"]["steps"]:
+            if "run" in step and step.get("id") != "gradle":
+                step["run"] = "# Additional explanation\n\n" + step["run"]
+        text = yaml.safe_dump(workflow, sort_keys=False)
+        validate_candidate(parse_yaml(text), text)
 
     def test_workflow_guards_reject_encoded_non_lf_shell_line_separators(self):
         import yaml
 
         original, _ = self.read("android-ci.yml")
-        for target in ("scope", "stage", "aggregate", "build-condition"):
+        for target in ("scope", "setup", "stage", "localization", "inspection", "aggregate", "build-condition"):
             for separator in ("\r", "\v", "\f", "\x85", "\u2028", "\u2029"):
                 value = copy.deepcopy(original)
                 if target == "build-condition":
@@ -542,7 +614,7 @@ class WorkflowTests(unittest.TestCase):
         import yaml
 
         original, _ = self.read("android-ci.yml")
-        for target in ("scope", "stage", "aggregate"):
+        for target in ("scope", "setup", "stage", "localization", "inspection", "aggregate"):
             value = copy.deepcopy(original)
             step = self.guarded_step(value, target)
             step["run"] = "# ${{ github.event.pull_request.body }}\n" + step["run"]

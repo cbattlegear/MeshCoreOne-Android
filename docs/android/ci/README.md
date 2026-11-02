@@ -60,6 +60,11 @@ accepting command text inside comments or bypassable workflow-, job- or
 step-level shell overrides and global environment injection. It also requires
 the exact candidate checkout, classifier and native-suite selector, with their
 bound outputs and no additional scope-step commands or output overrides.
+The Linux job's checkout, pinned setup and preflight steps are fixed before the
+selected stages, and localization, APK inspection/upload and backup handoff
+must immediately follow them. Added or altered intermediate steps cannot replace
+the verifier or change its execution environment before those checks. Candidate
+source changes still require independent trusted-reader review.
 Only the fixed event-name and event-path expressions are allowed in the scope
 script. Embedded control or non-LF line separators are rejected rather than
 being parsed differently from the shell. Other GitHub expression expansion is

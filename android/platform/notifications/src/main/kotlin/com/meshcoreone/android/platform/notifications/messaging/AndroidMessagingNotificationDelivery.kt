@@ -33,6 +33,7 @@ import com.meshcoreone.android.core.model.SnapshotList
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 
@@ -90,7 +91,9 @@ class AndroidMessagingNotificationDelivery(
         }
         val notification = buildNotification(request)
         return try {
-            manager.notify(tag(request.id), NOTIFICATION_ID, notification)
+            synchronized(postingLock) {
+                manager.notify(tag(request.id), NOTIFICATION_ID, notification)
+            }
             publishConversationShortcut(request)
             NotificationPostResult.Posted
         } catch (_: SecurityException) {
@@ -119,8 +122,9 @@ class AndroidMessagingNotificationDelivery(
     }
 
     internal fun buildNotification(request: NotificationRequest): Notification {
-        val contentIntent = contentPendingIntent(request)
-        val payloadExtras = NotificationPayloadCodec.write(Intent(), request.payload).extras
+        val launchIntent = contentLaunchIntent(request)
+        val contentIntent = contentPendingIntent(request, launchIntent)
+        val payloadExtras = launchIntent.extras
         val builder = Notification.Builder(context, channelFor(request.payload, request.soundEnabled))
             .setSmallIcon(context.applicationInfo.icon)
             .setContentTitle(request.title)
@@ -209,11 +213,14 @@ class AndroidMessagingNotificationDelivery(
         return PendingIntent.getBroadcast(context, requestCode(request.id, actionName), intent, flags)
     }
 
-    internal fun contentPendingIntent(request: NotificationRequest): PendingIntent {
+    internal fun contentPendingIntent(
+        request: NotificationRequest,
+        launchIntent: Intent = contentLaunchIntent(request),
+    ): PendingIntent {
         return PendingIntent.getActivity(
             context,
             requestCode(request.id, ACTION_OPEN),
-            contentLaunchIntent(request),
+            launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
     }
@@ -221,6 +228,7 @@ class AndroidMessagingNotificationDelivery(
     internal fun contentLaunchIntent(request: NotificationRequest): Intent = NotificationPayloadCodec.write(
         Intent(context, NotificationOpenActivity::class.java)
             .setAction(ACTION_PREFIX + ACTION_OPEN)
+            .putExtra(EXTRA_POST_ID, UUID.randomUUID().toString())
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             .setData(Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$ACTION_OPEN")),
         request.payload,
@@ -274,6 +282,24 @@ class AndroidMessagingNotificationDelivery(
     private fun requestCode(id: NotificationId, action: String) = 31 * id.value.hashCode() + action.hashCode()
 
     companion object {
+        private val postingLock = Any()
+        internal const val EXTRA_POST_ID = "mc1.notification.post-id"
+
+        internal fun retireContentNotification(context: Context, notificationId: String, postId: String) {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            val tag = TAG_PREFIX + notificationId
+            // Posting and conditional retirement share one boundary, including replacement posts.
+            synchronized(postingLock) {
+                if (manager.activeNotifications.any {
+                        it.tag == tag && it.id == NOTIFICATION_ID &&
+                            it.notification.extras.getString(EXTRA_POST_ID) == postId
+                    }
+                ) {
+                    manager.cancel(tag, NOTIFICATION_ID)
+                }
+            }
+        }
+
         internal const val CHANNEL_MESSAGES = "mesh_messages"
         internal const val CHANNEL_MESSAGES_SILENT = "mesh_messages_silent"
         internal const val CHANNEL_ACTIVITY = "mesh_activity"

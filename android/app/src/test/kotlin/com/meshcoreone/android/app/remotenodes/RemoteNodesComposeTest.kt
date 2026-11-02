@@ -54,6 +54,7 @@ import org.junit.Assert.*
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -65,6 +66,7 @@ import kotlinx.coroutines.flow.collect
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Build
+import android.os.Looper
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37], qualifiers = "w1080dp-h1000dp-mdpi")
@@ -140,6 +142,8 @@ class RemoteNodesComposeTest {
         compose.onNodeWithTag("remote-tab:TELEMETRY").performClick()
         expand(L.remoteNodesStatusNeighbors)
         compose.onNodeWithText(text(L.remoteNodesStatusViewOnMap)).performScrollTo().performClick()
+        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        compose.waitForIdle()
         compose.waitUntil(5_000) { renderedMap?.points?.any { it.label == "Located neighbor" } == true }
         compose.onNodeWithText("Move fixture camera").performScrollTo().performClick()
         val panned = nextCamera

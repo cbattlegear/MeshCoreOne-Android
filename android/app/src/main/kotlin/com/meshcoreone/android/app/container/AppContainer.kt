@@ -428,7 +428,15 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         if (appState.connectionState != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY ||
             !statePlatform.isReadyFor(current)
         ) return false
-        if (response.action != null || response.payload is NotificationPayload.LowBattery) {
+        if (response.action != null) {
+            if (current.notificationService.didReceiveWithResult(response) == NotificationResponseDispatch.ACTION_CALLBACK_MISSING) {
+                java.util.logging.Logger.getLogger("com.mc1.NotificationActions")
+                    .fine("Notification action forwarder is unavailable; retaining for retry")
+                return false
+            }
+            return true
+        }
+        if (response.payload is NotificationPayload.LowBattery) {
             current.notificationService.didReceive(response)
             return true
         }

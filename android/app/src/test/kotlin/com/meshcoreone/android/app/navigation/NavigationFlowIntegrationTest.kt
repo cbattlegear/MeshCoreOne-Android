@@ -1985,6 +1985,63 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun queuedMarkReadWaitsForItsActionForwarder() = runTest {
+        val context = ApplicationProvider.getApplicationContext<android.app.Application>()
+        if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val dispatcherScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        lateinit var delivery: AndroidMessagingNotificationDelivery
+        val h = ContainerHarness(this, store, notificationNavigationReady = { delivery.retryPendingActions() })
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Queued action target") }
+        val rejected = CompletableDeferred<Unit>()
+        val accepted = CopyOnWriteArrayList<UUID>()
+        val forwarded = CopyOnWriteArrayList<Pair<EntityKey, UUID>>()
+        try {
+            delivery = AndroidMessagingNotificationDelivery(context, dispatcherScope) { response ->
+                val handled = h.container.handleNotificationResponse(response)
+                val message = (response.payload as NotificationPayload.DirectMessage).messageID
+                if (handled) accepted += message else rejected.complete(Unit)
+                handled
+            }
+            connect(h)
+            val session = assertNotNull(h.sessions.current)
+            val radio = session.token.radioId
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val key = EntityKey(radio, contact.id)
+            session.notificationService.onMarkAsRead = null
+            delivery.registerCategories(SnapshotList.of(NotificationCategoryDefinition(
+                NotificationCategory.DIRECT_MESSAGE,
+                SnapshotList.of(NotificationActionDefinition(NotificationAction.MARK_READ, "Mark read", null, null)),
+            )))
+            suspend fun enqueue(id: String, message: UUID) {
+                manager.cancelAll()
+                delivery.post(NotificationRequest(
+                    NotificationId(id), NotificationCategory.DIRECT_MESSAGE, contact.name, "Queued action",
+                    false, null, null, NotificationPayload.DirectMessage(key, message),
+                ))
+                manager.activeNotifications.single().notification.actions.single().actionIntent.send()
+                shadowOf(android.os.Looper.getMainLooper()).idle()
+            }
+
+            val first = UUID.randomUUID()
+            enqueue("wp302-missing-action", first)
+            h.eventually("the dispatcher retains the action while its forwarder is missing") { rejected.isCompleted }
+            assertTrue(accepted.isEmpty())
+            session.notificationService.onMarkAsRead = { target, message -> forwarded += target to message }
+            delivery.retryPendingActions()
+            h.eventually("the retained action reaches the installed forwarder") { accepted.contains(first) }
+            val second = UUID.randomUUID()
+            enqueue("wp302-action-sentinel", second)
+            h.eventually("a later action drains after the retained action") { accepted.contains(second) }
+            assertEquals(listOf(first, second), accepted.toList())
+            assertEquals(listOf(key to first, key to second), forwarded.toList())
+        } finally {
+            dispatcherScope.cancel()
+            manager.cancelAll()
+            h.container.close()
+        }
+    }
+
     @Test fun contactCommitWinsWhenTeardownStartsInsideItsSerializedCommit() = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Commit winner") }

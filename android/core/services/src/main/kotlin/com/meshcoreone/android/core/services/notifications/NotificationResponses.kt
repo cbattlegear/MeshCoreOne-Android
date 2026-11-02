@@ -72,12 +72,13 @@ suspend fun NotificationService.didReceive(response: NotificationResponse) {
 
 enum class NotificationResponseDispatch {
     ACTION_HANDLED,
+    ACTION_CALLBACK_MISSING,
     TAP_CALLBACK_INVOKED,
     TAP_CALLBACK_MISSING,
 }
 
 /**
- * Reports whether a tap had a callback without changing the existing optional-callback behavior.
+ * Reports missing callbacks without changing the existing optional-callback behavior.
  * A callback failure is logged and reported as invoked; cancellation still propagates.
  */
 suspend fun NotificationService.didReceiveWithResult(response: NotificationResponse): NotificationResponseDispatch {
@@ -86,16 +87,17 @@ suspend fun NotificationService.didReceiveWithResult(response: NotificationRespo
         when (response.action) {
             NotificationAction.REPLY -> {
                 val text = response.userText ?: return@contained NotificationResponseDispatch.ACTION_HANDLED
-                if (keys.contact != null) {
-                    onQuickReply?.invoke(keys.contact, text)
+                val invoked = if (keys.contact != null) {
+                    onQuickReply?.let { it(keys.contact, text); true } ?: false
                 } else if (keys.channelIndex != null && keys.channelRadioId != null) {
-                    onChannelQuickReply?.invoke(keys.channelRadioId, keys.channelIndex, text)
-                }
-                NotificationResponseDispatch.ACTION_HANDLED
+                    onChannelQuickReply?.let { it(keys.channelRadioId, keys.channelIndex, text); true } ?: false
+                } else true
+                if (invoked) NotificationResponseDispatch.ACTION_HANDLED
+                else NotificationResponseDispatch.ACTION_CALLBACK_MISSING
             }
             NotificationAction.MARK_READ -> {
-                routeMarkRead(keys)
-                NotificationResponseDispatch.ACTION_HANDLED
+                if (routeMarkRead(keys)) NotificationResponseDispatch.ACTION_HANDLED
+                else NotificationResponseDispatch.ACTION_CALLBACK_MISSING
             }
             null -> {
                 if (routeTap(response.payload, keys)) NotificationResponseDispatch.TAP_CALLBACK_INVOKED
@@ -106,15 +108,15 @@ suspend fun NotificationService.didReceiveWithResult(response: NotificationRespo
     }
 }
 
-private suspend fun NotificationService.routeMarkRead(keys: PayloadKeys) {
-    val messageID = keys.messageID ?: return
-    if (keys.contact != null) {
-        onMarkAsRead?.invoke(keys.contact, messageID)
+private suspend fun NotificationService.routeMarkRead(keys: PayloadKeys): Boolean {
+    val messageID = keys.messageID ?: return true
+    return if (keys.contact != null) {
+        onMarkAsRead?.let { it(keys.contact, messageID); true } ?: false
     } else if (keys.channelIndex != null && keys.channelRadioId != null) {
-        onChannelMarkAsRead?.invoke(keys.channelRadioId, keys.channelIndex, messageID)
+        onChannelMarkAsRead?.let { it(keys.channelRadioId, keys.channelIndex, messageID); true } ?: false
     } else if (keys.session != null) {
-        onRoomMarkAsRead?.invoke(keys.session, messageID)
-    }
+        onRoomMarkAsRead?.let { it(keys.session, messageID); true } ?: false
+    } else true
 }
 
 private suspend fun NotificationService.routeTap(payload: NotificationPayload, keys: PayloadKeys): Boolean {

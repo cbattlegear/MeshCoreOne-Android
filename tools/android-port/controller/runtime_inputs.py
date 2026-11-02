@@ -14,7 +14,7 @@ from controller.model import SHA, git, tree
 
 CONTROLLER_MODULES = (
     "__init__", "apk_alignment", "authority", "backends", "capabilities", "ci", "ci_environment", "ci_evidence",
-    "dispatch", "disposable", "engine", "errors", "gate_runtime", "gates", "historical", "jvm_lanes", "ledger", "local_scope", "model", "module_junit",
+    "dispatch", "disposable", "engine", "errors", "gate_runtime", "gates", "historical", "jvm_lanes", "ledger", "local_scope", "merged_acceptance", "model", "module_junit",
     "native_review", "paths", "performance", "publication", "provision", "repair_acceptance", "render", "runtime_inputs", "scaffold_scope", "schema", "scope_amendment", "settings",
     "software_verification", "staging", "test_runner", "validate", "verification", "verification_config", "windows_guest", "workflows",
 )
@@ -67,6 +67,7 @@ FIXED_INPUTS = (
     "android/parity-tests/src/test/kotlin/com/meshcoreone/android/parity/SessionLifecycleAcceptanceTest.kt",
     "docs/android/parity/coverage-policy.json", "docs/android/parity/accounting.json",
     "docs/android/parity/review-proposals.json", "docs/android/parity/review-bindings.json",
+    "tools/android-port/tests/test_merged_acceptance.py",
     "tools/android-port/tests/test_native_review.py",
     "tools/android-port/tests/test_repair_acceptance.py",
     "tools/android-port/tests/test_debug_packaging.py",

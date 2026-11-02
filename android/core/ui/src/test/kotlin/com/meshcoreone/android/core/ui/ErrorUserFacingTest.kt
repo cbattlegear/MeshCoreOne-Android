@@ -70,7 +70,7 @@ class ErrorUserFacingTest : SourceCaseProof() {
     @Test fun mesh() = prove { assertEquals(resources.getString(L.errorMeshCoreTimeout), message(MeshCoreException.Timeout())) }
     @OriginalCase("ErrorUserFacingMessageTests::protocol error dispatches to concrete mapping()")
     @Test fun protocol() = prove {
-        assertEquals(resources.getString(L.errorDeviceStorageFull), mapper.protocolError(ErrorCode.TABLE_FULL).resolve(resources))
+        assertEquals("Device storage is full.", mapper.protocolError(ErrorCode.TABLE_FULL).resolve(resources))
     }
     @OriginalCase("ErrorUserFacingMessageTests::timeout error dispatches to concrete mapping()")
     @Test fun actualRuntimeTimeoutHidesTheOperationNameAndPreservesItsDuration() = prove {
@@ -228,8 +228,7 @@ class ErrorUserFacingTest : SourceCaseProof() {
     @OriginalCase("ErrorUserFacingMessageTests::keychain error dispatches to concrete mapping()")
     @Test fun actualNativeStorageFaultDispatchesWithoutManufacturedAppleStatus() = prove {
         val failure = StorageFailure(StorageProblem.SecretAlreadyExists, StorageOperation.WRITE)
-        assertEquals(resources.getString(R.string.ui_storage_save_failed) + "\n" +
-            resources.getString(R.string.ui_storage_already_exists), message(failure))
+        assertEquals("Could not save local data.\nThe saved item already exists.", message(failure))
         assertEquals(NativeStorageErrorFamily.STORAGE, failure.nativeFamily)
         assertSame(failure, mapper.present(failure).originalFailure)
         assertEquals(UiStorageIssue(StorageOperation.WRITE, StorageProblem.SecretAlreadyExists), mapper.present(failure).content.storageIssue)

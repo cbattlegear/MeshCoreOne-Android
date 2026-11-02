@@ -1,0 +1,88 @@
+{
+  "wp": "WP-218",
+  "issue": 397,
+  "pinned_source": "db14559b39d32322b06477c6ae676112f583db50",
+  "status": "Code-bearing head 9910d6b2596883c851936bab401756d97f0b4505 passed exact-head Android candidate CI 41285833069. The latest Copilot review's remaining memory-trim thread was confirmed against the current implementation, replied to, and resolved; no unresolved review threads remain. GitHub's formal reviewDecision remains blank, so formal approval is not claimed. No local Kotlin/Gradle tests ran because WP-218 declares no local commands.",
+  "concerns": {
+    "DATA-22": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkPreviewCacheTest.kt",
+      "case": "persisted previews rehydrate through the app policy port and LinkPreviewStateHolder for DM and channel consumers; persisted image-extension HTML previews select the card route for primary and secondary media URLs after a cold AppChatContent start; hero and icon bytes reload from persistent storage without live DNS; repeated AppChatContent renderContent calls for the same persisted miss issue a single Room lookup; a mounted preview changes from Tap to Load to its saved card after a miss is cleared and rechecked; mounted inline image state is retained across unrelated media-resolution updates"
+    },
+    "DATA-23": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/CachedPreviewPolicyConsumerTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/platform/PreviewPolicyTest.kt; android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/composer/LinkLogicTest.kt",
+      "case": "cached results remain visible through the state-holder with auto-resolve disabled and unavailable DNS; the 512-entry positive cache retains 402 media URLs for a 201-message, two-URL timeline under its 50 MiB cost cap, while bounded URL-presence metadata preserves classification after blob eviction; persisted misses are reused, cleared on memory trim, and expire after one minute so external store writes become visible; read failures are not memoized, 201 distinct URL misses remain memoized across repeated timeline reads, and repeated AppChatContent rendering queries a missing preview only once; globally disabled previews skip persistent lookup; cached inline image bytes mount before automatic-fetch gating and without DNS/network work"
+    },
+    "DATA-24": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedGifRetentionTest.kt",
+      "case": "AppChatContent produces a real two-frame GIF, the actual AppMessageContent Compose consumer mounts it, and after trimMemory the mounted viewer's Share control sends the original encoded bytes without refetch"
+    },
+    "DATA-25": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/ImageHeaderDecoderTest.kt",
+      "case": "positive dimensions use a complete PNG produced by the host-JVM image writer"
+    },
+    "DATA-26": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/BitmapImageDecoderNativeTest.kt",
+      "case": "complete PNG/JPEG decode produces a native Bitmap allocation cost consumed by InlineImageCache"
+    },
+    "DATA-27": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/OkHttpContentFetchingTest.kt",
+      "case": "private redirect target reaches the private-address predicate and listens but must receive zero connections"
+    },
+    "DATA-28": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/RegionResolverTest.kt",
+      "case": "authorized nil-country resolution reaches geocoder; unauthorized resolution does not"
+    },
+    "DATA-29": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/MalwareDomainFilterTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/content/AndroidMalwareDomainFilterTest.kt; android/app/src/test/kotlin/com/meshcoreone/android/app/content/MountedInlineMalwareWarningTest.kt",
+      "case": "legitimate-domain decisions use the bundled malware-domain snapshot; loaded and refreshed domains plus queried hosts are normalized case-insensitively; successful network refreshes publish a policy revision so mounted cached images and loaded preview cards are rechecked; warning-state inline images recover after a refreshed policy allows their host"
+    },
+    "DATA-30": {
+      "evidence": "android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtraction.kt; android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt; #403",
+      "case": "explicit schemes are normalized and stop at adjacent angle-bracketed links; bare and www domains use HTTPS; punctuation and unmatched delimiters are bounded; interior apostrophes survive in explicit, bare-domain and opaque URI spans while trailing quote punctuation is trimmed; quoted email local parts including escaped characters and Unicode-adjacent partial ASCII hosts are excluded; hierarchical and opaque non-HTTP URIs, including unknown nested scheme payloads and ftp:files.example.com/did:web:example.com, URL-like email local parts and nested candidates are suppressed without discarding outer query URLs or links after Link:/Visit: labels; unmatched enclosing delimiters end unsupported URI spans before an adjacent HTTPS link; prose See-https:// remains supported while feed-https:// is suppressed; punycode TLDs are complete, malware hosts are checked case-insensitively, and body www links use HTTPS; full NSDataDetector equivalence remains unclaimed and tracked by WP-308 #403"
+    },
+    "DATA-31": {
+      "evidence": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/content/LinkUrlExtractionTest.kt",
+      "case": "original WCMesh.com mention input plus explicit URL mention suppression exercise overlap filtering"
+    },
+    "DATA-32": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/NativeLinkMetadataFetchingTest.kt",
+      "case": "actual metadata producer scrapes page metadata and passes the hero image through native Bitmap preview processing"
+    },
+    "DATA-33": {
+      "evidence": "android/app/src/test/kotlin/com/meshcoreone/android/app/content/BitmapImageDecoderNativeTest.kt; existing AnimatedGifImageDecoderTest.kt",
+      "case": "Robolectric native graphics exercises real bitmap/GIF decoder paths; no physical-device result is claimed"
+    }
+  },
+  "latest_review_repairs": {
+    "cached_inline_images": "Check the current malware policy first, then hydrate an encoded cached image before any DNS safety check; perform URL DNS safety only for an actual network fetch, including when auto-resolve is disabled.",
+    "mounted_image_lifecycle": "Keep the Compose-mounted image keyed to content and URL rather than the global media-resolution counter, preserving the original decoded handle and share bytes across unrelated rebuilds.",
+    "malware_refresh": "Publish an observable revision after replacing the malware list; mounted images are hidden until rechecked and each blocked image entry routes through the localized malware warning, including non-first URLs. A Robolectric Compose regression covers a blocked second image.",
+    "timeline_miss_cache": "Bound negative persisted-lookup memory by both 10,000 entries and an estimated 4 MiB while retaining cache writes as miss invalidations.",
+    "url_apostrophes": "Allow apostrophes within explicit, bare-domain and URI candidate spans while retaining the existing trailing-quote trimming policy.",
+    "unsupported_uri_prefetch": "Suppress embedded domains for known and unknown non-HTTP opaque URI schemes while retaining Link:/Visit: prose-label extraction; retain hierarchical-scheme suppression for all `scheme://` URIs.",
+    "malware_policy_revision": "Include the malware-policy revision in mounted preview-holder identity so cached cards are rechecked; route matching warning-state images through the image check and clear stale warning state after a successful check.",
+    "unsupported_uri_boundaries": "End unsupported URI spans at unmatched closing delimiters so a separate adjacent web link remains eligible; restrict the See-https prose exception so feed-https stays an opaque scheme.",
+    "timeline_positive_cache": "Increase the positive-entry cap to 512 without relaxing the existing 50 MiB cost bound; load unknown media URLs while retaining a bounded 10,000-entry/4 MiB persisted-presence snapshot, then verify 402 persisted URLs across 201 two-URL messages trigger no reads on a second timeline pass.",
+    "secondary_persisted_image_preview": "Classify each secondary image-extension URL against its persisted preview before choosing the inline-image route; hold inline fetching until the store-backed classification completes and verify a cached .jpg HTML page displays its saved card with auto-resolve enabled and zero network fetches.",
+    "preview_memory_pressure": "AppChatContent.trimMemory clears positive preview blobs and the bounded persisted lookup/presence snapshot; lookup generation checks prevent an in-flight database read from repopulating stale entries. A successful post-trim save replaces current negative lookup metadata using the current generation without restoring the cleared blob; availability is published only when memory or persistence can recover the result.",
+    "persisted_miss_expiry": "Persisted hit/miss presence expires after 60 seconds using an injectable monotonic clock; successful rechecks publish the affected URL so only matching mounted holders re-resolve an externally written preview.",
+    "compose_test_semantics": "Replace the unsupported assertDoesNotHaveClickAction helper with a direct SemanticsActions.OnClick absence assertion.",
+    "persisted_preview_rehydration": "The post-merge candidate run exposed that AppChatContent.renderContent used the memory-only preview lookup; restore the store-backed lookup so saved previews remain available when auto-fetch is disabled.",
+    "regression_tests_added": "CachedPreviewPolicyConsumerTest covers 402 URLs over a repeated 201-message render; LinkPreviewCacheTest covers positive metadata after blob eviction, title-only byte-cost eviction, trim clearing during an in-flight lookup, URL-specific availability events, and a post-trim successful save replacing a negative lookup without repopulating the memory blob. MountedInlineMalwareWarningTest seeds a real decoded image before mounted malware checks, verifies a cold persisted secondary .jpg classification with auto-resolve disabled and no fetch, exercises persisted-write refresh without preloading the image route, confirms another URL's in-flight manual preview remains Loading and completes, verifies a matching external save is rechecked after a failed manual load, and checks a manual fetch remains visible after trim when persistence fails. Exact-head run 41276626669 passed with the mounted cases discovered.",
+    "mounted_gif": "Exercise the actual Compose AppMessageContent image mount with an injected deterministic safe-malware decision, while the separate mounted malware warning test verifies the real filter; retain the visible GIF and original share bytes through the mounted viewer's Share control across process memory trim. The real-filter adapter test now waits for persisted refresh completion after observing its policy revision, preventing its worker from writing after the test closes storage."
+  },
+  "verification": {
+    "manifest_configured": false,
+    "declared_commands": [],
+    "local_test_execution": "not run; no approved WP-218 command is declared",
+    "current_review_candidate": "The code-bearing candidate 9910d6b2596883c851936bab401756d97f0b4505 passed exact-head Android candidate CI 41285833069. Its review noted the existing cache-clear-on-trim behavior; AppChatContent.trimMemory calls LinkPreviewCache.clearMemory, which clears both positive and persisted hit/miss caches under the memory-clear lock and advances the generation. The persisted-lookup trim regression covers cache clearing and in-flight stale-read prevention. The remaining thread was replied to and resolved. Formal GitHub reviewDecision remains blank, so formal approval is not claimed. No local Kotlin/Gradle tests ran because WP-218 declares no commands.",
+    "latest_candidate": "Code-bearing head 9910d6b2596883c851936bab401756d97f0b4505 passed exact-head Android candidate CI 41285833069. This head includes the prose-label and common opaque-scheme URL extraction regressions while preserving prior URL/cache fixes. The latest remaining memory-trim review thread was resolved after confirming the implementation and regression coverage. No local Kotlin/Gradle tests ran because no approved WP-218 commands are declared; no physical-device/iOS result is claimed.",
+    "diff_check": "passed; evidence JSON parsed with python3 -m json.tool"
+  },
+  "limitations": [
+    "This worktree did not execute Gradle/JVM tests.",
+    "Robolectric native graphics is not physical-device verification.",
+    "WP-308 issue #403 still owns the broader NSDataDetector adaptation decision.",
+    "No complete WP-218 source-family acceptance is claimed."
+  ]
+}

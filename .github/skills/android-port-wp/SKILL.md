@@ -105,7 +105,10 @@ Native adaptations state original behavior, Android behavior, rationale and test
 Unexpected source behavior or an unresolved parity gap is not silently marked out of scope.
 
 Completion requires implemented behavior, real assertions, preserved consumer contracts and verified
-evidence. Compile-only scaffolds may satisfy a scaffold WP, never a feature WP.
+evidence. A reviewed, checked, merged implementation accepts its declared scope without a separate
+completion ceremony. A repair accepts its own scope; it neither completes unrelated work nor reopens
+an accepted implementation. Compile-only scaffolds may satisfy a scaffold WP, never a feature WP.
+Name concrete items not verified (for example "physical radio test not run"), not boilerplate disclaimers.
 
 ## PR and gate handling
 

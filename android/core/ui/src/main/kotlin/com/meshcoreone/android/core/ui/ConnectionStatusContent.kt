@@ -21,6 +21,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,6 +36,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -120,8 +122,14 @@ fun BLEStatusIndicatorView(state: RadioStatusState, actions: RadioStatusActions,
                     val number = NumberFormat.getNumberInstance(resourceLocale(resources)).also {
                         it.minimumFractionDigits = 2; it.maximumFractionDigits = 2
                     }
-                    Text("${battery.percentage(device.activeOCVArray)}% (${number.format(battery.voltage)}v)",
-                        Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                    val percentage = battery.percentage(device.activeOCVArray)
+                    val reading = "${NumberFormat.getPercentInstance(resourceLocale(resources)).format(percentage / 100.0)} (${number.format(battery.voltage)}v)"
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).semantics(mergeDescendants = true) {
+                        contentDescription = "${resources.getString(S.deviceInfoBattery)}: $reading"
+                    }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BatteryGlyph(percentage, paintedSurface = MenuDefaults.containerColor)
+                        Text(reading)
+                    }
                 }
                 DropdownMenuItem(text = { Text(uiString(UiText.Resource(S.bleStatusChangeDevice))) },
                     onClick = { menuExpanded = false; actions.selectDevice() }, modifier = Modifier.sharedTouchTarget())
@@ -169,6 +177,49 @@ fun BLEStatusToolbarItem(state: RadioStatusState, actions: RadioStatusActions, m
     BLEStatusIndicatorView(state, actions, modifier)
 
 @Composable
+fun BatteryGlyph(
+    percentage: Int,
+    modifier: Modifier = Modifier,
+    accessibilityLabel: UiText? = null,
+    paintedSurface: Color = sharedPaintedSurface(),
+) {
+    require(percentage in 0..100) { "Battery percentage must be in 0..100" }
+    val role = when (batteryLevelRole(percentage)) {
+        BatteryLevelRole.NORMAL -> SharedStatusColorRole.PRIMARY
+        BatteryLevelRole.WARNING -> SharedStatusColorRole.ORANGE
+        BatteryLevelRole.CRITICAL -> SharedStatusColorRole.RED
+    }
+    val foreground = statusForeground(role, MaterialTheme.colorScheme.onSurface, paintedSurface,
+        LocalMeshTheme.current.frame.highContrast)
+    val description = accessibilityLabel?.let { uiString(it) }
+    val fill = when (percentage) {
+        in 88..100 -> 1f
+        in 63..<88 -> 0.75f
+        in 38..<63 -> 0.5f
+        in 13..<38 -> 0.25f
+        else -> 0f
+    }
+    Canvas(modifier.size(width = 28.dp, height = 16.dp).semantics {
+        sharedPaintedSurface = paintedSurface
+        sharedEmittedForeground = foreground
+        if (description != null) {
+            contentDescription = description
+            progressBarRangeInfo = ProgressBarRangeInfo(percentage.toFloat(), 0f..100f)
+        }
+    }) {
+        val stroke = 1.5.dp.toPx()
+        drawRoundRect(foreground, topLeft = Offset(stroke / 2, stroke / 2),
+            size = Size(size.width * 0.88f - stroke, size.height - stroke),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
+            style = Stroke(stroke))
+        drawRect(foreground, topLeft = Offset(size.width * 0.9f, size.height * 0.3f),
+            size = Size(size.width * 0.1f, size.height * 0.4f))
+        if (fill > 0f) drawRect(foreground, topLeft = Offset(stroke * 2, stroke * 2),
+            size = Size((size.width * 0.88f - stroke * 4) * fill, size.height - stroke * 4))
+    }
+}
+
+@Composable
 fun SignalBars(
     tier: RSSITuning.SignalTier,
     modifier: Modifier = Modifier,
@@ -181,7 +232,10 @@ fun SignalBars(
     Canvas(modifier.size(24.dp).semantics {
         sharedPaintedSurface = paintedSurface
         sharedEmittedForeground = color
-        if (description != null) contentDescription = description
+        if (description != null) {
+            contentDescription = description
+            progressBarRangeInfo = ProgressBarRangeInfo(tier.fillLevel.toFloat(), 0f..1f)
+        }
     }) {
         val count = tier.rawValue.toInt() + 1
         for (index in 0..<3) {

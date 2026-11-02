@@ -17,7 +17,7 @@ from controller.schema import digest, load_json
 from controller.scope_amendment import (
     AMENDMENT_PATH, amendment, apply_translation_scope, project_translation_scope,
     project_translation_exclusions,
-    review_policy_predecessor,
+    review_policy_predecessor, completion_policy_predecessor,
     debug_packaging_predecessor, DEBUG_PACKAGING_CAPABILITY,
     rooms_avatar_predecessor, ROOMS_AVATAR_CAPABILITY,
     rooms_message_actions_predecessor, ROOMS_MESSAGE_ACTIONS_CAPABILITY,
@@ -190,7 +190,7 @@ class TranslationScopeAmendmentTests(unittest.TestCase):
         return previous
 
     def test_bubble_consumer_inverse_rejects_widening_and_preserves_entire_current_main(self):
-        current = load_json(REPO / "docs/android/automation-policy.json")
+        current = completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json"))
         before = copy.deepcopy(current)
         previous = json.loads(subprocess.check_output([
             "git", "-C", str(REPO), "show",
@@ -232,7 +232,7 @@ class TranslationScopeAmendmentTests(unittest.TestCase):
                 bubble_consumer_predecessor(changed)
 
     def test_room_failed_event_inverse_restores_whole_main_and_rejects_rule_drift(self):
-        current = load_json(REPO / "docs/android/automation-policy.json")
+        current = completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json"))
         before = copy.deepcopy(current)
         previous = json.loads(subprocess.check_output([
             "git", "-C", str(REPO), "show",
@@ -267,7 +267,8 @@ class TranslationScopeAmendmentTests(unittest.TestCase):
                 room_failed_event_predecessor(malformed)
 
     def test_wp503_accessibility_binding_projection_is_exact_reversible_and_drift_safe(self):
-        current = host_scoped_jvm_predecessor(load_json(REPO / "docs/android/automation-policy.json"))
+        current = host_scoped_jvm_predecessor(
+            completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json")))
         before = copy.deepcopy(current)
         previous = wp503_accessibility_source_binding_predecessor(current)
         base = json.loads(subprocess.check_output([
@@ -328,7 +329,8 @@ class TranslationScopeAmendmentTests(unittest.TestCase):
             content_scope_revisions(base_manifest(), unrelated)
 
     def test_receive_prefetch_single_rule_inverse_restores_entire_b677_object_and_raw_git_blob(self):
-        current = room_cleanup_predecessor(load_json(REPO / "docs/android/automation-policy.json"))
+        current = room_cleanup_predecessor(
+            completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json")))
         before = copy.deepcopy(current)
         previous = json.loads(subprocess.check_output([
             "git", "-C", str(REPO), "show",
@@ -394,7 +396,8 @@ class TranslationScopeAmendmentTests(unittest.TestCase):
             content_scope_revisions(base_manifest(), changed)
 
     def test_parity_support_inverse_restores_entire_exact_6b_policy_and_manifest(self):
-        current = receive_prefetch_predecessor(load_json(REPO / "docs/android/automation-policy.json"))
+        current = receive_prefetch_predecessor(
+            completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json")))
         before = copy.deepcopy(current)
         previous = json.loads(subprocess.check_output([
             "git", "-C", str(REPO), "show",
@@ -480,7 +483,7 @@ class TranslationScopeAmendmentTests(unittest.TestCase):
     def test_debug_support_projection_is_exact_reversible_and_never_rebinds_history(self):
         manifest = base_manifest()
         current = message_actions_translation_predecessor(disposable_predecessor(
-            load_json(REPO / "docs/android/automation-policy.json")))
+            completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json"))))
         current = rooms_avatar_predecessor(rooms_message_actions_predecessor(mention_picker_predecessor(current)))
         before = copy.deepcopy(current)
         previous = debug_packaging_predecessor(current)
@@ -524,7 +527,7 @@ class TranslationScopeAmendmentTests(unittest.TestCase):
     def test_rooms_support_projection_matches_real_predecessor_and_preserves_historical_binding(self):
         manifest = base_manifest()
         current = message_actions_translation_predecessor(disposable_predecessor(
-            load_json(REPO / "docs/android/automation-policy.json")))
+            completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json"))))
         current = rooms_message_actions_predecessor(mention_picker_predecessor(current))
         before = copy.deepcopy(current)
         previous = rooms_avatar_predecessor(current)
@@ -587,7 +590,7 @@ class TranslationScopeAmendmentTests(unittest.TestCase):
     def test_rooms_actions_projection_is_exact_reversible_and_keeps_actual_and_historical_bindings(self):
         manifest = base_manifest()
         current = mention_picker_predecessor(message_actions_translation_predecessor(disposable_predecessor(
-            load_json(REPO / "docs/android/automation-policy.json"))))
+            completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json")))))
         before = copy.deepcopy(current)
         previous = rooms_message_actions_predecessor(current)
         historical = json.loads(subprocess.check_output([
@@ -653,7 +656,7 @@ class TranslationScopeAmendmentTests(unittest.TestCase):
     def test_picker_projection_restores_exact_reviewed_candidate_then_real_trusted_policy(self):
         manifest = base_manifest()
         current = message_actions_translation_predecessor(disposable_predecessor(
-            load_json(REPO / "docs/android/automation-policy.json")))
+            completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json"))))
         before = copy.deepcopy(current)
         previous = mention_picker_predecessor(current)
         candidate = json.loads(subprocess.check_output([
@@ -730,7 +733,8 @@ class TranslationScopeAmendmentTests(unittest.TestCase):
 
     def test_active_translation_affordance_projection_restores_entire_reviewed_aa4_and_binding(self):
         manifest = base_manifest()
-        current = disposable_predecessor(load_json(REPO / "docs/android/automation-policy.json"))
+        current = disposable_predecessor(
+            completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json")))
         before = copy.deepcopy(current)
         previous = message_actions_translation_predecessor(current)
         historical_bytes = subprocess.check_output([

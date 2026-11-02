@@ -40,15 +40,23 @@ internal class FakeData : ChatListDataSource {
     var failFetchConversations: Exception? = null
     var failDeleteDirect: Exception? = null
     var failFavoriteWrites: Exception? = null
+    var conversationFetchGate: (suspend () -> Unit)? = null
+    var roomFetchGate: (suspend () -> Unit)? = null
     val calls = mutableListOf<String>()
 
     override suspend fun fetchConversations(radioId: RadioId): List<ContactDTO> {
         calls += "fetchConversations"
         failFetchConversations?.let { throw it }
-        return contacts
+        val fetched = contacts
+        conversationFetchGate?.invoke()
+        return fetched
     }
     override suspend fun fetchChannels(radioId: RadioId) = channels
-    override suspend fun fetchRemoteNodeSessions(radioId: RadioId) = rooms
+    override suspend fun fetchRemoteNodeSessions(radioId: RadioId): List<RemoteNodeSessionDTO> {
+        val fetched = rooms
+        roomFetchGate?.invoke()
+        return fetched
+    }
     override suspend fun fetchContacts(radioId: RadioId) = contacts
     override suspend fun fetchLastMessages(contactIds: List<UUID>, limit: Int) = contactMessages
     override suspend fun fetchLastChannelMessages(channels: List<ChatChannelKey>, limit: Int) = channelMessages

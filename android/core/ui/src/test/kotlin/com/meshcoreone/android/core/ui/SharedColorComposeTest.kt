@@ -11,11 +11,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -138,6 +140,66 @@ class SharedColorComposeTest {
             val expectedArgb = expected.toArgb()
             for (shift in listOf(0, 8, 16)) {
                 assertTrue(abs(((pixel ushr shift) and 255) - ((expectedArgb ushr shift) and 255)) <= 1)
+            }
+            for (index in 0..<3) {
+                val barPixel = bitmap.getPixel((bounds.left + bounds.width * (index + 0.375f) / 3).toInt(),
+                    (bounds.bottom - bounds.height / 6).toInt())
+                if (index <= tier.rawValue.toInt()) {
+                    assertEquals(expectedArgb, barPixel)
+                } else {
+                    assertNotEquals(expectedArgb, barPixel)
+                    assertNotEquals(android.graphics.Color.WHITE, barPixel)
+                }
+            }
+        }
+    }
+
+    @Test fun nativeBatteryPixelsPinAllFiveFillStepsAndWarningColorsWithTextAndProgress() {
+        val percentages = listOf(0, 9, 19, 25, 50, 75, 100)
+        var normalForeground = Color.Unspecified
+        controller.get().setContent {
+            MeshCoreTheme(motionScale = 0f) {
+                val primary = MaterialTheme.colorScheme.onSurface
+                SideEffect { normalForeground = primary }
+                Surface(color = Color.White) {
+                    Row(Modifier.padding(16.dp)) {
+                        for (percentage in percentages) BatteryGlyph(percentage, Modifier.testTag("battery-$percentage"),
+                            UiText.Verbatim("Battery: $percentage%"), paintedSurface = Color.White)
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        val bitmap = compose.runOnUiThread {
+            val view = controller.get().window.decorView
+            Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888).also { view.draw(Canvas(it)) }
+        }
+        for ((percentage, filled) in listOf(0 to 0, 9 to 0, 19 to 1, 25 to 1, 50 to 2, 75 to 3, 100 to 4)) {
+            val node = compose.onNodeWithTag("battery-$percentage").fetchSemanticsNode()
+            assertEquals(listOf("Battery: $percentage%"), node.config[SemanticsProperties.ContentDescription])
+            assertEquals(percentage.toFloat(), node.config[SemanticsProperties.ProgressBarRangeInfo].current)
+            val foreground = node.config[SharedEmittedForeground]
+            val expected = when (percentage) {
+                0, 9 -> accessibleForeground(ThemeColor.hex(0xFF3B30), ThemeColor.WHITE, 4.5).toComposeColor()
+                19 -> accessibleForeground(ThemeColor.hex(0xFF9500), ThemeColor.WHITE, 4.5).toComposeColor()
+                else -> normalForeground
+            }
+            assertEquals(expected, foreground)
+            val bounds = node.boundsInWindow
+            for ((x, y) in listOf(bounds.left + bounds.width * 0.95f to bounds.top + bounds.height / 2,
+                bounds.left + bounds.width * 0.44f to bounds.top)) {
+                val pixel = bitmap.getPixel(x.toInt(), y.toInt())
+                for (shift in listOf(0, 8, 16)) {
+                    assertTrue(abs(((pixel ushr shift) and 255) - ((expected.toArgb() ushr shift) and 255)) <= 1,
+                        "Battery $percentage must paint its cap and outline in the expected role color")
+                }
+            }
+            val inset = 3f
+            val span = bounds.width * 0.88f - 6f
+            for (index in 0..<4) {
+                val pixel = bitmap.getPixel((bounds.left + inset + span * (index + 0.5f) / 4).toInt(),
+                    (bounds.top + bounds.height / 2).toInt())
+                assertEquals(if (index < filled) foreground.toArgb() else android.graphics.Color.WHITE, pixel)
             }
         }
     }

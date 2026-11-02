@@ -11,7 +11,7 @@ from .model import Manifest, SHA
 from .render import issue_payload
 from .settings import Settings
 from .schema import digest, positive_integer
-from .verification import require_shared_whole_lane
+from .verification import dispatch_software_lane
 
 
 @dataclass(frozen=True)
@@ -90,10 +90,42 @@ class Controller:
 
     def completed(self, wp_id: str):
         record = self.ledger.get(wp_id)
+        if self.authority is None:
+            if record is None or record["state"] != "completed" or record["completion"] is None:
+                raise PortError(f"{wp_id}: no verified merged-PR completion (closed issue/idle worker is insufficient)")
+            raise PortError("Missing authenticated gate/evidence authority; completion cannot be reconciled")
+        if hasattr(self.authority, "merged_implementation"):
+            accepted = self.ledger.accepted_completion(wp_id)
+            previous = [
+                row["completion"] for row in self.ledger.historical_records(wp_id)
+                if row["completion"] is not None
+            ]
+            if record is not None and record["state"] == "completed" and record["completion"] is not None:
+                previous.append(record["completion"])
+            known = ([accepted] if accepted is not None else []) + previous
+            if known:
+                confirmed = [self.authority.confirm_merged(wp_id, proof) for proof in known]
+                identities = {
+                    (proof["pr_number"], proof["merge_commit_sha"], proof["binding"]["head_sha"])
+                    for proof in confirmed
+                }
+                if len(identities) != 1:
+                    raise PortError(f"{wp_id}: conflicting previously accepted implementations")
+                return confirmed[0]
+            from .merged_acceptance import BoundedRepair
+
+            identity = None
+            if record is not None and record.get("predecessor_attempt") is None:
+                candidate = Identity.parse(record["identity"])
+                if candidate.pr_number is not None:
+                    identity = candidate
+            try:
+                proof = self.authority.merged_implementation(wp_id, identity)
+            except BoundedRepair:
+                proof = self.authority.merged_implementation(wp_id)
+            return self.ledger.remember_completion(wp_id, proof, authoritative=True)
         if record is None or record["state"] != "completed" or record["completion"] is None:
             raise PortError(f"{wp_id}: no verified merged-PR completion (closed issue/idle worker is insufficient)")
-        if self.authority is None:
-            raise PortError("Missing authenticated gate/evidence authority; completion cannot be reconciled")
         bundle = self.authority.bundle(wp_id, Identity.parse(record["identity"]))
         if not isinstance(bundle, GateBundle) or not bundle.authoritative:
             raise PortError("Unverified gate bundle; model-written PASS is not merge authority")
@@ -113,8 +145,7 @@ class Controller:
         wp = self.manifest.wp(wp_id)
         if wp["supervised"]:
             raise PortError(f"{wp_id} is supervised bootstrap work; never automatically dispatched")
-        if not wp["verification"]["configured"] or not wp["verification"]["commands"]:
-            require_shared_whole_lane(self.manifest, wp)
+        dispatch_software_lane(self.manifest, wp)
         self.require_foundation()
         for dependency in wp["depends_on"]:
             self.completed(dependency)
@@ -392,6 +423,112 @@ class Controller:
         record = self.ledger.get(wp_id)
         if record is None or self.authority is None:
             raise PortError("Completion requires existing identity and an authenticated gate authority")
+        if hasattr(self.authority, "merged_implementation"):
+            from .merged_acceptance import BoundedRepair, HumanGateRequired, NoImplementationFound
+
+            try:
+                proof = self.completed(wp_id)
+            except (BoundedRepair, HumanGateRequired, NoImplementationFound):
+                proof = None
+            if proof is not None:
+                if record["state"] == "completed":
+                    return proof
+                observation = self.backend.reconcile(wp_id, Identity.parse(record["identity"]))
+                if observation.ambiguous or not observation.authoritative or observation.worker_state != "completed":
+                    raise PortError("PR is accepted; active or ambiguous worker reservation remains held")
+                identity = Identity.parse(record["identity"]).reconcile(observation.identity)
+                if identity.pr_number != proof["pr_number"]:
+                    if observation.pr_open or not hasattr(self.authority, "merged_scope"):
+                        raise PortError("PR is accepted; the current worker's terminal scope is unverified")
+                    repair = self.authority.merged_scope(wp_id, identity)
+                    if (
+                        repair.get("kind") != "merged-scope" or repair.get("pr_number") != identity.pr_number
+                        or repair.get("binding", {}).get("repository") != self.policy["repository"]
+                        or repair.get("binding", {}).get("work_package") != wp_id
+                    ):
+                        raise PortError("Current worker's merged scope has a conflicting identity")
+                    if record["state"] not in ("review_wait", "gate_wait", "merge_wait"):
+                        self.observe(wp_id, record["attempt"], observation)
+                    self.ledger.recover_merge({
+                        "work_package": wp_id, "pr_number": identity.pr_number, "action": "merge",
+                        "attempt": record["attempt"], "reservation_revision": record["revision"],
+                        "binding": record["binding"],
+                        "expected_head_sha": repair["binding"]["head_sha"], "base_sha": repair["binding"]["base_sha"],
+                        "ci_run_ids": repair["ci_run_ids"], "approval_id": repair["approval_id"],
+                        "policy_revision": repair["binding"]["policy_revision"],
+                    }, {"merged": True, "sha": repair["merge_commit_sha"]}, authoritative=True)
+                    self.ledger.release(
+                        wp_id, record["attempt"], identity, observation.worker_state,
+                        observation.pr_open, observation.authoritative,
+                    )
+                    return proof
+                if any(
+                    record["binding"][key] != proof["binding"][key]
+                    for key in ("base_sha", "source_sha", "manifest_sha256", "policy_revision")
+                ):
+                    raise PortError("PR is accepted; the worker reservation has a different identity or binding")
+                if record["state"] not in ("review_wait", "gate_wait", "merge_wait"):
+                    self.observe(wp_id, record["attempt"], observation)
+                self.ledger.complete(wp_id, record["attempt"], proof, authoritative=True)
+                self.ledger.recover_merge({
+                    "work_package": wp_id, "pr_number": proof["pr_number"], "action": "merge",
+                    "attempt": record["attempt"], "reservation_revision": record["revision"],
+                    "binding": record["binding"],
+                    "expected_head_sha": proof["binding"]["head_sha"], "base_sha": proof["binding"]["base_sha"],
+                    "ci_run_ids": proof["ci_run_ids"], "approval_id": proof["approval_id"],
+                    "policy_revision": proof["binding"]["policy_revision"],
+                }, {"merged": True, "sha": proof["merge_commit_sha"]}, authoritative=True)
+                return proof
+            identity = Identity.parse(record["identity"])
+            observation = self.backend.reconcile(wp_id, identity)
+            if observation.ambiguous or not observation.authoritative or observation.worker_state != "completed":
+                raise PortError("Merged bounded scope requires an actually completed, reconciled worker")
+            identity = identity.reconcile(observation.identity)
+            if identity.pr_number is None or observation.pr_open:
+                raise PortError("Merged bounded scope requires the terminal implementation PR")
+            if not hasattr(self.authority, "merged_scope"):
+                raise PortError("Missing authenticated merged-scope authority")
+            scope = self.authority.merged_scope(wp_id, identity)
+            binding = scope.get("binding", {}) if isinstance(scope, dict) else {}
+            merge_sha = scope.get("merge_commit_sha") if isinstance(scope, dict) else None
+            if (
+                not isinstance(scope, dict) or scope.get("kind") != "merged-scope"
+                or scope.get("pr_number") != identity.pr_number
+                or binding.get("repository") != self.policy["repository"]
+                or binding.get("work_package") != wp_id
+                or any(
+                    binding.get(key) != record["binding"].get(key)
+                    for key in ("base_sha", "source_sha", "manifest_sha256", "policy_revision")
+                )
+                or not isinstance(merge_sha, str) or SHA.fullmatch(merge_sha) is None
+            ):
+                raise PortError("Merged bounded scope has a conflicting identity or lease binding")
+            if record["state"] == "completed":
+                raise PortError("A completed lease cannot be released as a bounded repair")
+            if record["state"] not in ("review_wait", "gate_wait", "merge_wait"):
+                self.observe(wp_id, record["attempt"], observation)
+            payload = {
+                "work_package": wp_id, "pr_number": identity.pr_number, "action": "merge",
+                "attempt": record["attempt"], "reservation_revision": record["revision"],
+                "binding": record["binding"], "expected_head_sha": binding.get("head_sha"),
+                "base_sha": binding.get("base_sha"), "ci_run_ids": scope.get("ci_run_ids"),
+                "approval_id": scope.get("approval_id"), "policy_revision": binding.get("policy_revision"),
+            }
+            if not isinstance(payload["expected_head_sha"], str) or SHA.fullmatch(payload["expected_head_sha"]) is None:
+                raise PortError("Merged bounded scope has no exact candidate head")
+            receipt = {"merged": True, "sha": merge_sha}
+            recovered = self.ledger.recover_merge(payload, receipt, authoritative=True)
+            if not recovered:
+                previous, _ = self.ledger.begin_merge(payload)
+                if previous is not None and previous != receipt:
+                    raise PortError("Stored merge receipt conflicts with the authenticated merged PR")
+                if not self.ledger.recover_merge(payload, receipt, authoritative=True):
+                    raise PortError("Authenticated merged PR has no recoverable merge intent")
+            self.ledger.release(
+                wp_id, record["attempt"], identity, observation.worker_state,
+                observation.pr_open, observation.authoritative,
+            )
+            return scope
         observation = self.backend.reconcile(wp_id, Identity.parse(record["identity"]))
         if observation.ambiguous or not observation.authoritative or observation.worker_state != "completed":
             raise PortError("Only an actually completed existing worker can enter acceptance; idle is insufficient")
@@ -456,6 +593,20 @@ class Controller:
         record = self.ledger.get(wp_id)
         if record is None:
             raise PortError("Merge candidate has no existing lease/identity")
+        if hasattr(self.authority, "reviewed_candidate"):
+            if self.policy["paused"] or not self.policy["activation_approved"] or self.policy["dispatch_mode"] == "off":
+                raise PortError("Paused/off policy blocks merges")
+            if self.policy["admin_bypass"] or self.policy["merge_strategy"] != "serialized-exact-head-current-base":
+                raise PortError("Unsupported merge strategy or admin bypass")
+            base = self.backend.current_base()
+            result = self.authority.reviewed_candidate(wp_id, Identity.parse(record["identity"]), base)
+            for key in ("repository", "work_package", "base_sha", "source_sha", "manifest_sha256", "policy_revision"):
+                if result["binding"][key] != record["binding"][key]:
+                    raise PortError("Merge evidence disagrees with existing all-write-path lease binding")
+            return {
+                "action": "merge", "expected_head_sha": result["binding"]["head_sha"],
+                "base_sha": base, "ci_run_ids": result["ci_run_ids"], "approval_id": result["approval_id"],
+            }
         bundle = self.authority.bundle(wp_id, Identity.parse(record["identity"]))
         if not bundle.authoritative:
             raise PortError("Unverified merge evidence")

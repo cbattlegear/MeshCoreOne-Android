@@ -4,10 +4,13 @@ package com.meshcoreone.android.core.protocol.session
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import java.lang.management.ManagementFactory
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.resume
@@ -15,9 +18,11 @@ import kotlin.coroutines.suspendCoroutine
 import kotlin.test.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import org.junit.jupiter.api.Test
@@ -27,6 +32,28 @@ import org.junit.jupiter.api.TestFactory
 class ChannelWriteDispatchTest {
     @TestFactory
     fun realSessionCases() = listOf(
+        nativeCase("an already cancelled caller is definitely unsent before any serializer task exists") {
+            val f = fixture(); start(f)
+            val dispatch = ChannelWriteDispatch()
+            val observed = CompletableDeferred<ChannelWriteCancellationDisposition>()
+            val write = backgroundScope.launch(start = CoroutineStart.ATOMIC) {
+                try {
+                    f.session.setChannel(3u, "cancelled", filled(0x33, 16), dispatch)
+                } catch (cancelled: CancellationException) {
+                    observed.complete(dispatch.cancellationDisposition)
+                    throw cancelled
+                }
+            }
+            write.cancel(CancellationException("before serializer task")); runCurrent()
+            assertTrue(write.isCancelled)
+            assertEquals(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT, observed.await())
+            assertEquals(1, f.transport.sent.size)
+            assertEquals(0, f.session.core.generation().pending.size)
+            val next = checkedRequest { f.session.setChannel(4u, "next", filled(0x44, 16)) }; runCurrent()
+            assertEquals(2, f.transport.sent.size)
+            f.transport.ok(); runCurrent(); next.await()
+            f.session.stop()
+        },
         nativeCase("cancellation queued on the real serializer fences any later channel dispatch") {
             val f = fixture(); start(f)
             val occupying = checkedRequest { f.session.getBattery() }; runCurrent()
@@ -233,9 +260,20 @@ class ChannelWriteDispatchTest {
 
     @Test
     fun activeCheckAndWriteMarkAreLinearizedAgainstCancellation() {
+        assertEquals(ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN, activeCheckRace(fenced = true))
+    }
+
+    @Test
+    fun unfencedNegativeControlProducesAFalseUnsentDisposition() {
+        assertEquals(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT, activeCheckRace(fenced = false))
+    }
+
+    private fun activeCheckRace(fenced: Boolean): ChannelWriteCancellationDisposition {
         val checkedActive = CountDownLatch(1)
         val releaseActiveCheck = CountDownLatch(1)
         val cancelling = CountDownLatch(1)
+        val senderThread = AtomicReference<Thread>()
+        val cancellationThread = AtomicReference<Thread>()
         val actual = Job()
         val caller = object : Job by actual {
             override fun <E : CoroutineContext.Element> get(key: CoroutineContext.Key<E>): E? {
@@ -253,24 +291,50 @@ class ChannelWriteDispatchTest {
         }
         val context = RequestContext(caller)
         val effects = AtomicInteger()
+        val unfencedWritten = AtomicBoolean(false)
         val threads = Executors.newFixedThreadPool(2)
         try {
             val sending = threads.submit {
-                context.beforeSend()
+                senderThread.set(Thread.currentThread())
+                if (fenced) context.beforeSend()
+                else {
+                    caller.ensureActive()
+                    unfencedWritten.set(true)
+                }
                 effects.incrementAndGet()
             }
             assertTrue(checkedActive.await(5, TimeUnit.SECONDS))
             actual.cancel()
             val disposition = threads.submit<ChannelWriteCancellationDisposition> {
+                cancellationThread.set(Thread.currentThread())
                 cancelling.countDown()
-                context.cancelDispatch()
+                if (fenced) context.cancelDispatch()
+                else if (unfencedWritten.get()) ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN
+                else ChannelWriteCancellationDisposition.DEFINITELY_UNSENT
             }
             assertTrue(cancelling.await(5, TimeUnit.SECONDS))
-            assertFalse(disposition.isDone, "Cancellation cannot sample a false flag inside the active-check window")
+            if (fenced) {
+                val bean = ManagementFactory.getThreadMXBean()
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                var contended = false
+                while (System.nanoTime() < deadline) {
+                    assertFalse(disposition.isDone, "An unfenced cancellation must fail this control before sender release")
+                    val blocked = bean.getThreadInfo(cancellationThread.get().id)
+                    if (blocked?.threadState == Thread.State.BLOCKED && blocked.lockOwnerId == senderThread.get().id) {
+                        contended = true
+                        break
+                    }
+                    Thread.yield()
+                }
+                assertTrue(contended, "Prove the cancellation thread is blocked on the sender's actual monitor")
+            } else {
+                assertEquals(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT, disposition.get(5, TimeUnit.SECONDS))
+                assertEquals(0, effects.get(), "The unfenced snapshot occurs before the paused sender dispatches")
+            }
             releaseActiveCheck.countDown()
             sending.get(5, TimeUnit.SECONDS)
-            assertEquals(ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN, disposition.get(5, TimeUnit.SECONDS))
             assertEquals(1, effects.get())
+            return disposition.get(5, TimeUnit.SECONDS)
         } finally {
             releaseActiveCheck.countDown()
             actual.cancel()

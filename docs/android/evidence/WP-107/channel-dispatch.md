@@ -57,12 +57,13 @@ extension closes its check/mark race before exposing any unsent proof.
 
 ## Discriminating regressions
 
-`ChannelWriteDispatchTest` adds 11 real-session/interface cases and two direct
+`ChannelWriteDispatchTest` adds 12 real-session/interface cases and three direct
 dispatch-fence controls. They are supplementary native assertions, not newly
 credited original Swift families:
 
 | Schedule | Required assertion |
 | --- | --- |
+| Already cancelled caller at the pre-task activity check | Atomic-start control observes `DEFINITELY_UNSENT` before a task exists; no packet/subscription and a normal successor still works. |
 | Actual serializer occupied by battery exchange; channel queued and cancelled | Cancellation catch observes fenced `DEFINITELY_UNSENT`; releasing the first exchange and sending a successor never dispatches the cancelled channel. |
 | Normal four-argument call | Independently constructed exact `0x20` bytes and bare OK completion; no success-to-cancellation inference. |
 | Cooperative send suspended before transport commit | Cancel propagates; no committed frame does not downgrade `MAY_HAVE_WRITTEN`; unresolved response remains blocked. |
@@ -75,7 +76,8 @@ credited original Swift families:
 | Invalid input and device error | Existing typed failures and wire validation remain intact. |
 | Alternate implementation | Default overload retains `UNKNOWN` and original cancellation. |
 | Cancel wins fence while caller remains active | Both ordinary and cleanup dispatch are rejected permanently. |
-| Sender paused inside active-check/mark window, caller cancelled concurrently | Cancellation cannot observe an unsent snapshot inside the critical section; sender winner reports `MAY_HAVE_WRITTEN`. Real JVM latches/futures have bounded waits and joined executor cleanup, not timing sleeps. |
+| Sender paused inside active-check/mark window, caller cancelled concurrently | JVM monitor ownership proves the cancellation thread is actually blocked by the paused sender before release; sender winner reports `MAY_HAVE_WRITTEN`. Real JVM latches/futures have bounded waits and joined executor cleanup, not timing sleeps. |
+| Unfenced negative control | The same paused active-check schedule completes a false unsent snapshot before the sender resumes and effects its write, demonstrating why an atomic flag alone is insufficient. |
 
 ## Verification status
 
@@ -97,6 +99,10 @@ credited original Swift families:
   hosted verification are not claimed by this document. The exact-commit hosted
   job/log, if obtained, is authoritative; do not retain a duplicate CI-result
   bundle.
+- Superseded candidate `b72cfca8...` hosted run 41466241714 was cancelled by
+  the later push; its aggregate `android-ci` check failed on cancelled jobs.
+  It is not a product test failure or passing test execution. No manual rerun
+  was requested.
 
 Acceptance IDs: bounded WP-107-behavior and WP-107-boundaries support.
 No whole-WP, actual service/Room consumer, device, hardware, signing, protected

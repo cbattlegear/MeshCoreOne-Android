@@ -64,7 +64,13 @@ class RequestResponseSerializer(
         operation: suspend RequestContext.() -> T,
     ): T {
         val caller = currentCoroutineContext()
-        caller.ensureActive()
+        try {
+            caller.ensureActive()
+        } catch (cancelled: CancellationException) {
+            // No owned task exists yet, so this call cannot dispatch later.
+            dispatch?.cancelled(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT)
+            throw cancelled
+        }
         val context = RequestContext(caller)
         val task = scope.async {
             mutex.withLock {

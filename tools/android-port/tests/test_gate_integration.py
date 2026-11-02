@@ -201,6 +201,28 @@ class StagingTests(unittest.TestCase):
             with self.subTest(sources=sources), self.assertRaises(PortError):
                 self.staged_fixture(additional_candidate_sources=sources)
 
+    def test_cross_owner_production_and_cases_stage_real_pinned_bytes_not_candidate_spec(self):
+        production = "MC1/Views/Chats/Navigation/ChatLinkRouter.swift"
+        test = "MC1Tests/Views/Chats/ChatLinkRouterTests.swift"
+        baseline = self.staged_fixture()
+        staged = self.staged_fixture(additional_original_paths={production, test})
+        records = {item["path"]: item for item in staged["files"] if item["side"] == "pinned-reference"}
+        self.assertEqual(records[production]["blob_sha"], "d747388a70dd944f699d5f0d12ac8dc17d5141de")
+        self.assertEqual(records[test]["blob_sha"], "92073f0b8d9e5944bc3bd3718a3fd3fa4d019173")
+        self.assertIn("ChatLinkRouter", records[production]["content"])
+        self.assertNotEqual(digest(staged), digest(baseline))
+        for path in (production, test):
+            pinned = git(REPO, "show", f"{REFERENCE_SHA}:{path}")
+            self.assertEqual(records[path]["content"].encode(), pinned)
+            self.assertEqual(records[path]["sha256"], hashlib.sha256(pinned).hexdigest())
+            with self.subTest(path=path), self.assertRaisesRegex(PortError, "pinned source"):
+                self.staged_fixture(additional_original_paths={production, test},
+                                    reference_override={path: "0" * 40})
+        excluded = next(entry["path"] for entry in base_manifest().data["inventory"]
+                        if entry["kind"] == "production" and entry["exclusion"] is not None)
+        with self.assertRaisesRegex(PortError, "Unknown or excluded"):
+            self.staged_fixture(additional_original_paths={excluded})
+
     def test_retained_native_fixture_uses_observation_revision_not_candidate(self):
         head = git(REPO, "rev-parse", "HEAD").decode().strip()
         entries = tree(REPO, head)

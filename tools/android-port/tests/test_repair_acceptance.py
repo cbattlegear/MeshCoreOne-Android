@@ -19,7 +19,7 @@ from controller.native_review import REVIEW_MARKER
 from controller.repair_acceptance import (
     COMPRESSED_SCOPE_MARKER, SCOPE_MARKER, authenticated_scope, instrumentation_results, validate_build_log,
     validate_hosted_methods as validate_compiled_hosted_methods, validate_scope, verify_native, verify_repair,
-    retained_repairs_execution, scoped_candidate_sources, scoped_retained_sources,
+    retained_repairs_execution, scoped_candidate_sources, scoped_original_paths, scoped_retained_sources,
 )
 from controller.schema import digest, load_json
 from controller.publication import encode_structured_body
@@ -125,6 +125,57 @@ def build_log(modules, **changes):
 
 
 class RepairContractTests(unittest.TestCase):
+    def test_foreign_production_spec_requires_real_cross_owner_cases_in_each_scoped_route(self):
+        source = "MC1/Views/Chats/Navigation/ChatLinkRouter.swift"
+        test = "MC1Tests/Views/Chats/ChatLinkRouterTests.swift"
+        definition = next(entry for entry in load_json(REPO / "docs" / "android" / "test-cases.json")["entries"]
+                          if entry["path"] == test)
+        for route in ("repair", "verification", "whole"):
+            manifest, rules, value, scope = whole_fixture() if route == "whole" else fixture()
+            paths = [PATH]
+            if route == "verification":
+                scope.update(schema_version=2, kind="landed-wp-verification")
+                scope["paths"][0]["path"] = TEST
+                scope["coverage"][0].update(path=TEST, production_bindings={PATH: "5" * 40})
+                paths = [TEST]
+            catalog = copy.deepcopy(value.catalog) if route == "whole" else {
+                "schema_version": 1, "source_sha": value.binding.source_sha, "entries": [],
+            }
+            catalog["entries"].append(copy.deepcopy(definition))
+            entry = scope["coverage"][0]
+            entry["source_paths"].extend([source, test])
+            entry["cases"].extend({"path": test, **case} for case in definition["cases"])
+            operations, cases, _ = validate_scope(scope, value.binding, manifest, rules, paths, catalog)
+            self.assertEqual(set(operations), set(paths))
+            self.assertTrue({source, test}.issubset(scoped_original_paths(scope, cases, manifest)))
+            for kind in ("production-only", "invented-production-case", "unmapped-test", "unknown-case",
+                         "wrong-family", "stale-catalog", "unknown-source", "excluded-source", "stale-binding"):
+                altered, altered_catalog = copy.deepcopy(scope), copy.deepcopy(catalog)
+                coverage = altered["coverage"][0]
+                if kind == "production-only":
+                    coverage["source_paths"].remove(test)
+                    coverage["cases"] = [case for case in coverage["cases"] if case["path"] != test]
+                elif kind == "invented-production-case":
+                    coverage["cases"].append({"path": source, **definition["cases"][0]})
+                elif kind == "unmapped-test":
+                    coverage["cases"] = [case for case in coverage["cases"] if case["path"] != test]
+                elif kind == "unknown-case":
+                    coverage["cases"][-1]["id"] = "invented"
+                elif kind == "wrong-family":
+                    coverage["cases"][-1]["parameter_family"] = "invented"
+                elif kind == "stale-catalog":
+                    altered_catalog["entries"][-1]["blob_sha"] = "0" * 40
+                elif kind == "unknown-source":
+                    coverage["source_paths"].append("MC1/Unknown.swift")
+                elif kind == "excluded-source":
+                    coverage["source_paths"].append(next(
+                        item["path"] for item in manifest.data["inventory"] if item["exclusion"] is not None
+                    ))
+                else:
+                    altered["binding"]["source_sha"] = "0" * 40
+                with self.subTest(route=route, kind=kind), self.assertRaises(PortError):
+                    validate_scope(altered, value.binding, manifest, rules, paths, altered_catalog)
+
     def test_scoped_candidate_sources_include_consumer_tests_and_native_bindings_without_conflicts(self):
         _, _, _, scope = fixture()
         scope["coverage"][0]["production_bindings"] = {PATH: "5" * 40}
@@ -1703,12 +1754,16 @@ class RepairAuthorityTests(unittest.TestCase):
             validate_scope(altered, value_binding, native.manifest, native.policy, [consumer], None)
 
     def test_scoped_cross_owner_sources_are_staged_again_for_receipt_validation(self):
-        source = "MC1Services/Tests/MC1ServicesTests/SyncCoordinatorMessageHandlerTests.swift"
+        source = "MC1Tests/Views/Chats/ChatLinkRouterTests.swift"
+        production = "MC1/Views/Chats/Navigation/ChatLinkRouter.swift"
         definition = next(entry for entry in load_json(REPO / "docs" / "android" / "test-cases.json")["entries"]
                           if entry["path"] == source)
         case = definition["cases"][0]
-        for whole in (False, True):
-            native, api, prefix, value, scope, staged, entries = self.fixture()
+        for route in ("repair", "verification", "whole"):
+            whole = route == "whole"
+            native, api, prefix, value, scope, staged, entries = (
+                self.verification_fixture() if route == "verification" else self.fixture()
+            )
             if whole:
                 manifest, rules, value, scope = whole_fixture()
                 native.manifest, native.policy = manifest, rules
@@ -1717,7 +1772,7 @@ class RepairAuthorityTests(unittest.TestCase):
                 "schema_version": 1, "source_sha": value.binding.source_sha, "entries": [],
             }
             catalog["entries"].append(copy.deepcopy(definition))
-            scope["coverage"][0]["source_paths"].append(source)
+            scope["coverage"][0]["source_paths"].extend([source, production])
             scope["coverage"][0]["cases"].append({"path": source, **case})
             scope["native"] = [{
                 "revision": BASE, "transcript": "docs/android/evidence/WP-503/fixture.txt",
@@ -1753,14 +1808,16 @@ class RepairAuthorityTests(unittest.TestCase):
                 else:
                     native.stage_repair("WP-312", 123, 700)
                 self.assertIn(source, stage.call_args.kwargs["additional_original_paths"])
+                self.assertIn(production, stage.call_args.kwargs["additional_original_paths"])
                 self.assertEqual(stage.call_args.kwargs["additional_candidate_sources"],
-                                 {TEST: "4" * 40, PATH: "5" * 40})
+                                 {CONSUMER_TEST if route == "verification" else TEST: "4" * 40, PATH: "5" * 40})
                 self.assertEqual(stage.call_args.kwargs["additional_retained_sources"],
                                  {(BASE, CONSUMER_TEST): "8" * 40})
                 native.evaluate("WP-312", 123, 90)
                 self.assertIn(source, stage.call_args.kwargs["additional_original_paths"])
+                self.assertIn(production, stage.call_args.kwargs["additional_original_paths"])
                 self.assertEqual(stage.call_args.kwargs["additional_candidate_sources"],
-                                 {TEST: "4" * 40, PATH: "5" * 40})
+                                 {CONSUMER_TEST if route == "verification" else TEST: "4" * 40, PATH: "5" * 40})
                 self.assertEqual(stage.call_args.kwargs["additional_retained_sources"],
                                  {(BASE, CONSUMER_TEST): "8" * 40})
                 self.assertEqual(stage.call_count, 2)

@@ -1082,16 +1082,29 @@ and all other gates still apply. Its body is
 | `verification` | Exactly `["android-scaffold"]`, mapping to the existing declared strict scaffold runner, not a guessed Gradle task |
 | `native` | Explicit immutable independently retained native observations, or `[]` when affected behavior has a reviewed hosted native adaptation |
 
-Coverage source paths must be nonexcluded pinned inputs. A cross-owner source
-must appear in the same coverage entry as at least one explicitly mapped
-original case from that source. Coverage `cases` items are
+Coverage source paths must be nonexcluded pinned inputs. A cross-owner test or
+support source must appear in the same coverage entry as at least one explicitly
+mapped original case from that source. A cross-owner production specification
+may also appear in `source_paths`, alongside explicitly mapped cross-owner
+test/support cases in that same entry; it is not itself a catalog case.
+Production-only cross-owner mappings, invented cases and unmapped cross-owner
+test/support inputs still fail closed. Coverage `cases` items are
 `{path, id, parameter_family}` from the trusted frozen catalog; the receipt
 must account for every selected parameter family. Independent source review
 must establish the relevance and completeness of cross-owner families against
 the assignment, and the original source retains its primary owner. Every affected
 module must be selected, including typed-capability-admitted support files.
-The staging and receipt revalidation paths include each selected cross-owner
-source's pinned bytes in the immutable reviewer inputs and staging digest.
+The staging and receipt revalidation paths include each selected production
+specification and original case source's pinned bytes in the immutable reviewer
+inputs and staging digest. They resolve identities from the trusted-base
+manifest and fixed reference tree, never author-supplied production blob IDs.
+This applies identically to bounded repairs, verification-only additions and
+whole-WP scopes; complete whole-WP case coverage is unchanged. Case relevance
+to the production specification remains an authenticated source-review duty,
+not a conclusion inferred from inventory ownership or the scope author.
+Existing receipts with unchanged staged inputs remain readable. A scope whose
+newly included foreign production bytes change the staging digest needs a fresh
+exact-bound review; neither a prior digest nor an author-supplied scope is a verdict.
 Referenced candidate test methods, unchanged production consumers and native
 source bindings are likewise staged at their exact candidate blob identities.
 Each retained native fixture is also staged from its immutable observation
@@ -1112,6 +1125,32 @@ the canonical WP marker or legacy `[WP-xxx] ` title. Its actual server path
 inventory must contain an actually repaired production path; added repair helpers
 still need exact typed admissions and behavioral coverage. Legacy title provenance
 does not manufacture a historical completion receipt or alter old reservations.
+
+Controller-only changes use the existing candidate controller/workflow CI lane
+and supervised source review, then merge to the trusted default branch before
+the publisher can execute the new code. The native scope contract still requires
+the declared Android scaffold job: controller-only CI is not that job, and this
+change does not introduce a controller-only native-acceptance route. Scoped
+acceptance also rejects changes to trusted verification/runtime inputs, including
+these controller readers; a repair cannot attest its own replacement validators.
+If a
+controller repair cannot satisfy native acceptance under the deployed base,
+report the missing check/gate for a separately authorized supervised source-merge
+decision; a previous candidate's exception is not reusable authority. Do not
+change policy, branch rules or synthesize a passing check. Once the source is
+reviewed and actually merged, stage the affected feature repair anew against
+current main, obtain its real exact-bound CI and authenticated review, and
+dispatch `android-parity-review.yml --ref main` with its WP/PR/review identity as
+documented above. Installed local execution runtimes are a separate deployment;
+no runtime installation or live operation is implied by a source merge.
+
+Focused source-only regressions (native Windows pinned Python, no Gradle or
+shared Android execution) use the existing strict runner:
+
+```powershell
+$env:PYTHONPATH="$PWD\tools\android-port;$PWD\tools\android-port\tests"
+python -B -c "import unittest; from controller.test_runner import run_suite; raise SystemExit(run_suite(unittest.TestLoader().loadTestsFromNames(['test_repair_acceptance','test_gate_integration','test_native_review'])))"
+```
 
 For **verification-only additions** to an already-landed WP, keep that same
 authenticated issue-comment marker and every field above, but explicitly use

@@ -79,6 +79,16 @@ def repair_producer_bindings(scope, manifest):
     return bindings
 
 
+def scoped_original_paths(scope, cases, manifest):
+    production = {
+        entry["path"] for entry in manifest.data["inventory"]
+        if entry["kind"] == "production" and entry["exclusion"] is None
+    }
+    return {path for path, _, _ in cases} | {
+        path for entry in scope["coverage"] for path in entry["source_paths"] if path in production
+    }
+
+
 def scoped_candidate_sources(scope):
     sources = {}
 
@@ -328,10 +338,13 @@ def validate_scope(scope, binding, manifest, policy, changed_paths, catalog):
         if any(not isinstance(entry[key], list) for key in ("cases", "native_methods", "hosted_methods")):
             raise PortError("Malformed repair original/native families")
         foreign_sources = set(entry["source_paths"]) - owned.keys()
-        if foreign_sources - {
+        foreign_production = {path for path in foreign_sources if original_inputs[path]["kind"] == "production"}
+        case_paths = {
             case["path"] for case in entry["cases"]
             if isinstance(case, dict) and isinstance(case.get("path"), str)
-        }:
+        }
+        if (foreign_sources - foreign_production - case_paths
+                or foreign_production and not (foreign_sources - foreign_production) & case_paths):
             raise PortError("Cross-owner source mappings require explicit original case families")
         if not entry["cases"] and not entry["native_methods"] and not entry["hosted_methods"]:
             raise PortError("No original case or explicit native adaptation covers this change")

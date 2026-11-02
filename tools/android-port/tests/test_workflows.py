@@ -454,7 +454,10 @@ class WorkflowTests(unittest.TestCase):
     def test_scope_classifier_and_outputs_cannot_be_removed_or_overridden(self):
         import yaml
 
-        original, _ = self.read("android-ci.yml")
+        original, text = self.read("android-ci.yml")
+        scope_step = original["jobs"]["scope"]["steps"][1]
+        scope_step["run"] = "# Valid scope explanation\n\n" + scope_step["run"]
+        validate_candidate(original, text)
         for kind in (
             "classifier-removed", "classifier-commented", "classifier-duplicated",
             "classifier-output", "classifier-failure", "output-override",
@@ -464,7 +467,12 @@ class WorkflowTests(unittest.TestCase):
             value = copy.deepcopy(original)
             scope = value["jobs"]["scope"]
             step = scope["steps"][1]
-            classifier, selector = step["run"].splitlines()
+            commands = [
+                line.strip(" \t") for line in step["run"].split("\n")
+                if line.strip(" \t") and not line.lstrip(" \t").startswith("#")
+            ]
+            self.assertEqual(len(commands), 2)
+            classifier, selector = commands
             if kind == "classifier-removed":
                 step["run"] = selector + "\n"
             elif kind == "classifier-commented":

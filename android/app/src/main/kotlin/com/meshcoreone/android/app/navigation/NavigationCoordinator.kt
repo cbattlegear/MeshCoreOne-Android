@@ -133,11 +133,48 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     fun stageContactLink(link: ContactLinkRequest?, selectChats: Boolean = false) = mutableState.update {
         (if (selectChats) it.select(AppTab.CHATS) else it).copy(pendingContactLink = link)
     }
-    fun stageChannelLink(link: ChannelLinkRequest?, selectChats: Boolean = false) = mutableState.update {
-        (if (selectChats) it.select(AppTab.CHATS) else it).copy(pendingChannelLink = link)
+    fun stageChannelLink(link: ChannelLinkRequest?, selectChats: Boolean = false) {
+        if (link == null) {
+            clearPendingChannelLink()
+            return
+        }
+        stageChannelConfirmation(PendingChannelConfirmation(UUID.randomUUID(), link = link), selectChats)
     }
-    fun stageHashtag(link: HashtagJoinRequest?, selectChats: Boolean = false) = mutableState.update {
-        (if (selectChats) it.select(AppTab.CHATS) else it).copy(pendingHashtag = link)
+    fun stageHashtag(link: HashtagJoinRequest?, selectChats: Boolean = false) {
+        if (link == null) {
+            clearPendingHashtag()
+            return
+        }
+        stageChannelConfirmation(PendingChannelConfirmation(UUID.randomUUID(), hashtag = link), selectChats)
+    }
+
+    private fun stageChannelConfirmation(request: PendingChannelConfirmation, selectChats: Boolean) =
+        mutableState.update {
+            (if (selectChats) it.select(AppTab.CHATS) else it).copy(
+                pendingChannelConfirmation = if (request.link != null) request else it.pendingChannelConfirmation,
+                pendingHashtagConfirmation = if (request.hashtag != null) request else it.pendingHashtagConfirmation,
+            )
+        }
+
+    fun completeChannelConfirmation(deliveryId: UUID, channel: ChannelDTO? = null): Boolean {
+        while (true) {
+            val current = mutableState.value
+            val isLink = current.pendingChannelConfirmation?.deliveryId == deliveryId
+            val isHashtag = current.pendingHashtagConfirmation?.deliveryId == deliveryId
+            if (!isLink && !isHashtag) return false
+            val cleared = current.copy(
+                pendingChannelConfirmation = if (isLink) null else current.pendingChannelConfirmation,
+                pendingHashtagConfirmation = if (isHashtag) null else current.pendingHashtagConfirmation,
+            )
+            val next = if (channel != null) {
+                val selection = ChatSelection.Channel(channel)
+                cleared.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
+                    pendingChannel = channel, chatsSelectedRoute = selection,
+                    pendingScrollToMessageID = null, tabBarVisible = false,
+                )
+            } else cleared
+            if (mutableState.compareAndSet(current, next)) return true
+        }
     }
     fun setPendingDeviceMenuTipDonation(pending: Boolean) =
         mutableState.update { it.copy(pendingDeviceMenuTipDonation = pending) }
@@ -151,8 +188,8 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     fun clearPendingContactDetailNavigation() = mutableState.update { it.copy(pendingContactDetail = null) }
     fun clearPendingMapFocus() = mutableState.update { it.copy(pendingMapFocus = null) }
     fun clearPendingContactLink() = stageContactLink(null)
-    fun clearPendingChannelLink() = stageChannelLink(null)
-    fun clearPendingHashtag() = stageHashtag(null)
+    fun clearPendingChannelLink() = mutableState.update { it.copy(pendingChannelConfirmation = null) }
+    fun clearPendingHashtag() = mutableState.update { it.copy(pendingHashtagConfirmation = null) }
     fun clearFailure(expected: NavigationFailure? = state.value.failure) = mutableState.update {
         if (it.failure == expected) it.copy(failure = null) else it
     }
@@ -194,7 +231,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     fun clearPendingLinks() = mutableState.update {
         clearRadioSelection(it).copy(
             generation = Math.incrementExact(it.generation),
-            pendingContactLink = null, pendingChannelLink = null, pendingHashtag = null,
+            pendingContactLink = null, pendingChannelConfirmation = null, pendingHashtagConfirmation = null,
         )
     }
 
@@ -202,7 +239,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     fun replaceRadio(radioId: RadioId?) = mutableState.update {
         clearRadioSelection(it).copy(
             radioId = radioId, generation = Math.incrementExact(it.generation),
-            pendingContactLink = null, pendingChannelLink = null, pendingHashtag = null,
+            pendingContactLink = null, pendingChannelConfirmation = null, pendingHashtagConfirmation = null,
             pendingChatContact = null, pendingChannel = null, pendingRoomSession = null,
             pendingRoomAuthentication = null, pendingContactDetail = null,
             pendingDiscoveryNavigation = false, pendingScrollToMessageID = null, pendingMapFocus = null,

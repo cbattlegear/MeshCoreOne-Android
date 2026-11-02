@@ -1,5 +1,54 @@
 # WP-405 evidence
 
+## Issue #417 consumer-only follow-up: execution pending
+
+Finding: https://github.com/cbattlegear/MeshCoreOne-Android/issues/417#issuecomment-6578143740.
+The original schedules were static/unexecuted. Source inspection at #508
+`48474607c10e50a27933fb0cc0992905f2666e45` confirmed dual-slot clearing,
+per-entry dialog mounting and holder identity tied to the unrelated slot.
+Its exact current-base run `41442628576` passed against
+`5878b5357dc9fe9986f002fe68763aca0bc35303`; that run does not execute this repair
+or establish any new finding's outcome.
+
+WP-302 explicitly reported no active competing channel-dialog/relocation
+edit. Its #495 contact/room-auth and owner-metadata changes are retained as
+future disjoint reconciliation requirements, not imported APIs. Trusted
+`app-build-launcher` / `add-direct-support-wiring` and
+`reviewed-support-test` / `add-or-update-related-test` admission covers the
+exact consumer/test paths. Supported same-owner evolution reached revision
+11, preserving historical authorization/binding; #495 and its reservation
+remain frozen and untouched.
+
+The original five `ChannelConfirmationConsumerTest` methods are retained.
+Eight additional methods declare:
+
+- Fresh identities for identical/different same-kind staging; old dismissal
+  and successful completion cannot affect the replacement, for both kinds.
+- Both cross-kind staging orders, cancellation and successful acknowledgement,
+  retaining the other slot and completed navigation.
+- Real-coordinator reentrant publication observing acknowledgement and
+  navigation in one state before identical replacement.
+- Real adaptive shell, existing conversation, compact/tiled resize in both
+  directions, one accessible dialog, metadata and cancellation preserving
+  the unseen other kind without a connection/write.
+- Real-graph channel write held after the actual command and Room save:
+  independent hashtag arrival keeps submitting disabled across resize and
+  one consent produces exactly one command with original secret/scope.
+- Identical and distinct channel replacements before that held join returns
+  survive the old completion without obsolete navigation.
+- Reverse independent channel arrival while a hashtag join is held, including
+  temporary preemption/cancellation/reappearance with submitting still
+  disabled, followed by preserved independent pending request and one write.
+
+The held-write gate wraps the production persistence protocol after the
+real firmware acknowledgement and Room save; it is not a replacement router,
+callback-only action or invented radio result. Hosted discovery/results are
+pending, and no local Android/Gradle is run. No physical-device or integrated
+lifecycle claim follows. External/chat held-lookup session replacement and
+confirmation/write session ownership remain blocked on WP-302's actual
+accepted shared boundary after #506; no full #417 completion or merge follows
+from this consumer-only candidate.
+
 ## Issue #504 related map-consumer synchronization follow-up
 
 Exact selection candidate `d2d85f1fbb6557d8cafc71756a89c096c1277287`

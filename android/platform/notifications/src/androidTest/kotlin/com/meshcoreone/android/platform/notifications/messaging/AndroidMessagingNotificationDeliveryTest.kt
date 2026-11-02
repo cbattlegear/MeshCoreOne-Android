@@ -2,7 +2,9 @@
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.app.Notification
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.meshcoreone.android.core.contracts.domain.EntityKey
@@ -19,6 +21,8 @@ import com.meshcoreone.android.core.model.SnapshotList
 import java.util.UUID
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -27,6 +31,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@Config(sdk = [31, 37])
 class AndroidMessagingNotificationDeliveryTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val contact = EntityKey(
@@ -59,7 +64,50 @@ class AndroidMessagingNotificationDeliveryTest {
         assertEquals(1, notification.actions[0].remoteInputs?.size)
         assertFalse(notification.actions[0].actionIntent.isImmutable)
         assertTrue(notification.actions[1].actionIntent.isImmutable)
-        assertTrue(delivery.actionPendingIntent(request, null, mutable = false).isImmutable)
+        val contentIntent = delivery.contentPendingIntent(request)
+        val launch = shadowOf(contentIntent).savedIntent
+        assertEquals(contentIntent, notification.contentIntent)
+        assertTrue(contentIntent.isImmutable)
+        assertEquals(
+            ComponentName(context.packageName, "com.meshcoreone.android.MainActivity"),
+            launch.component,
+        )
+        assertEquals(AndroidMessagingNotificationDelivery.ACTION_PREFIX + AndroidMessagingNotificationDelivery.ACTION_OPEN, launch.action)
+        assertEquals(
+            "meshcore-notification://action/${request.id.value}/OPEN",
+            launch.dataString,
+        )
+        assertEquals(request.payload, NotificationPayloadCodec.read(launch))
+        assertEquals(
+            NotificationActionReceiver::class.java.name,
+            shadowOf(notification.actions[0].actionIntent).savedIntent.component?.className,
+        )
+        assertEquals(
+            NotificationActionReceiver::class.java.name,
+            shadowOf(notification.actions[1].actionIntent).savedIntent.component?.className,
+        )
+    }
+
+    @Test
+    fun activityContentIntentPreservesEveryTypedPayloadIdentity() = runTest {
+        val delivery = delivery(this)
+        val payloads = listOf(
+            NotificationPayload.DirectMessage(contact, message),
+            NotificationPayload.ChannelMessage(contact.radioId, 17u, message),
+            NotificationPayload.RoomMessage("Ops", EntityKey(contact.radioId, contact.id), message),
+            NotificationPayload.NewContact(contact),
+            NotificationPayload.Reaction(message, contact, null, null),
+            NotificationPayload.Reaction(message, null, 2u, contact.radioId),
+            NotificationPayload.LowBattery(14),
+            NotificationPayload.QuickReplyFailed(contact),
+            NotificationPayload.ChannelQuickReplyFailed(contact.radioId, 3u),
+        )
+
+        payloads.forEachIndexed { index, payload ->
+            val request = request().copy(id = NotificationId("content-$index"), payload = payload)
+            val pendingIntent = delivery.contentPendingIntent(request)
+            assertEquals(payload, NotificationPayloadCodec.read(shadowOf(pendingIntent).savedIntent))
+        }
     }
 
     @Test
@@ -72,8 +120,14 @@ class AndroidMessagingNotificationDeliveryTest {
         )
     }
 
-    private fun delivery(scope: TestScope) =
-        AndroidMessagingNotificationDelivery(context, scope) { true }
+    private fun delivery(scope: TestScope) = AndroidMessagingNotificationDelivery(
+        context,
+        scope,
+        { true },
+        launcherIntent = {
+            Intent().setComponent(ComponentName(context.packageName, "com.meshcoreone.android.MainActivity"))
+        },
+    )
 
     private fun request() = NotificationRequest(
         id = NotificationId(message.toString()),

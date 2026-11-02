@@ -40,6 +40,9 @@ class AndroidMessagingNotificationDelivery(
     context: Context,
     scope: CoroutineScope,
     routeAction: suspend (NotificationResponse) -> Boolean,
+    private val launcherIntent: (Context) -> Intent? = { appContext ->
+        appContext.packageManager.getLaunchIntentForPackage(appContext.packageName)
+    },
 ) : NotificationDeliveryPort {
     private val context = context.applicationContext
     private val manager = this.context.getSystemService(NotificationManager::class.java)
@@ -119,7 +122,7 @@ class AndroidMessagingNotificationDelivery(
     }
 
     internal fun buildNotification(request: NotificationRequest): Notification {
-        val contentIntent = actionPendingIntent(request, action = null, mutable = false)
+        val contentIntent = contentPendingIntent(request)
         val payloadExtras = NotificationPayloadCodec.write(Intent(), request.payload).extras
         val builder = Notification.Builder(context, channelFor(request.payload, request.soundEnabled))
             .setSmallIcon(context.applicationInfo.icon)
@@ -193,20 +196,38 @@ class AndroidMessagingNotificationDelivery(
 
     internal fun actionPendingIntent(
         request: NotificationRequest,
-        action: NotificationAction?,
+        action: NotificationAction,
         mutable: Boolean,
     ): PendingIntent {
-        val actionName = action?.rawValue ?: ACTION_OPEN
+        val actionName = action.rawValue
         val intent = NotificationPayloadCodec.write(
             Intent(context, NotificationActionReceiver::class.java)
                 .setAction(ACTION_PREFIX + actionName)
                 .setData(Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$actionName"))
-                .putExtra(NotificationActionReceiver.EXTRA_ACTION, action?.rawValue),
+                .putExtra(NotificationActionReceiver.EXTRA_ACTION, action.rawValue),
             request.payload,
         )
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or
             if (mutable) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getBroadcast(context, requestCode(request.id, actionName), intent, flags)
+    }
+
+    internal fun contentPendingIntent(request: NotificationRequest): PendingIntent {
+        val launchIntent = launcherIntent(context)
+            ?: error("No launcher Activity is registered for ${context.packageName}")
+        val intent = NotificationPayloadCodec.write(
+            launchIntent
+                .setAction(ACTION_PREFIX + ACTION_OPEN)
+                .setData(Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$ACTION_OPEN"))
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            request.payload,
+        )
+        return PendingIntent.getActivity(
+            context,
+            requestCode(request.id, ACTION_OPEN),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     private fun publishConversationShortcut(request: NotificationRequest) {

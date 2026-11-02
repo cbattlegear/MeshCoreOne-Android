@@ -45,6 +45,15 @@ def parse_yaml(text: str):
     return value
 
 
+def executable_lines(script: str):
+    if not isinstance(script, str):
+        raise PortError("Workflow run script must be a string")
+    return [
+        line.strip() for line in script.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
 def validate_boundary(value: dict, text: str):
     if value.get("permissions") != {"contents": "read"}:
         raise PortError("Workflow token must have contents:read only")
@@ -82,21 +91,29 @@ def validate_candidate(value: dict, text: str):
         or scope_outputs.get("benchmark") != "${{ steps.changed.outputs.benchmark }}"
     ):
         raise PortError("Diff-derived scope outputs and committed accessibility-suite selection must remain separate")
-    if (gate.get("name") != "android-ci" or gate.get("if") != "${{ always() }}"
+    if (set(gate) != {"name", "if", "needs", "runs-on", "timeout-minutes", "steps"}
+            or gate.get("name") != "android-ci" or gate.get("if") != "${{ always() }}"
+            or gate.get("runs-on") != "ubuntu-24.04" or gate.get("timeout-minutes") != "5"
             or gate.get("needs") != ["scope", "controller", "build", "external-oracle", "backup-oracle"]):
         raise PortError("android-ci must always report every selected build outcome")
     build = jobs["build"]
     if any(jobs[name].get("runs-on") != "macos-26-intel" for name in ("external-oracle", "backup-oracle")):
         raise PortError("Reference oracles require the supported macOS26 Intel host; do not downgrade runtime or skip oracles")
-    if (build.get("runs-on") != "ubuntu-24.04" or "strategy" in build
+    build_condition = (
+        "${{ needs.scope.outputs.scaffold == 'true' || "
+        "needs.scope.outputs.protocol == 'true' || "
+        "needs.scope.outputs.backup == 'true' || "
+        "needs.scope.outputs.benchmark == 'true' }}"
+    )
+    condition = build.get("if")
+    if (set(build) != {"name", "needs", "if", "runs-on", "timeout-minutes", "defaults", "steps"}
+            or build.get("name") != "One Linux Android build"
+            or build.get("runs-on") != "ubuntu-24.04" or build.get("timeout-minutes") != "75"
+            or build.get("defaults") != {"run": {"shell": "pwsh"}}
             or build.get("needs") != ["scope"]
-            or "needs.scope.outputs" not in build.get("if", "")):
+            or not isinstance(condition, str)
+            or " ".join(condition.split()) != build_condition):
         raise PortError("The selected Linux execution host must be mandatory, dependency-gated and unmatrixed")
-    if any(
-        f"needs.scope.outputs.{scope} == 'true'" not in build.get("if", "")
-        for scope in ("scaffold", "protocol", "backup", "benchmark")
-    ):
-        raise PortError("The Linux build job must include every selected Android build scope")
     steps = build["steps"]
     stage_steps = [step for step in steps if step.get("id") == "gradle"]
     if len(stage_steps) != 1:
@@ -110,24 +127,28 @@ def validate_candidate(value: dict, text: str):
         "RUN_BENCHMARK": "${{ needs.scope.outputs.benchmark }}",
         "RUN_CONTROLLER": "${{ needs.scope.outputs.controller }}",
     }
-    benchmark_command = "python tools/android-port/controller/ci.py run --stage benchmark"
-    scaffold_command = "ci.py run --stage scaffold @affected @scopes"
-    if (
-        not isinstance(stage_environment, dict)
-        or any(stage_environment.get(key) != value for key, value in expected_stage_environment.items())
-        or "$affected = @()" not in stage_run
-        or "if ($env:RUN_CONTROLLER -ne 'true') { $affected = @('--affected-candidate') }" not in stage_run
-        or "if ($env:RUN_BENCHMARK -eq 'true') {" not in stage_run
-        or "if ($env:RUN_SCAFFOLD -eq 'true' -or $env:RUN_PROTOCOL -eq 'true' -or $env:RUN_BACKUP -eq 'true') {" not in stage_run
-        or any(
+    stage_lines = [
+        "if ($env:RUN_BENCHMARK -eq 'true') {",
+        "& python tools/android-port/controller/ci.py run --stage benchmark",
+        "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+        "}",
+        "if ($env:RUN_SCAFFOLD -eq 'true' -or $env:RUN_PROTOCOL -eq 'true' -or $env:RUN_BACKUP -eq 'true') {",
+        "$scopes = @()",
+        *(
             f"if ($env:RUN_{scope.upper()} -eq 'true') {{ $scopes += @('--scope', '{scope}') }}"
-            not in stage_run
             for scope in ("scaffold", "protocol", "backup")
-        )
-        or stage_run.count(benchmark_command) != 1
-        or stage_run.count(scaffold_command) != 1
-        or stage_run.count("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }") != 2
-        or stage_run.index(benchmark_command) > stage_run.index(scaffold_command)
+        ),
+        "$affected = @()",
+        "if ($env:RUN_CONTROLLER -ne 'true') { $affected = @('--affected-candidate') }",
+        "& python tools/android-port/controller/ci.py run --stage scaffold @affected @scopes",
+        "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+        "}",
+    ]
+    if (
+        set(stage_steps[0]) != {"id", "name", "env", "run"}
+        or stage_steps[0].get("name") != "Run parallel Gradle validation and Android tasks"
+        or stage_environment != expected_stage_environment
+        or executable_lines(stage_run) != stage_lines
     ):
         raise PortError("Candidate Gradle stages must run selected benchmark verification and exact affected scaffold planning")
     selected_controller = (
@@ -188,21 +209,48 @@ def validate_candidate(value: dict, text: str):
         },
     }:
         raise PortError("Debug APK handoff must be successful, scaffold-only, exact-candidate/run-bound and fail on absence")
-    gate_runs = "\n".join(s.get("run", "") for s in gate["steps"])
-    gate_environment = {
-        key: value for step in gate["steps"] for key, value in step.get("env", {}).items()
-    }
     selected_build_gate = (
         'if [ "$SCAFFOLD_SELECTED" = "true" ] || [ "$PROTOCOL_SELECTED" = "true" ] '
         '|| [ "$BACKUP_SELECTED" = "true" ] || [ "$BENCHMARK_SELECTED" = "true" ]; then'
     )
+    gate_steps = gate.get("steps")
+    gate_environment = {
+        "CONTROLLER_SELECTED": "${{ needs.scope.outputs.controller }}",
+        "SCAFFOLD_SELECTED": "${{ needs.scope.outputs.scaffold }}",
+        "PROTOCOL_SELECTED": "${{ needs.scope.outputs.protocol }}",
+        "BACKUP_SELECTED": "${{ needs.scope.outputs.backup }}",
+        "BENCHMARK_SELECTED": "${{ needs.scope.outputs.benchmark }}",
+        "EXTERNAL_SELECTED": "${{ needs.scope.outputs['external-oracle'] }}",
+        "CONTROLLER_RESULT": "${{ needs.controller.result }}",
+        "BUILD_RESULT": "${{ needs.build.result }}",
+        "EXTERNAL_RESULT": "${{ needs.external-oracle.result }}",
+        "BACKUP_RESULT": "${{ needs.backup-oracle.result }}",
+    }
+    gate_lines = [
+        'test "$CONTROLLER_RESULT" = "success"',
+        selected_build_gate,
+        'test "$BUILD_RESULT" = "success"',
+        "else",
+        'test "$BUILD_RESULT" = "skipped"',
+        "fi",
+        'if [ "$EXTERNAL_SELECTED" = "true" ]; then',
+        'test "$EXTERNAL_RESULT" = "success"',
+        "else",
+        'test "$EXTERNAL_RESULT" = "skipped"',
+        "fi",
+        'if [ "$BACKUP_SELECTED" = "true" ]; then',
+        'test "$BACKUP_RESULT" = "success"',
+        "else",
+        'test "$BACKUP_RESULT" = "skipped"',
+        "fi",
+    ]
     if (
-        gate_environment.get("BUILD_RESULT") != "${{ needs.build.result }}"
-        or gate_environment.get("BENCHMARK_SELECTED") != "${{ needs.scope.outputs.benchmark }}"
-        or selected_build_gate not in gate_runs
-        or "aggregate --artifacts" in gate_runs
-        or any(step.get("uses", "").startswith(("actions/upload-artifact@", "actions/download-artifact@"))
-               for step in gate["steps"])
+        not isinstance(gate_steps, list) or len(gate_steps) != 1
+        or not isinstance(gate_steps[0], dict)
+        or set(gate_steps[0]) != {"name", "env", "run"}
+        or gate_steps[0]["name"] != "Require every selected scope to pass"
+        or gate_steps[0]["env"] != gate_environment
+        or executable_lines(gate_steps[0]["run"]) != gate_lines
     ):
         raise PortError("Android CI must use direct fail-closed job results without duplicate report artifacts")
     all_runs = "\n".join(

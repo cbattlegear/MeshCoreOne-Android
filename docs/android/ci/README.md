@@ -50,7 +50,9 @@ Benchmark inputs under `android/benchmark/`, shared build logic, changes to
 `android/app/build.gradle.kts` or `android/app/proguard-rules.pro`, and shared
 Gradle inputs select the declared `benchmark` scope. The Linux build job runs
 `ci.py run --stage benchmark` only when selected, and the required aggregate
-check requires that job to succeed.
+check requires that job to succeed. Workflow validation checks the actual
+guarded stage commands, exit handling and aggregate result bindings, rather than
+accepting command text inside comments or bypassable shell overrides.
 Mixed selections run the benchmark stage before scaffold so scaffold outputs
 remain authoritative. Merged acceptance requires the exact build-job log to
 contain both the successful benchmark task-graph report and the WP-504

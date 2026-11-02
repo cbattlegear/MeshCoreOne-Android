@@ -367,12 +367,16 @@ class WorkflowTests(unittest.TestCase):
 
     def test_benchmark_scope_cannot_skip_its_stage_or_required_build_gate(self):
         original, text = self.read("android-ci.yml")
-        for kind in ("scope-output", "build-condition", "stage-command", "stage-environment",
-                     "aggregate-environment", "aggregate-selection"):
+        for kind in ("scope-output", "build-condition", "build-conjunction", "build-shell",
+                     "build-ignored-failure", "stage-command", "stage-comment", "stage-false-guard",
+                     "stage-ignored-failure", "stage-shell", "stage-environment",
+                     "aggregate-environment", "aggregate-selection", "aggregate-comment",
+                     "aggregate-override", "aggregate-shell", "aggregate-ignored-failure"):
             value = copy.deepcopy(original)
             gradle = next(step for step in value["jobs"]["build"]["steps"] if step.get("id") == "gradle")
             aggregate = next(step for step in value["jobs"]["android-ci"]["steps"]
                              if step.get("name") == "Require every selected scope to pass")
+            benchmark_command = "& python tools/android-port/controller/ci.py run --stage benchmark"
             if kind == "scope-output":
                 value["jobs"]["scope"]["outputs"].pop("benchmark")
             elif kind == "build-condition":
@@ -380,21 +384,66 @@ class WorkflowTests(unittest.TestCase):
                     "needs.scope.outputs.benchmark == 'true'",
                     "needs.scope.outputs.backup == 'true'",
                 )
+            elif kind == "build-conjunction":
+                value["jobs"]["build"]["if"] = value["jobs"]["build"]["if"].replace(
+                    "needs.scope.outputs.backup == 'true' ||",
+                    "needs.scope.outputs.backup == 'true' &&",
+                )
+            elif kind == "build-shell":
+                value["jobs"]["build"]["defaults"]["run"]["shell"] = "bash"
+            elif kind == "build-ignored-failure":
+                value["jobs"]["build"]["continue-on-error"] = "true"
             elif kind == "stage-command":
                 gradle["run"] = gradle["run"].replace(
-                    "python tools/android-port/controller/ci.py run --stage benchmark",
+                    benchmark_command,
                     "echo benchmark stage omitted",
                 )
+            elif kind == "stage-comment":
+                gradle["run"] = gradle["run"].replace(benchmark_command, "# " + benchmark_command)
+            elif kind == "stage-false-guard":
+                gradle["run"] = gradle["run"].replace(
+                    benchmark_command, "if ($false) {\n  " + benchmark_command + "\n}",
+                )
+            elif kind == "stage-ignored-failure":
+                gradle["run"] = gradle["run"].replace(
+                    "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+                    "# if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+                    1,
+                )
+            elif kind == "stage-shell":
+                gradle["shell"] = "bash"
             elif kind == "stage-environment":
                 gradle["env"].pop("RUN_BENCHMARK")
             elif kind == "aggregate-environment":
                 aggregate["env"].pop("BENCHMARK_SELECTED")
-            else:
+            elif kind == "aggregate-selection":
                 aggregate["run"] = aggregate["run"].replace(
                     ' || [ "$BENCHMARK_SELECTED" = "true" ]', "",
                 )
+            elif kind == "aggregate-comment":
+                start = aggregate["run"].index('if [ "$SCAFFOLD_SELECTED"')
+                end = aggregate["run"].index("fi\n", start) + len("fi\n")
+                block = aggregate["run"][start:end]
+                aggregate["run"] = aggregate["run"][:start] + "".join(
+                    "# " + line for line in block.splitlines(keepends=True)
+                ) + aggregate["run"][end:]
+            elif kind == "aggregate-override":
+                aggregate["run"] = 'BUILD_RESULT="success"\n' + aggregate["run"]
+            elif kind == "aggregate-shell":
+                value["jobs"]["android-ci"]["defaults"] = {"run": {"shell": "bash {0}"}}
+            else:
+                value["jobs"]["android-ci"]["continue-on-error"] = "true"
+            self.assertNotEqual(value, original, f"Mutation {kind} did not change the workflow")
             with self.subTest(kind=kind), self.assertRaises(PortError):
                 validate_candidate(value, text)
+
+    def test_workflow_guards_allow_comments_and_indentation_without_treating_comments_as_commands(self):
+        workflow, text = self.read("android-ci.yml")
+        gradle = next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+        gate = workflow["jobs"]["android-ci"]["steps"][0]
+        gradle["run"] = "# Additional explanation\n\n" + gradle["run"]
+        gate["run"] = "# Additional explanation\n\n" + gate["run"]
+        validate_candidate(workflow, text)
 
     def test_read_only_checkout_ephemeral_runners_pins_and_secret_absence(self):
         original, text = self.read("android-ci.yml")

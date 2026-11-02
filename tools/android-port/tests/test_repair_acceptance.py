@@ -493,6 +493,8 @@ class RepairExecutionTests(unittest.TestCase):
              "@Test fun keepsListReachable() = check(true)\nprivate fun unused() { MapTestHelper() }"),
             ("expression-lambda", None,
              "@Test fun keepsListReachable() = run { MapTestHelper() }"),
+            ("expression-run-test", None,
+             "@Test fun keepsListReachable() = runTest { MapTestHelper() }"),
             ("unrelated-qualified-constructor", None,
              "@Test fun keepsListReachable() { unrelated.MapTestHelper() }"),
             ("shadowed-constructor", None,
@@ -581,6 +583,32 @@ class RepairExecutionTests(unittest.TestCase):
                         validate_hosted_methods(scope, blobs, REPO, executed, compiled)
                 else:
                     validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
+    def test_real_helper_shapes_keep_unproved_port_inheritance_blocked(self):
+        helpers = (
+            # ContainerHarness.kt has a top-level factory with a qualified anonymous port.
+            "package sample\n"
+            "private fun defaultLocation() = object : ports.LocationProducing { "
+            "override fun requestPermissionIfNeeded(): Unit = error(\"must not prompt\") }\n"
+            "class MapTestHelper { val enabled = true }",
+            # RemoteNodesFixture.kt implements production ports and returns a delegated anonymous port.
+            "package sample\nimport ports.RemoteNodeHistoryStore\n"
+            "class MapTestHelper : RemoteNodeHistoryStore { "
+            "fun historyStore(): RemoteNodeHistoryStore = object : RemoteNodeHistoryStore by this {} }",
+            # Even without an anonymous object, an absent compiled production parent stays unknown.
+            "package sample\nimport ports.RemoteNodeHistoryStore\n"
+            "class MapTestHelper : RemoteNodeHistoryStore { val enabled = true }",
+        )
+        for helper_source in helpers:
+            scope, _, _, blobs, content, executed, compiled = self.helper_inputs(
+                helper_source,
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+                "@Test fun keepsListReachable() { MapTestHelper() } }",
+            )
+            with self.subTest(helper=helper_source), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ), self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
+                validate_hosted_methods(scope, blobs, REPO, executed, compiled)
 
     def test_repair_helper_consumers_require_compiled_and_executed_source_lineage(self):
         helper_source = "package sample\nclass MapTestHelper { val enabled = true }"

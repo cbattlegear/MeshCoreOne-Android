@@ -1206,6 +1206,35 @@ not #519 acceptance or evidence that the full helper repair is deployable.
 The historical successful run does not supersede #519's later red CI or missing
 API31/37 native evidence. No new Android/native job was run for this diagnostic.
 
+The follow-up trace of that same immutable evidence identifies independent
+proof gaps, not just an overbroad error message:
+
+- `ContainerHarness.kt` includes a top-level `defaultAdvertLocation` factory
+  with an anonymous qualified `LocationProducing` implementation. Its named
+  helper classes also inherit production ports such as
+  `core.runtime.ProcessConnectionPreferences`, absent from this test-source
+  registry.
+- `RemoteNodesFixture.kt` implements seven production ports via wildcard imports
+  and contains eight inherited anonymous objects, including
+  `object : RemoteNodeHistoryStore by this {}`. Anonymous bodies are not named
+  class-index entries, and the production parent identities cannot be resolved
+  from the compiled test registry.
+- The app registry covers `test`, `androidTest` and `shared`, not `main`
+  production dependencies. `AppMapFeatureTest`'s two real consumers additionally
+  have expression bodies `= runTest { ... }`, outside the deliberately bounded
+  immediate-block contract. `RemoteNodesComposeTest` has 21 block-bodied tests,
+  but its helper proof fails first.
+
+Faithful source regressions retain rejection of anonymous/delegated production
+port shapes, absent compiled parents and expression-bodied `runTest` consumers.
+No safe support fix is claimed from the existing evidence. Supporting these
+fixtures requires an exact compiler-bound production/dependency declaration
+closure (including resolved imports/interfaces), bounded anonymous/delegated
+inheritance proof, and a proved consumer execution contract for `runTest`.
+Reading arbitrary candidate `src/main` blobs or treating a successful aggregate
+build as that missing registry is not a substitute. The current gate and hold
+remain; the source proposal is not sufficient for #519.
+
 Focused source-only regressions (native Windows pinned Python, no Gradle or
 shared Android execution) use the existing strict runner:
 

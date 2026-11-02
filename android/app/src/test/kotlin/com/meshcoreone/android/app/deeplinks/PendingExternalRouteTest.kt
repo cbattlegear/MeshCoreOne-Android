@@ -3,11 +3,15 @@ package com.meshcoreone.android.app.deeplinks
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -82,5 +86,50 @@ class PendingExternalRouteTest {
         pending.submit(PendingExternalRoute.Delivery("2", "meshcoreone://hashtag/general"))
         pending.markReady()
         assertEquals(listOf("meshcoreone://hashtag/general"), routed)
+    }
+
+    @Test
+    fun failedRouteRetainsItsDeliveryAndReleasesTheSlotForRetry() = runTest {
+        var calls = 0
+        val failure = IllegalStateException("lookup failed")
+        val pending = PendingExternalRoute {
+            if (++calls == 1) throw failure
+            DeepLinkRouteOutcome.Navigated
+        }
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("failure", "meshcore://map?lat=1&lon=2")
+        assertEquals(failure, assertFailsWith<IllegalStateException> { pending.submit(delivery) })
+        assertEquals(delivery, pending.snapshot())
+        assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.retry())
+        assertEquals(2, calls)
+        assertNull(pending.snapshot())
+    }
+
+    @Test
+    fun latestReplacementDrainsEvenWhenAnIntermediateRouterNeverStarted() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val routed = mutableListOf<String>()
+        val pending = PendingExternalRoute {
+            routed += it
+            if (it == "A") {
+                started.complete(Unit)
+                awaitCancellation()
+            }
+            DeepLinkRouteOutcome.Navigated
+        }
+        pending.markReady()
+        val first = async { pending.submit(PendingExternalRoute.Delivery("A", "A")) }
+        started.await()
+        val second = async(start = CoroutineStart.UNDISPATCHED) {
+            pending.submit(PendingExternalRoute.Delivery("B", "B"))
+        }
+        val third = async(start = CoroutineStart.UNDISPATCHED) {
+            pending.submit(PendingExternalRoute.Delivery("C", "C"))
+        }
+        assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(first.await())
+        assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(second.await())
+        assertIs<PendingExternalRoute.SubmitOutcome.Routed>(third.await())
+        assertEquals(listOf("A", "C"), routed)
+        assertNull(pending.snapshot())
     }
 }

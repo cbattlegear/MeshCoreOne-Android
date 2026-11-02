@@ -5,17 +5,23 @@ import com.meshcoreone.android.core.contracts.AppTab
 import java.net.URI
 import java.net.URISyntaxException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
     suspend fun routeExternal(uriText: String): DeepLinkRouteOutcome {
-        val previousTab = environment.selectedTab
-        environment.selectedTab = AppTab.CHATS
+        val previousTab = commitIfActive {
+            environment.selectedTab.also { environment.selectedTab = AppTab.CHATS }
+        }
         val outcome = route(uriText)
-        if (outcome == DeepLinkRouteOutcome.Rejected) environment.selectedTab = previousTab
+        commitIfActive {
+            if (outcome == DeepLinkRouteOutcome.Rejected) environment.selectedTab = previousTab
+        }
         return outcome
     }
 
     suspend fun route(uriText: String): DeepLinkRouteOutcome {
+        currentCoroutineContext().ensureActive()
         val uri = try {
             URI(uriText)
         } catch (_: URISyntaxException) {
@@ -24,7 +30,7 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         if (uri.scheme.equals(MeshCoreUriParser.SCHEME, ignoreCase = true)) {
             return when (val link = MeshCoreUriParser.parse(uriText)) {
                 is MeshCoreDeepLink.Map -> {
-                    environment.navigateToMap(link.latitude, link.longitude)
+                    commitIfActive { environment.navigateToMap(link.latitude, link.longitude) }
                     DeepLinkRouteOutcome.Navigated
                 }
                 is MeshCoreDeepLink.Contact -> routeContact(link)
@@ -48,12 +54,14 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         val existing = environment.currentRadioId?.let { radioId ->
             lookupOrNull { environment.fetchContact(radioId, link.publicKey) }
         }
-        return if (existing != null) {
-            environment.navigateToContactDetail(existing)
-            DeepLinkRouteOutcome.Navigated
-        } else {
-            environment.stageContactConfirmation(link)
-            DeepLinkRouteOutcome.ConfirmationStaged
+        return commitIfActive {
+            if (existing != null) {
+                environment.navigateToContactDetail(existing)
+                DeepLinkRouteOutcome.Navigated
+            } else {
+                environment.stageContactConfirmation(link)
+                DeepLinkRouteOutcome.ConfirmationStaged
+            }
         }
     }
 
@@ -61,12 +69,14 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         val existing = environment.currentRadioId?.let { radioId ->
             lookupOrNull { environment.fetchChannels(radioId) }?.firstOrNull { it.secret == link.secret }
         }
-        return if (existing != null) {
-            environment.navigateToChannel(existing)
-            DeepLinkRouteOutcome.Navigated
-        } else {
-            environment.stageChannelConfirmation(link)
-            DeepLinkRouteOutcome.ConfirmationStaged
+        return commitIfActive {
+            if (existing != null) {
+                environment.navigateToChannel(existing)
+                DeepLinkRouteOutcome.Navigated
+            } else {
+                environment.stageChannelConfirmation(link)
+                DeepLinkRouteOutcome.ConfirmationStaged
+            }
         }
     }
 
@@ -75,13 +85,22 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
             lookupOrNull { environment.fetchChannels(radioId) }
                 ?.let { HashtagDeepLinkSupport.findChannelByName(link.fullName, it) }
         }
-        return if (existing != null) {
-            environment.navigateToChannel(existing)
-            DeepLinkRouteOutcome.Navigated
-        } else {
-            environment.stageHashtagConfirmation(link)
-            DeepLinkRouteOutcome.ConfirmationStaged
+        return commitIfActive {
+            if (existing != null) {
+                environment.navigateToChannel(existing)
+                DeepLinkRouteOutcome.Navigated
+            } else {
+                environment.stageHashtagConfirmation(link)
+                DeepLinkRouteOutcome.ConfirmationStaged
+            }
         }
+    }
+
+    private suspend fun <T> commitIfActive(block: () -> T): T {
+        val context = currentCoroutineContext()
+        val commit = { context.ensureActive(); block() }
+        val guard = context[PendingExternalRoute.CommitGuard]
+        return if (guard == null) commit() else guard.commit(commit)
     }
 
     private suspend fun <T> lookupOrNull(block: suspend () -> T): T? = try {

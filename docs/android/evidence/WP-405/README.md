@@ -1,5 +1,58 @@
 # WP-405 evidence
 
+## Issue #504 candidate: validation pending
+
+This follow-up is separate from merged PR #347. Its integrated base is
+`99919a0a8049c2da2bfab4c6cdc08bca787b3045`; the Swift source remains
+`db14559b39d32322b06477c6ae676112f583db50`. Existing same-owner advisory
+reservation `d76f0641-87d4-4218-92e9-3cdf3f972471` evolved from revision 4
+through 6 using supported `reserve.py evolve`, admitting staging/router
+modification under `wp-owned`. Historical authorization/binding fields were
+preserved, not rewritten or treated as a fresh live execution grant. WP-302
+owns its frozen contact lookup ordering/session work; this candidate does not
+change its API, navigation state or environment projection.
+
+Source characterization: previously B replaced `pending` while A held
+`inFlight`; B's `drain()` returned `Staged`. A's completion released its slot
+but did not drain B, and A's post-lookup consumer could still publish an obsolete
+confirmation/navigation result. Identical URI text with a distinct ID had the
+same defect. This is source-derived characterization, not an executed failing
+regression.
+
+The candidate cancels/retires A at B submission, routes B independently and
+atomically guards validity/cancellation with synchronous router writes.
+`ExternalRouteReplacementTest` defines six methods covering known/unknown
+contact results, distinct/identical URI deliveries, duplicate IDs, deliberately
+non-cooperative A, the window before B enters the router, actual navigation and
+confirmation state, channel/hashtag paths, metadata and once-only delivery.
+The synchronous-write method additionally asserts that both real contact
+navigation and confirmation effects hold the exact submission-invalidation
+monitor, rather than relying on an unprotected check/write sequence.
+`PendingExternalRouteTest` retains all five original assertions and adds
+failure/retry and A/B/C pre-router replacement methods. Total targeted
+definitions: 18 methods across these two classes and `AppDeepLinkRouterTest`;
+this is an inventory, **not a discovered/passed test count**.
+
+Light validation performed:
+
+```text
+python .\tools\android-port\controller\validate.py
+PASS: 1,866 tracked reference files, 1,786 owned, 80 excluded, 64 WPs,
+178 dependency edges; manifest SHA-256
+11120a20d04408b3d21fac09180412df0490cabf1dafb8a3c98fe83e0fad31e4.
+git --no-pager diff --check
+PASS for the candidate edits at authoring.
+```
+
+Kotlin compilation, regression execution, Android preflight, lint and App suite
+discovery are **NOT RUN**. Local Android/Gradle is prohibited during runner
+recovery; no remote heavy slot or live execution binding is inferred from
+advisory path admission. A focused issue #504 PR was subsequently authorized
+for normal change-scoped hosted validation; its unexecuted Kotlin results
+remain explicitly unverified until the actual hosted job reports them.
+No direct Gradle/compiler bypass or manual full workflow dispatch is authorized.
+The historical passing results below must not be attributed to this candidate.
+
 ## WP405-LINKS repair verification status
 
 The APP-G03/APP-G04/APP-G07 repair batch passed supported affected local

@@ -18,6 +18,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -182,7 +183,9 @@ class PreferenceBoundaryTest {
         val reporter = RecordingReporter()
         val preferences = PreferenceStore(data, StorageAccess {}, reporter)
         val values = Channel<Double>(Channel.UNLIMITED)
-        var observer: kotlinx.coroutines.Job? = null
+        var observer: Job? = null
+        var cancelledReader: Job? = null
+        var cancelledReadReturned = false
         try {
             assertEquals(0.0, preferences.get(AppStorageKey.lastStaleCleanupDate))
             preferences.set(AppStorageKey.lastStaleCleanupDate, 0.0)
@@ -196,11 +199,15 @@ class PreferenceBoundaryTest {
             testScheduler.runCurrent()
             if (serialized) {
                 assertTrue(values.tryReceive().isFailure, "A dirty file must not become the initial observation")
-                val cancelledReader = launch { preferences.snapshot() }
+                val reader = launch {
+                    preferences.snapshot()
+                    cancelledReadReturned = true
+                }
+                cancelledReader = reader
                 testScheduler.runCurrent()
-                assertFalse(cancelledReader.isCompleted)
-                cancelledReader.cancelAndJoin()
-                assertTrue(cancelledReader.isCancelled)
+                assertFalse(reader.isCompleted)
+                reader.cancel()
+                assertTrue(reader.isCancelled)
                 assertFalse(writer.isCompleted, "Cancelling a waiting reader must not cancel the writer")
             } else {
                 assertEquals(0.0, values.tryReceive().getOrThrow(), "Negative control must reach the dirty read")
@@ -208,6 +215,8 @@ class PreferenceBoundaryTest {
             replace.complete(Unit)
             writer.await()
             testScheduler.runCurrent()
+            cancelledReader?.join()
+            assertFalse(cancelledReadReturned, "A cancelled snapshot must not return normally")
             assertEquals(committed, preferences.get(AppStorageKey.lastStaleCleanupDate))
             val persisted = file.inputStream().use { delegate.readFrom(it) }
             assertEquals(committed, PreferenceSnapshot.from(persisted)[AppStorageKey.lastStaleCleanupDate])
@@ -222,6 +231,7 @@ class PreferenceBoundaryTest {
             assertTrue(reporter.failures.isEmpty())
         } finally {
             replace.complete(Unit)
+            cancelledReader?.cancelAndJoin()
             observer?.cancelAndJoin()
             lifetime.cancelAndJoin()
             values.close()

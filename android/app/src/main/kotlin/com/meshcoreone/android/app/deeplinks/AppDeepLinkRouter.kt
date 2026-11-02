@@ -9,18 +9,11 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
 class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
-    suspend fun routeExternal(uriText: String): DeepLinkRouteOutcome {
-        val previousTab = commitIfActive {
-            environment.selectedTab.also { environment.selectedTab = AppTab.CHATS }
-        }
-        val outcome = route(uriText)
-        commitIfActive {
-            if (outcome == DeepLinkRouteOutcome.Rejected) environment.selectedTab = previousTab
-        }
-        return outcome
-    }
+    suspend fun routeExternal(uriText: String): DeepLinkRouteOutcome = route(uriText, external = true)
 
-    suspend fun route(uriText: String): DeepLinkRouteOutcome {
+    suspend fun route(uriText: String): DeepLinkRouteOutcome = route(uriText, external = false)
+
+    private suspend fun route(uriText: String, external: Boolean): DeepLinkRouteOutcome {
         currentCoroutineContext().ensureActive()
         val uri = try {
             URI(uriText)
@@ -35,8 +28,8 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
                         DeepLinkRouteOutcome.Navigated
                     }
                 }
-                is MeshCoreDeepLink.Contact -> routeContact(link)
-                is MeshCoreDeepLink.Channel -> routeChannel(link)
+                is MeshCoreDeepLink.Contact -> routeContact(link, external)
+                is MeshCoreDeepLink.Channel -> routeChannel(link, external)
                 else -> DeepLinkRouteOutcome.Rejected
             }
         }
@@ -46,13 +39,16 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
             val fullName = HashtagDeepLinkSupport.channelNameFromUri(uri)
                 ?.let(HashtagDeepLinkSupport::fullChannelName)
                 ?: return DeepLinkRouteOutcome.Rejected
-            return routeHashtag(MeshCoreDeepLink.Hashtag(fullName))
+            return routeHashtag(MeshCoreDeepLink.Hashtag(fullName), external)
         }
         return DeepLinkRouteOutcome.Rejected
     }
 
-    private suspend fun routeContact(link: MeshCoreDeepLink.Contact): DeepLinkRouteOutcome {
-        if (link.publicKey == environment.connectedDevicePublicKey) return DeepLinkRouteOutcome.IgnoredSelfContact
+    private suspend fun routeContact(link: MeshCoreDeepLink.Contact, external: Boolean): DeepLinkRouteOutcome {
+        if (link.publicKey == environment.connectedDevicePublicKey) return commitOutcomeIfActive {
+            if (external) environment.selectedTab = AppTab.CHATS
+            DeepLinkRouteOutcome.IgnoredSelfContact
+        }
         val existing = environment.currentRadioId?.let { radioId ->
             lookupOrNull { environment.fetchContact(radioId, link.publicKey) }
         }
@@ -61,13 +57,13 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
                 environment.navigateToContactDetail(existing)
                 DeepLinkRouteOutcome.Navigated
             } else {
-                environment.stageContactConfirmation(link)
+                environment.stageContactConfirmation(link, selectChats = external)
                 DeepLinkRouteOutcome.ConfirmationStaged
             }
         }
     }
 
-    private suspend fun routeChannel(link: MeshCoreDeepLink.Channel): DeepLinkRouteOutcome {
+    private suspend fun routeChannel(link: MeshCoreDeepLink.Channel, external: Boolean): DeepLinkRouteOutcome {
         val existing = environment.currentRadioId?.let { radioId ->
             lookupOrNull { environment.fetchChannels(radioId) }?.firstOrNull { it.secret == link.secret }
         }
@@ -76,13 +72,13 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
                 environment.navigateToChannel(existing)
                 DeepLinkRouteOutcome.Navigated
             } else {
-                environment.stageChannelConfirmation(link)
+                environment.stageChannelConfirmation(link, selectChats = external)
                 DeepLinkRouteOutcome.ConfirmationStaged
             }
         }
     }
 
-    private suspend fun routeHashtag(link: MeshCoreDeepLink.Hashtag): DeepLinkRouteOutcome {
+    private suspend fun routeHashtag(link: MeshCoreDeepLink.Hashtag, external: Boolean): DeepLinkRouteOutcome {
         val existing = environment.currentRadioId?.let { radioId ->
             lookupOrNull { environment.fetchChannels(radioId) }
                 ?.let { HashtagDeepLinkSupport.findChannelByName(link.fullName, it) }
@@ -92,17 +88,10 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
                 environment.navigateToChannel(existing)
                 DeepLinkRouteOutcome.Navigated
             } else {
-                environment.stageHashtagConfirmation(link)
+                environment.stageHashtagConfirmation(link, selectChats = external)
                 DeepLinkRouteOutcome.ConfirmationStaged
             }
         }
-    }
-
-    private suspend fun <T> commitIfActive(block: () -> T): T {
-        val context = currentCoroutineContext()
-        val commit = { context.ensureActive(); block() }
-        val guard = context[PendingExternalRoute.CommitGuard]
-        return if (guard == null) commit() else guard.commit(commit)
     }
 
     private suspend fun commitOutcomeIfActive(block: () -> DeepLinkRouteOutcome): DeepLinkRouteOutcome {

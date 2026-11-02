@@ -34,9 +34,9 @@ interface AppDeepLinkEnvironment {
     fun navigateToMap(latitude: Double, longitude: Double)
     fun navigateToContactDetail(contact: ContactDTO)
     fun navigateToChannel(channel: ChannelDTO)
-    fun stageContactConfirmation(link: MeshCoreDeepLink.Contact)
-    fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel)
-    fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag)
+    fun stageContactConfirmation(link: MeshCoreDeepLink.Contact, selectChats: Boolean = false)
+    fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel, selectChats: Boolean = false)
+    fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag, selectChats: Boolean = false)
     suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO?
     suspend fun fetchChannels(radioId: RadioId): List<ChannelDTO>
 }

@@ -130,9 +130,15 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         it.push(AppTab.TOOLS, NavigationDestination.Tool(tool)).copy(selectedTool = tool)
     }
 
-    fun stageContactLink(link: ContactLinkRequest?) = mutableState.update { it.copy(pendingContactLink = link) }
-    fun stageChannelLink(link: ChannelLinkRequest?) = mutableState.update { it.copy(pendingChannelLink = link) }
-    fun stageHashtag(link: HashtagJoinRequest?) = mutableState.update { it.copy(pendingHashtag = link) }
+    fun stageContactLink(link: ContactLinkRequest?, selectChats: Boolean = false) = mutableState.update {
+        (if (selectChats) it.select(AppTab.CHATS) else it).copy(pendingContactLink = link)
+    }
+    fun stageChannelLink(link: ChannelLinkRequest?, selectChats: Boolean = false) = mutableState.update {
+        (if (selectChats) it.select(AppTab.CHATS) else it).copy(pendingChannelLink = link)
+    }
+    fun stageHashtag(link: HashtagJoinRequest?, selectChats: Boolean = false) = mutableState.update {
+        (if (selectChats) it.select(AppTab.CHATS) else it).copy(pendingHashtag = link)
+    }
     fun setPendingDeviceMenuTipDonation(pending: Boolean) =
         mutableState.update { it.copy(pendingDeviceMenuTipDonation = pending) }
 

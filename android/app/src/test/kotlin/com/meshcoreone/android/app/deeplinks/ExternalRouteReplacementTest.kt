@@ -6,6 +6,10 @@ import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.navigation.MapFocusRequest
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
+import com.meshcoreone.android.app.navigation.NavigationLayout
+import com.meshcoreone.android.app.navigation.NavigationState
+import com.meshcoreone.android.app.navigation.SettingsDetail
+import com.meshcoreone.android.app.navigation.ToolSelection
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
@@ -23,10 +27,14 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -252,6 +260,276 @@ class ExternalRouteReplacementTest {
         }
     }
 
+    @Test
+    fun rejectedReplacementPreservesOriginalSelectionAndEveryBackStack() = runTest {
+        for (known in listOf(false, true)) {
+            for (initialTab in listOf(AppTab.SETTINGS, AppTab.TOOLS)) {
+                val environment = environmentWithBackStacks(initialTab)
+                val original = environment.navigation.state.value
+                val started = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                environment.contactLookup = {
+                    started.complete(Unit)
+                    withContext(NonCancellable) { release.await() }
+                    if (known) contact() else null
+                }
+                val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+                pending.markReady()
+                val first = async { pending.submit(PendingExternalRoute.Delivery("A", contactUri)) }
+                started.await()
+                assertEquals(original, environment.navigation.state.value, "Lookup must not select a speculative host")
+                val replacement = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
+                    pending.submit(PendingExternalRoute.Delivery("B", malformedContactUri)),
+                )
+                assertIs<DeepLinkRouteOutcome.Rejected>(replacement.outcome)
+                assertEquals(original, environment.navigation.state.value)
+                release.complete(Unit)
+                assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(first.await())
+                assertEquals(original, environment.navigation.state.value, "Obsolete completion must not roll back navigation")
+                assertNull(pending.snapshot())
+            }
+        }
+    }
+
+    @Test
+    fun rejectedReplacementCannotRollBackAUserSelectionMadeDuringLookup() = runTest {
+        for (known in listOf(false, true)) {
+            for (userTab in AppTab.entries) {
+                val environment = environmentWithBackStacks(AppTab.SETTINGS)
+                val started = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                environment.contactLookup = {
+                    started.complete(Unit)
+                    withContext(NonCancellable) { release.await() }
+                    if (known) contact() else null
+                }
+                val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+                pending.markReady()
+                val first = async { pending.submit(PendingExternalRoute.Delivery("A", contactUri)) }
+                started.await()
+                environment.navigation.selectTab(AppTab.MAP)
+                environment.navigation.selectTab(userTab)
+                val userSelection = environment.navigation.state.value
+                val replacement = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
+                    pending.submit(PendingExternalRoute.Delivery("B", malformedContactUri)),
+                )
+                assertIs<DeepLinkRouteOutcome.Rejected>(replacement.outcome)
+                assertEquals(userSelection, environment.navigation.state.value)
+                release.complete(Unit)
+                assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(first.await())
+                assertEquals(userSelection, environment.navigation.state.value)
+                assertNull(pending.snapshot())
+            }
+        }
+    }
+
+    @Test
+    fun rejectedDeliveryCannotRollBackAnAlreadyCommittedContactResult() = runTest {
+        for (known in listOf(false, true)) {
+            val environment = environmentWithBackStacks(AppTab.SETTINGS)
+            environment.contactLookup = { if (known) contact() else null }
+            val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+            pending.markReady()
+            val delivery = PendingExternalRoute.Delivery("A", contactUri)
+            assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.submit(delivery))
+            val committed = environment.navigation.state.value
+            if (known) {
+                assertEquals(AppTab.NODES, committed.selectedTab)
+                assertEquals(contact(), committed.pendingContactDetail)
+            } else {
+                assertEquals(AppTab.CHATS, committed.selectedTab)
+                assertEquals(ContactLinkRequest("Alice", key, ContactType.CHAT), committed.pendingContactLink)
+            }
+            val rejected = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
+                pending.submit(PendingExternalRoute.Delivery("B", malformedContactUri)),
+            )
+            assertIs<DeepLinkRouteOutcome.Rejected>(rejected.outcome)
+            assertEquals(committed, environment.navigation.state.value)
+            assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(pending.submit(delivery))
+            assertEquals(committed, environment.navigation.state.value)
+        }
+    }
+
+    @Test
+    fun validReplacementCommitsItsOwnSelectionWithoutDestroyingUnrelatedStacks() = runTest {
+        for (uri in listOf(mapUri, channelUri, "meshcoreone://hashtag/test", contactUri)) {
+            val environment = environmentWithBackStacks(AppTab.SETTINGS)
+            val originalStacks = environment.navigation.state.value.stacks
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var lookups = 0
+            environment.contactLookup = {
+                if (++lookups == 1) {
+                    started.complete(Unit)
+                    withContext(NonCancellable) { release.await() }
+                }
+                null
+            }
+            val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+            pending.markReady()
+            val first = async { pending.submit(PendingExternalRoute.Delivery("A", contactUri)) }
+            started.await()
+            environment.navigation.selectTab(AppTab.NODES)
+            assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
+                pending.submit(PendingExternalRoute.Delivery("B", uri)),
+            )
+            val committed = environment.navigation.state.value
+            assertEquals(originalStacks, committed.stacks)
+            when (uri) {
+                mapUri -> {
+                    assertEquals(AppTab.MAP, committed.selectedTab)
+                    assertEquals(MapFocusRequest(51.5074, -0.1278), committed.pendingMapFocus)
+                }
+                channelUri -> {
+                    assertEquals(AppTab.CHATS, committed.selectedTab)
+                    assertEquals(ChannelLinkRequest("#test", secret, "testregion", true), committed.pendingChannelLink)
+                }
+                contactUri -> {
+                    assertEquals(AppTab.CHATS, committed.selectedTab)
+                    assertEquals(ContactLinkRequest("Alice", key, ContactType.CHAT), committed.pendingContactLink)
+                    assertEquals(2, lookups, "Identical URI text with a new ID must route independently")
+                }
+                else -> {
+                    assertEquals(AppTab.CHATS, committed.selectedTab)
+                    assertEquals(HashtagJoinRequest("#test"), committed.pendingHashtag)
+                }
+            }
+            release.complete(Unit)
+            assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(first.await())
+            assertEquals(committed, environment.navigation.state.value)
+            assertNull(pending.snapshot())
+        }
+    }
+
+    @Test
+    fun rejectedUriPreservesToolDetailAndBackAtTheRailBoundary() = runTest {
+        val rail = NavigationLayout.RAIL_MIN_WIDTH_DP.toFloat()
+        for (width in listOf(rail - 1f, rail, rail + 1f)) {
+            val environment = environmentWithBackStacks(AppTab.TOOLS)
+            val reference = environmentWithBackStacks(AppTab.TOOLS)
+            environment.navigation.measureWindow(width)
+            reference.navigation.measureWindow(width)
+            val original = environment.navigation.state.value
+            assertEquals(2, original.activeStack.size)
+            assertEquals(ToolSelection.NOISE_FLOOR, original.selectedTool)
+            assertIs<DeepLinkRouteOutcome.Rejected>(
+                AppDeepLinkRouter(environment).routeExternal(malformedContactUri),
+            )
+            assertEquals(original, environment.navigation.state.value)
+            assertTrue(environment.navigation.back())
+            assertTrue(reference.navigation.back())
+            assertEquals(reference.navigation.state.value, environment.navigation.state.value)
+            assertEquals(AppTab.TOOLS, environment.navigation.state.value.selectedTab)
+            assertEquals(1, environment.navigation.state.value.activeStack.size)
+            assertNull(environment.navigation.state.value.selectedTool)
+        }
+    }
+
+    @Test
+    fun committedExternalSelectionRetainsTheApprovedRailToolCleanup() = runTest {
+        val rail = NavigationLayout.RAIL_MIN_WIDTH_DP.toFloat()
+        for (width in listOf(rail - 1f, rail, rail + 1f)) {
+            for (uri in listOf(mapUri, contactUri, channelUri, "meshcoreone://hashtag/test")) {
+                val environment = environmentWithBackStacks(AppTab.TOOLS)
+                environment.navigation.measureWindow(width)
+                val original = environment.navigation.state.value
+                val outcome = AppDeepLinkRouter(environment).routeExternal(uri)
+                if (uri == mapUri) assertIs<DeepLinkRouteOutcome.Navigated>(outcome)
+                else assertIs<DeepLinkRouteOutcome.ConfirmationStaged>(outcome)
+                val committed = environment.navigation.state.value
+                assertEquals(if (uri == mapUri) AppTab.MAP else AppTab.CHATS, committed.selectedTab)
+                assertEquals(
+                    if (width < rail) original.stacks.getValue(AppTab.TOOLS)
+                    else original.stacks.getValue(AppTab.TOOLS).take(1),
+                    committed.stacks.getValue(AppTab.TOOLS),
+                )
+                assertEquals(if (width < rail) ToolSelection.NOISE_FLOOR else null, committed.selectedTool)
+                for (tab in AppTab.entries.filterNot { it == AppTab.TOOLS }) {
+                    assertEquals(original.stacks.getValue(tab), committed.stacks.getValue(tab))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun reentrantSubmissionObservesSelectionAndConfirmationAsOneCommit() = runTest {
+        for (uri in listOf(contactUri, channelUri, "meshcoreone://hashtag/test")) {
+            val environment = environmentWithBackStacks(AppTab.SETTINGS)
+            val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+            pending.markReady()
+            val submissions = this
+            var replacement: Deferred<PendingExternalRoute.SubmitOutcome>? = null
+            val observed = mutableListOf<NavigationState>()
+            val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                environment.navigation.state.collect { state ->
+                    observed += state
+                    if (state.selectedTab == AppTab.CHATS && replacement == null) {
+                        when (uri) {
+                            contactUri -> assertEquals(
+                                ContactLinkRequest("Alice", key, ContactType.CHAT), state.pendingContactLink,
+                            )
+                            channelUri -> assertEquals(
+                                ChannelLinkRequest("#test", secret, "testregion", true), state.pendingChannelLink,
+                            )
+                            else -> assertEquals(HashtagJoinRequest("#test"), state.pendingHashtag)
+                        }
+                        replacement = submissions.async(start = CoroutineStart.UNDISPATCHED) {
+                            pending.submit(PendingExternalRoute.Delivery("B", mapUri))
+                        }
+                    }
+                }
+            }
+            val first = async { pending.submit(PendingExternalRoute.Delivery("A", uri)) }
+            testScheduler.runCurrent()
+            assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(first.await())
+            assertIs<PendingExternalRoute.SubmitOutcome.Routed>(assertNotNull(replacement).await())
+            val committed = environment.navigation.state.value
+            assertEquals(AppTab.MAP, committed.selectedTab)
+            assertEquals(MapFocusRequest(51.5074, -0.1278), committed.pendingMapFocus)
+            assertEquals(listOf(AppTab.SETTINGS, AppTab.CHATS, AppTab.MAP), observed.map { it.selectedTab })
+            assertEquals(committed, observed.last())
+            assertNull(pending.snapshot())
+            assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(
+                pending.submit(PendingExternalRoute.Delivery("A", uri)),
+            )
+            collector.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun inChatRoutingAndClearingDoNotSelectAnExternalConfirmationHost() = runTest {
+        for (uri in listOf(contactUri, channelUri, "meshcoreone://hashtag/test")) {
+            val environment = environmentWithBackStacks(AppTab.SETTINGS)
+            val original = environment.navigation.state.value
+            assertIs<DeepLinkRouteOutcome.ConfirmationStaged>(AppDeepLinkRouter(environment).route(uri))
+            val staged = environment.navigation.state.value
+            assertEquals(original.selectedTab, staged.selectedTab)
+            assertEquals(original.stacks, staged.stacks)
+            when (uri) {
+                contactUri -> {
+                    assertNotNull(staged.pendingContactLink)
+                    environment.navigation.clearPendingContactLink()
+                }
+                channelUri -> {
+                    assertNotNull(staged.pendingChannelLink)
+                    environment.navigation.clearPendingChannelLink()
+                }
+                else -> {
+                    assertNotNull(staged.pendingHashtag)
+                    environment.navigation.clearPendingHashtag()
+                }
+            }
+            assertEquals(original, environment.navigation.state.value)
+        }
+    }
+
+    private fun environmentWithBackStacks(initialTab: AppTab): Environment = Environment().apply {
+        navigation.navigateToContactDetail(contact())
+        navigation.navigateToSetting(SettingsDetail.APPEARANCE)
+        navigation.measureWindow(900f)
+        if (initialTab == AppTab.TOOLS) navigation.navigateToTool(ToolSelection.NOISE_FLOOR)
+    }
+
     private fun assertNoContactResult(environment: Environment) {
         val state = environment.navigation.state.value
         assertNull(state.pendingContactLink)
@@ -277,17 +555,18 @@ class ExternalRouteReplacementTest {
             afterContactCommit()
         }
         override fun navigateToChannel(channel: ChannelDTO) = navigation.navigateToChannel(channel)
-        override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact) {
+        override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact, selectChats: Boolean) {
             beforeContactCommit()
-            navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType))
+            navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType), selectChats)
             afterContactCommit()
         }
-        override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel) =
+        override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel, selectChats: Boolean) =
             navigation.stageChannelLink(
                 ChannelLinkRequest(link.name, link.secret, link.regionScope, link.hasHashtagSecretMismatch),
+                selectChats,
             )
-        override fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag) =
-            navigation.stageHashtag(HashtagJoinRequest(link.fullName))
+        override fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag, selectChats: Boolean) =
+            navigation.stageHashtag(HashtagJoinRequest(link.fullName), selectChats)
         override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? = contactLookup()
         override suspend fun fetchChannels(radioId: RadioId): List<ChannelDTO> = channelLookup()
     }
@@ -299,6 +578,7 @@ class ExternalRouteReplacementTest {
         val contactUri = "meshcore://contact/add?name=Alice&public_key=${key.hexString}&type=1"
         val channelUri = "meshcore://channel/add?name=%23test&secret=${secret.hexString}&region_scope=testregion"
         const val mapUri = "meshcore://map?lat=51.5074&lon=-0.1278"
+        const val malformedContactUri = "meshcore://contact/add?name=broken"
         fun contact() = ContactDTO(
             id = UUID(0, 2), radioId = radio, publicKey = key, name = "Alice",
             typeRawValue = ContactType.CHAT.rawValue, lastHeardTimestamp = null,

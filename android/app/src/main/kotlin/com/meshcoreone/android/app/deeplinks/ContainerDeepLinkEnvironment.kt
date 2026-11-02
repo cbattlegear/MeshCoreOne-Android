@@ -27,16 +27,17 @@ class ContainerDeepLinkEnvironment(
     override fun navigateToContactDetail(contact: ContactDTO) = navigation.navigateToContactDetail(contact)
     override fun navigateToChannel(channel: ChannelDTO) = navigation.navigateToChannel(channel)
 
-    override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact) =
-        navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType))
+    override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact, selectChats: Boolean) =
+        navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType), selectChats)
 
-    override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel) =
+    override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel, selectChats: Boolean) =
         navigation.stageChannelLink(
             ChannelLinkRequest(link.name, link.secret, link.regionScope, link.hasHashtagSecretMismatch),
+            selectChats,
         )
 
-    override fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag) =
-        navigation.stageHashtag(HashtagJoinRequest(link.fullName))
+    override fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag, selectChats: Boolean) =
+        navigation.stageHashtag(HashtagJoinRequest(link.fullName), selectChats)
 
     override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? =
         container.appState.offlineDataStore?.fetchContact(radioId, publicKey)

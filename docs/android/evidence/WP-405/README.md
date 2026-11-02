@@ -1,5 +1,48 @@
 # WP-405 evidence
 
+## Issue #504 selection follow-up: new execution pending
+
+The previous exact candidate `ab5e5fabf7413ba54fa24fd56c25d5d6d4760eb6`
+passed hosted run `41395949358` against actual main
+`d85ac9f8a5367615099bc215acc8d022c11eb75b`: App 1,857 and chats 443
+discovered/run/passed, zero failures/errors/skips. That run does not verify the
+new selection repair below.
+
+WP-302's static finding identified Settings -> suspended A -> rejected B
+retaining A's obsolete temporary Chats selection. The App router now leaves
+navigation untouched until a guarded target commit; external confirmations
+select Chats in the same StateFlow update as staging, avoiding a reentrant
+collector between selection and request publication. The environment carries
+an explicit selection flag; existing navigation staging/clearing callers retain
+their default behavior. No WP-302 lifecycle or lookup-ordering source is
+imported. The deliberate pending-lookup timing
+adaptation is documented in `docs/android/deviations/WP-405.md`.
+
+Eight additional `ExternalRouteReplacementTest` methods exercise the actual
+router/NavigationCoordinator: rejected replacement retains original selection
+and every stack (including rail tool detail); user choices during lookup are
+not rolled back; committed contact results survive rejected B; valid map,
+channel, hashtag and identical-URI replacements commit their own selection and
+metadata without damaging unrelated stacks. Additional methods cover the exact
+rail-width boundary and Back, approved tool cleanup on a committed switch,
+reentrant StateFlow submission during publication, and unchanged internal
+routing/clearing semantics. All previous assertions are retained; only the fake
+environment signature is updated to carry the atomic selection flag.
+Definition inventory is now 15 replacement + 8 pending + 5 router =
+28 targeted methods, not an execution count.
+
+Existing owned router/test/deviation/evidence operations were admitted by
+`tools/android-port/local/reserve.py admit` under `wp-owned`. The directly
+necessary `NavigationCoordinator` staging-method wiring was admitted under
+`app-build-launcher` / `add-direct-support-wiring`; the same stored advisory
+owner evolved revision 6 to 7, preserving historical binding and authorization
+context. WP-302 confirmed it is not actively editing those methods; its unmerged
+stageContactLink/completion-CAS overlap must be reconciled in the actual order.
+No ownership,
+lease binding, source pin, policy or review verdict was rewritten. New Kotlin
+execution remains unverified until the next normal PR-triggered scoped run.
+No local Android/Gradle or manual workflow dispatch is used.
+
 ## Issue #504 candidate: validation pending
 
 This follow-up is separate from merged PR #347. Its integrated base is

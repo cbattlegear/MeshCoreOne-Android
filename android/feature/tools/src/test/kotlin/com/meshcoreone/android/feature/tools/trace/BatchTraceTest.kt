@@ -155,4 +155,51 @@ class BatchTraceTest {
         assertEquals(2, harness.state.completedResults.size)
         assertEquals(0, harness.state.currentTraceIndex)
     }
+
+    @Test
+    fun `batch results card model exposes progress aggregates and partial results after cancel`() {
+        holder.setBatchEnabled(true)
+        seed(batchResult(listOf(5.0), 100), batchResult(listOf(6.0), 200, success = false), index = 3, size = 5)
+        assertEquals(BatchStatus(false, 3, 5, 1), harness.state.batchStatus)
+        assertEquals(BatchRtt(100, 100, 100), harness.state.batchRtt)
+        holder.cancelBatchTrace()
+        assertEquals(BatchStatus(false, 0, 5, 1), harness.state.batchStatus)
+        assertTrue(harness.state.hasBatchResults)
+        assertEquals(BatchRtt(100, 100, 100), harness.state.batchRtt)
+    }
+
+    @Test
+    fun `batch status reports completion percentage and no aggregates without successes`() {
+        holder.setBatchEnabled(true)
+        seed(batchResult(listOf(5.0), 0, success = false), batchResult(listOf(5.0), 0, success = false), batchResult(listOf(5.0), 90), size = 3)
+        val status = checkNotNull(harness.state.batchStatus)
+        assertTrue(status.isComplete)
+        assertEquals(33, status.successPercent)
+        seed(batchResult(listOf(5.0), 0, success = false), size = 1)
+        assertNull(harness.state.batchRtt)
+    }
+
+    @Test
+    fun `first trace exposes progress before a response and default state has no card`() {
+        assertNull(harness.state.batchStatus)
+        assertNull(harness.state.batchRtt)
+        assertNull(harness.state.displayedResult)
+        holder.setBatchEnabled(true)
+        seed(index = 1)
+        assertEquals(BatchStatus(false, 1, 3, 0), harness.state.batchStatus)
+    }
+
+    @Test
+    fun `partial batch selects latest successful response even after a failure`() {
+        val success = batchResult(listOf(7.0), 100)
+        val failure = batchResult(emptyList(), 0, success = false)
+        holder.editStateForTesting {
+            it.copy(batchEnabled = true, result = failure, completedResults = listOf(success, failure))
+        }
+        assertEquals(success, harness.state.displayedResult)
+        assertEquals(7.0, harness.state.latestHopSNR(1))
+        holder.cancelBatchTrace()
+        assertEquals(success, harness.state.displayedResult)
+        assertEquals(7.0, harness.state.hopStats(1)?.avg)
+    }
 }

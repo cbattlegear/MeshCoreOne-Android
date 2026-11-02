@@ -1,6 +1,45 @@
 # WP-405 evidence
 
-## Issue #417 mounted observation correction: new execution pending
+## Issue #417 allocation-through-save candidate: execution pending
+
+This local follow-up starts from `0c8e3cb22816673d2373fb20f2cbab3744387eaf`,
+against trusted/current main `5878b5357dc9fe9986f002fe68763aca0bc35303`,
+with source pin `db14559b39d32322b06477c6ae676112f583db50` unchanged.
+It implements fresh service-owned allocation, shared read/write/batch-save
+serialization, observed-slot authority and explicit uncertain-write quarantine.
+See `docs/android/deviations/WP-405.md` for lock ordering, adaptation and limits.
+The existing advisory owner `d76f0641-87d4-4218-92e9-3cdf3f972471` evolved
+revision 13 -> 14 -> 15 with homogeneous production/test operations; this is
+not a privileged current-controller receipt.
+
+Added, not yet executed: three mounted two-consent/pre-ACK methods on SDK 31
+and 37, two mounted READY/retry-overlap methods plus one ESP32 reconnect/skip
+recovery method on both SDKs, fifteen native
+service allocation/concurrency/failure cases, and one holder stale-snapshot
+case. The original thirteen mounted methods and all original source families
+remain. The mounted partial-sync case deliberately uses a device-error read
+and the real explicitly invoked retry; automatic delayed-retry-controller
+scheduling is not claimed as executed.
+
+Declared local checks: `python .\tools\android-port\controller\validate.py`
+PASS (1,866 references, 64 WPs, 178 edges);
+`python .\tools\android-port\portmap.py` PASS (1,999 implementation records);
+`git --no-pager diff --check` PASS. An initial mixed AndroidOnly/PortedFrom
+annotation caused a traceability-disposition failure and was corrected without
+changing validator policy. No local Android/Gradle execution or manual workflow
+dispatch is authorized or performed; Kotlin compilation and new runtime cases
+remain explicitly unverified until the normal exact-head hosted checks.
+Do not resolve the high review thread or infer full #417/#398 acceptance from
+source changes or these dependency-free checks.
+
+## Issue #417 mounted observation correction: prior exact-head pass
+
+The corrected head `0c8e3cb22816673d2373fb20f2cbab3744387eaf` passed
+[run 41456929553](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41456929553)
+against base `5878b5357dc9fe9986f002fe68763aca0bc35303`.
+App discovered and passed 1,881 cases, zero failures/errors/skips; all 26
+mounted confirmation records passed, including eight held-after-save records.
+This result belongs only to that prior head, not the new allocation candidate.
 
 Exact head `ce5bf82f41e7e69aab05bea73c0f03d33551c4ed` failed
 [hosted run 41453274809](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41453274809)
@@ -18,13 +57,14 @@ observation of handoff consumption is paired with exact lasting selection,
 top destination, preserved prior stack/other stacks, one selected-conversation
 entry and its real editable composer. Existing confirmation identity,
 submitting/resize, metadata, packet and once-per-consent checks remain.
-This correction has not yet executed; the failed candidate is not accepted.
+That observation correction subsequently passed at the exact head above.
 No local Android/Gradle or manual workflow dispatch is authorized or run.
 
 The fixture still pauses after ACK and Room save, not before A's `0x20`
 reply. It cannot cover the separately recorded pre-ACK two-consent slot
 allocation race, late-ACK cancellation or service reconciliation.
-See the same #417 finding below. No allocation or protocol fix is claimed.
+The new allocation candidate above adds distinct pre-ACK coverage; the older
+pass does not establish that repair or protocol reconciliation.
 
 Cold-start support assessment used exact trusted-main consumer operations
 for `MainActivity`, `MeshCoreApplication`, `AppContainer`,

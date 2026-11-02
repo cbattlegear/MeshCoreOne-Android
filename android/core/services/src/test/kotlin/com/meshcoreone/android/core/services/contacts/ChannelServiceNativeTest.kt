@@ -1,14 +1,18 @@
 // AndroidOnly: WP-209 native cancellation, concurrency, retry-timing and error-mapping cases for the ChannelService port.
+// AndroidOnly: WP-405 Allocation-through-save and uncertain-outcome exclusion regressions.
 package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ChannelSyncError
 import com.meshcoreone.android.core.contracts.domain.ChannelSyncErrorType
 import com.meshcoreone.android.core.contracts.domain.ChannelSyncResult
+import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import com.meshcoreone.android.core.protocol.session.ChannelSessionOps
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
@@ -20,12 +24,312 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 
 class ChannelServiceNativeTest {
+    @TestFactory
+    fun allocationThroughSave(): List<DynamicTest> = channelsCases("WP-405 allocation",
+        "two accepted joins refresh allocation after the first actual acknowledgement and save" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            val ack = CompletableDeferred<Unit>()
+            val session = object : ChannelSessionOps by base {
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
+                    base.setChannel(index, name, secret)
+                    if (name == "#test") ack.await()
+                }
+            }
+            val store = ChannelsInMemoryStore()
+            val service = initializedAllocationService(radio, session, store)
+            val first = async(start = CoroutineStart.UNDISPATCHED) { service.joinHashtagChannel(radio, 4u, "#test") }
+            val second = async(start = CoroutineStart.UNDISPATCHED) {
+                service.createChannelWithSecret(radio, 4u, "Private", channelsSecret(0x22))
+            }
+            assertEquals(1, base.recordedSetChannels.size)
+            assertTrue(store.fetchChannels(radio).isEmpty(), "A is held before save, not after commit")
+            assertFalse(second.isCompleted)
+            ack.complete(Unit)
+            assertEquals(1u, first.await().index)
+            assertEquals(2u, second.await().index)
+            assertEquals(listOf("#test", "Private"), store.fetchChannels(radio).map { it.name })
+            assertEquals(listOf<UByte>(1u, 2u), base.recordedSetChannels.map { it.index })
+        },
+        "allocation cannot pass a known acknowledgement while its local save is still held" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            val rows = ChannelsInMemoryStore()
+            val save = CompletableDeferred<Unit>()
+            val store = object : ChannelPersisting by rows {
+                override suspend fun saveChannel(radioId: com.meshcoreone.android.core.model.RadioId, info: ChannelInfo): java.util.UUID {
+                    if (info.name == "A") save.await()
+                    return rows.saveChannel(radioId, info)
+                }
+            }
+            val service = initializedAllocationService(radio, base, store)
+            val first = async(start = CoroutineStart.UNDISPATCHED) {
+                service.createChannelWithSecret(radio, 3u, "A", channelsSecret(0x11))
+            }
+            val second = async(start = CoroutineStart.UNDISPATCHED) { service.joinHashtagChannel(radio, 3u, "#B") }
+            assertEquals(1, base.recordedSetChannels.size, "No B dispatch before A is persisted")
+            assertTrue(rows.fetchChannels(radio).isEmpty())
+            save.complete(Unit)
+            assertEquals(1u, first.await().index)
+            assertEquals(2u, second.await().index)
+        },
+        "explicit-index writes participate in the allocation boundary" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            val ack = CompletableDeferred<Unit>()
+            val session = object : ChannelSessionOps by base {
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
+                    base.setChannel(index, name, secret)
+                    if (name == "Explicit") ack.await()
+                }
+            }
+            val rows = ChannelsInMemoryStore()
+            val service = initializedAllocationService(radio, session, rows)
+            val first = async(start = CoroutineStart.UNDISPATCHED) { service.setChannel(radio, 1u, "Explicit", "key") }
+            val second = async(start = CoroutineStart.UNDISPATCHED) { service.joinHashtagChannel(radio, 3u, "#B") }
+            assertEquals(1, base.recordedSetChannels.size)
+            ack.complete(Unit)
+            first.await()
+            assertEquals(2u, second.await().index)
+            assertEquals("Explicit", rows.fetchChannel(radio, 1u)?.name)
+        },
+        "sync reads cannot capture a pre-write snapshot and later prune the accepted allocation" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            val ack = CompletableDeferred<Unit>()
+            val session = object : ChannelSessionOps by base {
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
+                    base.setChannel(index, name, secret)
+                    ack.await()
+                    base.setStubbedChannels(mapOf(index to ChannelInfo(index, name, secret)))
+                }
+            }
+            val rows = ChannelsInMemoryStore()
+            val service = initializedAllocationService(radio, session, rows)
+            val previousReads = base.recordedGetChannelIndices
+            val first = async(start = CoroutineStart.UNDISPATCHED) { service.joinHashtagChannel(radio, 3u, "#test") }
+            val sync = async(start = CoroutineStart.UNDISPATCHED) { service.syncChannels(radio, 3u, false) }
+            assertEquals(previousReads, base.recordedGetChannelIndices)
+            assertFalse(sync.isCompleted)
+            assertFailsWith<ChannelServiceError.SyncAlreadyInProgress> { service.syncChannels(radio, 3u, false) }
+            ack.complete(Unit)
+            val accepted = first.await()
+            assertEquals(1, sync.await().channelsSynced)
+            assertEquals(accepted.id, rows.fetchChannel(radio, 1u)?.id)
+        },
+        "clear and subsequent allocation serialize deletion before reusing the slot" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            val ack = CompletableDeferred<Unit>()
+            val session = object : ChannelSessionOps by base {
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
+                    base.setChannel(index, name, secret)
+                    if (name.isEmpty()) ack.await()
+                }
+            }
+            val rows = ChannelsInMemoryStore()
+            base.setStubbedChannels(mapOf(1.toUByte() to ChannelInfo(1u, "Old", channelsSecret(0x11))))
+            rows.saveChannel(radio, ChannelInfo(1u, "Old", channelsSecret(0x11)))
+            val service = initializedAllocationService(radio, session, rows)
+            val clear = async(start = CoroutineStart.UNDISPATCHED) { service.clearChannel(radio, 1u) }
+            val next = async(start = CoroutineStart.UNDISPATCHED) { service.joinHashtagChannel(radio, 2u, "#test") }
+            assertEquals(1, base.recordedSetChannels.size)
+            assertEquals("Old", rows.fetchChannel(radio, 1u)?.name)
+            ack.complete(Unit)
+            clear.await()
+            assertEquals(1u, next.await().index)
+            assertEquals("#test", rows.fetchChannel(radio, 1u)?.name)
+        },
+        "cancelling a queued consent dispatches nothing and does not quarantine the preceding successful write" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            val ack = CompletableDeferred<Unit>()
+            val session = object : ChannelSessionOps by base {
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
+                    base.setChannel(index, name, secret)
+                    if (name == "A") ack.await()
+                }
+            }
+            val service = initializedAllocationService(radio, session, ChannelsInMemoryStore())
+            val first = async(start = CoroutineStart.UNDISPATCHED) {
+                service.createChannelWithSecret(radio, 4u, "A", channelsSecret(0x11))
+            }
+            val cancelled = async(start = CoroutineStart.UNDISPATCHED) { service.joinHashtagChannel(radio, 4u, "#cancelled") }
+            cancelled.cancelAndJoin()
+            assertEquals(1, base.recordedSetChannels.size)
+            ack.complete(Unit)
+            first.await()
+            assertEquals(2u, service.joinHashtagChannel(radio, 4u, "#next").index)
+            assertEquals(listOf("A", "#next"), base.recordedSetChannels.map { it.name })
+        },
+        "caller cancellation after attempted dispatch preserves cancellation and blocks unsafe slot reuse and sync" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            val session = object : ChannelSessionOps by base {
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
+                    base.setChannel(index, name, secret)
+                    awaitCancellation()
+                }
+            }
+            val rows = ChannelsInMemoryStore()
+            val service = initializedAllocationService(radio, session, rows)
+            val first = async(start = CoroutineStart.UNDISPATCHED) { service.joinHashtagChannel(radio, 3u, "#test") }
+            first.cancelAndJoin()
+            assertTrue(first.isCancelled)
+            val failure = assertFailsWith<ChannelMutationError.ReconciliationRequired> {
+                service.createChannelWithSecret(radio, 3u, "B", channelsSecret(0x22))
+            }
+            assertIs<CancellationException>(failure.cause)
+            assertFailsWith<ChannelMutationError.ReconciliationRequired> { service.syncChannels(radio, 3u, false) }
+            assertFailsWith<ChannelMutationError.ReconciliationRequired> { service.clearChannel(radio, 1u) }
+            assertTrue(rows.fetchChannels(radio).isEmpty())
+            assertEquals(1, base.recordedSetChannels.size)
+        },
+        "a successful acknowledgement with failed local save remains an explicit failure and blocks later allocation" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            val rows = ChannelsInMemoryStore()
+            val diskFailure = IllegalStateException("disk full")
+            val store = object : ChannelPersisting by rows {
+                override suspend fun saveChannel(radioId: com.meshcoreone.android.core.model.RadioId, info: ChannelInfo): java.util.UUID =
+                    throw diskFailure
+            }
+            val service = initializedAllocationService(radio, base, store)
+            assertEquals(diskFailure, assertFailsWith<IllegalStateException> { service.joinHashtagChannel(radio, 3u, "#test") })
+            assertEquals(diskFailure, assertFailsWith<ChannelMutationError.ReconciliationRequired> {
+                service.joinHashtagChannel(radio, 3u, "#next")
+            }.cause)
+            assertEquals(1, base.recordedSetChannels.size)
+            assertTrue(rows.fetchChannels(radio).isEmpty())
+        },
+        "a definitive negative device acknowledgement permits a subsequent fresh allocation" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession().apply { stubbedSetChannelError = MeshCoreException.DeviceError(6u) }
+            val service = initializedAllocationService(radio, base, ChannelsInMemoryStore())
+            assertFailsWith<ChannelServiceError.SessionError> { service.joinHashtagChannel(radio, 3u, "#failed") }
+            base.stubbedSetChannelError = null
+            assertEquals(1u, service.joinHashtagChannel(radio, 3u, "#test").index)
+        },
+        "full capacity is a typed allocation failure but an existing hashtag still reuses its row without writing" to {
+            val radio = channelsRadioId()
+            val rows = ChannelsInMemoryStore()
+            rows.saveChannel(radio, ChannelInfo(1u, "#Ops", channelsSecret(0x11)))
+            val base = ChannelsMockSession()
+            base.setStubbedChannels(mapOf(1.toUByte() to ChannelInfo(1u, "#Ops", channelsSecret(0x11))))
+            val service = initializedAllocationService(radio, base, rows)
+            assertFailsWith<ChannelMutationError.NoAvailableSlots> {
+                service.createChannelWithSecret(radio, 2u, "Full", channelsSecret(0x22))
+            }
+            assertEquals("#Ops", service.joinHashtagChannel(radio, 2u, "#ops").name)
+            assertTrue(base.recordedSetChannels.isEmpty())
+        },
+        "occupant callbacks may initiate another mutation without lock reentrancy and cache publication stays fresh" to {
+            val radio = channelsRadioId()
+            val rows = ChannelsInMemoryStore()
+            rows.saveChannel(radio, ChannelInfo(1u, "Old", channelsSecret(0x11)))
+            val cache = ChannelsDecryptionCapture()
+            val base = ChannelsMockSession()
+            base.setStubbedChannels(mapOf(1.toUByte() to ChannelInfo(1u, "Old", channelsSecret(0x11))))
+            val service = initializedAllocationService(radio, base, rows, cache)
+            service.setSlotOccupantChangedHandler { _, slots ->
+                assertEquals(setOf<UByte>(1u), slots.toSet())
+                service.joinHashtagChannel(radio, 4u, "#nested")
+            }
+            service.setChannelWithSecret(radio, 1u, "Changed", channelsSecret(0x22))
+            assertEquals(listOf("Changed", "#nested"), rows.fetchChannels(radio).map { it.name })
+            assertEquals(listOf(setOf<UByte>(1u, 2u), setOf<UByte>(1u, 2u)), cache.indexUpdates.takeLast(2).map { it.toSet() })
+        },
+        "uninitialized and partial or circuit-breaker skipped radio slots are not free-slot authority" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession().apply { stubbedGetChannelError = MeshCoreException.Timeout() }
+            val rows = ChannelsInMemoryStore()
+            val service = ChannelService(base, rows, null, ChannelsRecordingClock())
+            assertEquals(listOf<UByte>(1u, 2u, 3u),
+                assertFailsWith<ChannelMutationError.SyncIncomplete> { service.joinHashtagChannel(radio, 4u, "#test") }
+                    .unresolvedIndices.toList())
+            base.stubbedGetChannelError = MeshCoreException.Timeout()
+            val result = service.syncChannels(radio, 6u, false)
+            assertTrue(result.circuitBreakerAborted)
+            assertFailsWith<ChannelMutationError.SyncIncomplete> { service.joinHashtagChannel(radio, 6u, "#test") }
+            assertTrue(base.recordedSetChannels.isEmpty())
+        },
+        "partial-sync unknown slot refuses a join before delayed retry and joins wait for retry read plus batch commit" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            base.script(1u, { throw MeshCoreException.Timeout() }, { throw MeshCoreException.Timeout() }, { throw MeshCoreException.Timeout() })
+            val rows = ChannelsInMemoryStore()
+            val retryRead = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var holdRetry = false
+            val store = object : ChannelPersisting by rows {
+                override suspend fun batchSaveChannels(
+                    radioId: RadioId, configured: SnapshotList<ChannelInfo>, unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
+                ): SnapshotList<com.meshcoreone.android.core.model.ChannelDTO> {
+                    if (holdRetry) {
+                        retryRead.complete(Unit)
+                        release.await()
+                    }
+                    return rows.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
+                }
+            }
+            val service = ChannelService(base, store, null, ChannelsRecordingClock())
+            assertEquals(listOf<UByte>(1u), service.syncChannels(radio, 4u, false).retryableIndices.toList())
+            assertNull(rows.fetchChannel(radio, 1u))
+            base.script(1u, { throw MeshCoreException.Timeout() }, { throw MeshCoreException.Timeout() }, { throw MeshCoreException.Timeout() })
+            assertFailsWith<ChannelMutationError.SyncIncomplete> { service.joinHashtagChannel(radio, 4u, "#too-early") }
+            base.setStubbedChannels(mapOf(1.toUByte() to ChannelInfo(1u, "Radio occupant", channelsSecret(0x33))))
+            holdRetry = true
+            val retry = async(start = CoroutineStart.UNDISPATCHED) { service.retryFailedChannels(radio, SnapshotList.of(1u)) }
+            retryRead.await()
+            val join = async(start = CoroutineStart.UNDISPATCHED) { service.joinHashtagChannel(radio, 4u, "#accepted") }
+            assertFalse(join.isCompleted)
+            assertTrue(base.recordedSetChannels.isEmpty(), "Retry's radio snapshot must commit before allocation")
+            release.complete(Unit)
+            assertEquals(1, retry.await().channelsSynced)
+            assertEquals(2u, join.await().index)
+            assertEquals("Radio occupant", rows.fetchChannel(radio, 1u)?.name)
+            assertEquals("#accepted", rows.fetchChannel(radio, 2u)?.name)
+        },
+        "retry starting after a successful join sees that joined occupant instead of restoring an old read" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            val rows = ChannelsInMemoryStore()
+            val service = initializedAllocationService(radio, base, rows)
+            val accepted = service.joinHashtagChannel(radio, 4u, "#test")
+            rows.saveTestMessage(radio, accepted.index, "Keep this message")
+            base.setStubbedChannels(mapOf(accepted.index to ChannelInfo(accepted.index, accepted.name, accepted.secret)))
+            assertEquals(1, service.retryFailedChannels(radio, SnapshotList.of(accepted.index)).channelsSynced)
+            assertEquals(accepted.id, rows.fetchChannel(radio, accepted.index)?.id)
+            assertEquals(listOf("Keep this message"), rows.fetchMessages(radio, accepted.index).map { it.text })
+        },
+        "a new service with a skipped initial channel phase establishes authority on consent instead of remaining blocked" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            base.setStubbedChannels(mapOf(1.toUByte() to ChannelInfo(1u, "Radio occupant", channelsSecret(0x33))))
+            val rows = ChannelsInMemoryStore()
+            val service = ChannelService(base, rows, null)
+            assertTrue(base.recordedGetChannelIndices.isEmpty())
+            val accepted = service.joinHashtagChannel(radio, 3u, "#test")
+            assertEquals(listOf<UByte>(0u, 1u, 2u), base.recordedGetChannelIndices)
+            assertEquals(2u, accepted.index)
+            assertEquals("Radio occupant", rows.fetchChannel(radio, 1u)?.name)
+            assertEquals(listOf<UByte>(2u), base.recordedSetChannels.map { it.index })
+        },
+    )
+
+    private suspend fun initializedAllocationService(
+        radio: RadioId, session: ChannelSessionOps, store: ChannelPersisting, cache: ChannelDecryptionCache? = null,
+    ): ChannelService = ChannelService(session, store, cache).also { it.syncChannels(radio, 4u, false) }
+
     @TestFactory
     fun concurrencyAndCancellation(): List<DynamicTest> = channelsNativeCases(
         "a sync in progress rejects concurrent syncs and retries, then releases the guard" to {

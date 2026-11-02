@@ -1130,8 +1130,13 @@ borrow a later declaration's block. Constructor references must be unqualified,
 resolve by same package or exact import/alias, and have no shadowing declaration.
 Property reads must be unqualified in the method's immediate block, without
 local/destructured/lambda-parameter shadowing; qualified names, named arguments
-and references inside nested blocks do not establish this lineage. Unsupported
-or ambiguous binding requires a supported explicit consumer, not guessed
+and references inside nested blocks do not establish this lineage.
+Local function declarations in a selected consumer body are rejected, including
+expression-bodied locals: lexical brace depth cannot prove their execution.
+A property-name call (including a generic call) does not establish a property
+read; a same-named class function can be called instead. An ordinary property
+read still qualifies even if that function exists.
+Unsupported or ambiguous binding requires a supported explicit consumer, not guessed
 execution. The original broad `/src/test` same-file guard remains in effect
 for unsupported test source forms such as Java; they cannot borrow an unrelated
 Kotlin method or claim the Kotlin-only helper exception.

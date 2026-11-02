@@ -1544,6 +1544,8 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
             )
             if method not in declarations or bodies.get(method) is None:
                 raise PortError("Test-helper consumer must be an actual declared JUnit method with a block body")
+            if "fun" in bodies[method]:
+                raise PortError("Local function declarations make test-helper consumer execution ambiguous")
             class_name = classes[method]
             member = consumer.get("member")
             accessible_helpers = helper_reference_names(helper_declarations, context)
@@ -1556,7 +1558,11 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 initializer = members.get(class_name, {}).get(member, ())
                 linked = (
                     not shadows(bodies[method], member)
-                    and any(immediate_references(bodies[method], {member}, 1))
+                    and any(
+                        index + 1 < len(bodies[method])
+                        and bodies[method][index + 1] not in ("(", "<")
+                        for index in immediate_references(bodies[method], {member}, 1)
+                    )
                     and invokes_helper(initializer, accessible_helpers)
                 )
             if not linked:

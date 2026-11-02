@@ -531,6 +531,24 @@ class RepairExecutionTests(unittest.TestCase):
             ), self.assertRaises(PortError):
                 validate_hosted_methods(scope, blobs, REPO, executed, compiled)
 
+    def test_helper_lineage_rejects_uncalled_expression_function_and_property_function_collision(self):
+        cases = (
+            (None, "", "fun unused() = MapTestHelper(); check(true)"),
+            ("fixture", "private fun fixture() = true;", "check(fixture())"),
+            ("fixture", "private fun <T> fixture(): Boolean = true;", "check(fixture<Boolean>())"),
+        )
+        for member, extra, body in cases:
+            scope, _, _, blobs, content, executed, compiled = self.helper_inputs(
+                "package sample\nclass MapTestHelper { val enabled = true }",
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+                "private val fixture = MapTestHelper(); " + extra
+                + "@Test fun keepsListReachable() { " + body + " } }", member=member,
+            )
+            with self.subTest(member=member, body=body), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ), self.assertRaises(PortError):
+                validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
     def test_repair_helper_consumers_require_compiled_and_executed_source_lineage(self):
         helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
         direct_consumer = (
@@ -551,6 +569,9 @@ class RepairExecutionTests(unittest.TestCase):
             (direct_consumer.replace("keepsListReachable() {", "keepsListReachable(): Unit {"), None),
             (member_consumer.replace("assertTrue(fixture.enabled)", "val unrelated = true; assertTrue(fixture.enabled)"),
              "fixture"),
+            (member_consumer.replace(
+                "@Test fun", "private fun fixture() = true;\n@Test fun",
+            ), "fixture"),
         ):
             scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
                 helper_source, consumer_source, member=member,

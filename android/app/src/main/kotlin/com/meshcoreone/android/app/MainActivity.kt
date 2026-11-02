@@ -45,6 +45,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.feature.tools.trace.AndroidRecentHopsStorage
+import com.meshcoreone.android.platform.notifications.messaging.NotificationContentTap
+import com.meshcoreone.android.platform.notifications.messaging.NotificationContentTapResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -56,6 +58,7 @@ class NavigationHostViewModel : ViewModel() {
     var initialized = false
     private var deepLinksBound = false
     private var initialViewIntentSubmitted = false
+    private var initialNotificationIntentSubmitted = false
     private var deliverySequence = 0L
     private var router: AppDeepLinkRouter? = null
     val pendingExternalRoute = PendingExternalRoute { uri ->
@@ -81,6 +84,26 @@ class NavigationHostViewModel : ViewModel() {
         if (intent.action != Intent.ACTION_VIEW) return
         deliverySequence = Math.incrementExact(deliverySequence)
         submitViewIntent("new-$deliverySequence", intent)
+    }
+
+    fun submitInitialNotificationIntent(intent: Intent) {
+        if (!initialNotificationIntentSubmitted) submitNotificationIntent(intent)
+    }
+
+    fun submitNewNotificationIntent(intent: Intent) {
+        submitNotificationIntent(intent)
+    }
+
+    private fun submitNotificationIntent(intent: Intent) {
+        when (NotificationContentTap.enqueue(intent)) {
+            NotificationContentTapResult.NOT_NOTIFICATION -> return
+            NotificationContentTapResult.ENQUEUED -> Unit
+            NotificationContentTapResult.MALFORMED ->
+                java.util.logging.Logger.getLogger("com.mc1.Launcher").warning("Malformed notification content tap")
+            NotificationContentTapResult.QUEUE_FULL ->
+                java.util.logging.Logger.getLogger("com.mc1.Launcher").warning("Notification content tap queue is full")
+        }
+        initialNotificationIntentSubmitted = true
     }
 
     private fun submitViewIntent(id: String, intent: Intent) {
@@ -117,6 +140,7 @@ open class MainActivity : ComponentActivity() {
             host.initialized = true
         }
         host.submitInitialViewIntent(intent)
+        host.submitInitialNotificationIntent(intent)
         setContent {
             val resolved by produceContainer()
             val screen: @Composable () -> Unit = {
@@ -195,6 +219,7 @@ open class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         host.submitNewViewIntent(intent)
+        host.submitNewNotificationIntent(intent)
     }
 
     /** While resumed, this activity is the host that can launch the system companion-device chooser. */

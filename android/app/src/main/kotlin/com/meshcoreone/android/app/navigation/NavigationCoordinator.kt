@@ -133,13 +133,30 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     fun stageContactLink(link: ContactLinkRequest?, targetRadioId: RadioId? = state.value.radioId) =
         mutableState.update {
-            if (link == null) it.copy(pendingContactLink = null) else it.stageContactLink(link, targetRadioId)
+            if (link == null) it.copy(pendingContactLink = null) else {
+                it.copy(contactLookupRevision = Math.incrementExact(it.contactLookupRevision))
+                    .stageContactLink(link, targetRadioId)
+            }
         }
 
     private fun NavigationState.stageContactLink(link: ContactLinkRequest, radioId: RadioId?) = copy(
         pendingContactLink = link.copy(targetRadioId = radioId, generation = generation, deliveryId = nextEntryId),
         nextEntryId = Math.incrementExact(nextEntryId),
     )
+
+    internal fun beginContactLinkLookup(expectedGeneration: Long): Long? {
+        while (true) {
+            val current = state.value
+            val initialAssignment = current.initialContactLinkGeneration == expectedGeneration &&
+                current.generation == Math.incrementExact(expectedGeneration)
+            if (current.generation != expectedGeneration && !initialAssignment) return null
+            val revision = Math.incrementExact(current.contactLookupRevision)
+            if (mutableState.compareAndSet(current, current.copy(contactLookupRevision = revision))) return revision
+        }
+    }
+
+    internal fun isContactLinkLookupCurrent(revision: Long?): Boolean =
+        revision != null && state.value.contactLookupRevision == revision
 
     // Native adaptation: Commit lookup results against their initiating context, never a post-lookup radio.
     fun completeContactLookup(
@@ -167,7 +184,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                     pendingContactLink = null, pendingContactDetail = contact, selectedContact = contact,
                     nodesShowingDiscovery = false,
                 )
-            }
+            }.copy(contactLookupRevision = Math.incrementExact(current.contactLookupRevision))
             if (mutableState.compareAndSet(current, next)) return failure == null
         }
     }

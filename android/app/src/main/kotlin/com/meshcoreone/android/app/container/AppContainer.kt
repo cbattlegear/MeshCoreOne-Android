@@ -4,7 +4,10 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationDestination
+import com.meshcoreone.android.app.navigation.NavigationFailure
+import com.meshcoreone.android.app.navigation.NavigationOutcome
 import com.meshcoreone.android.app.navigation.NotificationNavigationBinding
+import com.meshcoreone.android.app.navigation.NotificationNavigationReceipt
 import com.meshcoreone.android.app.navigation.PersistenceNavigationLookup
 import com.meshcoreone.android.app.state.AccessibilityAnnouncer
 import com.meshcoreone.android.app.state.AppState
@@ -41,6 +44,7 @@ import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
+import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.maps.OfflineMapController
@@ -63,7 +67,9 @@ import com.meshcoreone.android.core.services.messaging.ChatSendQueueProgress
 import com.meshcoreone.android.core.services.messaging.ChannelQueryAccountingEvent
 import com.meshcoreone.android.core.services.messaging.LoggingMessagingIssueReporter
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
+import com.meshcoreone.android.core.services.notifications.NotificationResponseDispatch
 import com.meshcoreone.android.core.services.notifications.didReceive
+import com.meshcoreone.android.core.services.notifications.didReceiveWithResult
 import com.meshcoreone.android.core.services.rendering.ChatCoordinatorRegistry
 import com.meshcoreone.android.core.services.rendering.DraftStore
 import com.meshcoreone.android.core.services.sync.SyncClock
@@ -297,9 +303,12 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     }
 
     internal fun captureContactLinkSession(generation: Long): () -> Boolean {
+        val lookupRevision = navigation.beginContactLinkLookup(generation)
         val initiating = sessions.current
         return {
-            if (initiating != null) {
+            if (!navigation.isContactLinkLookupCurrent(lookupRevision)) {
+                false
+            } else if (initiating != null) {
                 isCurrentSession(initiating) ||
                     sessions.current === initiating && !initiating.isTornDown &&
                     connectionManager.snapshot.value.token == null &&
@@ -397,8 +406,24 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         if (appState.connectionState != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY ||
             !statePlatform.isReadyFor(current)
         ) return false
-        current.notificationService.didReceive(response)
-        return true
+        if (response.action != null || response.payload is NotificationPayload.LowBattery) {
+            current.notificationService.didReceive(response)
+            return true
+        }
+        val receipt = NotificationNavigationReceipt()
+        val dispatch = withContext(receipt) { current.notificationService.didReceiveWithResult(response) }
+        return when (val outcome = receipt.outcome) {
+            null -> {
+                when {
+                    receipt.callbackStarted -> false
+                    dispatch == NotificationResponseDispatch.TAP_CALLBACK_INVOKED -> true
+                    else -> isCurrentSession(current)
+                }
+            }
+            is NavigationOutcome.Failed -> outcome.failure != NavigationFailure.StaleGeneration
+            NavigationOutcome.NotReady, NavigationOutcome.NoPendingRoute -> false
+            else -> true
+        }
     }
 
     /** Forwards a chooser activity result to the platform gateway; a no-op without a companion registry. */

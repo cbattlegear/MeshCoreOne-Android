@@ -143,6 +143,7 @@ data class NavigationState(
     val radioId: RadioId? = null,
     val generation: Long = 0,
     val initialContactLinkGeneration: Long? = null,
+    internal val contactLookupRevision: Long = 0,
     val failure: NavigationFailure? = null,
     val navigationReady: Boolean = false,
     val pendingNotifications: SnapshotList<PendingNotificationRoute> = SnapshotList.empty(),
@@ -161,6 +162,7 @@ data class NavigationState(
         require(generation >= 0 && pendingNotifications.all { it.generation == null || it.generation >= 0 }) {
             "Connection generations must be nonnegative"
         }
+        require(contactLookupRevision >= 0) { "Contact lookup revision must be nonnegative" }
         require(initialContactLinkGeneration == null || initialContactLinkGeneration in 0 until generation) {
             "Initial contact context must precede its assigned radio generation"
         }

@@ -1,15 +1,29 @@
 // AndroidOnly: WP-302 Actual preserved launcher identity, retained host recreation and private/public process-restoration assertions.
 package com.meshcoreone.android.app.navigation
 
+import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.Build
 import androidx.lifecycle.ViewModelProvider
+import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.MainActivity
 import com.meshcoreone.android.app.NavigationHostViewModel
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
+import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.Before
@@ -58,5 +72,44 @@ class NavigationActivityTest {
             assertNull(state.selectedContact); assertEquals(NavigationFailure.PrivateSelectionNotRestored(1), state.failure)
             assertFalse(state.navigationReady)
         } finally { second.pause().stop().destroy() }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Config(application = Application::class)
+    @Test fun notificationContentIntentsSurviveHostRecreationWithoutReplayingAndNewTapsRemainDistinct() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val radio = RadioId(UUID.randomUUID())
+        val contact = EntityKey(radio, UUID.randomUUID())
+        val message = UUID.randomUUID()
+        val response = NotificationResponse(NotificationPayload.DirectMessage(contact, message), null, null)
+        val delivered = mutableListOf<NotificationResponse>()
+        AndroidMessagingNotificationDelivery(context, scope) { delivered += it; true }
+        val intent = Intent(context, MainActivity::class.java)
+            .setAction("com.meshcoreone.android.notification.OPEN")
+            .setData(Uri.parse("meshcore-notification://action/example/OPEN"))
+            .putExtra("mc1.notification.type", "direct")
+            .putExtra("mc1.notification.contact.radio", radio.value.toString())
+            .putExtra("mc1.notification.contact.id", contact.id.toString())
+            .putExtra("mc1.notification.message", message.toString())
+        val controller = Robolectric.buildActivity(MainActivity::class.java, intent).setup().visible()
+        try {
+            testScheduler.runCurrent()
+            assertEquals(listOf(response), delivered)
+            controller.recreate()
+            testScheduler.runCurrent()
+            assertEquals(listOf(response), delivered)
+
+            controller.newIntent(Intent(intent))
+            testScheduler.runCurrent()
+            assertEquals(listOf(response, response), delivered)
+            controller.recreate()
+            testScheduler.runCurrent()
+            assertEquals(listOf(response, response), delivered)
+        } finally {
+            controller.pause().stop().destroy()
+            scope.cancel()
+            testScheduler.runCurrent()
+        }
     }
 }

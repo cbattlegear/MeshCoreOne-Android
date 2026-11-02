@@ -6,7 +6,17 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.services.notifications.NotificationService
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionCommit
 import java.util.UUID
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.currentCoroutineContext
+
+internal class NotificationNavigationReceipt : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<NotificationNavigationReceipt>
+    var callbackStarted: Boolean = false
+    var outcome: NavigationOutcome? = null
+}
 
 class NotificationNavigationBinding(
     private val service: NotificationService,
@@ -19,10 +29,18 @@ class NotificationNavigationBinding(
     @Volatile private var active = true
     private val generation = coordinator.state.value.generation
     private val route: suspend (NotificationNavigationRequest) -> Unit = { request ->
-        onOutcome(coordinator.handleNotificationRequest(request, lookup, generation) { active && isCurrentSession() })
+        currentCoroutineContext()[NotificationNavigationReceipt]?.callbackStarted = true
+        val outcome = coordinator.handleNotificationRequest(request, lookup, generation) { active && isCurrentSession() }
+        val context = currentCoroutineContext()
+        context[NotificationNavigationReceipt]?.outcome = outcome
+        if (outcome == NavigationOutcome.Navigated || outcome is NavigationOutcome.Fallback ||
+            outcome is NavigationOutcome.Failed && outcome.failure != NavigationFailure.StaleGeneration
+        ) context[NotificationActionCommit]?.navigationCommitted()
+        onOutcome(outcome)
     }
     private val direct: suspend (EntityKey) -> Unit = { route(NotificationNavigationRequest.Direct(it)) }
     private val newContact: suspend (EntityKey) -> Unit = {
+        currentCoroutineContext()[NotificationNavigationReceipt]?.callbackStarted = true
         route(NotificationNavigationRequest.NewContact(it, connectedDevice()?.manualAddContacts == true))
     }
     private val channel: suspend (RadioId, UByte) -> Unit = { radio, index ->

@@ -511,5 +511,26 @@ class NotificationPolicyNativeTests {
             h.service.didReceive(NotificationResponse(dm, NotificationAction.REPLY, "boom"))
             assertEquals(emptyList(), h.store.calls)
         },
+        nativeCase("tap dispatch reports optional and invoked callbacks without changing cancellation") {
+            val h = NotificationHarness(this)
+            val contact = EntityKey(RADIO_A, contactID)
+            val response = NotificationResponse(NotificationPayload.DirectMessage(contact, messageID), null, null)
+            assertEquals(NotificationResponseDispatch.TAP_CALLBACK_MISSING, h.service.didReceiveWithResult(response))
+            var calls = 0
+            h.service.onNotificationTapped = {
+                assertEquals(contact, it)
+                calls++
+            }
+            assertEquals(NotificationResponseDispatch.TAP_CALLBACK_INVOKED, h.service.didReceiveWithResult(response))
+            assertEquals(1, calls)
+            h.service.onNotificationTapped = { throw IllegalStateException("callback failed") }
+            assertEquals(NotificationResponseDispatch.TAP_CALLBACK_INVOKED, h.service.didReceiveWithResult(response))
+            h.service.onNotificationTapped = { throw CancellationException("cancelled") }
+            assertFailsWith<CancellationException> { h.service.didReceiveWithResult(response) }
+            assertEquals(
+                NotificationResponseDispatch.ACTION_HANDLED,
+                h.service.didReceiveWithResult(NotificationResponse(response.payload, NotificationAction.REPLY, null)),
+            )
+        },
     )
 }

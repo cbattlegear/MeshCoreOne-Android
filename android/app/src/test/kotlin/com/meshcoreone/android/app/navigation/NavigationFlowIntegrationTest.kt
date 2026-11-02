@@ -55,6 +55,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.TestScope
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -177,6 +178,174 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { unmount(); h.container.close() }
     }
 
+    @Test fun aTapWhoseLookupOutlivesItsSessionIsNotAcknowledgedAndCanReachTheReplacement() = runTest {
+        var hold = false
+        var heldKey: EntityKey? = null
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<ContactDTO?>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContact(key: EntityKey): ContactDTO? {
+                if (hold && key == heldKey) {
+                    entered.complete(Unit)
+                    return release.await()
+                }
+                return store.fetchContact(key)
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Retired tap target") }
+        try {
+            val target = h.target()
+            connect(h, target)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            heldKey = EntityKey(radio, contact.id)
+            val response = NotificationResponse(
+                NotificationPayload.DirectMessage(assertNotNull(heldKey), UUID.randomUUID()), null, null,
+            )
+            hold = true
+            val pending = async { h.container.handleNotificationResponse(response) }
+            entered.await()
+            hold = false
+            h.manager.disconnect()
+            h.eventually("retired notification graph is withdrawn") {
+                h.sessions.current == null && !h.container.navigation.state.value.navigationReady
+            }
+            val beforeCompletion = h.container.navigation.state.value
+            release.complete(contact)
+            assertFalse(pending.await(), "A stale navigation outcome must leave the tap unacknowledged")
+            assertEquals(beforeCompletion, h.container.navigation.state.value)
+
+            connect(h, target)
+            assertTrue(h.container.handleNotificationResponse(response))
+            assertEquals(ChatSelection.Direct(contact), h.container.navigation.state.value.chatsSelectedRoute)
+        } finally {
+            release.complete(null)
+            h.container.close()
+        }
+    }
+
+    @Test fun cancellationAfterARealNotificationCommitDoesNotReplayTheQueuedTap() = runTest {
+        verifyNotificationCommitWins(observerCancels = true)
+    }
+
+    @Test fun failedObserverAfterARealNotificationCommitDoesNotReplayTheQueuedTap() = runTest {
+        verifyNotificationCommitWins(observerCancels = false)
+    }
+
+    private suspend fun TestScope.verifyNotificationCommitWins(observerCancels: Boolean) {
+        val context = ApplicationProvider.getApplicationContext<android.app.Application>()
+        if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Committed tap target") }
+        var attempts = 0
+        var binding: NotificationNavigationBinding? = null
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val session = assertNotNull(h.sessions.current)
+            val observed = CompletableDeferred<NavigationOutcome>()
+            val cancellation = CompletableDeferred<kotlinx.coroutines.CancellationException>()
+            val acknowledgement = CompletableDeferred<Boolean>()
+            binding = NotificationNavigationBinding(
+                session.notificationService, h.container.navigation, PersistenceNavigationLookup(store),
+                connectedDevice = { h.appState.connectedDevice },
+                onOutcome = {
+                    observed.complete(it)
+                    if (observerCancels) throw kotlinx.coroutines.CancellationException("Observer cancelled after navigation")
+                    throw IllegalStateException("Observer failed after navigation")
+                },
+                isCurrentSession = { h.container.isCurrentSession(session) },
+            )
+            val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { response ->
+                attempts++
+                try {
+                    h.container.handleNotificationResponse(response).also { acknowledgement.complete(it) }
+                } catch (failure: kotlinx.coroutines.CancellationException) {
+                    cancellation.complete(failure)
+                    throw failure
+                }
+            }
+            manager.cancelAll()
+            delivery.registerCategories(SnapshotList.empty())
+            delivery.post(NotificationRequest(
+                NotificationId("wp302-committed-tap"), NotificationCategory.DIRECT_MESSAGE, contact.name, "Committed tap",
+                false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), UUID.randomUUID()),
+            ))
+            manager.activeNotifications.single().notification.contentIntent.send()
+            shadowOf(android.os.Looper.getMainLooper()).idle()
+            h.eventually("the real tap commits before the observer exits") {
+                if (observerCancels) cancellation.isCompleted else acknowledgement.isCompleted
+            }
+            assertEquals(NavigationOutcome.Navigated, observed.await())
+            if (observerCancels) {
+                assertEquals("Observer cancelled after navigation", cancellation.await().message)
+            } else {
+                assertTrue(acknowledgement.await())
+            }
+            val state = h.container.navigation.state.value
+            assertEquals(ChatSelection.Direct(contact), state.chatsSelectedRoute)
+            assertEquals(1, attempts)
+
+            testScheduler.runCurrent()
+            delivery.retryPendingActions()
+            h.settle()
+            assertEquals(1, attempts, "A committed tap must not be delivered again")
+            assertEquals(state.activeStack, h.container.navigation.state.value.activeStack)
+        } finally {
+            binding?.close()
+            manager.cancelAll()
+            h.container.close()
+        }
+    }
+
+    @Test fun currentSessionOptionalCustomAndActionCallbacksKeepTheirExistingSemantics() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val session = assertNotNull(h.sessions.current)
+            val contact = EntityKey(radio, UUID.randomUUID())
+            val message = UUID.randomUUID()
+            val payload = NotificationPayload.DirectMessage(contact, message)
+            val tap = NotificationResponse(payload, null, null)
+            val original = session.notificationService.onNotificationTapped
+
+            session.notificationService.onNotificationTapped = null
+            assertTrue(h.container.handleNotificationResponse(tap))
+            var taps = 0
+            session.notificationService.onNotificationTapped = { assertEquals(contact, it); taps++ }
+            assertTrue(h.container.handleNotificationResponse(tap))
+            assertEquals(1, taps)
+            session.notificationService.onNotificationTapped = { throw IllegalStateException("custom callback failed") }
+            assertTrue(h.container.handleNotificationResponse(tap))
+            session.notificationService.onNotificationTapped = {
+                throw kotlinx.coroutines.CancellationException("custom callback cancelled")
+            }
+            assertFailsWith<kotlinx.coroutines.CancellationException> { h.container.handleNotificationResponse(tap) }
+            session.notificationService.onNotificationTapped = original
+
+            val calls = mutableListOf<String>()
+            session.notificationService.onQuickReply = { key, text ->
+                assertEquals(contact, key)
+                calls += "reply:$text"
+            }
+            session.notificationService.onMarkAsRead = { key, id ->
+                assertEquals(contact, key)
+                assertEquals(message, id)
+                calls += "read"
+            }
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(payload, NotificationAction.REPLY, "hello")))
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(payload, NotificationAction.MARK_READ, null)))
+            assertTrue(h.container.handleNotificationResponse(
+                NotificationResponse(NotificationPayload.LowBattery(5), null, null),
+            ))
+            assertEquals(listOf("reply:hello", "read"), calls)
+        } finally { h.container.close() }
+    }
+
     @Test fun reactionNotificationAnchorsReachActualMountedTimelinesAndSurviveWindowChanges() = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Reaction peer") }
@@ -288,6 +457,91 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { unmount(); h.container.close() }
     }
 
+    @Test fun actualReadyDuringTheFinalRetryDelayDeliversTheQueuedTapOnce() = runTest {
+        val context = ApplicationProvider.getApplicationContext<android.app.Application>()
+        if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        lateinit var delivery: AndroidMessagingNotificationDelivery
+        var readinessSignals = 0
+        val routeAttempts = mutableListOf<Long>()
+        val h = ContainerHarness(
+            this, store, sessionConfiguration = SessionConfiguration(contactStreamInactivityTimeout = 60.0),
+            notificationNavigationReady = { readinessSignals++; delivery.retryPendingActions() },
+        )
+        delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { response ->
+            routeAttempts += testScheduler.currentTime
+            h.container.handleNotificationResponse(response)
+        }
+        h.links.configureRadio = { radio ->
+            radio.knownContacts += contactFrame(key(20), "Final delay peer")
+            radio.respond = { frame -> if (frame[0].toInt() == 0x04) listOf(Bytes.of(2) + le32(1)) else null }
+        }
+        try {
+            manager.cancelAll()
+            val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
+            val contact = ContactDTO(
+                radioId = radio, publicKey = key(20), name = "Final delay peer", lastHeardTimestamp = null,
+            )
+            store.saveContact(contact)
+            delivery.registerCategories(SnapshotList.empty())
+            delivery.post(NotificationRequest(
+                NotificationId("wp302-final-delay"), NotificationCategory.DIRECT_MESSAGE, contact.name, "Queued tap",
+                false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), UUID.randomUUID()),
+            ))
+            manager.activeNotifications.single().notification.contentIntent.send()
+            shadowOf(android.os.Looper.getMainLooper()).idle()
+            testScheduler.runCurrent()
+            val firstAttempt = routeAttempts.single()
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("callbacks installed while initial contact sync is held") {
+                h.manager.connectionState == DeviceConnectionState.SYNCING &&
+                    h.container.navigation.state.value.navigationReady &&
+                    h.links.radios.last().sent.any { it[0].toInt() == 0x04 }
+            }
+            val lastAttempt = firstAttempt + 14_750
+            assertTrue(testScheduler.currentTime <= lastAttempt)
+            testScheduler.advanceTimeBy(lastAttempt - testScheduler.currentTime)
+            testScheduler.runCurrent()
+            assertEquals(60, routeAttempts.size)
+            assertEquals(DeviceConnectionState.SYNCING, h.manager.connectionState)
+            assertNull(h.container.navigation.state.value.pendingChatContact)
+
+            val beforeReady = readinessSignals
+            val firmware = h.links.radios.last()
+            firmware.push(firmware.knownContacts.single())
+            firmware.push(Bytes.of(4) + le32(0))
+            h.eventually("held sync completes during the final retry delay", virtualBudgetMillis = 100) {
+                h.manager.connectionState == DeviceConnectionState.READY && readinessSignals > beforeReady
+            }
+            val retryDeadline = firstAttempt + 15_000
+            assertTrue(testScheduler.currentTime < retryDeadline, "READY must occur during the final delay")
+            assertEquals(60, routeAttempts.size, "No new drain starts before the old owner finishes")
+            testScheduler.advanceTimeBy(retryDeadline - testScheduler.currentTime)
+            testScheduler.runCurrent()
+            connecting.await()
+
+            mount(h)
+            await(h) {
+                (h.container.navigation.state.value.chatsSelectedRoute as? ChatSelection.Direct)?.contact?.id == contact.id
+            }
+            val state = h.container.navigation.state.value
+            val synchronizedContact = assertNotNull(store.fetchContact(radio, contact.publicKey))
+            assertEquals(contact.id, synchronizedContact.id)
+            assertEquals(synchronizedContact, assertIs<ChatSelection.Direct>(state.chatsSelectedRoute).contact)
+            compose.onNodeWithTag("entry:${state.activeStack.last().id}").assertIsDisplayed()
+            assertEquals(61, routeAttempts.size)
+            val stack = state.activeStack
+            delivery.retryPendingActions()
+            h.settle()
+            assertEquals(61, routeAttempts.size)
+            assertEquals(stack, h.container.navigation.state.value.activeStack)
+        } finally {
+            manager.cancelAll()
+            unmount()
+            h.container.close()
+        }
+    }
+
     @Test fun externalAndChatLookupResultsCannotCrossARealRadioSwitchOrNavigateAnOldSavedContact() = runTest {
         val deviceA = UUID(1, 1)
         val deviceB = UUID(2, 2)
@@ -347,6 +601,79 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 h.settle()
             }
             assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+        } finally { h.container.close() }
+    }
+
+    @Test fun newerContactLookupsAndDirectStagingSupersedeOlderInFlightLookups() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio {
+            it.knownContacts += contactFrame(key(20), "Older contact")
+            it.knownContacts += contactFrame(key(21), "Newer contact")
+        }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val oldContact = assertNotNull(store.fetchContact(radio, key(20)))
+            val newContact = assertNotNull(store.fetchContact(radio, key(21)))
+            val navigation = h.container.navigation
+            for ((olderFromChat, newerRoute) in listOf(
+                false to "chat", true to "external", false to "direct", true to "direct",
+            )) for (olderFound in listOf(false, true)) {
+                navigation.clearPendingLinks()
+                navigation.clearFailure()
+                val entered = CompletableDeferred<RadioId>()
+                val release = CompletableDeferred<ContactDTO?>()
+                val rejected = CompletableDeferred<Unit>()
+                suspend fun fetch(radioId: RadioId, publicKey: Bytes): ContactDTO? =
+                    if (publicKey == key(20)) {
+                        entered.complete(radioId)
+                        release.await()
+                    } else store.fetchContact(radioId, publicKey)
+                val external = AppDeepLinkRouter(object :
+                    AppDeepLinkEnvironment by ContainerDeepLinkEnvironment(h.container, navigation) {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes) = fetch(radioId, publicKey)
+                })
+                val chat = ChatLinkRouter(object : ChatLinkEnvironment by h.container.chatsFeature.list.links {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes) = fetch(radioId, publicKey)
+                }, backgroundScope, com.meshcoreone.android.feature.chats.list.ChatListDiagnostics { message, _ ->
+                    if (message == "Contact-link lookup context is no longer current") rejected.complete(Unit)
+                })
+                val oldUri = h.container.nodesFeature.uriCodec.exportContactUri("Older claim", key(20), ContactType.ROOM)
+                val older = if (olderFromChat) {
+                    assertTrue(chat.route(oldUri))
+                    null
+                } else async { external.routeExternal(oldUri) }
+                assertEquals(radio, entered.await())
+
+                val newKey = if (newerRoute == "external") key(21) else key(30)
+                val newUri = h.container.nodesFeature.uriCodec.exportContactUri("Newer claim", newKey, ContactType.REPEATER)
+                when (newerRoute) {
+                    "chat" -> {
+                        assertTrue(chat.route(newUri))
+                        h.eventually("newer chat contact confirmation is staged") {
+                            navigation.state.value.pendingContactLink?.publicKey == newKey
+                        }
+                    }
+                    "external" -> assertEquals(DeepLinkRouteOutcome.Navigated, external.routeExternal(newUri))
+                    else -> navigation.stageContactLink(
+                        ContactLinkRequest("Newer claim", newKey, ContactType.REPEATER), radio,
+                    )
+                }
+                if (newerRoute == "external") {
+                    assertEquals(newContact, navigation.state.value.pendingContactDetail)
+                } else {
+                    val staged = assertNotNull(navigation.state.value.pendingContactLink)
+                    assertEquals("Newer claim", staged.name)
+                    assertEquals(ContactType.REPEATER, staged.type)
+                    assertEquals(newKey, staged.publicKey)
+                    assertEquals(radio, staged.targetRadioId)
+                }
+                val beforeCompletion = navigation.state.value
+                release.complete(if (olderFound) oldContact else null)
+                if (older != null) assertEquals(DeepLinkRouteOutcome.ContactLookupRejected, older.await())
+                else h.eventually("older chat contact lookup is rejected") { rejected.isCompleted }
+                assertEquals(beforeCompletion, navigation.state.value, "The older lookup must not change navigation")
+            }
         } finally { h.container.close() }
     }
 

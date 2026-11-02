@@ -404,13 +404,7 @@ class MergedAcceptance:
             result["publisher_run_id"], result["publisher_run_attempt"], WORKFLOW_PATH, base,
             ("workflow_dispatch",), review_identity=(wp_id, number, review_id), historical_attempt=True,
         )
-        for check in selected:
-            if (
-                check.get("app", {}).get("id") != suite["app"]["id"]
-                or check.get("external_id") != f"{expected.key}:{run['id']}:{run['run_attempt']}"
-                or check.get("details_url") != f"https://github.com/{expected.repository}/actions/runs/{run['id']}"
-            ):
-                raise PortError("Review check is not from the authenticated default-branch publisher")
+        native.verify_published_checks(selected, summary, expected, run, suite, number, review_id)
         reviews = self.backend.pages(f"{self.prefix}/pulls/{number}/reviews")
         actual = [review for review in reviews if review.get("id") == review_id]
         if len(actual) != 1 or timestamp(actual[0].get("submitted_at"), "source review") > merged_at:

@@ -911,6 +911,17 @@ After **supervised review and merge of the publisher**, dispatch the deployed wo
 gh workflow run android-parity-review.yml --ref main -f work_package=WP-xxx -f pull_request=<number> -f review_id=<actual-review-id>
 ```
 
+The documented direct-file `inspect` command establishes the `controller`
+package context after adding the controller directory to `sys.path`, so deferred
+relative imports work in file mode as well as `python -m controller.native_review`.
+An isolated subprocess regression reaches deferred staging and repair-receipt
+imports in both modes with network sockets disabled and GitHub/token environment
+variables removed. If an `ImportError` nevertheless occurs during publication
+after checks are created, the publisher completes those checks with failure and
+rethrows the original exception; an offline fake-check regression verifies this
+without mutating any live check. This source behavior does not itself establish a
+trusted review, publisher deployment or successful publication.
+
 Only this workflow may publish `parity-review` (and the legacy `gate-integrity` check); local
 `publish` fails before mutation. Publication creates in-progress checks first and
 records failures explicitly. Interrupted publication remains pending/failed, never

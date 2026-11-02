@@ -62,6 +62,8 @@ def executable_lines(script: str, *, expression_lines=()):
     lines = script.split("\n")
     if any("${{" in line and line.strip(" \t") not in expression_lines for line in lines):
         raise PortError("Workflow run script contains GitHub expression expansion")
+    if any(re.match(r"[ \t]*#requires", line, re.IGNORECASE) for line in lines):
+        raise PortError("Workflow run script contains a PowerShell #requires directive")
     return [
         line.strip(" \t") for line in lines
         if line.strip(" \t") and not line.lstrip(" \t").startswith("#")

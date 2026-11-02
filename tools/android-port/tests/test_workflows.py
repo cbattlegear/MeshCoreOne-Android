@@ -570,19 +570,55 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(kind=kind), self.assertRaises(PortError):
                 validate_candidate(parse_yaml(text), text)
 
+    def test_workflow_guards_reject_powershell_requires_directives_in_every_fixed_build_script(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for index, step in enumerate(original["jobs"]["build"]["steps"]):
+            if "run" not in step:
+                continue
+            for directive in (
+                "#requires -Modules WorkflowGuardRegressionOnly",
+                "#ReQuIrEs -mOdUlEs @{ ModuleName = 'WorkflowGuardRegressionOnly'; RequiredVersion = '1.0' }",
+                " \t#REQUIRES\t-MODULES ./WorkflowGuardRegressionOnly.psm1",
+                "\t#requires  -Modules\tWorkflowGuardRegressionOnly,OtherWorkflowGuardRegressionOnly",
+                "#requires -Version 7.0",
+                "#requires-not-a-directive -Modules WorkflowGuardRegressionOnly",
+            ):
+                for position in ("before", "after"):
+                    value = copy.deepcopy(original)
+                    changed = value["jobs"]["build"]["steps"][index]
+                    changed["run"] = (
+                        directive + "\n" + step["run"] if position == "before"
+                        else step["run"] + "\n" + directive + "\n"
+                    )
+                    text = yaml.safe_dump(value, sort_keys=False)
+                    parsed = parse_yaml(text)
+                    self.assertEqual(parsed["jobs"]["build"]["steps"][index]["run"], changed["run"])
+                    with self.subTest(step=index, directive=directive, position=position):
+                        with self.assertRaisesRegex(PortError, "#requires directive"):
+                            validate_candidate(parsed, text)
+
     def test_workflow_guards_allow_comments_and_indentation_without_treating_comments_as_commands(self):
         import yaml
 
         workflow, _ = self.read("android-ci.yml")
+        comments = (
+            " \t# Additional explanation\n"
+            "# requires -Modules WorkflowGuardRegressionOnly\n"
+            "#\trequires -Modules WorkflowGuardRegressionOnly\n"
+            "##requires -Modules WorkflowGuardRegressionOnly\n"
+            "# Note about #requires -Modules WorkflowGuardRegressionOnly\n\n"
+        )
         gradle = next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "gradle")
         gate = workflow["jobs"]["android-ci"]["steps"][0]
         scope = workflow["jobs"]["scope"]["steps"][1]
-        gradle["run"] = "# Additional explanation\n\n" + gradle["run"]
-        gate["run"] = "# Additional explanation\n\n" + gate["run"]
-        scope["run"] = "# Additional explanation\n\n" + scope["run"]
+        gradle["run"] = comments + gradle["run"]
+        gate["run"] = comments + gate["run"]
+        scope["run"] = comments + scope["run"]
         for step in workflow["jobs"]["build"]["steps"]:
             if "run" in step and step.get("id") != "gradle":
-                step["run"] = "# Additional explanation\n\n" + step["run"]
+                step["run"] = comments + step["run"]
         text = yaml.safe_dump(workflow, sort_keys=False)
         validate_candidate(parse_yaml(text), text)
 

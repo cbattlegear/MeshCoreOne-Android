@@ -258,10 +258,13 @@ required, and the command does not kill processes, reboot, install or run tests.
 
 The ledger transaction refuses every unrelated native/Gradle/JVM-slot,
 disposable or runtime-install owner. If the exact old `gradle-execution` row is
-still held, its path must match this host's local temporary execution directory and
-its recorded acquisition must predate the verified boot; the command archives its raw row before removing
-only that row. A missing row is recorded as missing, never recreated. A newer
-invocation, even with the same owner token, is refused. Repeating the operation
+still held, its execution directory must be directly under the current Python-selected
+temporary root (`tempfile.gettempdir()`), as with the launcher. Python considers
+`TMPDIR`, `TEMP`, `TMP` and platform fallbacks; recovery must use the same
+temporary-root configuration as the launcher, and a mismatch is refused. Its
+recorded acquisition must predate the verified boot; the command archives its raw
+row before removing only that row. A missing row is recorded as missing, never
+recreated. A newer invocation, even with the same owner token, is refused. Repeating the operation
 returns the original emergency audit while the lane remains quiescent; it refuses
 newer or unrelated owners instead of changing them. After an emergency audit,
 `recover --owner` and `check --owner` also refuse a reappeared same-token row

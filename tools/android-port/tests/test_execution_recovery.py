@@ -167,7 +167,8 @@ class ExecutionRecoveryTests(unittest.TestCase):
                 patch.object(recovery, "operator_identity", return_value={
                     "host": "fixture-host", "principal": "fixture-sid",
                 }), \
-                patch.dict(os.environ, {"TEMP": str(self.root)}):
+                patch.dict(os.environ, {"TEMP": str(self.root)}), \
+                patch.object(tempfile, "tempdir", str(self.root)):
             yield
 
     def test_emergency_recovery_needs_no_history_admission_or_supervisor(self):
@@ -365,6 +366,41 @@ class ExecutionRecoveryTests(unittest.TestCase):
         with self.ledger.transaction() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM execution_emergencies").fetchone()[0], 1)
 
+    def test_emergency_recovery_uses_launcher_temp_root_precedence_and_fallback(self):
+        observation, boundary = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        preferred = self.root / "preferred"
+        alternate = self.root / "alternate"
+        fallback = self.root / "fallback"
+        for directory in (preferred, alternate, fallback):
+            directory.mkdir()
+        missing = self.root / "missing"
+        cases = (
+            ("TMPDIR", preferred, alternate, fallback, preferred),
+            ("TEMP fallback", missing, alternate, fallback, alternate),
+            ("TMP fallback", missing, missing, fallback, fallback),
+        )
+        for index, (label, tmpdir, temp, tmp, expected) in enumerate(cases, 1):
+            with self.subTest(root=label), self.reboot_authority(observation), \
+                    patch.dict(os.environ, {
+                        "TMPDIR": str(tmpdir), "TEMP": str(temp), "TMP": str(tmp),
+                    }), patch.object(tempfile, "tempdir", None):
+                directory = Path(tempfile.mkdtemp(prefix="meshcore-execution-")).resolve()
+                self.assertEqual(directory.parent, expected.resolve())
+                token = f"{index:032x}"
+                owner = f"local-check:{token}"
+                payload = {
+                    **self.receipt["payload"], "token": token,
+                    "completion": str(directory / "cleanup.json"),
+                }
+                self.ledger.acquire_hard_lock("gradle-execution", owner, payload, boundary - 120)
+                with self.ledger.transaction() as connection:
+                    original = dict(connection.execute("SELECT * FROM hard_locks").fetchone())
+                result = self.ledger.emergency_recover(owner, "fixture-host")
+                self.assertTrue(result["emergency_reconciled"])
+                self.assertEqual(json.loads(result["audit"]["original_row"]), original)
+                self.assertEqual(self.ledger.hard_lock_records(), [])
+
     def test_emergency_recovery_rejects_foreign_or_malformed_retained_receipt(self):
         observation, boundary = self.reboot_fixture()
         self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
@@ -372,6 +408,9 @@ class ExecutionRecoveryTests(unittest.TestCase):
             {**self.receipt["payload"], "token": "b" * 32},
             {**self.receipt["payload"], "completion": "/tmp/foreign/cleanup.json"},
             {**self.receipt["payload"], "completion": str(self.root / "foreign" / "cleanup.json")},
+            {**self.receipt["payload"], "completion": str(
+                self.root / "foreign" / "meshcore-execution-wrong-root" / "cleanup.json"
+            )},
         ):
             with self.subTest(payload=payload):
                 self.ledger.acquire_hard_lock("gradle-execution", self.receipt["owner"], payload, boundary - 120)
@@ -379,6 +418,9 @@ class ExecutionRecoveryTests(unittest.TestCase):
                 with self.reboot_authority(observation), self.assertRaises(PortError):
                     self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
                 self.assertEqual(original, self.ledger.hard_lock_records())
+                with self.ledger.transaction() as connection:
+                    count = connection.execute("SELECT COUNT(*) FROM execution_emergencies").fetchone()[0]
+                self.assertEqual(count, 0)
                 self.ledger.release_hard_lock("gradle-execution", self.receipt["owner"])
 
     def test_emergency_recovery_reappeared_owner_and_future_boot_never_remove_work(self):

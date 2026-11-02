@@ -3,6 +3,7 @@ import math
 import os
 import re
 import sqlite3
+import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -1125,7 +1126,7 @@ class Ledger:
                 if not 0 < receipt["acquired"] < evidence["boot_timestamp"]:
                     raise PortError("Emergency recovery refuses an invocation acquired after the current boot")
                 completion = Path(receipt["payload"]["completion"])
-                temp = Path(os.environ.get("TEMP", ""))
+                temp = Path(tempfile.gettempdir())
                 if (
                     not temp.is_absolute() or completion.parent.parent != temp.resolve()
                     or not completion.parent.name.startswith("meshcore-execution-")

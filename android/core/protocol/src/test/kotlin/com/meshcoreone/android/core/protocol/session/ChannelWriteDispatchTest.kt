@@ -9,6 +9,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.Continuation
+import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import kotlin.test.*
@@ -237,6 +238,11 @@ class ChannelWriteDispatchTest {
         val cancelling = CountDownLatch(1)
         val actual = Job()
         val caller = object : Job by actual {
+            override fun <E : CoroutineContext.Element> get(key: CoroutineContext.Key<E>): E? {
+                @Suppress("UNCHECKED_CAST")
+                return if (key == Job) this as E else null
+            }
+
             override val isActive: Boolean
                 get() {
                     val snapshot = actual.isActive

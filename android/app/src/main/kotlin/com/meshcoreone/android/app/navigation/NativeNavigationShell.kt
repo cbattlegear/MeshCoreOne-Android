@@ -342,6 +342,9 @@ fun NativeNavigationShell(
             }
         }
         if (nodes != null) AppPendingContact(nodes, coordinator)
+        if (chats != null && state.selectedTab == AppTab.CHATS) {
+            AppPendingRoomAuthentication(chats, coordinator, state)
+        }
     }
 }
 

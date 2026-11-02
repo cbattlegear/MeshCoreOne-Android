@@ -27,7 +27,7 @@ class NotificationNavigationBinding(
     isCurrentSession: () -> Boolean = { true },
 ) : AutoCloseable {
     @Volatile private var active = true
-    private val generation = coordinator.state.value.generation
+    private val generation = coordinator.currentState.generation
     private val route: suspend (NotificationNavigationRequest) -> Unit = { request ->
         currentCoroutineContext()[NotificationNavigationReceipt]?.callbackStarted = true
         val outcome = coordinator.handleNotificationRequest(request, lookup, generation) { active && isCurrentSession() }

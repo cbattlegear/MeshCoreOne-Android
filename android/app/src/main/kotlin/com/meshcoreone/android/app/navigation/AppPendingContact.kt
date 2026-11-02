@@ -63,10 +63,15 @@ internal class ContactLinkConfirmation(
     private val operation = Mutex()
     val state = mutableState.asStateFlow()
 
-    private fun isCurrent(): Boolean = navigation.state.value.let {
-        isCurrentNavigationSession() && link.deliveryId != null &&
-            it.pendingContactLink?.deliveryId == link.deliveryId && it.generation == link.generation &&
-            (radio == null || session.currentRadioId() == radio)
+    private fun ownsDelivery(): Boolean = navigation.currentState.let {
+        link.deliveryId != null && it.pendingContactLink?.deliveryId == link.deliveryId && it.generation == link.generation
+    }
+
+    private fun isCurrent(): Boolean =
+        isCurrentNavigationSession() && ownsDelivery() && (radio == null || session.currentRadioId() == radio)
+
+    private fun reportDisconnected() {
+        if (ownsDelivery()) mutableState.update { it.copy(failure = UiText.Resource(C.contactsAddErrorNotConnected)) }
     }
 
     suspend fun load() {
@@ -81,6 +86,7 @@ internal class ContactLinkConfirmation(
                 "Contact lookup returned a mismatched identity"
             }
             if (isCurrent()) mutableState.update { it.copy(existing = existing, failure = null) }
+            else if (!isCurrentNavigationSession()) reportDisconnected()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -97,7 +103,11 @@ internal class ContactLinkConfirmation(
     }
 
     private suspend fun confirmCurrent(): Boolean {
-        if (!isCurrent() || state.value.loading || state.value.importing || state.value.failure != null) return false
+        if (state.value.loading || state.value.importing || state.value.failure != null) return false
+        if (!isCurrent()) {
+            if (!isCurrentNavigationSession()) reportDisconnected()
+            return false
+        }
         state.value.existing?.let { return navigation.completeContactLink(link, it, isCurrentNavigationSession) }
         val isCurrentSession = session.captureSessionValidity()
         val device = session.connectedDevice()
@@ -106,7 +116,7 @@ internal class ContactLinkConfirmation(
         if (!isCurrentSession() || device == null || device.radioId != radio || service == null || store == null ||
             session.connectionState() != DeviceConnectionState.READY
         ) {
-            mutableState.update { it.copy(failure = UiText.Resource(C.contactsAddErrorNotConnected)) }
+            reportDisconnected()
             return false
         }
         mutableState.update { it.copy(importing = true, failure = null) }
@@ -118,18 +128,18 @@ internal class ContactLinkConfirmation(
                 lastModified = dependencies.clock.wallNow.epochSecond.toUInt(),
             ))
             currentCoroutineContext().ensureActive()
-            if (!isCurrent()) return false
             if (!isCurrentSession()) {
-                mutableState.update { it.copy(failure = UiText.Resource(C.contactsAddErrorNotConnected)) }
+                reportDisconnected()
                 return false
             }
+            if (!isCurrent()) return false
             val added = store.fetchContact(device.radioId, link.publicKey)
             currentCoroutineContext().ensureActive()
-            if (!isCurrent()) return false
             if (!isCurrentSession()) {
-                mutableState.update { it.copy(failure = UiText.Resource(C.contactsAddErrorNotConnected)) }
+                reportDisconnected()
                 return false
             }
+            if (!isCurrent()) return false
             if (added == null) {
                 mutableState.update { it.copy(failure = UiText.Resource(C.contactsCommonErrorOccurred)) }
                 return false
@@ -143,12 +153,13 @@ internal class ContactLinkConfirmation(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: NodesContactFailure.ContactTableFull) {
-            mutableState.update { it.copy(failure = UiText.Format(
-                com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_add_error_nodelistfull,
-                listOf(UiFormatArgument.Integer(device.maxContacts.toLong())).snapshot(),
-            )) }
+            if (!isCurrentSession()) reportDisconnected()
+            else if (isCurrent()) mutableState.update { it.copy(failure = UiText.Format(
+                    com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_add_error_nodelistfull,
+                    listOf(UiFormatArgument.Integer(device.maxContacts.toLong())).snapshot(),
+                )) }
         } catch (failure: Exception) {
-            report(failure)
+            if (!isCurrentSession()) reportDisconnected() else report(failure)
         } finally {
             mutableState.update { it.copy(importing = false) }
         }
@@ -159,7 +170,8 @@ internal class ContactLinkConfirmation(
         java.util.logging.Logger.getLogger("com.mc1.Navigation").log(
             java.util.logging.Level.WARNING, "Contact-link confirmation failed", failure,
         )
-        if (isCurrent()) mutableState.update { it.copy(failure = UiErrorMapper().message(failure)) }
+        if (!isCurrentNavigationSession()) reportDisconnected()
+        else if (isCurrent()) mutableState.update { it.copy(failure = UiErrorMapper().message(failure)) }
     }
 
     fun dismiss(): Boolean = navigation.completeContactLink(link)

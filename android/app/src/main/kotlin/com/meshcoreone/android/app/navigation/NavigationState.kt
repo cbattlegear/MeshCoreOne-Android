@@ -7,6 +7,7 @@ package com.meshcoreone.android.app.navigation
 
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.FeatureId
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
@@ -128,6 +129,9 @@ data class NavigationState(
     val pendingChannel: ChannelDTO? = null,
     val pendingRoomSession: RemoteNodeSessionDTO? = null,
     val pendingRoomAuthentication: RemoteNodeSessionDTO? = null,
+    internal val roomAuthenticationDeliveryId: Long? = null,
+    internal val roomAuthenticationGeneration: Long? = null,
+    internal val roomAuthenticationSessionToken: SessionToken? = null,
     val pendingDiscoveryNavigation: Boolean = false,
     val pendingContactDetail: ContactDTO? = null,
     val selectedContact: ContactDTO? = null,
@@ -142,9 +146,9 @@ data class NavigationState(
     val pendingHashtag: HashtagJoinRequest? = null,
     val radioId: RadioId? = null,
     val generation: Long = 0,
+    internal val boundSessionToken: SessionToken? = null,
     val initialContactLinkGeneration: Long? = null,
     internal val contactLookupRevision: Long = 0,
-    internal val commitRevision: Long = 0,
     val failure: NavigationFailure? = null,
     val navigationReady: Boolean = false,
     val pendingNotifications: SnapshotList<PendingNotificationRoute> = SnapshotList.empty(),
@@ -156,15 +160,27 @@ data class NavigationState(
                 stack.all { it.ownerTab == tab }
         }) { "Every stack must start at its matching root" }
         val ids = stacks.values.flatten().map { it.id } + pendingNotifications.map { it.id } +
-            listOfNotNull(pendingContactLink?.deliveryId)
+            listOfNotNull(pendingContactLink?.deliveryId, roomAuthenticationDeliveryId)
         require(ids.distinct().size == ids.size && ids.all { it >= 0 && it < nextEntryId }) {
             "Entry identities must be unique, nonnegative and below the next identity"
+        }
+        require(
+            roomAuthenticationDeliveryId == null && roomAuthenticationGeneration == null ||
+                roomAuthenticationDeliveryId != null && roomAuthenticationGeneration != null &&
+                pendingRoomAuthentication != null && roomAuthenticationGeneration in 0L..generation,
+        ) { "A room authentication delivery requires a pending room and a valid generation" }
+        require(
+            roomAuthenticationSessionToken == null ||
+                roomAuthenticationDeliveryId != null && pendingRoomAuthentication?.radioId == roomAuthenticationSessionToken.radioId &&
+                roomAuthenticationSessionToken == boundSessionToken,
+        ) { "A room authentication owner must match the pending room and bound session" }
+        require(boundSessionToken == null || boundSessionToken.radioId == radioId) {
+            "The bound session must match the navigation radio"
         }
         require(generation >= 0 && pendingNotifications.all { it.generation == null || it.generation >= 0 }) {
             "Connection generations must be nonnegative"
         }
         require(contactLookupRevision >= 0) { "Contact lookup revision must be nonnegative" }
-        require(commitRevision >= 0) { "Navigation commit revision must be nonnegative" }
         require(initialContactLinkGeneration == null || initialContactLinkGeneration in 0 until generation) {
             "Initial contact context must precede its assigned radio generation"
         }

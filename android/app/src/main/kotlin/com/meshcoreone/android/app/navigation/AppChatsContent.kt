@@ -91,8 +91,9 @@ internal fun AppChatsContent(
             onOpenChat = coordinator::openChat,
             onClearSelection = { coordinator.back() },
             onNewChannel = { newChannel = true },
-            onRoomAuthenticationRequested = { coordinator.openChat(ChatRoute.Room(it)) },
+            onRoomAuthenticationRequested = coordinator::requestRoomAuthentication,
             failureText = { UiErrorMapper().message(it) },
+            consumePendingRoomAuthentication = false,
         )
         return
     }
@@ -141,22 +142,6 @@ private fun AppChatConversation(
                     route = router::route,
                     openExternal = uriHandler::openUri,
                     navigateToContact = coordinator::navigateToContactDetail,
-                )
-            }
-            if (state.pendingRoomAuthentication?.id == selected.session.id &&
-                state.pendingRoomAuthentication?.radioId == selected.session.radioId
-            ) {
-                val roomState by holder.state.collectAsState()
-                LaunchedEffect(holder) { holder.prepareAuthentication() }
-                com.meshcoreone.android.feature.chats.rooms.RoomAuthenticationSheet(
-                    roomState,
-                    onDismiss = coordinator::clearPendingRoomAuthentication,
-                    onAuthenticate = { password, rememberPassword ->
-                        scope.launch {
-                            holder.authenticate(password, rememberPassword)
-                            if (holder.state.value.session.isConnected) coordinator.clearPendingRoomAuthentication()
-                        }
-                    },
                 )
             }
             val preferences = feature.content?.rendering?.collectAsState()?.value

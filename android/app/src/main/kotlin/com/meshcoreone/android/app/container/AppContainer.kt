@@ -578,9 +578,11 @@ private class ContainerAppStatePlatform(
     private var generation: Long? = null
     private var binding: NotificationNavigationBinding? = null
 
-    fun isReadyFor(current: com.meshcoreone.android.app.state.AppSession): Boolean =
-        isCurrentSession(current) && session === current && binding != null && generation == navigation.state.value.generation &&
-            navigation.state.value.navigationReady
+    fun isReadyFor(current: com.meshcoreone.android.app.state.AppSession): Boolean {
+        val state = navigation.currentState
+        return isCurrentSession(current) && session === current && binding != null && generation == state.generation &&
+            state.boundSessionToken == current.token && state.navigationReady
+    }
 
     override fun configureNotificationNavigation(
         session: com.meshcoreone.android.app.state.AppSession,
@@ -588,12 +590,16 @@ private class ContainerAppStatePlatform(
     ) {
         if (!isCurrentSession(session)) return
         delegate.configureNotificationNavigation(session, connectedDevice)
-        if (this.session !== session || generation != navigation.state.value.generation) {
+        val current = navigation.currentState
+        if (this.session !== session || generation != current.generation || current.boundSessionToken != session.token) {
             binding?.close()
-            if (this.session !== session) {
-                navigation.bindNotificationSession(session.token.radioId, connectedDevice()?.publicKey)
-            } else if (navigation.state.value.radioId != session.token.radioId) {
-                navigation.replaceRadio(session.token.radioId)
+            binding = null
+            if (this.session !== session || current.boundSessionToken != session.token ||
+                current.radioId != session.token.radioId
+            ) {
+                if (!navigation.bindNotificationSession(session.token.radioId, connectedDevice()?.publicKey, session.token) {
+                    isCurrentSession(session)
+                }) return
             }
             binding = NotificationNavigationBinding(
                 session.notificationService, navigation, lookup, connectedDevice,
@@ -607,7 +613,7 @@ private class ContainerAppStatePlatform(
                 isCurrentSession = { isCurrentSession(session) },
             )
             this.session = session
-            generation = navigation.state.value.generation
+            generation = navigation.currentState.generation
         }
         navigation.setNavigationReady(true)
         onNavigationReady()

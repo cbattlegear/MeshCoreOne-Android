@@ -6,8 +6,11 @@ import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -62,14 +65,38 @@ class NavigationStateTest {
     @Test fun delayedPublicationNeverRegressesTheNewestCommittedState() {
         val initial = NavigationState()
         val store = NavigationStateStore(initial)
-        assertTrue(store.compareAndSet(initial, initial.copy(selectedTab = AppTab.NODES), publish = false))
-        val first = store.value
-        assertTrue(store.compareAndSet(first, first.copy(selectedTab = AppTab.MAP), publish = false))
-
-        store.publish()
-        store.publish()
+        val original = store.snapshot()
+        val first = NavigationStateStore.Publication()
+        val second = NavigationStateStore.Publication()
+        assertTrue(store.compareAndSet(original, initial.copy(selectedTab = AppTab.NODES), first))
+        val afterFirst = store.snapshot()
+        assertTrue(store.compareAndSet(afterFirst, afterFirst.value.copy(selectedTab = AppTab.MAP), second))
+        store.release(second)
+        assertSame(initial, store.state.value)
+        store.release(first)
         assertEquals(AppTab.MAP, store.state.value.selectedTab)
-        assertFalse(store.compareAndSet(initial, initial.copy(selectedTab = AppTab.TOOLS)))
+        assertFalse(store.compareAndSet(original, initial.copy(selectedTab = AppTab.TOOLS)))
+    }
+
+    @Test fun ordinaryUpdateCannotPublishAnUnreleasedGuardedCommit() {
+        val initial = NavigationState()
+        val store = NavigationStateStore(initial)
+        val guarded = NavigationStateStore.Publication()
+        assertTrue(store.compareAndSet(store.snapshot(), initial.copy(selectedTab = AppTab.NODES), guarded))
+        store.update { it.copy(selectedTab = AppTab.MAP) }
+        assertSame(initial, store.state.value)
+        store.release(guarded)
+        assertEquals(AppTab.MAP, store.state.value.selectedTab)
+    }
+
+    @Test fun staleSnapshotCannotCommitAfterAnEqualStateReturns() {
+        val initial = NavigationState()
+        val store = NavigationStateStore(initial)
+        val stale = store.snapshot()
+        store.update { it.copy(selectedTab = AppTab.NODES) }
+        store.update { initial }
+        assertSame(initial, store.value)
+        assertFalse(store.compareAndSet(stale, initial.copy(selectedTab = AppTab.MAP)))
     }
 
     @Test fun guardedNavigationPublishesOnlyAfterReleasingTheLifecycleBoundary() = runTest {
@@ -94,6 +121,19 @@ class NavigationStateTest {
         probe.join()
         collector.join()
         assertEquals(contact, n.state.value.pendingContactDetail)
+    }
+
+    @Test fun reentrantCollectorImmediatelySeesItsNewerPublishedState() = runTest {
+        val n = NavigationCoordinator()
+        val observed = CompletableDeferred<AppTab>()
+        val collector = launch(Dispatchers.Unconfined) {
+            n.state.drop(1).first()
+            n.selectTab(AppTab.MAP)
+            observed.complete(n.state.value.selectedTab)
+        }
+        n.selectTab(AppTab.NODES)
+        assertEquals(AppTab.MAP, observed.await())
+        collector.join()
     }
 
     @Test fun fiveTabsRetainIndependentStacksAndBackReturnsToChatsBeforeExit() {
@@ -292,6 +332,85 @@ class NavigationStateTest {
             assertNull(n.state.value.failure)
         }
     }
+    @Test fun roomAuthenticationPreservesThePriorStackAndDistinguishesIdenticalDeliveries() = runTest {
+        for (width in listOf(390f, 950f)) {
+            val n = NavigationCoordinator()
+            n.replaceRadio(radio)
+            n.measureWindow(width)
+            n.navigateToChat(contact)
+            val priorStack = n.state.value.stacks.getValue(AppTab.CHATS)
+            val disconnected = room.copy(isConnected = false)
+            val payload = NotificationPayload.RoomMessage(disconnected.name, EntityKey(radio, disconnected.id), message)
+
+            assertEquals(NavigationOutcome.Navigated, n.handleNotification(payload, lookup(room = disconnected)))
+            val first = n.state.value
+            val firstId = requireNotNull(first.roomAuthenticationDeliveryId)
+            assertEquals(priorStack, first.stacks.getValue(AppTab.CHATS))
+            assertEquals(ChatSelection.Direct(contact), first.chatsSelectedRoute)
+            assertTrue(n.dismissRoomAuthentication(firstId))
+            assertEquals(priorStack, n.state.value.stacks.getValue(AppTab.CHATS))
+
+            n.handleNotification(payload, lookup(room = disconnected))
+            val replacedId = requireNotNull(n.state.value.roomAuthenticationDeliveryId)
+            n.handleNotification(payload, lookup(room = disconnected))
+            val latest = n.state.value
+            val latestId = requireNotNull(latest.roomAuthenticationDeliveryId)
+            assertNotEquals(replacedId, latestId)
+            assertFalse(n.dismissRoomAuthentication(replacedId))
+            assertFalse(n.completeRoomAuthentication(
+                replacedId, requireNotNull(latest.roomAuthenticationGeneration), disconnected.copy(isConnected = true),
+            ) { true })
+            assertFalse(n.completeRoomAuthentication(
+                latestId, requireNotNull(latest.roomAuthenticationGeneration),
+                disconnected.copy(isConnected = true, publicKey = Bytes(ByteArray(32) { 0x7f }),
+            ) { true })
+            assertEquals(latestId, n.state.value.roomAuthenticationDeliveryId)
+            val authenticated = disconnected.copy(isConnected = true)
+            assertTrue(n.completeRoomAuthentication(
+                latestId, requireNotNull(latest.roomAuthenticationGeneration), authenticated,
+            ) { true })
+            assertNull(n.state.value.pendingRoomAuthentication)
+            assertEquals(ChatSelection.Room(authenticated), n.state.value.chatsSelectedRoute)
+            assertTrue(n.back())
+            assertEquals(priorStack, n.state.value.stacks.getValue(AppTab.CHATS))
+            assertEquals(ChatSelection.Direct(contact), n.state.value.chatsSelectedRoute)
+        }
+    }
+
+    @Test fun roomAuthenticationIsRetiredOrRestagedWhenItsRadioSessionChanges() {
+        val n = NavigationCoordinator()
+        val firstToken = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), radio)
+        val secondToken = firstToken.copy(generation = Generation(2))
+        assertTrue(n.bindNotificationSession(radio, null, firstToken))
+        val disconnected = room.copy(isConnected = false)
+        n.requestRoomAuthentication(disconnected)
+        val original = n.state.value
+        val oldId = requireNotNull(original.roomAuthenticationDeliveryId)
+        val oldGeneration = requireNotNull(original.roomAuthenticationGeneration)
+        assertEquals(firstToken, original.roomAuthenticationSessionToken)
+
+        assertFalse(n.bindNotificationSession(radio, null, secondToken) { false })
+        assertEquals(original, n.state.value)
+        assertTrue(n.bindNotificationSession(radio, null, secondToken))
+        val rebound = n.state.value
+        val newId = requireNotNull(rebound.roomAuthenticationDeliveryId)
+        assertNotEquals(oldId, newId)
+        assertEquals(rebound.generation, rebound.roomAuthenticationGeneration)
+        assertEquals(secondToken, rebound.roomAuthenticationSessionToken)
+        assertFalse(n.completeRoomAuthentication(oldId, oldGeneration, disconnected.copy(isConnected = true)) { true })
+        assertFalse(n.completeRoomAuthentication(newId, rebound.generation, disconnected.copy(isConnected = true)) { false })
+        assertEquals(newId, n.state.value.roomAuthenticationDeliveryId)
+        n.manuallyDisconnect()
+        assertNull(n.state.value.pendingRoomAuthentication)
+        assertNull(n.state.value.boundSessionToken)
+        assertFalse(n.dismissRoomAuthentication(newId))
+
+        n.requestRoomAuthentication(disconnected)
+        n.replaceRadio(otherRadio)
+        assertNull(n.state.value.pendingRoomAuthentication)
+        assertNull(n.state.value.roomAuthenticationDeliveryId)
+    }
+
     @Test fun reactionPrioritizesContactThenFallsBackToChannelAndPreservesMessageIdentity() = runTest {
         val request = NotificationPayload.Reaction(message, EntityKey(radio, contact.id), channel.index, radio)
         val n = NavigationCoordinator(); n.handleNotification(request, lookup())

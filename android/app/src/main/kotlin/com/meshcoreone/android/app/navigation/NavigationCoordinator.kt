@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
@@ -46,19 +47,24 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     internal fun retireBinding(action: () -> Unit) = commitBoundary(action)
 
     private fun commitIfCurrent(
-        expected: NavigationState, next: NavigationState, isCurrent: () -> Boolean,
+        expected: NavigationStateStore.Snapshot, next: NavigationState, isCurrent: () -> Boolean,
     ): Boolean? {
         var committed: Boolean? = null
-        commitBoundary {
-            if (isCurrent()) committed = mutableState.compareAndSet(expected, next, publish = false)
+        val publication = NavigationStateStore.Publication()
+        try {
+            commitBoundary {
+                if (isCurrent()) committed = mutableState.compareAndSet(expected, next, publication)
+            }
+        } finally {
+            if (committed == true) mutableState.release(publication)
         }
-        if (committed == true) mutableState.publish()
         return committed
     }
 
     // AndroidOnly: WP-302 Called only by a newly created host, not on resize or connection changes.
     fun restoreHostState(restored: NavigationState) {
-        check(mutableState.compareAndSet(NavigationState(), restored)) {
+        val current = mutableState.snapshot()
+        check(current.revision == 0L && current.value == NavigationState() && mutableState.compareAndSet(current, restored)) {
             "A live navigation host cannot be overwritten by restoration"
         }
     }
@@ -120,6 +126,69 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         )
     }
 
+    fun requestRoomAuthentication(session: RemoteNodeSessionDTO) = mutableState.update { current ->
+        when {
+            !session.isRoom -> current.copy(failure = NavigationFailure.WrongTarget(NavigationTarget.ROOM))
+            current.radioId != null && current.radioId != session.radioId ->
+                current.copy(failure = NavigationFailure.WrongRadio(current.radioId, session.radioId))
+            else -> current.select(AppTab.CHATS).copy(
+                pendingChatContact = null, pendingChannel = null, pendingRoomSession = null, failure = null,
+            ).stageRoomAuthentication(session)
+        }
+    }
+
+    private fun NavigationState.stageRoomAuthentication(session: RemoteNodeSessionDTO) = copy(
+        pendingRoomAuthentication = session,
+        roomAuthenticationDeliveryId = nextEntryId,
+        roomAuthenticationGeneration = generation,
+        roomAuthenticationSessionToken = boundSessionToken,
+        nextEntryId = Math.incrementExact(nextEntryId),
+    )
+
+    private fun NavigationState.withoutRoomAuthentication() = copy(
+        pendingRoomAuthentication = null,
+        roomAuthenticationDeliveryId = null,
+        roomAuthenticationGeneration = null,
+        roomAuthenticationSessionToken = null,
+    )
+
+    internal fun dismissRoomAuthentication(deliveryId: Long): Boolean {
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
+            if (current.roomAuthenticationDeliveryId != deliveryId) return false
+            if (mutableState.compareAndSet(snapshot, current.withoutRoomAuthentication())) return true
+        }
+    }
+
+    internal fun completeRoomAuthentication(
+        deliveryId: Long,
+        generation: Long,
+        session: RemoteNodeSessionDTO,
+        isCurrentSession: () -> Boolean,
+    ): Boolean {
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
+            val pending = current.pendingRoomAuthentication
+            if (!isCurrentSession() || current.roomAuthenticationDeliveryId != deliveryId ||
+                current.roomAuthenticationGeneration != generation || current.generation != generation ||
+                pending == null || !session.isConnected || !session.isRoom ||
+                session.radioId != pending.radioId || session.publicKey != pending.publicKey ||
+                current.radioId != null && current.radioId != session.radioId
+            ) return false
+            val selection = ChatSelection.Room(session)
+            val next = current.withoutRoomAuthentication()
+                .push(AppTab.CHATS, NavigationDestination.Chat(selection))
+                .copy(pendingRoomSession = session, chatsSelectedRoute = selection, tabBarVisible = false)
+            when (commitIfCurrent(snapshot, next, isCurrentSession)) {
+                true -> return true
+                null -> return false
+                false -> Unit
+            }
+        }
+    }
+
     fun navigateToDiscovery() = mutableState.update {
         it.push(AppTab.NODES, NavigationDestination.Discovery).copy(
             pendingDiscoveryNavigation = true, nodesShowingDiscovery = true, tabBarVisible = true,
@@ -163,12 +232,13 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     internal fun beginContactLinkLookup(expectedGeneration: Long): Long? {
         while (true) {
-            val current = mutableState.value
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
             val initialAssignment = current.initialContactLinkGeneration == expectedGeneration &&
                 current.generation == Math.incrementExact(expectedGeneration)
             if (current.generation != expectedGeneration && !initialAssignment) return null
             val revision = Math.incrementExact(current.contactLookupRevision)
-            if (mutableState.compareAndSet(current, current.copy(contactLookupRevision = revision))) return revision
+            if (mutableState.compareAndSet(snapshot, current.copy(contactLookupRevision = revision))) return revision
         }
     }
 
@@ -182,7 +252,8 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         isCurrentSession: () -> Boolean = { true },
     ): Boolean {
         while (true) {
-            val current = mutableState.value
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
             val initialAssignment = current.initialContactLinkGeneration == expectedGeneration &&
                 current.generation == Math.incrementExact(expectedGeneration)
             val radio = if (initialAssignment && targetRadioId == null) current.radioId else targetRadioId
@@ -202,7 +273,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                     nodesShowingDiscovery = false,
                 )
             }.copy(contactLookupRevision = Math.incrementExact(current.contactLookupRevision))
-            when (commitIfCurrent(current, next, isCurrentSession)) {
+            when (commitIfCurrent(snapshot, next, isCurrentSession)) {
                 true -> return failure == null
                 null -> return false
                 false -> Unit
@@ -215,7 +286,8 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         link: ContactLinkRequest, contact: ContactDTO? = null, isCurrentSession: () -> Boolean = { true },
     ): Boolean {
         while (true) {
-            val current = mutableState.value
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
             if (!isCurrentSession() || link.deliveryId == null || current.pendingContactLink?.deliveryId != link.deliveryId ||
                 current.generation != link.generation ||
                 contact != null && (contact.publicKey != link.publicKey ||
@@ -227,7 +299,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                     nodesShowingDiscovery = false,
                 )
             }
-            when (commitIfCurrent(current, next, isCurrentSession)) {
+            when (commitIfCurrent(snapshot, next, isCurrentSession)) {
                 true -> return true
                 null -> return false
                 false -> Unit
@@ -241,7 +313,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     fun clearPendingNavigation() = mutableState.update { it.copy(pendingChatContact = null) }
     fun clearPendingRoomNavigation() = mutableState.update { it.copy(pendingRoomSession = null) }
-    fun clearPendingRoomAuthentication() = mutableState.update { it.copy(pendingRoomAuthentication = null) }
+    fun clearPendingRoomAuthentication() = mutableState.update { it.withoutRoomAuthentication() }
     fun clearPendingChannelNavigation() = mutableState.update { it.copy(pendingChannel = null) }
     fun clearPendingDiscoveryNavigation() = mutableState.update { it.copy(pendingDiscoveryNavigation = false) }
     fun clearPendingScrollToMessage() = mutableState.update { it.copy(pendingScrollToMessageID = null) }
@@ -260,10 +332,11 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     fun enqueueNotification(payload: NotificationPayload, manualAddContacts: Boolean = false): Long {
         val request = NotificationNavigationRequest.fromPayload(payload, manualAddContacts)
         while (true) {
-            val current = mutableState.value
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
             val generation = if (!current.navigationReady && current.radioId == null) null else current.generation
             val pending = PendingNotificationRoute(current.nextEntryId, generation, request)
-            if (mutableState.compareAndSet(current, current.copy(
+            if (mutableState.compareAndSet(snapshot, current.copy(
                 nextEntryId = Math.incrementExact(current.nextEntryId),
                 pendingNotifications = (current.pendingNotifications + pending).snapshot(),
             ))) return pending.id
@@ -299,21 +372,40 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     fun replaceRadio(radioId: RadioId?) = mutableState.update { it.replaceRadioState(radioId) }
 
     // Native adaptation: A new session always retires old callbacks, even for the same radio.
-    fun bindNotificationSession(radioId: RadioId, localPublicKey: Bytes?) = mutableState.update { current ->
-        val eligible = current.pendingContactLink?.takeIf {
-            (current.radioId == null || current.radioId == radioId) &&
-                it.generation == current.generation && (it.targetRadioId == null || it.targetRadioId == radioId) &&
-                it.publicKey != localPublicKey
+    fun bindNotificationSession(
+        radioId: RadioId,
+        localPublicKey: Bytes?,
+        token: SessionToken? = null,
+        isCurrentSession: () -> Boolean = { true },
+    ): Boolean {
+        require(token == null || token.radioId == radioId) { "Session token must match the navigation radio" }
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
+            val eligible = current.pendingContactLink?.takeIf {
+                (current.radioId == null || current.radioId == radioId) &&
+                    it.generation == current.generation && (it.targetRadioId == null || it.targetRadioId == radioId) &&
+                    it.publicKey != localPublicKey
+            }
+            val eligibleRoom = current.pendingRoomAuthentication?.takeIf {
+                (current.radioId == null || current.radioId == radioId) && it.radioId == radioId && it.isRoom
+            }
+            val next = when {
+                current.radioId == radioId -> current.withoutRoomAuthentication().copy(
+                    generation = Math.incrementExact(current.generation), navigationReady = false, pendingContactLink = null,
+                    initialContactLinkGeneration = null, boundSessionToken = token,
+                )
+                current.radioId == null -> current.bindInitialRadioState(radioId).copy(boundSessionToken = token)
+                else -> current.replaceRadioState(radioId).copy(navigationReady = false, boundSessionToken = token)
+            }
+            val withContact = if (eligible == null) next else next.stageContactLink(eligible, radioId)
+            val withRoom = if (eligibleRoom == null) withContact else withContact.stageRoomAuthentication(eligibleRoom)
+            when (commitIfCurrent(snapshot, withRoom, isCurrentSession)) {
+                null -> return false
+                true -> return true
+                false -> Unit
+            }
         }
-        val next = when {
-            current.radioId == radioId -> current.copy(
-                generation = Math.incrementExact(current.generation), navigationReady = false, pendingContactLink = null,
-                initialContactLinkGeneration = null,
-            )
-            current.radioId == null -> current.bindInitialRadioState(radioId)
-            else -> current.replaceRadioState(radioId).copy(navigationReady = false)
-        }
-        if (eligible == null) next else next.stageContactLink(eligible, radioId)
     }
 
     private fun NavigationState.bindInitialRadioState(radioId: RadioId): NavigationState {
@@ -341,7 +433,8 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             pendingChatContact = pendingChatContact?.takeIf { it.radioId == radioId },
             pendingChannel = pendingChannel?.takeIf { it.radioId == radioId },
             pendingRoomSession = pendingRoomSession?.takeIf { it.radioId == radioId },
-            pendingRoomAuthentication = pendingRoomAuthentication?.takeIf { it.radioId == radioId },
+            pendingRoomAuthentication = null, roomAuthenticationDeliveryId = null, roomAuthenticationGeneration = null,
+            roomAuthenticationSessionToken = null,
             pendingContactDetail = pendingContactDetail?.takeIf { it.radioId == radioId },
             pendingScrollToMessageID = pendingScrollToMessageID.takeIf { chats != null },
         )
@@ -349,21 +442,26 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     private fun NavigationState.replaceRadioState(radioId: RadioId?) =
         clearRadioSelection(this).copy(
-            radioId = radioId, generation = Math.incrementExact(generation),
+            radioId = radioId, generation = Math.incrementExact(generation), boundSessionToken = null,
             initialContactLinkGeneration = null,
             pendingContactLink = null, pendingChannelLink = null, pendingHashtag = null,
             pendingChatContact = null, pendingChannel = null, pendingRoomSession = null,
-            pendingRoomAuthentication = null, pendingContactDetail = null,
+            pendingRoomAuthentication = null, roomAuthenticationDeliveryId = null, roomAuthenticationGeneration = null,
+            roomAuthenticationSessionToken = null,
+            pendingContactDetail = null,
             pendingDiscoveryNavigation = false, pendingScrollToMessageID = null, pendingMapFocus = null,
         )
 
     fun manuallyDisconnect() = mutableState.update {
-        clearDeviceSelection(it).copy(generation = Math.incrementExact(it.generation))
+        clearDeviceSelection(it).withoutRoomAuthentication().copy(
+            generation = Math.incrementExact(it.generation), boundSessionToken = null,
+        )
     }
 
     fun back(): Boolean {
         while (true) {
-            val current = mutableState.value
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
             if (!current.canGoBack) return false
             val next = if (current.activeStack.size == 1) current.select(AppTab.CHATS)
                 else {
@@ -390,7 +488,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                         pendingDiscoveryNavigation = if (current.selectedTab == AppTab.NODES) false else current.pendingDiscoveryNavigation,
                     )
                 }
-            if (mutableState.compareAndSet(current, next)) return true
+            if (mutableState.compareAndSet(snapshot, next)) return true
         }
     }
 
@@ -443,13 +541,13 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         resolved: Resolved, generation: Long, isCurrentSession: () -> Boolean = { true },
     ): NavigationOutcome {
         while (true) {
-            val current = mutableState.value
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
             if (current.generation != generation || !isCurrentSession()) {
                 return NavigationOutcome.Failed(NavigationFailure.StaleGeneration)
             }
-            val delivery = if (resolved is Resolved.Failure) current else current.copy(
+            val delivery = if (resolved is Resolved.Failure) current else current.withoutRoomAuthentication().copy(
                 pendingChatContact = null, pendingChannel = null, pendingRoomSession = null,
-                pendingRoomAuthentication = null,
             )
             val next = when (resolved) {
                     is Resolved.Chat -> {
@@ -474,7 +572,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                                 pendingRoomSession = resolved.session, chatsSelectedRoute = selection, tabBarVisible = false,
                             )
                         } else {
-                            delivery.select(AppTab.CHATS).copy(pendingRoomAuthentication = resolved.session, failure = null)
+                            delivery.select(AppTab.CHATS).copy(failure = null).stageRoomAuthentication(resolved.session)
                         }
                     }
                     is Resolved.Contact -> delivery.push(
@@ -486,7 +584,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                     is Resolved.Fallback -> delivery.select(AppTab.NODES).copy(failure = resolved.failure)
                     is Resolved.Failure -> current.copy(failure = resolved.failure)
             }
-            when (commitIfCurrent(current, next, isCurrentSession)) {
+            when (commitIfCurrent(snapshot, next, isCurrentSession)) {
                 null -> return NavigationOutcome.Failed(NavigationFailure.StaleGeneration)
                 false -> continue
                 true -> {
@@ -603,6 +701,10 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 it is NavigationDestination.Chat || it is NavigationDestination.ContactDetail ||
                     it is NavigationDestination.RemoteNode ||
                     it == NavigationDestination.Discovery
-            }.copy(selectedContact = null, nodesShowingDiscovery = false, chatsSelectedRoute = null)
+            }.copy(
+                selectedContact = null, nodesShowingDiscovery = false, chatsSelectedRoute = null,
+                pendingRoomAuthentication = null, roomAuthenticationDeliveryId = null, roomAuthenticationGeneration = null,
+                roomAuthenticationSessionToken = null, boundSessionToken = null,
+            )
     }
 }

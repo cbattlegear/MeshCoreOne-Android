@@ -695,7 +695,31 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         )
     }
 
-    fun room(room: RemoteNodeSessionDTO): RoomConversationDependencies = object : RoomConversationDependencies {
+    internal fun captureNavigationSession(token: com.meshcoreone.android.core.contracts.domain.SessionToken?): () -> Boolean {
+        val initiatingSession = token?.let { expected -> container.sessions.current?.takeIf { it.token == expected } }
+        return { initiatingSession != null && container.isCurrentSession(initiatingSession) }
+    }
+
+    internal fun roomForAuthentication(
+        room: RemoteNodeSessionDTO,
+        token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+        isCurrentSession: () -> Boolean,
+    ): RoomConversationDependencies {
+        val initiatingSession = token?.let { expected -> container.sessions.current?.takeIf { it.token == expected } }
+        return room(room) {
+            if (initiatingSession == null || initiatingSession.token.radioId != room.radioId || !isCurrentSession()) {
+                throw MessageServiceException(MessageServiceError.NotConnected)
+            }
+            initiatingSession
+        }
+    }
+
+    fun room(room: RemoteNodeSessionDTO): RoomConversationDependencies = room(room) { session(room.radioId) }
+
+    private fun room(
+        room: RemoteNodeSessionDTO,
+        joinSession: () -> RadioSessionContainer,
+    ): RoomConversationDependencies = object : RoomConversationDependencies {
         private fun roomKey() = EntityKey(room.radioId, room.id)
         override val data = object : RoomConversationDataSource {
             override suspend fun fetchMessages(session: RemoteNodeSessionDTO) =
@@ -711,7 +735,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
         override val service = object : RoomConversationService {
             override suspend fun join(contact: ContactDTO, password: String?, rememberPassword: Boolean) =
-                session(room.radioId).roomServerService.joinRoom(
+                joinSession().roomServerService.joinRoom(
                     room.radioId, contact, password, rememberPassword, contact.outPathLength,
                 )
             override suspend fun reconnect(session: RemoteNodeSessionDTO) =

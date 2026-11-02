@@ -331,6 +331,27 @@ class ChatListActionsTest {
     }
 
     @Test
+    fun `room taps and pending requests reach the current authentication owner synchronously`() = scenario {
+        val rig = Rig(this)
+        val lounge = room("Lounge", isConnected = false)
+        val requests = mutableListOf<com.meshcoreone.android.core.model.RemoteNodeSessionDTO>()
+        val actions = ChatListActions(
+            rig.holder, rig.deps, scope, { rig.navigated += it }, { rig.cleared += it },
+            requestRoomAuthentication = {
+                assertNull(rig.deps.navigation.pendingRoomAuthentication.value)
+                requests += it
+            },
+        )
+        actions.open(ChatRoute.Room(lounge))
+        assertEquals(listOf(lounge), requests)
+        assertTrue(rig.navigated.isEmpty())
+        rig.deps.navigation.pendingRoomAuthentication.value = lounge
+        actions.consumePendingRoomAuthentication()
+        assertEquals(listOf(lounge, lounge), requests)
+        assertNull(rig.holder.state.value.roomToAuthenticate)
+    }
+
+    @Test
     fun `offline announcement needs a disconnected radio that is known`() = scenario {
         val rig = Rig(this)
         assertFalse(rig.actions.shouldAnnounceOfflineState())

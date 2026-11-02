@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
@@ -41,6 +42,7 @@ import com.meshcoreone.android.core.runtime.SystemRuntimeClock
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ChatLinkEnvironment
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
+import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesSession
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
@@ -68,6 +70,7 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
@@ -181,6 +184,189 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 }
             }
         } finally { unmount(); h.container.close() }
+    }
+
+    @Test fun disconnectedRoomNotificationKeepsThePreviousChatAndUnreadStateAcrossResizeAndCancel() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Prior peer") }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val peer = assertNotNull(store.fetchContact(radio, key(20)))
+            val room = RemoteNodeSessionDTO(
+                radioId = radio, publicKey = key(40), name = "Resize room",
+                role = RemoteNodeRole.ROOM_SERVER, isConnected = false, unreadCount = 3,
+            )
+            store.saveContact(ContactDTO(
+                radioId = radio, publicKey = room.publicKey, name = room.name, typeRawValue = 3u,
+                lastHeardTimestamp = null,
+            ))
+            store.saveRemoteNodeSessionDTO(room)
+            val n = h.container.navigation
+            n.navigateToChat(peer)
+            mount(h)
+            h.settle()
+            compose.waitForIdle()
+            val previous = n.state.value.stacks.getValue(AppTab.CHATS)
+            val payload = NotificationPayload.RoomMessage(room.name, EntityKey(radio, room.id), UUID.randomUUID())
+
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(payload, null, null)))
+            await(h) { compose.onAllNodesWithTag("room-authentication-cancel").fetchSemanticsNodes().size == 1 }
+            val first = n.state.value
+            val firstId = assertNotNull(first.roomAuthenticationDeliveryId)
+            assertEquals(previous, first.stacks.getValue(AppTab.CHATS))
+            assertEquals(ChatSelection.Direct(peer), first.chatsSelectedRoute)
+            assertEquals(3L, assertNotNull(store.fetchRemoteNodeSession(EntityKey(radio, room.id))).unreadCount)
+
+            compose.runOnUiThread { width.value = 950.dp }
+            await(h) { n.state.value.widthDp >= 950f }
+            compose.onNodeWithTag("room-authentication-sheet").assertIsDisplayed()
+            assertEquals(firstId, n.state.value.roomAuthenticationDeliveryId)
+            assertEquals(previous, n.state.value.stacks.getValue(AppTab.CHATS))
+            await(h) { compose.onAllNodesWithTag("room-authentication-password").fetchSemanticsNodes().size == 1 }
+            compose.onNodeWithTag("room-authentication-password").performTextInput("first attempt")
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(payload, null, null)))
+            val replacementId = assertNotNull(n.state.value.roomAuthenticationDeliveryId)
+            assertNotEquals(firstId, replacementId)
+            assertFalse(n.dismissRoomAuthentication(firstId))
+            await(h) {
+                compose.onAllNodesWithTag("room-authentication-password").fetchSemanticsNodes().singleOrNull()
+                    ?.config?.getOrNull(SemanticsProperties.EditableText)?.text == ""
+            }
+            compose.runOnUiThread { host.get().onBackPressedDispatcher.onBackPressed() }
+            await(h) { n.state.value.pendingRoomAuthentication == null }
+            assertEquals(previous, n.state.value.stacks.getValue(AppTab.CHATS))
+            assertEquals(ChatSelection.Direct(peer), n.state.value.chatsSelectedRoute)
+            assertEquals(3L, assertNotNull(store.fetchRemoteNodeSession(EntityKey(radio, room.id))).unreadCount)
+        } finally {
+            compose.runOnUiThread { width.value = 390.dp }
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun mountedRoomListAuthenticatesBeforeOpeningAndSurfacesLoginFailure() = runTest {
+        val h = ContainerHarness(this, store)
+        val roomKey = key(40)
+        val allowLogin = java.util.concurrent.atomic.AtomicBoolean(false)
+        h.links.configureRadio = { radio ->
+            radio.knownContacts += contactFrame(key(20), "Prior peer")
+            radio.respond = { command ->
+                when (command[0].toInt()) {
+                    0x1a -> listOf(
+                        Bytes.of(0x06, 0, 0xaa, 0xbb, 0xcc, 0xdd) + le32(1_000),
+                        Bytes.of(if (allowLogin.get()) 0x85 else 0x86, 1) + roomKey.prefix(6),
+                    )
+                    0x1b -> listOf(Bytes.of(1, 2))
+                    else -> null
+                }
+            }
+        }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val peer = assertNotNull(store.fetchContact(radio, key(20)))
+            val room = RemoteNodeSessionDTO(
+                radioId = radio, publicKey = roomKey, name = "List room",
+                role = RemoteNodeRole.ROOM_SERVER, isConnected = false, unreadCount = 4,
+            )
+            store.saveContact(ContactDTO(
+                radioId = radio, publicKey = room.publicKey, name = room.name, typeRawValue = 3u,
+                outPathLength = 0u, lastHeardTimestamp = null,
+            ))
+            store.saveRemoteNodeSessionDTO(room)
+            val n = h.container.navigation
+            n.navigateToChat(peer)
+            compose.runOnUiThread { width.value = 950.dp }
+            mount(h)
+            await(h) { compose.onAllNodesWithContentDescription("List room", substring = true).fetchSemanticsNodes().isNotEmpty() }
+            val previous = n.state.value.stacks.getValue(AppTab.CHATS)
+            compose.onNodeWithContentDescription("List room", substring = true).performClick()
+            await(h) { compose.onAllNodesWithTag("room-authentication-password").fetchSemanticsNodes().size == 1 }
+            assertEquals(previous, n.state.value.stacks.getValue(AppTab.CHATS))
+            assertEquals(4L, assertNotNull(store.fetchRemoteNodeSession(EntityKey(radio, room.id))).unreadCount)
+            compose.onNodeWithTag("room-authentication-password").performTextInput("test password")
+            compose.onNodeWithTag("room-authentication-submit").performClick()
+            await(h) { compose.onAllNodesWithTag("room-authentication-error").fetchSemanticsNodes().size == 1 }
+            assertEquals(previous, n.state.value.stacks.getValue(AppTab.CHATS))
+            assertEquals(4L, assertNotNull(store.fetchRemoteNodeSession(EntityKey(radio, room.id))).unreadCount)
+
+            allowLogin.set(true)
+            compose.onNodeWithTag("room-authentication-submit").performClick()
+            await(h) { (n.state.value.chatsSelectedRoute as? ChatSelection.Room)?.session?.isConnected == true }
+            await(h) { n.state.value.pendingRoomAuthentication == null }
+            h.eventually("mounted room detail marks messages read after authentication") {
+                kotlinx.coroutines.runBlocking { store.fetchRemoteNodeSession(EntityKey(radio, room.id))?.unreadCount == 0L }
+            }
+            assertTrue(h.links.radios.last().sent.any { it[0].toInt() == 0x1a })
+            assertTrue(n.back())
+            assertEquals(previous, n.state.value.stacks.getValue(AppTab.CHATS))
+            assertEquals(ChatSelection.Direct(peer), n.state.value.chatsSelectedRoute)
+        } finally {
+            compose.runOnUiThread { width.value = 390.dp }
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun staleRoomAuthenticationCannotUseASameRadioSuccessor() = runTest {
+        val h = ContainerHarness(this, store)
+        val target = h.target()
+        try {
+            connect(h, target)
+            val first = assertNotNull(h.sessions.current)
+            val room = RemoteNodeSessionDTO(
+                radioId = first.token.radioId, publicKey = key(40), name = "Stale room",
+                role = RemoteNodeRole.ROOM_SERVER, isConnected = false,
+            )
+            val contact = ContactDTO(
+                radioId = room.radioId, publicKey = room.publicKey, name = room.name, typeRawValue = 3u,
+                lastHeardTimestamp = null,
+            )
+            h.container.navigation.requestRoomAuthentication(room)
+            val staged = h.container.navigation.state.value
+            assertEquals(first.token, staged.roomAuthenticationSessionToken)
+
+            h.manager.disconnect()
+            h.settle()
+            connect(h, target)
+            val successor = assertNotNull(h.sessions.current)
+            assertEquals(first.token.radioId, successor.token.radioId)
+            assertNotEquals(first.token, successor.token)
+            val feature = h.container.chatsFeature
+            val isCurrent = feature.captureNavigationSession(staged.roomAuthenticationSessionToken)
+            val dependencies = feature.roomForAuthentication(room, staged.roomAuthenticationSessionToken, isCurrent)
+            assertFalse(isCurrent())
+            val failure = assertFailsWith<com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException> {
+                dependencies.service.join(contact, "secret", false)
+            }
+            assertEquals(com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError.NotConnected, failure.error)
+            assertTrue(h.links.radios.last().sent.none { it[0].toInt() == 0x1a })
+        } finally { h.container.close() }
+    }
+
+    @Test fun rewiringSameSessionRestoresTheRoomAuthenticationOwner() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val session = assertNotNull(h.sessions.current)
+            val navigation = h.container.navigation
+            navigation.clearPerRadioSelection()
+            assertNull(navigation.state.value.boundSessionToken)
+            h.appState.wireServicesIfConnected()
+            h.settle()
+            assertSame(session, h.sessions.current)
+            assertEquals(session.token, navigation.state.value.boundSessionToken)
+
+            val room = RemoteNodeSessionDTO(
+                radioId = session.token.radioId, publicKey = key(40), name = "Rewired room",
+                role = RemoteNodeRole.ROOM_SERVER, isConnected = false,
+            )
+            navigation.requestRoomAuthentication(room)
+            val token = navigation.state.value.roomAuthenticationSessionToken
+            assertEquals(session.token, token)
+            assertTrue(h.container.chatsFeature.captureNavigationSession(token)())
+        } finally { h.container.close() }
     }
 
     @Test fun aTapWhoseLookupOutlivesItsSessionIsNotAcknowledgedAndCanReachTheReplacement() = runTest {
@@ -1182,6 +1368,63 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun retiredImportReportsDisconnectionAfterAckBeforeRowLookup() = runTest {
+        val acknowledged = CompletableDeferred<Unit>()
+        val releaseAcknowledgement = CompletableDeferred<Unit>()
+        val replacementHandshake = CompletableDeferred<Unit>()
+        var replacing = false
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { firmware ->
+            firmware.respond = { frame -> if (frame[0].toInt() == 0x09) listOf(Bytes.of(0)) else null }
+            if (replacing) firmware.connectGate = replacementHandshake
+        }
+        try {
+            connect(h)
+            val actual = h.container.nodesFeature
+            val realService = assertNotNull(actual.session.contactService())
+            val delayedService = object : NodesContactService by realService {
+                override suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
+                    realService.addOrUpdateContact(radioId, contact)
+                    acknowledged.complete(Unit)
+                    releaseAcknowledgement.await()
+                }
+            }
+            val dependencies = NodesFeatureDependencies(
+                object : NodesSession by actual.session {
+                    override fun contactService() = delayedService
+                },
+                actual.uriCodec, actual.timeouts, actual.messages, actual.announcer,
+                actual.preferences, actual.clock, actual.locale,
+            )
+            val navigation = h.container.navigation
+            mount(h, dependencies)
+            navigation.stageContactLink(ContactLinkRequest("Acknowledged import", key(30), ContactType.CHAT))
+            val pending = assertNotNull(navigation.state.value.pendingContactLink)
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            h.eventually("import has a real ACK before replacement") { acknowledged.isCompleted }
+            replacing = true
+            val deviceId = assertNotNull(h.appState.connectedDevice).id
+            val rebuilding = async { h.manager.rebuildSession(deviceId) }
+            h.eventually("old graph withdraws before replacement handshake") {
+                h.links.radios.size == 2 && h.sessions.current == null
+            }
+            releaseAcknowledgement.complete(Unit)
+            await(h) { compose.onAllNodesWithTag("contact-link-error").fetchSemanticsNodes().isNotEmpty() }
+            assertEquals(pending.deliveryId, navigation.state.value.pendingContactLink?.deliveryId)
+            assertNull(navigation.state.value.pendingContactDetail)
+            replacementHandshake.complete(Unit)
+            rebuilding.await()
+            h.settle()
+            h.assertReady()
+        } finally {
+            releaseAcknowledgement.complete(Unit)
+            replacementHandshake.complete(Unit)
+            unmount()
+            h.container.close()
+        }
+    }
+
     @Test fun savedOfflineContactDestinationSurvivesCompatibleInitialAssignmentButNotAnotherRadio() = runTest {
         for (compatible in listOf(true, false)) {
             val h = ContainerHarness(this, store, identity = { if (compatible) key(7) else key(8) })
@@ -1587,6 +1830,85 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally {
             release.countDown()
             binding?.close()
+            h.container.close()
+        }
+    }
+
+    @Test fun queuedTapSurvivesRetirementBetweenItsValidityCheckAndCommit() = runTest {
+        val context = ApplicationProvider.getApplicationContext<android.app.Application>()
+        if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val dispatcherScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        lateinit var delivery: AndroidMessagingNotificationDelivery
+        val h = ContainerHarness(this, store, notificationNavigationReady = { delivery.retryPendingActions() })
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Queued retirement target") }
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val rejected = CompletableDeferred<Unit>()
+        val accepted = CopyOnWriteArrayList<UUID>()
+        var binding: NotificationNavigationBinding? = null
+        try {
+            delivery = AndroidMessagingNotificationDelivery(context, dispatcherScope) { response ->
+                val handled = h.container.handleNotificationResponse(response)
+                val message = (response.payload as NotificationPayload.DirectMessage).messageID
+                if (handled) accepted += message else rejected.complete(Unit)
+                handled
+            }
+            val target = h.target()
+            connect(h, target)
+            val session = assertNotNull(h.sessions.current)
+            val radio = session.token.radioId
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val checks = AtomicInteger()
+            binding = NotificationNavigationBinding(
+                session.notificationService, h.container.navigation, PersistenceNavigationLookup(store),
+                connectedDevice = { h.appState.connectedDevice }, onOutcome = {},
+                isCurrentSession = {
+                    val valid = h.container.isCurrentSession(session)
+                    if (checks.incrementAndGet() == 2) {
+                        entered.countDown()
+                        check(release.await(10, TimeUnit.SECONDS)) { "Retirement did not release the queued tap" }
+                    }
+                    valid
+                },
+            )
+            manager.cancelAll()
+            delivery.registerCategories(SnapshotList.empty())
+            val first = UUID.randomUUID()
+            suspend fun enqueue(id: String, message: UUID) {
+                manager.cancelAll()
+                delivery.post(NotificationRequest(
+                    NotificationId(id), NotificationCategory.DIRECT_MESSAGE, contact.name, "Queued tap",
+                    false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), message),
+                ))
+                manager.activeNotifications.single().notification.contentIntent.send()
+                shadowOf(android.os.Looper.getMainLooper()).idle()
+            }
+            enqueue("wp302-retired-tap", first)
+            assertTrue(entered.await(10, TimeUnit.SECONDS), "Tap must pause after its pre-commit validity check")
+            val disconnect = async { h.manager.disconnect() }
+            h.eventually("the tap's session retires before its commit") { disconnect.isCompleted }
+            disconnect.await()
+            h.settle()
+            val afterRetirement = h.container.navigation.state.value
+            release.countDown()
+            h.eventually("the dispatcher receives the stale rejection") { rejected.isCompleted }
+            assertEquals(afterRetirement, h.container.navigation.state.value)
+            assertTrue(accepted.isEmpty())
+
+            connect(h, target)
+            h.eventually("the retained tap reaches the replacement session") { accepted.contains(first) }
+            assertEquals(ChatSelection.Direct(contact), h.container.navigation.state.value.chatsSelectedRoute)
+            delivery.retryPendingActions()
+            val second = UUID.randomUUID()
+            enqueue("wp302-retirement-sentinel", second)
+            h.eventually("a later queued tap completes after the retained tap") { accepted.contains(second) }
+            assertEquals(listOf(first, second), accepted.toList())
+        } finally {
+            release.countDown()
+            binding?.close()
+            dispatcherScope.cancel()
+            manager.cancelAll()
             h.container.close()
         }
     }

@@ -139,5 +139,21 @@ Independent expected values come from the captured outputs
 the ZWJ example but does not stamp a locale; the latter records
 `localizedStandardContains=true` for the digit example under `en_US`. These
 are Foundation reference outputs, not Android execution results. No broader
-locale-policy or device claim is made. Exact candidate hosted execution and
-review are pending; local Android/Gradle execution remains unrun.
+locale-policy or device claim is made.
+
+Hosted exact-candidate verification for head
+`ab1e3ea2be30f4a586c7ff1977ced296f4bc2f36`, based on
+`d85ac9f8a5367615099bc215acc8d022c11eb75b`, completed successfully in Android
+candidate run `41394912165`. Its Linux Android build and aggregate `android-ci`
+passed; the required PR checklist passed in run `41394912723`. Hosted JUnit
+evidence reports `discovered=42, passed=42, failed=0, errors=0, skipped=0`
+for the selected chat suite. The report positively discovers and passes
+`ChatTextMatchingTest.localizedStandardContains oracle`,
+`ChatTextMatchingTest.independent Unicode search probes retain search over all
+filters`, and `ConversationFilteringTest.search preserves Foundation expansion
+boundaries across every filter`. The fresh review on this head identified no
+open inline findings, but requested closer verification of SDK-dependent
+segmentation; the hosted JUnit execution supplies that JVM evidence. Local
+Android/Gradle execution, device behavior, and broader locale tailoring remain
+unverified. Swift codec/SwiftData oracle jobs were skipped by workflow
+selection and are not claimed as verified.

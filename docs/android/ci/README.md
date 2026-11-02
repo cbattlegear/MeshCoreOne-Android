@@ -1136,6 +1136,11 @@ expression-bodied locals: lexical brace depth cannot prove their execution.
 A property-name call (including a generic call) does not establish a property
 read; a same-named class function can be called instead. An ordinary property
 read still qualifies even if that function exists.
+Helper constructor spelling is also checked against every candidate-bound Kotlin
+source in the authoritative compiled module inventory. A competing same-package
+top-level declaration or a colliding inherited member rejects the binding;
+unknown, stale, unsupported or ambiguous compiled symbol/parent inputs fail closed.
+This is conservative collision exclusion, not Kotlin overload or arity resolution.
 Unsupported or ambiguous binding requires a supported explicit consumer, not guessed
 execution. The original broad `/src/test` same-file guard remains in effect
 for unsupported test source forms such as Java; they cannot borrow an unrelated
@@ -1178,6 +1183,13 @@ current main, obtain its real exact-bound CI and authenticated review, and
 dispatch `android-parity-review.yml --ref main` with its WP/PR/review identity as
 documented above. Installed local execution runtimes are a separate deployment;
 no runtime installation or live operation is implied by a source merge.
+
+The documented `python tools/android-port/controller/native_review.py` entrypoint
+sets its `controller` package identity when bootstrapping its import path, so
+deferred relative imports work in file mode as well as
+`python -m controller.native_review`. Isolated subprocess fixtures load the actual file and
+exercise deferred staging imports without credentials or network access. They
+do not establish a successful deployed publisher run or acceptance.
 
 Focused source-only regressions (native Windows pinned Python, no Gradle or
 shared Android execution) use the existing strict runner:

@@ -3,9 +3,13 @@
 import copy
 import hashlib
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from dataclasses import asdict, replace
+from pathlib import Path
 from unittest.mock import patch
 
 from fixtures import BASE, HEAD, MERGE, FakeApi, bundle, policy, settings, test_manifest
@@ -25,6 +29,57 @@ from controller.workflows import parse_yaml, validate_publisher
 
 
 class NativeReviewTests(unittest.TestCase):
+    def test_isolated_file_and_module_loading_reach_deferred_staging_imports(self):
+        source = Path(__file__).resolve().parents[1] / "controller" / "native_review.py"
+        script = """
+import importlib, runpy, socket, sys
+from unittest.mock import patch
+def no_network(*args, **kwargs):
+    raise AssertionError("entrypoint fixture must not use the network")
+with patch.object(socket, "socket", no_network):
+    sys.path.insert(0, str(__import__("pathlib").Path(sys.argv[1]).parents[1] / "tests"))
+    for mode in ("file", "module"):
+        if mode == "file":
+            namespace = runpy.run_path(sys.argv[1], run_name="entrypoint_fixture")
+        else:
+            namespace = vars(importlib.import_module("controller.native_review"))
+        cls = namespace["NativeReview"]
+        native = cls.__new__(cls)
+        for action, args in (("stage_repair", ("WP-003", 0, 0)),
+                             ("stage_whole", ("WP-003", 0, {}))):
+            try:
+                getattr(native, action)(*args)
+            except namespace["PortError"]:
+                pass
+            else:
+                raise AssertionError("expected validation after deferred imports")
+        from test_native_review import NativeReviewTests
+        fixture_native, api, prefix, value = NativeReviewTests().fixture()
+        native = cls(fixture_native.backend, fixture_native.manifest, fixture_native.policy)
+        with patch.object(native, "source_receipt", return_value=(
+            "", {"schema_version": 2, "scope_comment_id": 1},
+        )), patch("controller.repair_acceptance.authenticated_scope",
+                  side_effect=namespace["PortError"]("deferred repair receipt import reached")):
+            try:
+                native.evaluate("WP-003", 123, 90)
+            except namespace["PortError"] as error:
+                assert str(error) == "deferred repair receipt import reached", str(error)
+            else:
+                raise AssertionError("expected stop immediately after deferred receipt import")
+        assert all(method == "GET" for method, *rest in api.calls), api.calls
+print("file/module deferred imports reached; no authority or network")
+"""
+        environment = dict(os.environ)
+        for name in tuple(environment):
+            if "TOKEN" in name.upper() or name.startswith("GITHUB_"):
+                environment.pop(name)
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", script, str(source)], env=environment,
+            cwd=source.parent, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("file/module deferred imports reached", result.stdout)
+
     def setUp(self):
         stage = patch("controller.native_review.stage_review", side_effect=lambda *args: self.staged)
         stage.start()

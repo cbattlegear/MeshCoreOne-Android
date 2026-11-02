@@ -549,6 +549,36 @@ class RepairExecutionTests(unittest.TestCase):
             ), self.assertRaises(PortError):
                 validate_hosted_methods(scope, blobs, REPO, executed, compiled)
 
+    def test_helper_lineage_rejects_compiled_sibling_and_inherited_callable_collisions(self):
+        for inherited, collision in ((False, True), (True, True), (False, False), (True, False)):
+            scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
+                "package sample\nclass MapTestHelper { val enabled = true }",
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest"
+                + (" : Parent()" if inherited else "") + " { "
+                "@Test fun keepsListReachable() { check(MapTestHelper("
+                + ("" if inherited or not collision else "1")
+                + (")" if collision else ").enabled") + ") } }",
+            )
+            sibling = consumer.replace("MapHelperConsumerTest.kt", "Sibling.kt")
+            source = (
+                "package sample\nopen class Parent { fun "
+                + ("MapTestHelper" if collision else "unrelated") + "() = true }"
+                if inherited else "package sample\nfun "
+                + ("MapTestHelper" if collision else "unrelated") + "(unused: Int): Boolean = true"
+            ).encode()
+            blob = hashlib.sha1(b"blob " + str(len(source)).encode("ascii") + b"\0" + source).hexdigest()
+            blobs[sibling] = blob
+            content[blob] = source
+            compiled["core/maps"][sibling] = blob
+            with self.subTest(inherited=inherited, collision=collision), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ):
+                if collision:
+                    with self.assertRaises(PortError):
+                        validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+                else:
+                    validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
     def test_repair_helper_consumers_require_compiled_and_executed_source_lineage(self):
         helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
         direct_consumer = (

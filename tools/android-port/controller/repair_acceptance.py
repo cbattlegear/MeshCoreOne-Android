@@ -1013,19 +1013,23 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             "package": package, "imports": imports,
             "parents": _kotlin_parent_names(tokens[start + 2:body]),
             "members": members,
+            "binding_tokens": tuple(token for index, token in enumerate(tokens) if scopes[index] in visible),
             "uncertain": unresolved_scope or grouped_annotations or body in inherited_companions,
         }
     for start in bodyless_roots:
         declarations[-start - 1] = {
             "name": (package + "." if package else "") + tokens[start + 1],
             "package": package, "imports": imports, "parents": [], "members": set(),
-            "uncertain": unresolved_scope or grouped_annotations,
+            "uncertain": unresolved_scope or grouped_annotations, "binding_tokens": (),
         }
+    if symbol_context is not None:
+        symbol_context.update({
+            "package": package, "imports": imports, "tokens": tuple(tokens),
+            "top_tokens": tuple(token for index, token in enumerate(tokens) if not scopes[index]),
+        })
     if source_declarations is not None:
         source_declarations.update(declarations)
         return {}
-    if symbol_context is not None:
-        symbol_context.update({"package": package, "imports": imports, "tokens": tuple(tokens)})
     if class_member_tokens is not None:
         for body, name in class_bodies.items():
             if scopes[body]:
@@ -1443,6 +1447,78 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
             )
         return names
 
+    symbol_indexes = {}
+
+    def unambiguous_helpers(path, helper_path, declarations, context, class_name, names):
+        module = re.match(ANDROID_MODULE, path)[1]
+        if module not in symbol_indexes:
+            records, contexts = {}, {}
+            for source, blob in compiled_sources[module].items():
+                git_path(source)
+                if re.match(ANDROID_MODULE, source) is None or re.match(ANDROID_MODULE, source)[1] != module:
+                    raise PortError("Helper symbol source is outside the compiled module")
+                if candidate_tree.get(source) != blob:
+                    raise PortError("Helper symbol source is missing or stale in the candidate")
+                if not source.endswith(".kt"):
+                    raise PortError("Unsupported compiled source for helper symbol binding")
+                source_records, source_context = {}, {}
+                _kotlin_junit_methods(
+                    object_bytes(repo, blob).decode("utf-8"), source_declarations=source_records,
+                    symbol_context=source_context,
+                )
+                contexts[source] = source_context
+                for record in source_records.values():
+                    records.setdefault(record["name"], []).append(record)
+            symbol_indexes[module] = records, contexts
+        records, contexts = symbol_indexes[module]
+        consumer_records = records.get(class_name, [])
+        if len(consumer_records) != 1:
+            raise PortError("Unknown or ambiguous compiled helper consumer class")
+
+        def inherited_collision(record, name, visiting=()):
+            if record["name"] in visiting or len(visiting) >= 64:
+                raise PortError("Cyclic or excessive helper symbol lineage")
+            if record["parents"] == [] and not record["uncertain"]:
+                return False
+            for _, parent in lineages[module].parents(record):
+                if shadows(parent["binding_tokens"], name) or inherited_collision(
+                    parent, name, (*visiting, record["name"]),
+                ):
+                    return True
+            return False
+
+        result = set()
+        for name in names:
+            targets = [
+                record for record in declarations.values()
+                if record["name"] in context["imports"].get(name, {
+                    (context["package"] + "." if context["package"] else "") + name,
+                })
+            ]
+            if len(targets) != 1:
+                continue
+            target = targets[0]
+            if len(records.get(target["name"], [])) != 1:
+                continue
+            target_name = target["name"].rsplit(".", 1)[-1]
+            collision = False
+            for source, source_context in contexts.items():
+                if source_context["package"] != target["package"]:
+                    continue
+                tokens = source_context["top_tokens"]
+                if source == helper_path:
+                    # The expected class is not a competing callable declaration.
+                    tokens = tuple(
+                        token for index, token in enumerate(tokens)
+                        if not (token == target_name and index and tokens[index - 1] == "class")
+                    )
+                if shadows(tokens, target_name):
+                    collision = True
+                    break
+            if not collision and not inherited_collision(consumer_records[0], name):
+                result.add(name)
+        return result
+
     for coverage in scope["coverage"]:
         if verification:
             if any(candidate_tree.get(path) != blob for path, blob in coverage["production_bindings"].items()):
@@ -1552,6 +1628,9 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
             accessible_helpers = {
                 name for name in accessible_helpers if not shadows(context["tokens"], name)
             }
+            accessible_helpers = unambiguous_helpers(
+                path, helper_path, helper_declarations, context, class_name, accessible_helpers,
+            )
             if member is None:
                 linked = invokes_helper(bodies[method], accessible_helpers, depth=1)
             else:

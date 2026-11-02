@@ -2,6 +2,7 @@
 // Only the native rendering seam is replaced; this is not installed MapLibre or device evidence.
 package com.meshcoreone.android.app.container
 
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -35,6 +36,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.Shadows
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h1200dp-mdpi")
@@ -90,6 +92,7 @@ class TraceMapMountedConsumerTest {
             tableContacts = listOf(north.copy(latitude = 36.0), south)
             tableVersion.intValue++
         }
+        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
         compose.waitForIdle()
         compose.waitUntil(5_000) { latest?.lines?.singleOrNull()?.points?.firstOrNull() == GeoPoint(36.0, -122.0) }
         assertEquals(panned, latest!!.camera)

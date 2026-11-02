@@ -2,6 +2,7 @@
 // Native MapLibre is replaced only at the rendering seam; these are not device/projection observations.
 package com.meshcoreone.android.app.container
 
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -44,6 +45,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.Shadows
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h1200dp-mdpi")
@@ -172,6 +174,7 @@ class MapMountedConsumerTest {
         assertFalse(pin.clusterable)
         compose.onNodeWithTag("pick:${pin.id}").performClick()
         compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
+        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
         compose.waitUntil(5_000) {
             dispatched.lastOrNull()?.points?.none { it.style == MapPinStyle.DROPPED_PIN } == true
         }

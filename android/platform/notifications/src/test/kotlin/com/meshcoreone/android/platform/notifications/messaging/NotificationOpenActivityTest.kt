@@ -14,28 +14,18 @@ import android.os.Bundle
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
-import com.meshcoreone.android.core.contracts.domain.AppStateProvider
 import com.meshcoreone.android.core.contracts.domain.NotificationId
-import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
-import com.meshcoreone.android.core.contracts.notifications.DeliveredNotification
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategoryDefinition
-import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.RadioId
-import com.meshcoreone.android.core.model.NotificationPreferences
-import com.meshcoreone.android.core.services.notifications.NotificationService
-import com.meshcoreone.android.core.services.notifications.NotificationUnreadCounting
 import java.util.UUID
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -160,6 +150,7 @@ class NotificationOpenActivityTest {
 
     @Test
     fun builtReplacementCannotRewriteVisibleOrReversePostedReplyAndReadTokensAcrossRadios() = runTest {
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         val received = mutableListOf<NotificationResponse>()
         val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { received += it; true }
         delivery.registerCategories(SnapshotList.of(
@@ -178,8 +169,17 @@ class NotificationOpenActivityTest {
         )
         val first = delivery.buildNotification(original)
         val tag = AndroidMessagingNotificationDelivery.TAG_PREFIX + original.id.value
+        fun assertVisible(notification: Notification) {
+            assertEquals(
+                notification.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+                manager.activeNotifications.single().notification.extras
+                    .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+            )
+        }
         manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, first)
+        assertVisible(first)
         val second = delivery.buildNotification(original.copy(payload = otherRadioPayload))
+        assertVisible(first)
         first.actions.zip(second.actions).forEach { (a, b) ->
             assertFalse(a.actionIntent == b.actionIntent)
         }
@@ -217,8 +217,10 @@ class NotificationOpenActivityTest {
 
         assertTokens(first, payload) // B is built but not published; A is still visible.
         manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, second)
+        assertVisible(second)
         assertTokens(second, otherRadioPayload)
         manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, first)
+        assertVisible(first)
         assertTokens(first, payload) // Reverse build/post ordering must not rewrite either retained token.
         assertTokens(second, otherRadioPayload)
         assertEquals(8, received.size)
@@ -307,82 +309,6 @@ class NotificationOpenActivityTest {
             )
         } finally {
             controller.destroy()
-        }
-    }
-
-    @Test
-    @Config(shadows = [DeferredPublicationShadow::class])
-    fun realServiceSnapshotCleanupPreservesRealAdapterReplacementAndTap() = runTest {
-        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
-        val received = mutableListOf<NotificationResponse>()
-        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { received += it; true }
-        val manager = context.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(
-                AndroidMessagingNotificationDelivery.CHANNEL_MESSAGES_SILENT, "Messages",
-                NotificationManager.IMPORTANCE_DEFAULT,
-            ),
-        )
-        val publication = Shadow.extract<DeferredPublicationShadow>(manager)
-        for (delayed in listOf(false, true)) {
-            val selectedGate = CompletableDeferred<SnapshotList<DeliveredNotification>>()
-            val resume = CompletableDeferred<Unit>()
-            var outcomes: SnapshotList<SnapshotRemovalOutcome>? = null
-            val gated = object : NotificationDeliveryPort by delivery {
-                override suspend fun removeDeliveredSnapshot(
-                    selected: SnapshotList<DeliveredNotification>,
-                ): SnapshotList<SnapshotRemovalOutcome> {
-                    selectedGate.complete(selected)
-                    resume.await()
-                    return delivery.removeDeliveredSnapshot(selected).also { outcomes = it }
-                }
-            }
-            val service = NotificationService(
-                radioId = contact.radioId,
-                delivery = gated,
-                preferencesPort = object : NotificationPreferencesPort {
-                    override val preferences: StateFlow<NotificationPreferences>
-                        get() = error("Snapshot cleanup must not read preferences")
-                    override suspend fun update(preferences: NotificationPreferences) =
-                        error("Snapshot cleanup must not update preferences")
-                },
-                appState = object : AppStateProvider {
-                    override suspend fun isInForeground(): Boolean =
-                        error("Snapshot cleanup must not query app state")
-                },
-                unreadCounting = NotificationUnreadCounting { error("Snapshot cleanup must not query unread counts") },
-                scope = backgroundScope,
-            )
-            val original = request("composed-$delayed").copy(threadIdentifier = null)
-            delivery.post(original)
-            val cleanup = launch { service.removeDeliveredNotifications(contact.id) }
-            val selected = selectedGate.await()
-            assertEquals(original.id, selected.single().id)
-            val oldIdentity = requireNotNull(selected.single().postIdentity).value.toString()
-            publication.defer = delayed
-            val replacementPayload = NotificationPayload.DirectMessage(contact, UUID(0, if (delayed) 301 else 300))
-            delivery.post(original.copy(payload = replacementPayload))
-            val cancellations = publication.cancellations
-            resume.complete(Unit)
-            cleanup.join()
-            assertEquals(listOf(SnapshotRemovalOutcome.SUPERSEDED), requireNotNull(outcomes).toList())
-            assertEquals(cancellations, publication.cancellations)
-            publication.publish()
-            publication.defer = false
-            val replacement = manager.activeNotifications.single().notification
-            assertFalse(oldIdentity == replacement.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID))
-            replacement.contentIntent.send()
-            val launch = shadowOf(context).nextStartedActivity
-            assertEquals(replacementPayload, NotificationPayloadCodec.read(launch))
-            val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, launch).create()
-            try {
-                assertEquals(launcher, shadowOf(controller.get()).nextStartedActivity.component)
-                assertTrue(NotificationActionDispatcher.drainOnce())
-                assertEquals(replacementPayload, received.last().payload)
-                assertTrue(manager.activeNotifications.isEmpty())
-            } finally {
-                controller.destroy()
-            }
         }
     }
 

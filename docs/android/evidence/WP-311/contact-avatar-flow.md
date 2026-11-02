@@ -18,6 +18,11 @@ WP-311 identity, branch, dirty files and ledger remain untouched. Trusted
 `AUTOMATION.md` permits admitted isolated authoring despite this advisory refusal.
 Actual CLI `admit` returned `wp-owned` for feature modify/create/test and this
 record-evidence path; pinned-source, declared-verification and provenance invariants apply.
+The new app-level `ContactAvatarMountedStoreTest.kt` support path was independently admitted
+by the actual trusted CLI as `reviewed-support-test` with operation
+`add-or-update-related-test`. It is directly necessary to prove the production
+App contact adapter and real Room update, rather than treating a feature fake as storage evidence.
+It changes no production app assembly or other owner's source.
 #495's owner confirmed no live avatar-path overlap; its retained technical hold is unchanged.
 The actual changed-path lists for #495 and #508 also contain none of this repair's targets.
 
@@ -46,8 +51,10 @@ The actual changed-path lists for #495 and #508 also contain none of this repair
 Candidate checks are pending. New API31/API37 native-graphics Robolectric cases mount the
 production `ContactDetailScreen`, replace only the external activity-result transport,
 read real local PNG streams, invoke the production crop and JPEG encoder and inspect the
-feature persistence boundary. These are host tests, not actual device, physical TalkBack,
-iOS codec, durable Room or hardware evidence.
+feature persistence boundary. An additional API31 app-level mounted case uses the
+production `NodesEntry`, App contact adapter/service and in-memory Room database, checking
+cancel/save/remove and a same-UUID foreign-radio sentinel. These are host tests, not
+actual device, physical TalkBack, iOS codec, on-disk durability or hardware evidence.
 
 `python tools\android-port\controller\validate.py` and
 `python tools\android-port\portmap.py`: passed before candidate commit.

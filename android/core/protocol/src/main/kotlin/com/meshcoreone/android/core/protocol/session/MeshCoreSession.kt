@@ -244,6 +244,12 @@ class MeshCoreSession private constructor(
         if (secret.size < 16) throw MeshCoreException.InvalidInput("Channel secret requires at least 16 bytes")
         simple(PacketBuilder.setChannel(index, name, secret))
     }
+    override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        if (secret.size < 16) throw MeshCoreException.InvalidInput("Channel secret requires at least 16 bytes")
+        val packet = PacketBuilder.setChannel(index, name, secret)
+        core.exchange(dispatch) { simple(packet) }
+    }
     suspend fun setChannel(index: UByte, name: String, secret: ChannelSecret = ChannelSecret.DeriveFromName) =
         setChannel(index, name, secret.secretData(name))
     override suspend fun sendMessage(destination: Bytes, text: String, timestamp: Instant, attempt: UByte): MessageSentInfo {

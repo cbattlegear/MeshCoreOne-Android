@@ -77,6 +77,8 @@ def validate_boundary(value: dict, text: str):
 
 def validate_candidate(value: dict, text: str):
     validate_boundary(value, text)
+    if set(value) != {"name", "on", "permissions", "concurrency", "jobs"}:
+        raise PortError("Candidate workflow must not add global shell defaults or environment")
     events = value.get("on", {})
     if not {"pull_request", "merge_group", "push", "workflow_dispatch"}.issubset(events):
         raise PortError("Required PR/merge-group/push/manual event is missing")

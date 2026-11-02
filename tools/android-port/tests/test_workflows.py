@@ -367,7 +367,8 @@ class WorkflowTests(unittest.TestCase):
 
     def test_benchmark_scope_cannot_skip_its_stage_or_required_build_gate(self):
         original, text = self.read("android-ci.yml")
-        for kind in ("scope-output", "build-condition", "build-conjunction", "build-shell",
+        for kind in ("workflow-shell", "workflow-environment", "scope-output",
+                     "build-condition", "build-conjunction", "build-shell",
                      "build-ignored-failure", "stage-command", "stage-comment", "stage-false-guard",
                      "stage-ignored-failure", "stage-shell", "stage-environment",
                      "aggregate-environment", "aggregate-selection", "aggregate-comment",
@@ -377,7 +378,11 @@ class WorkflowTests(unittest.TestCase):
             aggregate = next(step for step in value["jobs"]["android-ci"]["steps"]
                              if step.get("name") == "Require every selected scope to pass")
             benchmark_command = "& python tools/android-port/controller/ci.py run --stage benchmark"
-            if kind == "scope-output":
+            if kind == "workflow-shell":
+                value["defaults"] = {"run": {"shell": "bash {0}"}}
+            elif kind == "workflow-environment":
+                value["env"] = {"BASH_ENV": "fixture"}
+            elif kind == "scope-output":
                 value["jobs"]["scope"]["outputs"].pop("benchmark")
             elif kind == "build-condition":
                 value["jobs"]["build"]["if"] = value["jobs"]["build"]["if"].replace(

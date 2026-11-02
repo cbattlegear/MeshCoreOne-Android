@@ -1,5 +1,4 @@
 // PortedFrom: MC1/State/PendingExternalURL.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-405 Supersede suspended Android URI lookups at delivery submission.
 package com.meshcoreone.android.app.deeplinks
 
 import kotlin.coroutines.AbstractCoroutineContextElement

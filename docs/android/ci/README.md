@@ -1247,6 +1247,35 @@ Reading arbitrary candidate `src/main` blobs or treating a successful aggregate
 build as that missing registry is not a substitute. The current gate and hold
 remain; the source proposal is not sufficient for #519.
 
+The existing producer is
+`tools/android-port/controller/verify_candidate_task_graph.gradle`: at the test
+task's `doFirst`, it selects Kotlin compiler tasks in that same project whose
+outputs intersect that test task's `testClassesDirs`, verifies their execution,
+then emits only `{task, sources: [{path, blob}]}`. `ci_evidence.read_test_sources`
+selects the exact runner, and `ci.py` / `local_scope.py` publish that inventory as
+`compiled_test_sources`. The emitter at the immutable #519 head has this same
+contract. It does not emit a production/dependency declaration closure, resolved
+symbol targets or compiler/classpath binding for those dependencies.
+
+Controller and controller-test paths are within WP-003's declared ownership, but
+path admission is not evidence that these missing outputs exist. A prospective
+producer must bind the selected test compilation and execution to exact
+production/dependency declarations and their resolution inputs, including
+non-source dependencies, before a validator can trust that closure. It must
+also distinguish the actual `runTest` target and executed lambda from an
+uncalled or shadowed lookalike. The current method inventory proves that a JUnit
+method ran, not which expression-body call target or lambda ran.
+
+An anonymous factory could only be excluded after proving it cannot affect
+either inherited-JUnit accounting or the selected consumer's symbol lineage.
+Its apparent lexical separation alone supplies neither parent resolution nor
+that reachability proof. No such output is available in this diagnostic, so
+anonymous/delegated-parent, inherited-test, collision and deferred-execution
+guards remain unchanged. Generating and validating a new compiler-bound output
+requires separately authorized actual compiler/runner execution; this
+source-only investigation neither runs that job nor substitutes synthetic
+controller fixtures for it.
+
 Focused source-only regressions (native Windows pinned Python, no Gradle or
 shared Android execution) use the existing strict runner:
 

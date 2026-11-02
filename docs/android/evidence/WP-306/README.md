@@ -169,3 +169,12 @@ does not establish the timeout's root cause or that it is flaky. No malware
 sources were changed, and the failure is not attributed to WP-306. The PR stays
 draft and unmerged pending clean required checks and human Android-runtime
 validation.
+
+After the coordinator released the diagnostic hold, the supported local
+launcher was invoked for head
+`0f694e831ceee3aa7c0b07610294a9202809a5fc` with affected base
+`d85ac9f8a5367615099bc215acc8d022c11eb75b`. It refused before product
+execution with `BLOCKED: Hard-lock collision for external resource
+gradle-execution: gradle-execution held`. Read-only recovery status showed a
+different live local-check owner and refused recovery. No product tests ran;
+the owner was not interrupted or changed, and direct Gradle was not used.

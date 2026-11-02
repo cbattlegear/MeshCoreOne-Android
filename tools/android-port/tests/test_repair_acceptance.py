@@ -125,6 +125,18 @@ def build_log(modules, **changes):
 
 
 class RepairContractTests(unittest.TestCase):
+    def test_wp002_admitted_unsupported_test_source_cannot_borrow_kotlin_execution(self):
+        manifest, rules, _, scope = fixture()
+        path = "android/app/src/test/java/sample/ChangedTest.java"
+        value = bundle(manifest, rules, "WP-002", changed_paths=[path], merged=False)
+        source = next(e["path"] for e in manifest.inputs("WP-002", False)
+                      if e["exclusion"] is None)
+        scope.update(binding=asdict(value.binding), owner=manifest.wp("WP-002")["owner"])
+        scope["paths"] = [{"path": path, "operation": "modify", "capability": "wp-owned"}]
+        scope["coverage"][0].update(path=path, source_paths=[source], modules=["app", "core/maps"])
+        with self.assertRaisesRegex(PortError, "Changed unit-test sources"):
+            validate_scope(scope, value.binding, manifest, rules, [path], None)
+
     def test_changed_helper_scope_binds_only_same_module_executed_consumers(self):
         helper = "android/feature/map/src/test/kotlin/com/meshcoreone/android/feature/map/MapHarness.kt"
         consumer = "android/feature/map/src/test/kotlin/com/meshcoreone/android/feature/map/MapHarnessConsumerTest.kt"
@@ -475,6 +487,50 @@ class RepairExecutionTests(unittest.TestCase):
             "core/maps": [{"class": "sample.MapHelperConsumerTest", "method": "keepsListReachable"}],
         }, {"core/maps": dict(blobs)}
 
+    def test_helper_lineage_cannot_borrow_later_bodies_qualified_names_or_shadowed_members(self):
+        cases = (
+            ("expression-body", None,
+             "@Test fun keepsListReachable() = check(true)\nprivate fun unused() { MapTestHelper() }"),
+            ("expression-lambda", None,
+             "@Test fun keepsListReachable() = run { MapTestHelper() }"),
+            ("unrelated-qualified-constructor", None,
+             "@Test fun keepsListReachable() { unrelated.MapTestHelper() }"),
+            ("shadowed-constructor", None,
+             "@Test fun keepsListReachable() { val MapTestHelper = { true }; check(MapTestHelper()) }"),
+            ("local-member-shadow", "fixture",
+             "@Test fun keepsListReachable() { val fixture = true; check(fixture) }"),
+            ("loop-member-shadow", "fixture",
+             "@Test fun keepsListReachable() { for (fixture in listOf(true)) check(fixture) }"),
+            ("destructured-member-shadow", "fixture",
+             "@Test fun keepsListReachable() { val (fixture, other) = true to false; check(fixture) }"),
+            ("lambda-member-shadow", "fixture",
+             "@Test fun keepsListReachable() { listOf(true).forEach { fixture -> check(fixture) } }"),
+            ("unrelated-qualified-member", "fixture",
+             "@Test fun keepsListReachable() { check(unrelated.fixture) }"),
+            ("named-argument-not-member-read", "fixture",
+             "@Test fun keepsListReachable() { unrelated(fixture = true) }"),
+            ("unexecuted-local-function", None,
+             "@Test fun keepsListReachable() { fun unused() { MapTestHelper() }; check(true) }"),
+        )
+        for label, member, method in cases:
+            scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
+                "package sample\nclass MapTestHelper { val enabled = true }",
+                "package sample\nimport org.junit.Test\nclass MapHelperConsumerTest { "
+                "private val fixture = MapTestHelper(); " + method + " }", member=member,
+            )
+            other = consumer.replace("MapHelperConsumerTest.kt", "UnrelatedHelper.kt")
+            other_source = b"package unrelated\nclass MapTestHelper { val enabled = true }"
+            other_blob = hashlib.sha1(
+                b"blob " + str(len(other_source)).encode("ascii") + b"\0" + other_source,
+            ).hexdigest()
+            blobs[other] = other_blob
+            content[other_blob] = other_source
+            compiled["core/maps"][other] = other_blob
+            with self.subTest(label=label), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: content[blob],
+            ), self.assertRaises(PortError):
+                validate_hosted_methods(scope, blobs, REPO, executed, compiled)
+
     def test_repair_helper_consumers_require_compiled_and_executed_source_lineage(self):
         helper_source = "package sample\nclass MapTestHelper { val enabled = true }"
         direct_consumer = (
@@ -492,6 +548,9 @@ class RepairExecutionTests(unittest.TestCase):
         ).replace("MapTestHelper()", "Harness()")
         for consumer_source, member in (
             (direct_consumer, None), (member_consumer, "fixture"), (imported_consumer, None),
+            (direct_consumer.replace("keepsListReachable() {", "keepsListReachable(): Unit {"), None),
+            (member_consumer.replace("assertTrue(fixture.enabled)", "val unrelated = true; assertTrue(fixture.enabled)"),
+             "fixture"),
         ):
             scope, helper, consumer, blobs, content, executed, compiled = self.helper_inputs(
                 helper_source, consumer_source, member=member,

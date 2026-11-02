@@ -1123,6 +1123,18 @@ methods, unreferenced helper classes, stale/missing sources, or compilation alon
 do not establish coverage. This syntactic lineage does not decide behavioral
 relevance: the independent reviewer must still verify that the helper change
 serves the mapped consumer and acceptance behavior.
+
+The bounded token reader accepts only parameterless consumer methods with an
+immediate block body (optionally explicit `: Unit`). Expression bodies cannot
+borrow a later declaration's block. Constructor references must be unqualified,
+resolve by same package or exact import/alias, and have no shadowing declaration.
+Property reads must be unqualified in the method's immediate block, without
+local/destructured/lambda-parameter shadowing; qualified names, named arguments
+and references inside nested blocks do not establish this lineage. Unsupported
+or ambiguous binding requires a supported explicit consumer, not guessed
+execution. The original broad `/src/test` same-file guard remains in effect
+for unsupported test source forms such as Java; they cannot borrow an unrelated
+Kotlin method or claim the Kotlin-only helper exception.
 Referenced candidate test methods, unchanged production consumers and native
 source bindings are likewise staged at their exact candidate blob identities.
 Each retained native fixture is also staged from its immutable observation

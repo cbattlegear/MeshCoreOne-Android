@@ -393,7 +393,7 @@ def validate_scope(scope, binding, manifest, policy, changed_paths, catalog):
                 raise PortError("Test-helper consumers must exactly match its immutable hosted method bindings")
             if any(method["path"] == path for method in entry["hosted_methods"]):
                 raise PortError("Changed helper sources cannot masquerade as their own executed test methods")
-        elif unit_test is not None and not whole_wp and not any(
+        elif "/src/test" in path and not whole_wp and not any(
             method["path"] == path for method in entry["hosted_methods"]
         ):
             raise PortError("Changed unit-test sources need their own hosted method or explicit helper consumers")
@@ -1025,7 +1025,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         source_declarations.update(declarations)
         return {}
     if symbol_context is not None:
-        symbol_context.update({"package": package, "imports": imports})
+        symbol_context.update({"package": package, "imports": imports, "tokens": tuple(tokens)})
     if class_member_tokens is not None:
         for body, name in class_bodies.items():
             if scopes[body]:
@@ -1138,29 +1138,21 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         cursor = function + 2
         if cursor >= len(tokens) or tokens[cursor] != "(":
             return None
-        depth = 1
-        cursor += 1
-        while cursor < len(tokens) and depth:
-            if tokens[cursor] == "(":
-                depth += 1
-            elif tokens[cursor] == ")":
-                depth -= 1
-            cursor += 1
-        if depth:
+        # Parameter binding and expression bodies need a real resolver, not a later brace.
+        if cursor + 1 >= len(tokens) or tokens[cursor + 1] != ")":
             return None
-        signature_end = cursor
+        cursor += 2
+        if tokens[cursor:cursor + 2] == [":", "Unit"]:
+            cursor += 2
         scope = scopes[function]
-        opening = next((
-            index for index in range(signature_end, len(tokens))
-            if scopes[index] == scope and tokens[index] == "{"
-        ), None)
-        if opening is None:
+        if cursor >= len(tokens) or tokens[cursor] != "{" or scopes[cursor] != scope:
             return None
+        opening = cursor
         closing = next((
             index for index in range(opening + 1, len(tokens))
             if tokens[index] == "}" and scopes[index] == (*scope, opening)
         ), None)
-        return None if closing is None else tuple(tokens[signature_end:closing + 1])
+        return None if closing is None else tuple(tokens[opening:closing + 1])
 
     for start, value in enumerate(tokens):
         if (
@@ -1372,21 +1364,66 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
             lineages[module] = _KotlinJUnitLineage(candidate_tree, sources, read_source)
         return lineages[module].resolve
 
-    def invokes_helper(tokens, names):
+    def shadows(tokens, name):
         for index, value in enumerate(tokens):
-            if value not in names:
+            if value in ("val", "var", "fun", "class", "object", "interface", "typealias"):
+                cursor = index + 1
+                if cursor < len(tokens) and tokens[cursor] == "<":
+                    while cursor < len(tokens) and tokens[cursor] != ">":
+                        cursor += 1
+                    cursor += 1
+                if cursor < len(tokens) and tokens[cursor] == "(":
+                    cursor += 1
+                    while cursor < len(tokens) and tokens[cursor] != ")":
+                        if tokens[cursor].strip("`") == name:
+                            return True
+                        cursor += 1
+                elif cursor < len(tokens) and tokens[cursor].strip("`") == name:
+                    return True
+            if value == "for":
+                cursor = index + 1
+                while cursor < len(tokens) and tokens[cursor] != "in":
+                    if tokens[cursor].strip("`") == name:
+                        return True
+                    cursor += 1
+            if value.strip("`") == name and index + 1 < len(tokens) and tokens[index + 1] == ":":
+                return True
+            if value == ">" and index and tokens[index - 1] == "-":
+                cursor = index - 2
+                while cursor >= 0 and tokens[cursor] != "{":
+                    if tokens[cursor].strip("`") == name:
+                        return True
+                    cursor -= 1
+        return False
+
+    def immediate_references(tokens, names, depth):
+        current_depth = 0
+        for index, value in enumerate(tokens):
+            if value == "{":
+                current_depth += 1
+            elif value == "}":
+                current_depth -= 1
+            if current_depth != depth or value.strip("`") not in names:
                 continue
+            if index and tokens[index - 1] in (".", ":"):
+                continue
+            if index + 1 < len(tokens) and tokens[index + 1] == "=":
+                continue
+            yield index
+
+    def invokes_helper(tokens, names, *, depth=0):
+        for index in immediate_references(tokens, names, depth):
             cursor = index + 1
             if cursor < len(tokens) and tokens[cursor] == "<":
-                depth = 1
+                angles = 1
                 cursor += 1
-                while cursor < len(tokens) and depth:
+                while cursor < len(tokens) and angles:
                     if tokens[cursor] == "<":
-                        depth += 1
+                        angles += 1
                     elif tokens[cursor] == ">":
-                        depth -= 1
+                        angles -= 1
                     cursor += 1
-                if depth:
+                if angles:
                     continue
             if cursor < len(tokens) and tokens[cursor] == "(":
                 return True
@@ -1507,15 +1544,21 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
             )
             if method not in declarations or bodies.get(method) is None:
                 raise PortError("Test-helper consumer must be an actual declared JUnit method with a block body")
-            body = set(bodies[method])
             class_name = classes[method]
             member = consumer.get("member")
             accessible_helpers = helper_reference_names(helper_declarations, context)
+            accessible_helpers = {
+                name for name in accessible_helpers if not shadows(context["tokens"], name)
+            }
             if member is None:
-                linked = invokes_helper(bodies[method], accessible_helpers)
+                linked = invokes_helper(bodies[method], accessible_helpers, depth=1)
             else:
                 initializer = members.get(class_name, {}).get(member, ())
-                linked = member in body and invokes_helper(initializer, accessible_helpers)
+                linked = (
+                    not shadows(bodies[method], member)
+                    and any(immediate_references(bodies[method], {member}, 1))
+                    and invokes_helper(initializer, accessible_helpers)
+                )
             if not linked:
                 raise PortError("Executed consumer method has no direct or class-member lineage to the changed test helper")
 

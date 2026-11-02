@@ -56,9 +56,8 @@ class BatchTraceCardComposeTest {
     private lateinit var recomposer: Recomposer
     private val frameClock = BroadcastFrameClock()
     private var frameNanos = 0L
-    private val state = MutableStateFlow(
-        TracePathState(batchEnabled = true, currentTraceIndex = 1, batchPresentationActive = true),
-    )
+    private val initialState = TracePathState(batchEnabled = true, currentTraceIndex = 1, batchPresentationActive = true)
+    private val state = MutableStateFlow(initialState)
     @Volatile private var collectedState: TracePathState? = null
     @Volatile private var renderedState: TracePathState? = null
     private val observedState = state.onEach { collectedState = it }
@@ -75,7 +74,7 @@ class BatchTraceCardComposeTest {
             recomposer = createLifecycleAwareWindowRecomposer(coroutineContext = frameClock, lifecycle = owner.lifecycle)
             setParentCompositionContext(recomposer)
             setContent {
-                val snapshot = observedState.collectAsStateWithLifecycle(initialValue = state.value).value
+                val snapshot = observedState.collectAsStateWithLifecycle(initialValue = initialState).value
                 SideEffect { renderedState = snapshot }
                 CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
                     MaterialTheme { TraceResults(snapshot) }

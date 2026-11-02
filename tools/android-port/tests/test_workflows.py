@@ -450,6 +450,28 @@ class WorkflowTests(unittest.TestCase):
         gate["run"] = "# Additional explanation\n\n" + gate["run"]
         validate_candidate(workflow, text)
 
+    def test_workflow_guards_reject_encoded_non_lf_shell_line_separators(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for target in ("stage", "aggregate"):
+            for separator in ("\r", "\v", "\f", "\x85", "\u2028", "\u2029"):
+                value = copy.deepcopy(original)
+                step = (
+                    next(step for step in value["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+                    if target == "stage" else value["jobs"]["android-ci"]["steps"][0]
+                )
+                step["run"] = "".join("#" + separator + line + "\n" for line in step["run"].splitlines())
+                text = yaml.safe_dump(value, sort_keys=False)
+                parsed = parse_yaml(text)
+                parsed_step = (
+                    next(step for step in parsed["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+                    if target == "stage" else parsed["jobs"]["android-ci"]["steps"][0]
+                )
+                self.assertEqual(parsed_step["run"], step["run"])
+                with self.subTest(target=target, separator=repr(separator)), self.assertRaises(PortError):
+                    validate_candidate(parsed, text)
+
     def test_read_only_checkout_ephemeral_runners_pins_and_secret_absence(self):
         original, text = self.read("android-ci.yml")
         for kind in ("permissions", "credentials", "action", "secret", "runner", "ignored-failure"):

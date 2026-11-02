@@ -45,12 +45,23 @@ def parse_yaml(text: str):
     return value
 
 
+def workflow_text(value, label: str):
+    if not isinstance(value, str):
+        raise PortError(f"{label} must be a string")
+    if any(
+        (ord(character) < 32 and character not in "\t\n")
+        or 127 <= ord(character) <= 159 or character in "\u2028\u2029"
+        for character in value
+    ):
+        raise PortError(f"{label} contains a non-LF or control character")
+    return value
+
+
 def executable_lines(script: str):
-    if not isinstance(script, str):
-        raise PortError("Workflow run script must be a string")
+    script = workflow_text(script, "Workflow run script")
     return [
-        line.strip() for line in script.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        line.strip(" \t") for line in script.split("\n")
+        if line.strip(" \t") and not line.lstrip(" \t").startswith("#")
     ]
 
 
@@ -107,14 +118,13 @@ def validate_candidate(value: dict, text: str):
         "needs.scope.outputs.backup == 'true' || "
         "needs.scope.outputs.benchmark == 'true' }}"
     )
-    condition = build.get("if")
+    condition = workflow_text(build.get("if"), "Linux build condition")
     if (set(build) != {"name", "needs", "if", "runs-on", "timeout-minutes", "defaults", "steps"}
             or build.get("name") != "One Linux Android build"
             or build.get("runs-on") != "ubuntu-24.04" or build.get("timeout-minutes") != "75"
             or build.get("defaults") != {"run": {"shell": "pwsh"}}
             or build.get("needs") != ["scope"]
-            or not isinstance(condition, str)
-            or " ".join(condition.split()) != build_condition):
+            or " ".join(re.split(r"[ \t\n]+", condition.strip(" \t\n"))) != build_condition):
         raise PortError("The selected Linux execution host must be mandatory, dependency-gated and unmatrixed")
     steps = build["steps"]
     stage_steps = [step for step in steps if step.get("id") == "gradle"]

@@ -53,7 +53,9 @@ Gradle inputs select the declared `benchmark` scope. The Linux build job runs
 check requires that job to succeed. Workflow validation checks the actual
 guarded stage commands, exit handling and aggregate result bindings, rather than
 accepting command text inside comments or bypassable workflow-, job- or
-step-level shell overrides and global environment injection.
+step-level shell overrides and global environment injection. Embedded control
+or non-LF line separators are rejected rather than being parsed differently
+from the shell.
 Mixed selections run the benchmark stage before scaffold so scaffold outputs
 remain authoritative. Merged acceptance requires the exact build-job log to
 contain both the successful benchmark task-graph report and the WP-504

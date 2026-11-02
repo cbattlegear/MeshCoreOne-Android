@@ -16,7 +16,9 @@ from controller.software_verification import (
 )
 from controller.scope_amendment import current_revisions, project_translation_scope
 from controller.verification_config import check_configuration, content_scope_predecessor
-from controller.verification import declared_software_lane, require_shared_whole_lane
+from controller.verification import (
+    declared_software_lane, dispatch_software_lane, require_shared_whole_lane, work_package_software_lane,
+)
 
 
 class SoftwareVerificationTests(unittest.TestCase):
@@ -350,3 +352,28 @@ class WP210ConcernMappingTests(unittest.TestCase):
                 engine.admit(wp["id"], wp["write_paths"], path, operation)
         self.assertNotIn("wp210-feature-cli-consumer-regression",
                          [rule["id"] for rule in policy["reservation_policy"]["capabilities"]])
+
+    def test_obsolete_placeholder_does_not_admit_non_module_or_inventory_work(self):
+        manifest = base_manifest()
+        self.assertEqual(work_package_software_lane(manifest, manifest.wp("WP-210")),
+                         declared_software_lane(manifest))
+        for wp_id in ("WP-004", "WP-006"):
+            with self.subTest(wp=wp_id):
+                self.assertEqual(dispatch_software_lane(manifest, manifest.wp(wp_id)),
+                                 declared_software_lane(manifest))
+                with self.assertRaisesRegex(PortError, "requires its own verification"):
+                    work_package_software_lane(manifest, manifest.wp(wp_id))
+        wp = manifest.wp("WP-407")
+        self.assertEqual(dispatch_software_lane(manifest, wp), declared_software_lane(manifest))
+        with self.assertRaisesRegex(PortError, "no primary-owned source inputs"):
+            work_package_software_lane(manifest, wp)
+
+    def test_dispatch_does_not_treat_other_blockers_or_malformed_entries_as_placeholder(self):
+        manifest = base_manifest()
+        wp = copy.deepcopy(manifest.wp("WP-210"))
+        wp["verification"] = {"configured": False, "commands": [], "blocker": "Runtime evidence is missing"}
+        with self.assertRaisesRegex(PortError, "Runtime evidence is missing"):
+            dispatch_software_lane(manifest, wp)
+        wp["verification"] = {"configured": False, "commands": [["python", ""]], "blocker": ""}
+        with self.assertRaisesRegex(PortError, "Malformed"):
+            dispatch_software_lane(manifest, wp)

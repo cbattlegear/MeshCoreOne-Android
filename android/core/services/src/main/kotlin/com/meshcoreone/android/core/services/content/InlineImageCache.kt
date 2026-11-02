@@ -72,6 +72,13 @@ sealed interface InlineImageResult {
     data object NotImage : InlineImageResult
 }
 
+/** Immutable owner for encoded image bytes shared by the process cache and mounted consumers. */
+class EncodedImageBytes(data: ByteArray) {
+    private val bytes = data.copyOf()
+    val size: Int get() = bytes.size
+    fun copy(): ByteArray = bytes.copyOf()
+}
+
 /**
  * Decoded hero image cached alongside its optional raw encoded bytes, generic over this module's
  * typed [DecodedImageHandle] (never a concrete bitmap type - see this file's header). Mirrors
@@ -84,9 +91,9 @@ class CachedDecodedImage(
     val isGif: Boolean,
     data: ByteArray?,
 ) {
-    private val retainedData = data?.copyOf()
-    val data: ByteArray? get() = retainedData?.copyOf()
-    val cost: Long = handle.costBytes.toLong() + (data?.size?.toLong() ?: 0L)
+    val encodedData: EncodedImageBytes? = data?.let(::EncodedImageBytes)
+    val data: ByteArray? get() = encodedData?.copy()
+    val cost: Long = handle.costBytes.toLong() + (encodedData?.size?.toLong() ?: 0L)
 }
 
 /**

@@ -4,14 +4,15 @@ package com.meshcoreone.android.feature.chats.composer
 
 import java.util.Locale
 
-/** A detected web link: UTF-16 [start]..[end) and the openable [url] (`www.` hosts resolve to `http://`). */
+/** A detected web link: UTF-16 [start]..[end) and the openable [url] (`www.` hosts resolve to `https://`). */
 data class DetectedUrl(val start: Int, val end: Int, val url: String)
 
 /**
  * Link scan feeding both URL tokens and the ranges hashtags must skip. The JVM has no `NSDataDetector`,
  * so this matches explicit `http(s)://` links and `www.` hosts and trims trailing sentence punctuation
  * and unbalanced `)` as the detector does. Bare domains (`example.com`) and emails are NOT linked
- * (oracle shows Swift links them); WP-218 `LinkUrlExtraction` made the same scoped choice.
+ * by this UI tokenizer; its broader detector adaptation remains tracked by #403. WP-218's
+ * independent preview-content extractor recognizes a bounded ASCII bare-domain subset.
  */
 object LinkDetection {
     private val candidate = Regex("""(?i)\b(?:https?://|www\.)[^${ChatCoordinateDetector.WHITE_SPACE.removeSurrounding("[", "]")}<>"]+""")
@@ -29,7 +30,7 @@ object LinkDetection {
         val raw = text.substring(match.range.first, end + 1)
         val prefixLength = if (raw.startsWith("www.", ignoreCase = true)) 4 else raw.indexOf("://") + 3
         if (raw.length <= prefixLength) return@mapNotNull null // scheme or `www.` with no host after trimming
-        val url = if (raw.startsWith("www.", ignoreCase = true)) "http://$raw" else raw
+        val url = if (raw.startsWith("www.", ignoreCase = true)) "https://$raw" else raw
         DetectedUrl(match.range.first, end + 1, url)
     }.toList()
 }

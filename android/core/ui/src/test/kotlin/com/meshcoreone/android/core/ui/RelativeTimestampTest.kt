@@ -46,6 +46,21 @@ class RelativeTimestampTest : SourceCaseProof() {
     @OriginalCase("RelativeTimestampTextTests::Uses date format at exactly week threshold()")
     @Test fun exactWeek() = prove { assertTrue(' ' in format(604_800)) }
 
+    @Test fun independentNativeTextVectorsDistinguishRelativeUnitsAndTheExactWeekBoundary() {
+        for ((age, expected) in listOf(
+            60L to "1 min. ago",
+            120L to "2 min. ago",
+            3_600L to "1 hr. ago",
+            86_400L to "1 day ago",
+            172_800L to "2 days ago",
+            604_799L to "7 days ago",
+            604_800L to "Nov 7",
+            2_592_000L to "Oct 15",
+        )) {
+            assertEquals(expected, format(age), "Native en-US/UTC age $age")
+        }
+    }
+
     @Test fun futureFractionalBoundaryAndCivilYesterdayAcrossDstUseTheInjectedClockAndZone() {
         assertEquals(nowText(), formatter.relativeTimestamp(now.plusSeconds(3600), now, resources))
         assertEquals(nowText(), formatter.relativeTimestamp(now.minusSeconds(59).minusNanos(999_999_999), now, resources))

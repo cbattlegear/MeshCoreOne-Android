@@ -7,7 +7,8 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
@@ -17,6 +18,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
@@ -28,6 +30,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -46,9 +49,10 @@ class BatchTraceCardComposeTest {
     private lateinit var host: ActivityController<Activity>
     private lateinit var owner: ScreenOwner
     private lateinit var content: ComposeView
-    private val state = mutableStateOf(
+    private val state = MutableStateFlow(
         TracePathState(batchEnabled = true, currentTraceIndex = 1, batchPresentationActive = true),
     )
+    @Volatile private var renderedState: TracePathState? = null
 
     @Before fun mount() {
         host = Robolectric.buildActivity(Activity::class.java).setup().visible()
@@ -59,13 +63,16 @@ class BatchTraceCardComposeTest {
             setViewTreeLifecycleOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
             setContent {
+                val snapshot by state.collectAsStateWithLifecycle()
+                SideEffect { renderedState = snapshot }
                 CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
-                    MaterialTheme { TraceResults(state.value) }
+                    MaterialTheme { TraceResults(snapshot) }
                 }
             }
         }
         host.get().setContentView(content)
         advanceFrames()
+        assertEquals(state.value, renderedState, "The mounted results must observe the initial state")
     }
 
     @After fun destroy() {
@@ -73,15 +80,13 @@ class BatchTraceCardComposeTest {
         owner.registry.currentState = Lifecycle.State.DESTROYED
         host.windowFocusChanged(false)
         host.pause().stop().destroy()
-        Shadows.shadowOf(Looper.getMainLooper()).idle()
     }
 
     @Test fun mountedProgressCompletionAndCancelledPartialResultsRemainAccessible() {
         assertTrue(descriptions().contains(C.contactsResultsBatchProgressLabel(host.get().resources, 1, 3)))
         val first = result(listOf(hop(0.0, start = true), hop(5.0)), 100)
         val second = result(listOf(hop(0.0, start = true), hop(7.0)), 200)
-        state.value = state.value.copy(currentTraceIndex = 3, completedResults = listOf(first, second))
-        advanceFrames()
+        render(state.value.copy(currentTraceIndex = 3, completedResults = listOf(first, second)))
         assertTrue(texts().contains("SNR: 7.0 dB"))
         assertTrue(descriptions().contains(C.contactsResultsHopAvgSNRLabel(host.get().resources, "6.0", "5.0", "7.0")))
         assertTrue(descriptions().contains(C.contactsResultsAvgRTTLabel(host.get().resources, 150, 100, 200)))
@@ -89,17 +94,15 @@ class BatchTraceCardComposeTest {
         val harness = TraceHarness()
         harness.holder.editStateForTesting { state.value }
         harness.holder.cancelBatchTrace()
-        state.value = harness.state
-        advanceFrames()
+        render(harness.state)
         assertTrue(texts().contains("SNR: 6.0 dB"))
         assertTrue(descriptions().contains(C.contactsResultsBatchSuccess(host.get().resources, 2, 3, 66)))
         assertFalse(descriptions().any { it.startsWith("Batch complete") || it.startsWith("Batch progress") })
 
-        state.value = state.value.copy(
+        render(state.value.copy(
             currentTraceIndex = 3,
             completedResults = listOf(first, second, result(emptyList(), 0, success = false)),
-        )
-        advanceFrames()
+        ))
         assertTrue(descriptions().contains(C.contactsResultsBatchCompleteLabel(host.get().resources, 2, 3, 66)))
         assertFalse(descriptions().any { it.startsWith("Batch progress") })
         assertTrue(descriptions().contains(C.contactsResultsAvgRTTLabel(host.get().resources, 150, 100, 200)))
@@ -109,11 +112,9 @@ class BatchTraceCardComposeTest {
     @Test fun mountedRttDescriptionDoesNotNarrowLongAndAllFailureHasNoAggregate() {
         val longRtt = Int.MAX_VALUE.toLong() + 1
         val success = result(listOf(hop(0.0, start = true), hop(5.0)), longRtt)
-        state.value = state.value.copy(currentTraceIndex = 0, batchSize = 1, completedResults = listOf(success))
-        advanceFrames()
+        render(state.value.copy(currentTraceIndex = 0, batchSize = 1, completedResults = listOf(success)))
         assertTrue(descriptions().any { it.contains("2147483648 milliseconds") })
-        state.value = state.value.copy(completedResults = listOf(result(emptyList(), 0, success = false)))
-        advanceFrames()
+        render(state.value.copy(completedResults = listOf(result(emptyList(), 0, success = false))))
         assertTrue(descriptions().contains(C.contactsResultsBatchCompleteLabel(host.get().resources, 0, 1, 0)))
         assertFalse(descriptions().any { it.startsWith("Average round trip") })
     }
@@ -133,12 +134,10 @@ class BatchTraceCardComposeTest {
                 )
             }
             if (cancelled) harness.holder.cancelBatchTrace()
-            state.value = harness.state
-            advanceFrames()
+            render(harness.state)
             assertTrue(descriptions().contains(C.contactsResultsAvgRTTLabel(host.get().resources, 100, 100, 100)))
             if (clear) harness.holder.clearPath() else harness.holder.addNode(contact(0xBB, name = "New route"))
-            state.value = harness.state
-            advanceFrames()
+            render(harness.state)
             assertFalse(descriptions().any { it.startsWith("Average round trip") || it.contains("successful") })
             assertFalse(texts().any { it.contains("SNR") })
             assertEquals(listOf(success), harness.state.completedResults)
@@ -157,8 +156,7 @@ class BatchTraceCardComposeTest {
 
         val job = harness.start { harness.holder.runBatchTrace() }
         assertTrue(harness.state.batchPresentationActive)
-        state.value = harness.state
-        advanceFrames()
+        render(harness.state)
         assertTrue(descriptions().contains(C.contactsResultsBatchProgressLabel(host.get().resources, 1, 3)))
 
         harness.respond(sender.sent.single().tag, listOf(node(0xAA, 5.0), node(null, 0.0)), RADIO)
@@ -172,8 +170,7 @@ class BatchTraceCardComposeTest {
         assertFalse(harness.state.batchPresentationActive)
         assertEquals(HopStats(7.0, 5.0, 9.0), harness.state.hopStats(1))
         assertEquals(2, harness.state.completedResults.size)
-        state.value = harness.state
-        advanceFrames()
+        render(harness.state)
         assertTrue(texts().contains("SNR: 9.0 dB"))
         assertFalse(descriptions().any { it.startsWith("Average signal to noise ratio") })
         assertFalse(descriptions().any { it.startsWith("Average round trip") || it.startsWith("Batch progress") })
@@ -182,31 +179,38 @@ class BatchTraceCardComposeTest {
         harness.time.advanceBy(500.milliseconds)
         assertTrue(job.isCompleted)
         assertEquals(2, harness.state.completedResults.size)
-        state.value = harness.state
-        advanceFrames()
+        render(harness.state)
         assertTrue(texts().contains("SNR: 9.0 dB"))
         assertFalse(descriptions().any { it.startsWith("Average signal to noise ratio") })
 
         val next = harness.start { harness.holder.runBatchTrace() }
         assertTrue(harness.state.batchPresentationActive)
         assertTrue(harness.state.completedResults.isEmpty())
-        state.value = harness.state
-        advanceFrames()
+        render(harness.state)
         assertTrue(descriptions().contains(C.contactsResultsBatchProgressLabel(host.get().resources, 1, 3)))
         harness.holder.cancelBatchTrace()
         harness.main.runCurrent()
         assertTrue(next.isCompleted)
     }
 
+    private fun render(snapshot: TracePathState) {
+        host.get().runOnUiThread { state.value = snapshot }
+        advanceFrames()
+        assertEquals(snapshot, renderedState, "The mounted results must observe every state transition")
+    }
+
     private fun advanceFrames() {
         repeat(6) {
-            Snapshot.sendApplyNotifications()
+            host.get().runOnUiThread { Snapshot.sendApplyNotifications() }
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
         }
-        val root = composeRoot()
-        root.javaClass.methods.filter { it.name == "measureAndLayout" }.forEach { method ->
-            if (method.parameterCount == 1) method.invoke(root, true) else method.invoke(root)
+        host.get().runOnUiThread {
+            val root = composeRoot()
+            root.javaClass.methods.filter { it.name == "measureAndLayout" }.forEach { method ->
+                if (method.parameterCount == 1) method.invoke(root, true) else method.invoke(root)
+            }
         }
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
     }
 
     private fun nodes(): List<SemanticsNode> {

@@ -63,8 +63,9 @@ class AndroidMessagingNotificationDeliveryTest {
         assertEquals(1, notification.actions[0].remoteInputs?.size)
         assertFalse(notification.actions[0].actionIntent.isImmutable)
         assertTrue(notification.actions[1].actionIntent.isImmutable)
-        val contentIntent = delivery.contentPendingIntent(request)
-        assertEquals(contentIntent, notification.contentIntent)
+        val contentIntent = notification.contentIntent
+        assertNotNull(contentIntent)
+        assertNotEquals(delivery.contentPendingIntent(request), contentIntent)
         assertTrue(contentIntent.isImmutable)
         assertTrue(contentIntent.isActivity)
         assertTrue(notification.actions[0].actionIntent.isBroadcast)
@@ -104,7 +105,15 @@ class AndroidMessagingNotificationDeliveryTest {
             assertTrue(pending.isImmutable)
             assertEquals(ComponentName(context, NotificationOpenActivity::class.java), launch.component)
             assertEquals("com.meshcoreone.android.notification.OPEN", launch.action)
-            assertEquals("meshcore-notification://action/content%2F$index/OPEN", launch.dataString)
+            assertEquals(
+                "meshcore-notification://action/content%2F$index/OPEN",
+                launch.data?.buildUpon()?.clearQuery()?.build().toString(),
+            )
+            assertEquals(
+                launch.getStringExtra(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+                launch.data?.getQueryParameter("post"),
+            )
+            assertNotNull(launch.data?.getQueryParameter("post"))
             assertEquals(payload, NotificationPayloadCodec.read(launch))
             assertFalse(launch.hasExtra(NotificationActionReceiver.EXTRA_ACTION))
             assertTrue(launch.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
@@ -119,11 +128,13 @@ class AndroidMessagingNotificationDeliveryTest {
         val second = request().copy(id = NotificationId("BB"))
         assertEquals(first.id.value.hashCode(), second.id.value.hashCode())
 
-        val firstPending = delivery.contentPendingIntent(first)
+        val firstLaunch = delivery.contentLaunchIntent(first)
+        val firstPending = delivery.contentPendingIntent(first, firstLaunch)
         val secondPending = delivery.contentPendingIntent(second)
 
         assertNotEquals(firstPending, secondPending)
-        assertEquals(firstPending, delivery.contentPendingIntent(first))
+        assertEquals(firstPending, delivery.contentPendingIntent(first, firstLaunch))
+        assertNotEquals(firstPending, delivery.contentPendingIntent(first))
     }
 
     @Test

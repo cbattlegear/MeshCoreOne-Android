@@ -140,6 +140,45 @@ class NotificationOpenActivityTest {
     }
 
     @Test
+    fun builtReplacementCannotRewriteVisibleOrReversePostedContentToken() = runTest {
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { true }
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                AndroidMessagingNotificationDelivery.CHANNEL_MESSAGES_SILENT,
+                "Messages",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        val firstRequest = request("reused")
+        val secondPayload = NotificationPayload.DirectMessage(contact, UUID(0, 100))
+        val first = delivery.buildNotification(firstRequest)
+        val tag = AndroidMessagingNotificationDelivery.TAG_PREFIX + firstRequest.id.value
+        manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, first)
+        val second = delivery.buildNotification(firstRequest.copy(payload = secondPayload))
+        assertFalse(first.contentIntent == second.contentIntent)
+
+        fun assertToken(notification: Notification, expected: NotificationPayload) {
+            notification.contentIntent.send()
+            val launched = shadowOf(context).nextStartedActivity
+            assertEquals(expected, NotificationPayloadCodec.read(launched))
+            val postId = notification.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)
+            assertNotNull(postId)
+            assertEquals(postId, launched.getStringExtra(AndroidMessagingNotificationDelivery.EXTRA_POST_ID))
+            assertEquals(postId, launched.data?.getQueryParameter("post"))
+        }
+
+        // B is built but unpublished: A's visible token must still represent A.
+        assertToken(manager.activeNotifications.single().notification, payload)
+        manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, second)
+        assertToken(manager.activeNotifications.single().notification, secondPayload)
+        // Reverse publication relative to build order must not change either immutable token.
+        manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, first)
+        assertToken(manager.activeNotifications.single().notification, payload)
+        assertToken(second, secondPayload)
+    }
+
+    @Test
     @Config(shadows = [ReplacementDuringLaunchShadow::class])
     fun replacementPostedAfterTapSurvivesOlderPostRetirement() = runTest {
         shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -294,7 +333,7 @@ class NotificationOpenActivityTest {
 
         @Implementation
         fun startActivity(intent: Intent) {
-            Shadow.directlyOn(
+            Shadow.directlyOn<Unit>(
                 activity,
                 Activity::class.java,
                 "startActivity",

@@ -225,14 +225,20 @@ class AndroidMessagingNotificationDelivery(
         )
     }
 
-    internal fun contentLaunchIntent(request: NotificationRequest): Intent = NotificationPayloadCodec.write(
-        Intent(context, NotificationOpenActivity::class.java)
-            .setAction(ACTION_PREFIX + ACTION_OPEN)
-            .putExtra(EXTRA_POST_ID, UUID.randomUUID().toString())
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            .setData(Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$ACTION_OPEN")),
-        request.payload,
-    )
+    internal fun contentLaunchIntent(request: NotificationRequest): Intent {
+        val postId = UUID.randomUUID().toString()
+        return NotificationPayloadCodec.write(
+            Intent(context, NotificationOpenActivity::class.java)
+                .setAction(ACTION_PREFIX + ACTION_OPEN)
+                .putExtra(EXTRA_POST_ID, postId)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .setData(
+                    Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$ACTION_OPEN")
+                        .buildUpon().appendQueryParameter("post", postId).build(),
+                ),
+            request.payload,
+        )
+    }
 
     private fun publishConversationShortcut(request: NotificationRequest) {
         if (request.category !in MESSAGE_CATEGORIES || request.threadIdentifier == null) return

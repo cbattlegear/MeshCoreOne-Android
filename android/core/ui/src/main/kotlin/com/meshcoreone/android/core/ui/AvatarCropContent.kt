@@ -38,6 +38,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -77,6 +80,9 @@ fun AvatarCropView(
     val moveDown = uiString(UiText.Resource(C.contactsDetailAvatarCropMoveDown))
     val moveLeft = uiString(UiText.Resource(C.contactsDetailAvatarCropMoveLeft))
     val moveRight = uiString(UiText.Resource(C.contactsDetailAvatarCropMoveRight))
+    // Read before Dialog installs its own constrained content window.
+    val hostWindowWidth = LocalWindowInfo.current.containerSize.width
+    val regularHostWidth = with(LocalDensity.current) { hostWindowWidth.toDp() >= 600.dp }
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(modifier.fillMaxWidth(0.95f), shape = MaterialTheme.shapes.large) {
             SharedUiScaffold(topBar = {
@@ -93,14 +99,14 @@ fun AvatarCropView(
             }) {
                 BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(Color.Black)) {
                     val size = AvatarCropGeometry.cropSize(CropSize(maxWidth.value.toDouble(), maxHeight.value.toDouble()),
-                        maxWidth >= 600.dp)
+                        regularHostWidth)
                     val imageSize = CropSize(image.width.toDouble(), image.height.toDouble())
                     val resolved = geometry.copy(imageSize = imageSize).resized(size)
                     LaunchedEffect(size, imageSize, geometry) {
                         if (resolved != geometry) latestChange(resolved)
                     }
                     val pan = size * AvatarCropGeometry.PAN_STEP_FRACTION
-                    Canvas(Modifier.fillMaxSize().pointerInput(image) {
+                    Canvas(Modifier.fillMaxSize().testTag("avatar-crop-canvas").pointerInput(image) {
                         val accumulator = CropGestureAccumulator(latestGeometry)
                         detectTransformGestures { _, translation, zoom, _ ->
                             latestChange(accumulator.transform(latestGeometry, zoom.toDouble(), CropOffset(

@@ -10,6 +10,7 @@ import android.content.ContextWrapper
 import android.content.res.Configuration
 import android.content.pm.ApplicationInfo
 import android.os.Looper
+import android.view.Display
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
@@ -134,6 +135,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowDialog
+import org.robolectric.shadows.ShadowDisplayManager
 import org.robolectric.shadows.ShadowViewRootImpl
 
 @RunWith(RobolectricTestRunner::class)
@@ -626,6 +628,26 @@ class SharedUiComposeTest {
     }
 
     private fun resizeDp(widthDp: Int, heightDp: Int, density: Float) {
+        val orientation = if (widthDp > heightDp) "land" else "port"
+        ShadowDisplayManager.changeDisplay(
+            Display.DEFAULT_DISPLAY, "+w${widthDp}dp-h${heightDp}dp-$orientation",
+        )
+        compose.runOnUiThread {
+            val activity = controller.get()
+            val configuration = Configuration(activity.resources.configuration).apply {
+                screenWidthDp = widthDp
+                screenHeightDp = heightDp
+                smallestScreenWidthDp = minOf(widthDp, heightDp)
+                this.orientation = if (widthDp > heightDp) {
+                    Configuration.ORIENTATION_LANDSCAPE
+                } else {
+                    Configuration.ORIENTATION_PORTRAIT
+                }
+            }
+            activity.resources.updateConfiguration(configuration, activity.resources.displayMetrics)
+            activity.onConfigurationChanged(configuration)
+            activity.window.decorView.dispatchConfigurationChanged(configuration)
+        }
         resize((widthDp * density).roundToInt(), (heightDp * density).roundToInt())
     }
 

@@ -5,6 +5,7 @@ package com.meshcoreone.android.app.container
 import android.Manifest
 import android.app.NotificationManager
 import android.os.Build
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -68,6 +69,7 @@ import org.robolectric.Robolectric
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowDialog
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
@@ -276,7 +278,19 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 compose.onAllNodesWithTag("room-authentication-password").fetchSemanticsNodes().singleOrNull()
                     ?.config?.getOrNull(SemanticsProperties.EditableText)?.text == ""
             }
-            compose.runOnUiThread { host.get().onBackPressedDispatcher.onBackPressed() }
+            val sheet = compose.runOnIdle {
+                assertNotNull(ShadowDialog.getLatestDialog()).also { assertTrue(it.isShowing) }
+            }
+            repeat(2) {
+                compose.runOnIdle {
+                    if (sheet.isShowing) {
+                        sheet.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
+                        sheet.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
+                    }
+                }
+                compose.waitForIdle()
+                assertEquals(previous, n.state.value.stacks.getValue(AppTab.CHATS))
+            }
             await(h) { n.state.value.pendingRoomAuthentication == null }
             assertEquals(previous, n.state.value.stacks.getValue(AppTab.CHATS))
             assertEquals(ChatSelection.Direct(peer), n.state.value.chatsSelectedRoute)
@@ -338,6 +352,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             compose.onNodeWithTag("room-authentication-submit").performClick()
             await(h) { (n.state.value.chatsSelectedRoute as? ChatSelection.Room)?.session?.isConnected == true }
             await(h) { n.state.value.pendingRoomAuthentication == null }
+            val roomEntry = n.state.value.activeStack.last()
+            await(h) { compose.onAllNodesWithTag("entry:${roomEntry.id}").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("entry:${roomEntry.id}").assertIsDisplayed()
             h.eventually("mounted room detail marks messages read after authentication") {
                 kotlinx.coroutines.runBlocking { store.fetchRemoteNodeSession(EntityKey(radio, room.id))?.unreadCount == 0L }
             }
@@ -1603,7 +1620,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 h.links.radios.size == 2 && h.sessions.current == null
             }
             releaseAcknowledgement.complete(Unit)
-            await(h) { compose.onAllNodesWithTag("contact-link-error").fetchSemanticsNodes().isNotEmpty() }
+            compose.waitForIdle()
+            h.eventually("retired ACK-backed import reports disconnection") {
+                compose.onAllNodesWithTag("contact-link-error").fetchSemanticsNodes().isNotEmpty()
+            }
             assertEquals(pending.deliveryId, navigation.state.value.pendingContactLink?.deliveryId)
             assertNull(navigation.state.value.pendingContactDetail)
             replacementHandshake.complete(Unit)

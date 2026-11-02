@@ -285,7 +285,7 @@ class RoomAccessibilityComposeTest {
         compose.onNode(hasSetTextAction()).performTextInput("fixture-password")
         compose.onNodeWithText(text(Rooms.remoteNodesAuthJoinRoom)).performClick()
         compose.waitUntil { fixture.joins.isNotEmpty() }
-        assertEquals(listOf(Triple(alice, "fixture-password", false)), fixture.joins)
+        assertEquals(listOf(Triple(fixture.roomContact, "fixture-password", false)), fixture.joins)
         assertTrue(fixture.holder.state.value.session.isConnected)
     }
 
@@ -422,6 +422,10 @@ class RoomAccessibilityComposeTest {
     ) :
         RoomConversationDependencies, ChatLinkEnvironment {
         var stored = messages
+        val roomContact = ContactDTO(
+            radioId = room.radioId, publicKey = room.publicKey, name = room.name, typeRawValue = 3u,
+            lastHeardTimestamp = null,
+        )
         val retries = mutableListOf<Pair<UUID, UUID>>()
         val joins = mutableListOf<Triple<ContactDTO, String?, Boolean>>()
         val external = mutableListOf<String>()
@@ -433,7 +437,7 @@ class RoomAccessibilityComposeTest {
         override val data = object : RoomConversationDataSource {
             override suspend fun fetchMessages(session: RemoteNodeSessionDTO) = stored
             override suspend fun refreshSession(session: RemoteNodeSessionDTO) = room
-            override suspend fun contactFor(session: RemoteNodeSessionDTO) = alice
+            override suspend fun contactFor(session: RemoteNodeSessionDTO) = roomContact
             override suspend fun markAsRead(session: RemoteNodeSessionDTO) = Unit
             override suspend fun markFailedSendsSeen(session: RemoteNodeSessionDTO) = Unit
         }

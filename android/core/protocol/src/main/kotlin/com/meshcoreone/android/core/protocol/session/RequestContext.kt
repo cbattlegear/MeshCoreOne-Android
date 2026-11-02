@@ -1,7 +1,6 @@
 // PortedFrom: MeshCore/Sources/MeshCore/Session/RequestContext.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.protocol.session
 
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -17,11 +16,21 @@ internal class RequestContext(val caller: CoroutineContext) {
     private val sendLock = Any()
     private var currentSend: Deferred<Unit>? = null
     private var currentSendIsCleanup = false
-    val entered = AtomicBoolean(false)
-    val mayHaveWritten = AtomicBoolean(false)
-    fun beforeSend(cleanup: Boolean = false) {
+    private var dispatchClosed = false
+    private var mayHaveWritten = false
+
+    fun beforeSend(cleanup: Boolean = false) = synchronized(sendLock) {
+        if (dispatchClosed) throw CancellationException("Request dispatch was cancelled")
         if (!cleanup) caller.ensureActive()
-        mayHaveWritten.set(true)
+        mayHaveWritten = true
+    }
+
+    fun cancelDispatch(): ChannelWriteCancellationDisposition = synchronized(sendLock) {
+        if (mayHaveWritten) ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN
+        else {
+            dispatchClosed = true
+            ChannelWriteCancellationDisposition.DEFINITELY_UNSENT
+        }
     }
     fun attachSend(send: Deferred<Unit>, cleanup: Boolean) = synchronized(sendLock) {
         currentSend = send
@@ -46,18 +55,20 @@ class RequestResponseSerializer(
     fun release() = mutex.unlock()
 
     suspend fun <T> withSerialization(operation: suspend () -> T): T = withOwnedSerialization {
-        mayHaveWritten.set(true)
+        beforeSend()
         operation()
     }
 
-    internal suspend fun <T> withOwnedSerialization(operation: suspend RequestContext.() -> T): T {
+    internal suspend fun <T> withOwnedSerialization(
+        dispatch: ChannelWriteDispatch? = null,
+        operation: suspend RequestContext.() -> T,
+    ): T {
         val caller = currentCoroutineContext()
         caller.ensureActive()
         val context = RequestContext(caller)
         val task = scope.async {
             mutex.withLock {
                 caller.ensureActive()
-                context.entered.set(true)
                 context.operation()
             }
         }
@@ -68,8 +79,10 @@ class RequestResponseSerializer(
             return task.await()
         } catch (cancelled: CancellationException) {
             // A written request still owns its reply; cancellation never hands that reply to the next caller.
-            if (!context.mayHaveWritten.get()) task.cancel()
+            val disposition = context.cancelDispatch()
+            if (disposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) task.cancel()
             else context.cancelInProgressSend()
+            dispatch?.cancelled(disposition)
             throw cancelled
         }
     }

@@ -57,6 +57,11 @@ interface ChannelSessionOps {
     /** Missing sent indices remain uncorrelated; preserve unread slots and reconnect before retrying them. */
     suspend fun getChannels(indices: List<UByte>): ChannelFetchResult
     suspend fun setChannel(index: UByte, name: String, secret: Bytes)
+    /** Alternate implementations without a dispatch fence conservatively leave the handle UNKNOWN. */
+    suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        setChannel(index, name, secret)
+    }
 }
 
 interface MessageFetchSessionOps {

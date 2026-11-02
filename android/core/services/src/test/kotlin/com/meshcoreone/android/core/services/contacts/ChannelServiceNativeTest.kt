@@ -13,6 +13,9 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.session.ChannelSessionOps
+import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
+import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
+import com.meshcoreone.android.core.protocol.transport.mock.MockTransport
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
@@ -35,6 +38,122 @@ import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 
 class ChannelServiceNativeTest {
+    @TestFactory
+    fun dispatchCancellationAccounting(): List<DynamicTest> = listOf(false, true).flatMap { clear ->
+        channelsCases("WP-405 dispatch accounting ${if (clear) "clear" else "write"}",
+            "real serializer queued cancellation permits a fresh acknowledged write without quarantine" to {
+                realDispatchCancellation(clear, sent = false)
+            },
+            "real transport dispatch cancellation propagates and quarantines later writes" to {
+                realDispatchCancellation(clear, sent = true)
+            },
+            "unknown dispatch cancellation remains quarantined" to {
+                val radio = channelsRadioId()
+                val base = ChannelsMockSession()
+                val rows = ChannelsInMemoryStore()
+                rows.saveChannel(radio, ChannelInfo(1u, "Original", channelsSecret(0x11)))
+                val original = rows.fetchChannel(radio, 1u)
+                val entered = CompletableDeferred<ChannelWriteDispatch>()
+                val session = object : ChannelSessionOps by base {
+                    override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+                        base.setChannel(index, name, secret, dispatch)
+                        entered.complete(dispatch)
+                        awaitCancellation()
+                    }
+                }
+                val service = ChannelService(session, rows, null)
+                val pending = launch(start = CoroutineStart.UNDISPATCHED) {
+                    if (clear) service.clearChannel(radio, 1u)
+                    else service.setChannelWithSecret(radio, 1u, "Cancelled", channelsSecret(0x22))
+                }
+                val dispatch = entered.await()
+                pending.cancelAndJoin()
+                assertTrue(pending.isCancelled)
+                assertEquals(ChannelWriteCancellationDisposition.UNKNOWN, dispatch.cancellationDisposition)
+                assertFailsWith<ChannelMutationError.ReconciliationRequired> {
+                    service.setChannelWithSecret(radio, 1u, "Must not retry", channelsSecret(0x33))
+                }
+                assertEquals(original, rows.fetchChannel(radio, 1u))
+                assertEquals(1, base.recordedSetChannels.size)
+            },
+        )
+    }
+
+    private suspend fun CoroutineScope.realDispatchCancellation(clear: Boolean, sent: Boolean) {
+        val radio = channelsRadioId()
+        val transport = MockTransport()
+        val real = channelsStartedSession(transport, { transport.sentData.size }, transport::simulateReceive)
+        try {
+            val rows = ChannelsInMemoryStore()
+            rows.saveChannel(radio, ChannelInfo(1u, "Original", channelsSecret(0x11)))
+            val original = rows.fetchChannel(radio, 1u)
+            val dispatches = mutableListOf<ChannelWriteDispatch>()
+            val session = object : ChannelSessionOps by real {
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+                    dispatches += dispatch
+                    real.setChannel(index, name, secret, dispatch)
+                }
+            }
+            val service = ChannelService(session, rows, null)
+            val occupying = if (sent) null else async(start = CoroutineStart.UNDISPATCHED) { real.getChannel(0u) }
+            try {
+                if (occupying != null) channelsWaitUntil("The real read must hold the serializer") { transport.sentData.size == 2 }
+                val observed = CompletableDeferred<CancellationException>()
+                val pending = launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        if (clear) service.clearChannel(radio, 1u)
+                        else service.setChannelWithSecret(radio, 1u, "Cancelled", channelsSecret(0x22))
+                    } catch (cancelled: CancellationException) {
+                        observed.complete(cancelled)
+                        throw cancelled
+                    }
+                }
+                if (sent) channelsWaitUntil("The actual channel packet must reach the transport") {
+                    transport.sentData.any { it[0].toInt() == 0x20 }
+                }
+                assertEquals(1, dispatches.size)
+                pending.cancel(CancellationException("cancelled channel consent"))
+                pending.join()
+                assertTrue(pending.isCancelled)
+                assertEquals("cancelled channel consent", observed.await().message)
+                assertEquals(original, rows.fetchChannel(radio, 1u), "Cancellation cannot manufacture a store commit")
+                assertEquals(
+                    if (sent) ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN
+                    else ChannelWriteCancellationDisposition.DEFINITELY_UNSENT,
+                    dispatches.single().cancellationDisposition,
+                )
+                if (sent) {
+                    assertFailsWith<ChannelMutationError.ReconciliationRequired> {
+                        service.setChannelWithSecret(radio, 1u, "Must not retry", channelsSecret(0x33))
+                    }
+                    assertEquals(1, dispatches.size)
+                } else {
+                    assertTrue(transport.sentData.none { it[0].toInt() == 0x20 })
+                    transport.simulateReceive(channelsChannelInfoPacket(0, "", channelsSecret(0)))
+                    occupying?.await()
+                    val next = async(start = CoroutineStart.UNDISPATCHED) {
+                        service.setChannelWithSecret(radio, 1u, "Fresh consent", channelsSecret(0x33))
+                    }
+                    channelsWaitUntil("The new consent must dispatch through the real serializer") {
+                        transport.sentData.any { it[0].toInt() == 0x20 }
+                    }
+                    assertEquals(2, dispatches.size)
+                    assertTrue(dispatches[0] !== dispatches[1], "Every attempt requires a fresh dispatch handle")
+                    assertEquals(original, rows.fetchChannel(radio, 1u), "A sent request is not an acknowledgement")
+                    transport.simulateOK()
+                    next.await()
+                    assertEquals("Fresh consent", rows.fetchChannel(radio, 1u)?.name)
+                    assertEquals(channelsSecret(0x33), rows.fetchChannel(radio, 1u)?.secret)
+                    assertEquals(1, transport.sentData.count { it[0].toInt() == 0x20 })
+                }
+            } finally {
+                occupying?.cancelAndJoin()
+            }
+        } finally {
+            real.stop()
+        }
+    }
+
     @TestFactory
     fun persistedWriteOutcomes(): List<DynamicTest> = channelsCases("WP-405 returned persistence UUID",
         "post-save channel fetch failure reports the actual commit without fabricating a DTO" to {
@@ -167,8 +286,8 @@ class ChannelServiceNativeTest {
             val base = ChannelsMockSession()
             val ack = CompletableDeferred<Unit>()
             val session = object : ChannelSessionOps by base {
-                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
-                    base.setChannel(index, name, secret)
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+                    base.setChannel(index, name, secret, dispatch)
                     if (name == "#test") ack.await()
                 }
             }
@@ -214,8 +333,8 @@ class ChannelServiceNativeTest {
             val base = ChannelsMockSession()
             val ack = CompletableDeferred<Unit>()
             val session = object : ChannelSessionOps by base {
-                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
-                    base.setChannel(index, name, secret)
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+                    base.setChannel(index, name, secret, dispatch)
                     if (name == "Explicit") ack.await()
                 }
             }
@@ -234,8 +353,8 @@ class ChannelServiceNativeTest {
             val base = ChannelsMockSession()
             val ack = CompletableDeferred<Unit>()
             val session = object : ChannelSessionOps by base {
-                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
-                    base.setChannel(index, name, secret)
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+                    base.setChannel(index, name, secret, dispatch)
                     ack.await()
                     base.setStubbedChannels(mapOf(index to ChannelInfo(index, name, secret)))
                 }
@@ -258,8 +377,8 @@ class ChannelServiceNativeTest {
             val base = ChannelsMockSession()
             val ack = CompletableDeferred<Unit>()
             val session = object : ChannelSessionOps by base {
-                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
-                    base.setChannel(index, name, secret)
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+                    base.setChannel(index, name, secret, dispatch)
                     if (name.isEmpty()) ack.await()
                 }
             }
@@ -281,8 +400,8 @@ class ChannelServiceNativeTest {
             val base = ChannelsMockSession()
             val ack = CompletableDeferred<Unit>()
             val session = object : ChannelSessionOps by base {
-                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
-                    base.setChannel(index, name, secret)
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+                    base.setChannel(index, name, secret, dispatch)
                     if (name == "A") ack.await()
                 }
             }
@@ -302,8 +421,8 @@ class ChannelServiceNativeTest {
             val radio = channelsRadioId()
             val base = ChannelsMockSession()
             val session = object : ChannelSessionOps by base {
-                override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
-                    base.setChannel(index, name, secret)
+                override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+                    base.setChannel(index, name, secret, dispatch)
                     awaitCancellation()
                 }
             }

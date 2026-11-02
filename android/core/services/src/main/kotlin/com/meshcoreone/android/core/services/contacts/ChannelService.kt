@@ -22,6 +22,8 @@ import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.model.ErrorCode
 import com.meshcoreone.android.core.protocol.model.sha256
 import com.meshcoreone.android.core.protocol.session.ChannelSessionOps
+import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
+import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
 import java.util.logging.Logger
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -378,7 +380,7 @@ class ChannelService(
         val truncatedName = name.utf8Prefix(ProtocolLimits.MAX_USABLE_NAME_BYTES)
         val prior = dataStore.fetchChannel(radioId, index)
         val savedId = retainUncertainWrite(
-            send = { session.setChannel(index, truncatedName, secret) },
+            send = { dispatch -> session.setChannel(index, truncatedName, secret, dispatch) },
             reconcile = { dataStore.saveChannel(radioId, ChannelInfo(index, truncatedName, secret)) },
         )
         knownSlots[radioId] = knownSlots[radioId].orEmpty() + index
@@ -392,7 +394,7 @@ class ChannelService(
             // Read the row first: after the clear write the empty-named channel may not be found.
             val channelToDelete = dataStore.fetchChannel(radioId, index)
             retainUncertainWrite(
-                send = { session.setChannel(index, "", Bytes(ByteArray(ProtocolLimits.CHANNEL_SECRET_SIZE))) },
+                send = { dispatch -> session.setChannel(index, "", Bytes(ByteArray(ProtocolLimits.CHANNEL_SECRET_SIZE)), dispatch) },
                 reconcile = {
                     // deleteChannel wipes the slot's messages with the row; with no row, wipe them directly.
                     if (channelToDelete != null) dataStore.deleteChannel(EntityKey(channelToDelete.radioId, channelToDelete.id))
@@ -411,15 +413,18 @@ class ChannelService(
         uncertainWrite?.let { throw ChannelMutationError.ReconciliationRequired(it) }
     }
 
-    private suspend fun <T> retainUncertainWrite(send: suspend () -> Unit, reconcile: suspend () -> T): T {
+    private suspend fun <T> retainUncertainWrite(send: suspend (ChannelWriteDispatch) -> Unit, reconcile: suspend () -> T): T {
         currentCoroutineContext().ensureActive()
+        val dispatch = ChannelWriteDispatch()
         var acknowledged = false
         try {
-            send()
+            send(dispatch)
             acknowledged = true
             return reconcile()
         } catch (failure: Exception) {
-            if (acknowledged || failure !is MeshCoreException.DeviceError) {
+            val definitelyUnsent = !acknowledged && failure is CancellationException &&
+                dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT
+            if (!definitelyUnsent && (acknowledged || failure !is MeshCoreException.DeviceError)) {
                 uncertainWrite = failure
                 logger.warning("Channel write outcome requires a fresh session and reconciliation: ${failure.describe()}")
             }

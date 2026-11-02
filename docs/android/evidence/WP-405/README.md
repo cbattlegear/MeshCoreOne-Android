@@ -1,6 +1,39 @@
 # WP-405 evidence
 
-## Form-instance follow-up: source only, execution held
+## Resumed source candidate: verification pending
+
+The user approved resumption, removing the earlier administrative pause/local
+execution hold but not supported execution admission, required local results,
+independent review, device evidence or frozen shared-state gates.
+The two retained unpublished commits remain in history.
+Actual merged producer PR #525 (`2d4c0eb4fdd629ef960698fa2e4562bc29c7c9d8`)
+is now available through current main
+`1e1ff70345f203b41f9a8b04836c2cc4640500c9`, integrated without conflicts in
+`132112943c2600126924805bbe2065b9be1a1682`.
+
+Actual trusted admission commands returned the reviewed support capabilities:
+
+```powershell
+python .\tools\android-port\local\reserve.py admit --wp WP-405 --path android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/contacts/ChannelService.kt --operation modify-related-consumer
+python .\tools\android-port\local\reserve.py admit --wp WP-405 --path android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/contacts/ChannelServiceNativeTest.kt --operation add-or-update-related-test
+```
+
+The existing advisory revision 18 includes both paths/operations. This is not
+a privileged controller receipt or source-ownership transfer.
+The service consumes fresh dispatch handles for set and clear; only proven
+unsent cancellation avoids quarantine. Six new native definitions exercise
+both operations, real queued/sent transport schedules and an UNKNOWN negative
+control. Existing delegated wrappers retain their actual holds by forwarding
+the new overload. No producer test result is consumer acceptance.
+
+Dependency-free validation passes, but Kotlin compilation and discovery of the
+resumed candidate are not yet established. The capacity owner's reported
+cleanup is not a slot grant or proof this build fits. Required execution uses
+the supported interlocked affected launcher against the committed candidate
+and current trusted base; there is no direct Gradle, unsafe WSL invocation,
+blind hosted retry or publication of untested source.
+
+## Form-instance follow-up: historical source-only held candidate
 
 This follow-up builds on local unpublished
 `288b6f558fb21174c7251bfdcb451d986775350a`, not on a new hosted pass.

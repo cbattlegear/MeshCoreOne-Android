@@ -70,7 +70,7 @@ def executable_lines(script: str, *, expression_lines=(), powershell=False):
     ]
 
 
-def validate_fixed_steps(steps, expected, label: str):
+def validate_fixed_steps(steps, expected, label: str, *, powershell=True, expression_lines=()):
     if len(steps) != len(expected):
         raise PortError(f"{label} has missing or additional steps")
     for index, (step, fixed) in enumerate(zip(steps, expected)):
@@ -79,7 +79,12 @@ def validate_fixed_steps(steps, expected, label: str):
             or {key: value for key, value in step.items() if key != "run"}
             != {key: value for key, value in fixed.items() if key != "run"}
             or ("run" in step) != ("run" in fixed)
-            or ("run" in fixed and executable_lines(step["run"], powershell=True) != fixed["run"])
+            or (
+                "run" in fixed
+                and executable_lines(
+                    step["run"], expression_lines=expression_lines, powershell=powershell,
+                ) != fixed["run"]
+            )
         ):
             raise PortError(f"{label} step {index + 1} differs from the fixed execution contract")
 
@@ -317,7 +322,18 @@ def validate_candidate(value: dict, text: str):
         "${{ needs.scope.outputs.controller != 'true' && "
         "needs.scope.outputs.accessibility-suite != 'true' }}"
     )
-    controller_steps = jobs["controller"]["steps"]
+    controller = jobs["controller"]
+    if (
+        set(controller) != {"name", "needs", "runs-on", "timeout-minutes", "steps"}
+        or controller.get("name") != "Controller and workflow policy"
+        or controller.get("needs") != ["scope"]
+        or controller.get("runs-on") != "ubuntu-24.04"
+        or controller.get("timeout-minutes") != "10"
+    ):
+        raise PortError("Controller CI must use the fixed fail-closed job environment and shell")
+    controller_steps = controller["steps"]
+    if not isinstance(controller_steps, list) or any(not isinstance(step, dict) for step in controller_steps):
+        raise PortError("Controller CI steps are malformed")
     selected_steps = [step for step in controller_steps if step.get("name") != "No controller inputs selected"]
     unselected_steps = [step for step in controller_steps if step.get("name") == "No controller inputs selected"]
     if (
@@ -325,7 +341,7 @@ def validate_candidate(value: dict, text: str):
         or len(unselected_steps) != 1 or unselected_steps[0].get("if") != unselected_controller
     ):
         raise PortError("Controller execution must honor either diff-selected inputs or the mandatory accessibility suite")
-    validate_fixed_steps(steps[stage + 1:stage + 5], [
+    validate_fixed_steps(steps[stage + 1:], [
         {
             "name": "Validate localization discovery",
             "if": "${{ steps.gradle.outputs.localization == 'true' }}",
@@ -445,6 +461,52 @@ def validate_candidate(value: dict, text: str):
         ] not in ([runner_command], [parity_runner_command])
     ):
         raise PortError("Controller CI must discover the real native accessibility runner regressions once and fail closed")
+    controller_checks = [
+        "python tools/android-port/controller/verification_config.py --check",
+        "python tools/android-port/controller/validate.py",
+        "python tools/android-port/portmap.py",
+        "python android/parity-tests/audit.py --check",
+        "python android/parity-tests/semantic.py --check",
+    ]
+    runner_lines = executable_lines(
+        runners[0]["run"], expression_lines=(runner_command, parity_runner_command),
+    )
+    if runner_lines not in (
+        [runner_command, *controller_checks], [parity_runner_command, *controller_checks],
+    ):
+        raise PortError("Controller CI must run the complete fixed validation sequence without overrides")
+    validate_fixed_steps(controller_steps, [
+        {
+            "name": "Read-only exact candidate",
+            "if": selected_controller,
+            "uses": "actions/checkout@" + ACTION_PINS["actions/checkout"],
+            "with": {
+                "ref": "${{ github.event.pull_request.head.sha || github.sha }}",
+                "fetch-depth": "0",
+                "persist-credentials": "false",
+            },
+        },
+        {
+            "name": "Setup pinned Python",
+            "if": selected_controller,
+            "uses": "actions/setup-python@" + ACTION_PINS["actions/setup-python"],
+            "with": {"python-version": "3.12.4", "architecture": "x64"},
+        },
+        {
+            "name": "Install checksum-pinned YAML parser",
+            "if": selected_controller,
+            "run": [
+                "python -m pip install --disable-pip-version-check --require-hashes "
+                "--no-deps --only-binary=:all: -r tools/android-port/controller/requirements-ci.txt --quiet",
+            ],
+        },
+        {"name": "Run controller tests once", "if": selected_controller, "run": runner_lines},
+        {
+            "name": "No controller inputs selected",
+            "if": unselected_controller,
+            "run": ['echo "Controller suite not selected."'],
+        },
+    ], "Controller job", powershell=False, expression_lines=(runner_command, parity_runner_command))
     for name in ("build", "external-oracle", "backup-oracle"):
         job = jobs[name]
         if job.get("if") == "${{ always() }}" or "scope" not in job.get("needs", []):

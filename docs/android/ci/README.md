@@ -62,9 +62,13 @@ the exact candidate checkout, classifier and native-suite selector, with their
 bound outputs and no additional scope-step commands or output overrides.
 The Linux job's checkout, pinned setup and preflight steps are fixed before the
 selected stages, and localization, APK inspection/upload and backup handoff
-must immediately follow them. Added or altered intermediate steps cannot replace
-the verifier or change its execution environment before those checks. Candidate
-source changes still require independent trusted-reader review.
+must immediately follow them, with no additional build steps afterward. Added
+or altered intermediate and trailing steps are rejected. Candidate source
+changes still require independent trusted-reader review.
+The controller job also pins its fail-closed job shape, checkout, setup,
+installer, complete runner/validation commands and unselected branch. Extra
+steps and shell, environment or failure-handling overrides are rejected; inert
+Bash comments and both supported runner forms remain allowed.
 PowerShell build-script `#requires` directives are rejected before comment filtering,
 including ASCII case, indentation and argument-whitespace variants: module
 requirements can load code before the fixed commands. Genuinely inert comments,

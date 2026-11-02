@@ -27,6 +27,9 @@ class WorkflowTests(unittest.TestCase):
     def guarded_step(self, workflow, target):
         if target == "scope":
             return workflow["jobs"]["scope"]["steps"][1]
+        if target == "controller":
+            return next(step for step in workflow["jobs"]["controller"]["steps"]
+                        if "controller/test_runner.py" in step.get("run", ""))
         if target == "stage":
             return next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "gradle")
         if target == "aggregate":
@@ -218,7 +221,9 @@ class WorkflowTests(unittest.TestCase):
                 validate_candidate(changed, text)
 
     def test_merged_controller_keeps_parity_and_native_event_discovery_in_one_execution(self):
-        original, text = self.read("android-ci.yml")
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
         runner = next(step for step in original["jobs"]["controller"]["steps"]
                       if "controller/test_runner.py" in step.get("run", ""))
         current = next(line for line in runner["run"].splitlines() if "controller/test_runner.py" in line)
@@ -230,8 +235,12 @@ class WorkflowTests(unittest.TestCase):
             changed = copy.deepcopy(original)
             step = next(step for step in changed["jobs"]["controller"]["steps"]
                         if "controller/test_runner.py" in step.get("run", ""))
-            step["run"] = step["run"].replace(current, command)
-            validate_candidate(changed, text)
+            step["run"] = (
+                "# Ordinary Bash comment\n#requires -Modules ExampleOnly\n"
+                + step["run"].replace(current, command)
+            )
+            text = yaml.safe_dump(changed, sort_keys=False)
+            validate_candidate(parse_yaml(text), text)
 
     def test_combined_controller_discovery_rejects_duplicates_and_unknown_families(self):
         original, text = self.read("android-ci.yml")
@@ -251,6 +260,61 @@ class WorkflowTests(unittest.TestCase):
             step["run"] = step["run"].replace(command, bad)
             with self.subTest(command=bad), self.assertRaises(PortError):
                 validate_candidate(changed, text)
+
+    def test_controller_job_rejects_failure_masking_and_execution_overrides(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for kind in (
+            "masked-runner", "disable-errexit", "remove-validation", "comment-validation",
+            "job-continue-on-error", "job-shell", "job-environment", "runner-shell",
+            "runner-environment", "runner-working-directory", "extra-selected-step",
+            "extra-pinned-action", "installer-command", "installer-shell", "checkout-ref",
+        ):
+            value = copy.deepcopy(original)
+            job = value["jobs"]["controller"]
+            runner = next(step for step in job["steps"] if "controller/test_runner.py" in step.get("run", ""))
+            installer = next(step for step in job["steps"] if step.get("name") == "Install checksum-pinned YAML parser")
+            if kind == "masked-runner":
+                runner["run"] = "set +e\n" + runner["run"] + "\ntrue\n"
+            elif kind == "disable-errexit":
+                runner["run"] = "set +e\n" + runner["run"]
+            elif kind == "remove-validation":
+                runner["run"] = runner["run"].replace("python tools/android-port/controller/validate.py\n", "")
+            elif kind == "comment-validation":
+                runner["run"] = runner["run"].replace(
+                    "python tools/android-port/controller/validate.py", "# python tools/android-port/controller/validate.py",
+                )
+            elif kind == "job-continue-on-error":
+                job["continue-on-error"] = "true"
+            elif kind == "job-shell":
+                job["defaults"] = {"run": {"shell": "bash {0}"}}
+            elif kind == "job-environment":
+                job["env"] = {"BASH_ENV": "/tmp/example-only"}
+            elif kind == "runner-shell":
+                runner["shell"] = "bash {0}"
+            elif kind == "runner-environment":
+                runner["env"] = {"BASH_ENV": "/tmp/example-only"}
+            elif kind == "runner-working-directory":
+                runner["working-directory"] = "example-only"
+            elif kind == "extra-selected-step":
+                job["steps"].insert(job["steps"].index(runner), {"if": runner["if"], "run": "echo example-only"})
+            elif kind == "extra-pinned-action":
+                extra = copy.deepcopy(job["steps"][1])
+                extra["name"] = "Unexpected additional setup"
+                job["steps"].insert(job["steps"].index(runner), extra)
+            elif kind == "installer-command":
+                installer["run"] += "\nset +e\n"
+            elif kind == "installer-shell":
+                installer["shell"] = "bash {0}"
+            else:
+                job["steps"][0]["with"]["ref"] = "${{ github.sha }}"
+            self.assertNotEqual(value, original, f"Mutation {kind} did not change the workflow")
+            text = yaml.safe_dump(value, sort_keys=False)
+            parsed = parse_yaml(text)
+            self.assertEqual(parsed, value)
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_candidate(parsed, text)
 
     def test_protocol_workflow_executes_the_real_nonzero_jvm_suite_on_linux(self):
         from controller.ci import TASKS
@@ -365,7 +429,8 @@ class WorkflowTests(unittest.TestCase):
             "uses": "actions/cache@caa296126883cff596d87d8935842f9db880ef25",
             "with": {"path": "~/.gradle/caches", "key": "gradle-read-only-fixture"},
         })
-        validate_candidate(cached, text)
+        with self.assertRaisesRegex(PortError, "Linux build handoff has missing or additional steps"):
+            validate_candidate(cached, text)
         for kind in ("merge", "gate", "needs", "host", "strategy"):
             value = copy.deepcopy(original)
             if kind == "merge":
@@ -570,6 +635,31 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(kind=kind), self.assertRaises(PortError):
                 validate_candidate(parse_yaml(text), text)
 
+    def test_build_handoffs_reject_additional_steps_after_backup_upload(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        original_steps = original["jobs"]["build"]["steps"]
+        backup = original_steps[-1]
+        self.assertEqual(backup.get("name"), "Transfer actual backup bytes to the platform oracle")
+        extra_action = copy.deepcopy(backup)
+        extra_action["name"] = "Unexpected additional upload"
+        for kind, added_steps in (
+            ("requires", [{"run": "#requires -Modules ExampleOnly\nWrite-Output ok\n"}]),
+            ("command", [{"run": "Write-Output ok\n"}]),
+            ("pinned-action", [extra_action]),
+            ("multiple", [{"run": "Write-Output one\n"}, {"run": "Write-Output two\n"}]),
+        ):
+            value = copy.deepcopy(original)
+            value["jobs"]["build"]["steps"].extend(copy.deepcopy(added_steps))
+            text = yaml.safe_dump(value, sort_keys=False)
+            parsed = parse_yaml(text)
+            self.assertEqual(parsed["jobs"]["build"]["steps"][-len(added_steps):], added_steps)
+            with self.subTest(kind=kind), self.assertRaisesRegex(
+                PortError, "Linux build handoff has missing or additional steps",
+            ):
+                validate_candidate(parsed, text)
+
     def test_workflow_guards_reject_powershell_requires_directives_in_every_fixed_build_script(self):
         import yaml
 
@@ -620,6 +710,9 @@ class WorkflowTests(unittest.TestCase):
         bash_comment = " \t#ReQuIrEs\t-MoDuLeS WorkflowGuardRegressionOnly\n"
         gate["run"] = bash_comment + comments + gate["run"]
         scope["run"] = bash_comment + comments + scope["run"]
+        for step in workflow["jobs"]["controller"]["steps"]:
+            if "run" in step:
+                step["run"] = bash_comment + comments + step["run"]
         for step in workflow["jobs"]["build"]["steps"]:
             if "run" in step and step.get("id") != "gradle":
                 step["run"] = comments + step["run"]
@@ -630,7 +723,7 @@ class WorkflowTests(unittest.TestCase):
         import yaml
 
         original, _ = self.read("android-ci.yml")
-        for target in ("scope", "setup", "stage", "localization", "inspection", "aggregate", "build-condition"):
+        for target in ("scope", "controller", "setup", "stage", "localization", "inspection", "aggregate", "build-condition"):
             for separator in ("\r", "\v", "\f", "\x85", "\u2028", "\u2029"):
                 value = copy.deepcopy(original)
                 if target == "build-condition":
@@ -654,7 +747,7 @@ class WorkflowTests(unittest.TestCase):
         import yaml
 
         original, _ = self.read("android-ci.yml")
-        for target in ("scope", "setup", "stage", "localization", "inspection", "aggregate"):
+        for target in ("scope", "controller", "setup", "stage", "localization", "inspection", "aggregate"):
             value = copy.deepcopy(original)
             step = self.guarded_step(value, target)
             step["run"] = "# ${{ github.event.pull_request.body }}\n" + step["run"]

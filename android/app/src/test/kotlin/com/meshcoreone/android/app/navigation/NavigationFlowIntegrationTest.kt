@@ -46,12 +46,14 @@ import com.meshcoreone.android.feature.nodes.deps.NodesSession
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -65,6 +67,9 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
@@ -606,7 +611,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun newerContactLookupsAndDirectStagingSupersedeOlderInFlightLookups() = runTest {
         val h = ContainerHarness(this, store)
-        h.links.configureRadio {
+        h.links.configureRadio = {
             it.knownContacts += contactFrame(key(20), "Older contact")
             it.knownContacts += contactFrame(key(21), "Newer contact")
         }
@@ -733,6 +738,42 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertNull(n.state.value.pendingContactLink)
             assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
         } finally { deferredChat.cancel(); unmount(); h.container.close() }
+    }
+
+    @Test fun preConnectionContactLookupSurvivesRetryWithinTheFirstConnectionSubmission() = runTest {
+        val h = ContainerHarness(this, store)
+        val chatScheduler = TestCoroutineScheduler()
+        val deferredChat = CoroutineScope(SupervisorJob() + StandardTestDispatcher(chatScheduler))
+        var attempts = 0
+        h.links.configureRadio = { radio ->
+            attempts++
+            if (attempts == 1) radio.connectFailure = IllegalStateException("First attempt failed")
+        }
+        try {
+            val n = h.container.navigation
+            val uri = h.container.nodesFeature.uriCodec.exportContactUri("Retry claim", key(31), ContactType.REPEATER)
+            assertTrue(ChatLinkRouter(h.container.chatsFeature.list.links, deferredChat).route(uri))
+            assertNull(n.state.value.pendingContactLink)
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("the first submission succeeds after retry", virtualBudgetMillis = 30_000) {
+                connecting.isCompleted
+            }
+            connecting.await()
+            h.settle()
+            h.assertReady()
+            assertTrue(attempts > 1)
+
+            chatScheduler.runCurrent()
+            val staged = assertNotNull(n.state.value.pendingContactLink)
+            assertEquals("Retry claim", staged.name)
+            assertEquals(key(31), staged.publicKey)
+            assertEquals(ContactType.REPEATER, staged.type)
+            assertEquals(h.appState.currentRadioId, staged.targetRadioId)
+            assertEquals(n.state.value.generation, staged.generation)
+        } finally {
+            deferredChat.cancel()
+            h.container.close()
+        }
     }
 
     @Test fun interleavedNotificationDestinationsRetireEarlierChatHandoffsBeforeMountedEffectsRun() = runTest {
@@ -1488,5 +1529,218 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertNull(n.state.value.pendingContactDetail)
             assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
         } finally { h.container.close() }
+    }
+
+    @Test fun teardownBetweenValidityAndCommitRejectsContactLookupAndNotificationAcknowledgement() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Commit boundary peer") }
+        val entered = CountDownLatch(2)
+        val release = CountDownLatch(1)
+        var binding: NotificationNavigationBinding? = null
+        try {
+            connect(h)
+            val session = assertNotNull(h.sessions.current)
+            val radio = session.token.radioId
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val navigation = h.container.navigation
+            val generation = navigation.state.value.generation
+            val captured = h.container.captureContactLinkSession(generation)
+            val contactChecks = AtomicInteger()
+            val notificationChecks = AtomicInteger()
+            fun pauseAfterCheck(checks: AtomicInteger, pauseAt: Int, valid: () -> Boolean): Boolean {
+                val result = valid()
+                if (checks.incrementAndGet() == pauseAt) {
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS)) { "Retirement did not release the commit check" }
+                }
+                return result
+            }
+            binding = NotificationNavigationBinding(
+                session.notificationService, navigation, PersistenceNavigationLookup(store),
+                connectedDevice = { h.appState.connectedDevice }, onOutcome = {},
+                isCurrentSession = {
+                    pauseAfterCheck(notificationChecks, 2) { h.container.isCurrentSession(session) }
+                },
+            )
+            val lookup = async(Dispatchers.IO) {
+                navigation.completeContactLookup(
+                    ContactLinkRequest("Stale contact", contact.publicKey, ContactType.CHAT),
+                    contact, radio, generation, radio,
+                ) { pauseAfterCheck(contactChecks, 1, captured) }
+            }
+            val tap = async(Dispatchers.IO) {
+                h.container.handleNotificationResponse(NotificationResponse(
+                    NotificationPayload.DirectMessage(EntityKey(radio, contact.id), UUID.randomUUID()), null, null,
+                ))
+            }
+            assertTrue(entered.await(10, TimeUnit.SECONDS), "Both routes must pause after their validity checks")
+
+            val disconnect = async { h.manager.disconnect() }
+            h.eventually("teardown completes for the captured session") { disconnect.isCompleted }
+            disconnect.await()
+            assertNull(h.manager.snapshot.value.token)
+            val afterRetirement = navigation.state.value
+            release.countDown()
+            assertFalse(lookup.await())
+            assertFalse(tap.await(), "A stale notification must remain unacknowledged")
+            assertEquals(afterRetirement, navigation.state.value)
+        } finally {
+            release.countDown()
+            binding?.close()
+            h.container.close()
+        }
+    }
+
+    @Test fun contactCommitWinsWhenTeardownStartsInsideItsSerializedCommit() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Commit winner") }
+        val inside = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        try {
+            connect(h)
+            val session = assertNotNull(h.sessions.current)
+            val radio = session.token.radioId
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val navigation = h.container.navigation
+            val generation = navigation.state.value.generation
+            val captured = h.container.captureContactLinkSession(generation)
+            val checks = AtomicInteger()
+            val route = async(Dispatchers.IO) {
+                navigation.completeContactLookup(
+                    ContactLinkRequest("Winner", contact.publicKey, ContactType.CHAT),
+                    contact, radio, generation, radio,
+                ) {
+                    val result = captured()
+                    if (checks.incrementAndGet() == 2) {
+                        inside.countDown()
+                        check(release.await(10, TimeUnit.SECONDS)) { "Commit boundary was not released" }
+                    }
+                    result
+                }
+            }
+            assertTrue(inside.await(10, TimeUnit.SECONDS))
+            val disconnectStarted = CountDownLatch(1)
+            val disconnect = async(Dispatchers.IO) {
+                disconnectStarted.countDown()
+                h.manager.disconnect()
+            }
+            assertTrue(disconnectStarted.await(10, TimeUnit.SECONDS))
+            assertEquals(session.token, h.manager.snapshot.value.token)
+            release.countDown()
+            assertTrue(route.await())
+            h.eventually("disconnect completes after the committed route") { disconnect.isCompleted }
+            disconnect.await()
+            assertEquals(contact.id, navigation.state.value.selectedContact?.id)
+        } finally {
+            release.countDown()
+            h.container.close()
+        }
+    }
+
+    @Test fun retiredConfirmationCannotOpenItsLoadedContactButCanStillBeDismissed() = runTest {
+        val cleanupEntered = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        val heldStore = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchConnectedRemoteNodeSessions(radioId: RadioId): SnapshotList<RemoteNodeSessionDTO> {
+                cleanupEntered.complete(Unit)
+                releaseCleanup.await()
+                return store.fetchConnectedRemoteNodeSessions(radioId)
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = heldStore)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Retired confirmation") }
+        try {
+            connect(h)
+            val session = assertNotNull(h.sessions.current)
+            val radio = session.token.radioId
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            val navigation = h.container.navigation
+            navigation.stageContactLink(ContactLinkRequest("Claim", contact.publicKey, ContactType.ROOM), radio)
+            val link = assertNotNull(navigation.state.value.pendingContactLink)
+            val confirmation = ContactLinkConfirmation(h.container.nodesFeature, navigation, link)
+            confirmation.load()
+            assertEquals(contact, confirmation.state.value.existing)
+
+            val disconnect = async { h.manager.disconnect() }
+            h.eventually("retired generation enters held cleanup") { cleanupEntered.isCompleted }
+            assertFalse(session.isTornDown)
+            assertFalse(h.container.isCurrentSession(session))
+            val before = navigation.state.value
+            assertFalse(confirmation.confirm())
+            assertEquals(before, navigation.state.value)
+            assertTrue(confirmation.dismiss())
+            assertNull(navigation.state.value.pendingContactLink)
+            assertNull(navigation.state.value.pendingContactDetail)
+            releaseCleanup.complete(Unit)
+            h.eventually("held cleanup finishes") { disconnect.isCompleted }
+            disconnect.await()
+        } finally {
+            releaseCleanup.complete(Unit)
+            h.container.close()
+        }
+    }
+
+    @Test fun postReadyFailureWithHeldCleanupRejectsTheRetiredGraphDespiteItsReadySnapshot() = runTest {
+        val cleanupEntered = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        val heldStore = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchConnectedRemoteNodeSessions(radioId: RadioId): SnapshotList<RemoteNodeSessionDTO> {
+                cleanupEntered.complete(Unit)
+                releaseCleanup.await()
+                return store.fetchConnectedRemoteNodeSessions(radioId)
+            }
+        }
+        lateinit var h: ContainerHarness
+        var captured: (() -> Boolean)? = null
+        var callback: (suspend (EntityKey) -> Unit)? = null
+        var generation = -1L
+        var failed = false
+        h = ContainerHarness(this, store, persistenceOverride = heldStore, notificationNavigationReady = {
+            if (!failed && h.manager.snapshot.value.state == DeviceConnectionState.READY) {
+                failed = true
+                val session = checkNotNull(h.sessions.current)
+                generation = h.container.navigation.state.value.generation
+                captured = h.container.captureContactLinkSession(generation)
+                callback = checkNotNull(session.notificationService.onNotificationTapped)
+                throw IllegalStateException("Failure after READY publication")
+            }
+        })
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Held cleanup peer") }
+        val connecting = async {
+            try {
+                h.manager.connect(h.target())
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: IllegalStateException) {
+                Unit
+            }
+        }
+        try {
+            h.eventually("failed READY generation enters held disconnect cleanup") { cleanupEntered.isCompleted }
+            val session = assertNotNull(h.sessions.current)
+            val radio = session.token.radioId
+            val contact = assertNotNull(store.fetchContact(radio, key(20)))
+            assertEquals(DeviceConnectionState.READY, h.manager.snapshot.value.state)
+            assertEquals(session.token, h.manager.snapshot.value.token)
+            assertFalse(session.isTornDown)
+            assertFalse(h.container.isCurrentSession(session))
+            val navigation = h.container.navigation
+            val before = navigation.state.value
+            assertFalse(navigation.completeContactLookup(
+                ContactLinkRequest("Retired", contact.publicKey, ContactType.CHAT), contact,
+                radio, generation, radio, assertNotNull(captured),
+            ))
+            val receipt = NotificationNavigationReceipt()
+            withContext(receipt) { assertNotNull(callback)(EntityKey(radio, contact.id)) }
+            assertEquals(NavigationOutcome.Failed(NavigationFailure.StaleGeneration), receipt.outcome)
+            assertFalse(h.container.handleNotificationResponse(NotificationResponse(
+                NotificationPayload.DirectMessage(EntityKey(radio, contact.id), UUID.randomUUID()), null, null,
+            )))
+            assertEquals(before, navigation.state.value)
+        } finally {
+            releaseCleanup.complete(Unit)
+            connecting.cancelAndJoin()
+            h.container.close()
+        }
     }
 }

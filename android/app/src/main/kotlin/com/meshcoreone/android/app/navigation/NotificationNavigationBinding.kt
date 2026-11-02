@@ -20,7 +20,7 @@ internal class NotificationNavigationReceipt : AbstractCoroutineContextElement(K
 
 class NotificationNavigationBinding(
     private val service: NotificationService,
-    coordinator: NavigationCoordinator,
+    private val coordinator: NavigationCoordinator,
     lookup: NavigationLookup,
     connectedDevice: () -> DeviceDTO?,
     onOutcome: (NavigationOutcome) -> Unit,
@@ -60,7 +60,7 @@ class NotificationNavigationBinding(
     }
 
     override fun close() {
-        active = false
+        coordinator.retireBinding { active = false }
         if (service.onNotificationTapped === direct) service.onNotificationTapped = null
         if (service.onNewContactNotificationTapped === newContact) service.onNewContactNotificationTapped = null
         if (service.onChannelNotificationTapped === channel) service.onChannelNotificationTapped = null

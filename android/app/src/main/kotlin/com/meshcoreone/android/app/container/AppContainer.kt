@@ -187,7 +187,9 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     private val observerBridge = ObserverBridge(dependencies.foreground, dependencies.mainScope.coroutineContext)
 
     val sessions = SessionRegistry()
-    val navigation = NavigationCoordinator()
+    val navigation = NavigationCoordinator().also { coordinator ->
+        coordinator.installCommitBoundary { action -> withNavigationCommitBoundary(action) }
+    }
     internal val currentTransport: com.meshcoreone.android.core.model.TransportType?
         get() = if (connectionManager.isSimulatorConnection) com.meshcoreone.android.core.model.TransportType.SIMULATOR
         else connectionManager.snapshot.value.token?.let {
@@ -296,32 +298,52 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     )
     private val disconnectWatcher: Job by lazy { watchDisconnects() }
 
-    internal fun isCurrentSession(session: com.meshcoreone.android.app.state.AppSession): Boolean {
-        val current = sessions.current
-        return current != null && current === session && !current.isTornDown &&
-            connectionManager.snapshot.value.token == session.token
+    private fun <T> withNavigationCommitBoundary(action: () -> T): T =
+        connectionManager.withNavigationCommitBoundary {
+            sessions.withNavigationCommitBoundary { current ->
+                if (current == null) action() else current.withNavigationCommitBoundary(action)
+            }
+        }
+
+    internal fun isCurrentSession(session: com.meshcoreone.android.app.state.AppSession): Boolean =
+        withNavigationCommitBoundary {
+            val current = sessions.current
+            current != null && current === session && !current.isTornDown &&
+                connectionManager.isNavigationSessionCurrent(session.token)
+        }
+
+    internal fun captureContactNavigationSession(generation: Long): () -> Boolean {
+        val (initiating, stamp) = connectionManager.withNavigationCommitBoundary {
+            sessions.withNavigationCommitBoundary { it to connectionManager.captureNavigationLifecycle() }
+        }
+        return {
+            if (initiating != null) {
+                isCurrentSession(initiating) ||
+                    sessions.current === initiating && !initiating.isTornDown &&
+                    connectionManager.isNavigationSessionCurrent(initiating.token, allowUnpublished = true) &&
+                    connectionManager.snapshot.value.token == null &&
+                    navigation.currentState.let { it.radioId == null && it.generation == generation }
+            } else {
+                val current = sessions.current
+                if (current == null) {
+                    connectionManager.isNavigationLifecycleCurrent(stamp)
+                } else {
+                    !current.isTornDown &&
+                        connectionManager.isInitialNavigationSession(stamp, current.token) &&
+                        navigation.currentState.let {
+                            it.radioId == null && it.generation == generation ||
+                                it.initialContactLinkGeneration == generation &&
+                                it.generation == Math.incrementExact(generation)
+                        }
+                }
+            }
+        }
     }
 
     internal fun captureContactLinkSession(generation: Long): () -> Boolean {
         val lookupRevision = navigation.beginContactLinkLookup(generation)
-        val initiating = sessions.current
-        return {
-            if (!navigation.isContactLinkLookupCurrent(lookupRevision)) {
-                false
-            } else if (initiating != null) {
-                isCurrentSession(initiating) ||
-                    sessions.current === initiating && !initiating.isTornDown &&
-                    connectionManager.snapshot.value.token == null &&
-                    navigation.state.value.let { it.radioId == null && it.generation == generation }
-            } else {
-                val current = sessions.current?.takeUnless { it.isTornDown }
-                current == null || navigation.state.value.let {
-                    it.radioId == null && it.generation == generation ||
-                        it.initialContactLinkGeneration == generation &&
-                        it.generation == Math.incrementExact(generation)
-                }
-            }
-        }
+        val isCurrentSession = captureContactNavigationSession(generation)
+        return { navigation.isContactLinkLookupCurrent(lookupRevision) && isCurrentSession() }
     }
 
     val appState: AppState = AppState(

@@ -274,6 +274,8 @@ class RadioSessionContainer private constructor(
     /** Whether teardown has started: a closed container accepts no new monitors or services. */
     val isTornDown: Boolean get() = isClosed
 
+    internal fun <T> withNavigationCommitBoundary(action: () -> T): T = synchronized(lock, action)
+
     /** Live coroutines under this graph's supervisor job (leak accounting: zero after teardown). */
     val liveJobCount: Int get() = containerJob.descendants()
 

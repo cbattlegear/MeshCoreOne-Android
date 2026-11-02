@@ -104,6 +104,15 @@ interface NodesSession {
         val device = connectedDevice()
         return { device != null && connectedDevice()?.id == device.id && connectionState() == DeviceConnectionState.READY }
     }
+    /** Capture the owner of a pending contact link, including the offline cached-contact case. */
+    fun captureContactNavigationValidity(generation: Long): () -> Boolean {
+        val radio = currentRadioId()
+        val device = connectedDevice()
+        val live = captureSessionValidity()
+        return {
+            if (device == null) connectedDevice() == null && currentRadioId() == radio else live()
+        }
+    }
     fun connectionState(): DeviceConnectionState
     fun connectedDevice(): DeviceDTO?
     fun currentRadioId(): RadioId?

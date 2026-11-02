@@ -15,10 +15,7 @@ import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.model.snapshotMap
 import com.meshcoreone.android.core.protocol.bytes.Bytes
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.currentCoroutineContext
@@ -34,10 +31,30 @@ interface NavigationLookup {
 }
 
 class NavigationCoordinator(initial: NavigationState = NavigationState()) {
-    private val mutableState = MutableStateFlow(initial)
-    val state: StateFlow<NavigationState> = mutableState.asStateFlow()
+    private val mutableState = NavigationStateStore(initial)
+    val state: StateFlow<NavigationState> = mutableState.state
+    internal val currentState: NavigationState get() = mutableState.value
     private val notificationMutex = Mutex()
     private val drainMutex = Mutex()
+    private val localCommitLock = Any()
+    private var commitBoundary: (() -> Unit) -> Unit = { action -> synchronized(localCommitLock, action) }
+
+    internal fun installCommitBoundary(boundary: (() -> Unit) -> Unit) {
+        commitBoundary = boundary
+    }
+
+    internal fun retireBinding(action: () -> Unit) = commitBoundary(action)
+
+    private fun commitIfCurrent(
+        expected: NavigationState, next: NavigationState, isCurrent: () -> Boolean,
+    ): Boolean? {
+        var committed: Boolean? = null
+        commitBoundary {
+            if (isCurrent()) committed = mutableState.compareAndSet(expected, next, publish = false)
+        }
+        if (committed == true) mutableState.publish()
+        return committed
+    }
 
     // AndroidOnly: WP-302 Called only by a newly created host, not on resize or connection changes.
     fun restoreHostState(restored: NavigationState) {
@@ -131,7 +148,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         it.push(AppTab.TOOLS, NavigationDestination.Tool(tool)).copy(selectedTool = tool)
     }
 
-    fun stageContactLink(link: ContactLinkRequest?, targetRadioId: RadioId? = state.value.radioId) =
+    fun stageContactLink(link: ContactLinkRequest?, targetRadioId: RadioId? = mutableState.value.radioId) =
         mutableState.update {
             if (link == null) it.copy(pendingContactLink = null) else {
                 it.copy(contactLookupRevision = Math.incrementExact(it.contactLookupRevision))
@@ -146,7 +163,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     internal fun beginContactLinkLookup(expectedGeneration: Long): Long? {
         while (true) {
-            val current = state.value
+            val current = mutableState.value
             val initialAssignment = current.initialContactLinkGeneration == expectedGeneration &&
                 current.generation == Math.incrementExact(expectedGeneration)
             if (current.generation != expectedGeneration && !initialAssignment) return null
@@ -156,7 +173,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     internal fun isContactLinkLookupCurrent(revision: Long?): Boolean =
-        revision != null && state.value.contactLookupRevision == revision
+        revision != null && mutableState.value.contactLookupRevision == revision
 
     // Native adaptation: Commit lookup results against their initiating context, never a post-lookup radio.
     fun completeContactLookup(
@@ -165,7 +182,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         isCurrentSession: () -> Boolean = { true },
     ): Boolean {
         while (true) {
-            val current = state.value
+            val current = mutableState.value
             val initialAssignment = current.initialContactLinkGeneration == expectedGeneration &&
                 current.generation == Math.incrementExact(expectedGeneration)
             val radio = if (initialAssignment && targetRadioId == null) current.radioId else targetRadioId
@@ -185,7 +202,11 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                     nodesShowingDiscovery = false,
                 )
             }.copy(contactLookupRevision = Math.incrementExact(current.contactLookupRevision))
-            if (mutableState.compareAndSet(current, next)) return failure == null
+            when (commitIfCurrent(current, next, isCurrentSession)) {
+                true -> return failure == null
+                null -> return false
+                false -> Unit
+            }
         }
     }
 
@@ -194,7 +215,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         link: ContactLinkRequest, contact: ContactDTO? = null, isCurrentSession: () -> Boolean = { true },
     ): Boolean {
         while (true) {
-            val current = state.value
+            val current = mutableState.value
             if (!isCurrentSession() || link.deliveryId == null || current.pendingContactLink?.deliveryId != link.deliveryId ||
                 current.generation != link.generation ||
                 contact != null && (contact.publicKey != link.publicKey ||
@@ -206,7 +227,11 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                     nodesShowingDiscovery = false,
                 )
             }
-            if (mutableState.compareAndSet(current, next)) return true
+            when (commitIfCurrent(current, next, isCurrentSession)) {
+                true -> return true
+                null -> return false
+                false -> Unit
+            }
         }
     }
     fun stageChannelLink(link: ChannelLinkRequest?) = mutableState.update { it.copy(pendingChannelLink = link) }
@@ -225,7 +250,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     fun clearPendingContactLink() = stageContactLink(null)
     fun clearPendingChannelLink() = stageChannelLink(null)
     fun clearPendingHashtag() = stageHashtag(null)
-    fun clearFailure(expected: NavigationFailure? = state.value.failure) = mutableState.update {
+    fun clearFailure(expected: NavigationFailure? = mutableState.value.failure) = mutableState.update {
         if (it.failure == expected) it.copy(failure = null) else it
     }
 
@@ -235,7 +260,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     fun enqueueNotification(payload: NotificationPayload, manualAddContacts: Boolean = false): Long {
         val request = NotificationNavigationRequest.fromPayload(payload, manualAddContacts)
         while (true) {
-            val current = state.value
+            val current = mutableState.value
             val generation = if (!current.navigationReady && current.radioId == null) null else current.generation
             val pending = PendingNotificationRoute(current.nextEntryId, generation, request)
             if (mutableState.compareAndSet(current, current.copy(
@@ -246,7 +271,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     suspend fun consumePendingNotification(lookup: NavigationLookup): NavigationOutcome = drainMutex.withLock {
-        val current = state.value
+        val current = mutableState.value
         if (!current.navigationReady) return@withLock NavigationOutcome.NotReady
         val pending = current.pendingNotifications.firstOrNull() ?: return@withLock NavigationOutcome.NoPendingRoute
         val outcome = handleNotificationRequest(pending.request, lookup, pending.generation ?: current.generation)
@@ -373,7 +398,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         payload: NotificationPayload,
         lookup: NavigationLookup,
         manualAddContacts: Boolean = false,
-        expectedGeneration: Long = state.value.generation,
+        expectedGeneration: Long = mutableState.value.generation,
     ): NavigationOutcome = handleNotificationRequest(
         NotificationNavigationRequest.fromPayload(payload, manualAddContacts), lookup, expectedGeneration,
     )
@@ -381,11 +406,11 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     suspend fun handleNotificationRequest(
         request: NotificationNavigationRequest,
         lookup: NavigationLookup,
-        expectedGeneration: Long = state.value.generation,
+        expectedGeneration: Long = mutableState.value.generation,
         isCurrentSession: () -> Boolean = { true },
     ): NavigationOutcome {
         return notificationMutex.withLock {
-            val current = state.value
+            val current = mutableState.value
             if (current.generation != expectedGeneration || !isCurrentSession()) {
                 return@withLock NavigationOutcome.Failed(NavigationFailure.StaleGeneration)
             }
@@ -418,7 +443,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         resolved: Resolved, generation: Long, isCurrentSession: () -> Boolean = { true },
     ): NavigationOutcome {
         while (true) {
-            val current = state.value
+            val current = mutableState.value
             if (current.generation != generation || !isCurrentSession()) {
                 return NavigationOutcome.Failed(NavigationFailure.StaleGeneration)
             }
@@ -461,13 +486,17 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                     is Resolved.Fallback -> delivery.select(AppTab.NODES).copy(failure = resolved.failure)
                     is Resolved.Failure -> current.copy(failure = resolved.failure)
             }
-            if (mutableState.compareAndSet(current, next)) {
-                return when (resolved) {
-                    is Resolved.Fallback -> NavigationOutcome.Fallback(resolved.failure)
-                    is Resolved.Failure -> NavigationOutcome.Failed(resolved.failure)
-                    is Resolved.Channel -> resolved.recoveryFailure?.let { NavigationOutcome.Fallback(it) }
-                        ?: NavigationOutcome.Navigated
-                    else -> NavigationOutcome.Navigated
+            when (commitIfCurrent(current, next, isCurrentSession)) {
+                null -> return NavigationOutcome.Failed(NavigationFailure.StaleGeneration)
+                false -> continue
+                true -> {
+                    return when (resolved) {
+                        is Resolved.Fallback -> NavigationOutcome.Fallback(resolved.failure)
+                        is Resolved.Failure -> NavigationOutcome.Failed(resolved.failure)
+                        is Resolved.Channel -> resolved.recoveryFailure?.let { NavigationOutcome.Fallback(it) }
+                            ?: NavigationOutcome.Navigated
+                        else -> NavigationOutcome.Navigated
+                    }
                 }
             }
         }
@@ -503,7 +532,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 else if (contact.id != key.id) Resolved.Failure(NavigationFailure.WrongTarget(NavigationTarget.CONTACT))
                 else Resolved.Chat(contact, request.messageId)
             } else if (request.channelRadioId != null && request.channelIndex != null) {
-                val currentRadio = state.value.radioId
+                val currentRadio = mutableState.value.radioId
                 if (currentRadio != null && currentRadio != request.channelRadioId)
                     Resolved.Failure(NavigationFailure.WrongRadio(currentRadio, request.channelRadioId))
                 else when (val channel = resolveChannel(lookup, request.channelRadioId, request.channelIndex, request.messageId)) {

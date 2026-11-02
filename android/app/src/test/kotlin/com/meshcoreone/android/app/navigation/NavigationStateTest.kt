@@ -11,10 +11,14 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.model.ContactType
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -24,6 +28,8 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.rules.TestName
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -51,6 +57,43 @@ class NavigationStateTest {
         override suspend fun contact(key: EntityKey) = contact
         override suspend fun channel(radioId: RadioId, index: UByte) = channel
         override suspend fun room(key: EntityKey) = room
+    }
+
+    @Test fun delayedPublicationNeverRegressesTheNewestCommittedState() {
+        val initial = NavigationState()
+        val store = NavigationStateStore(initial)
+        assertTrue(store.compareAndSet(initial, initial.copy(selectedTab = AppTab.NODES), publish = false))
+        val first = store.value
+        assertTrue(store.compareAndSet(first, first.copy(selectedTab = AppTab.MAP), publish = false))
+
+        store.publish()
+        store.publish()
+        assertEquals(AppTab.MAP, store.state.value.selectedTab)
+        assertFalse(store.compareAndSet(initial, initial.copy(selectedTab = AppTab.TOOLS)))
+    }
+
+    @Test fun guardedNavigationPublishesOnlyAfterReleasingTheLifecycleBoundary() = runTest {
+        val boundary = Any()
+        val n = NavigationCoordinator()
+        n.installCommitBoundary { action -> synchronized(boundary, action) }
+        n.replaceRadio(radio)
+        val observed = CompletableDeferred<Boolean>()
+        val acquired = CountDownLatch(1)
+        val probe = Thread { synchronized(boundary) { acquired.countDown() } }
+        val collector = launch(Dispatchers.Unconfined) {
+            n.state.drop(1).first()
+            probe.start()
+            observed.complete(acquired.await(2, TimeUnit.SECONDS))
+        }
+
+        assertTrue(n.completeContactLookup(
+            ContactLinkRequest("Fixture", contact.publicKey, ContactType.CHAT), contact,
+            radio, n.state.value.generation, radio,
+        ))
+        assertTrue("A synchronous StateFlow collector must not run under the lifecycle boundary", observed.await())
+        probe.join()
+        collector.join()
+        assertEquals(contact, n.state.value.pendingContactDetail)
     }
 
     @Test fun fiveTabsRetainIndependentStacksAndBackReturnsToChatsBeforeExit() {

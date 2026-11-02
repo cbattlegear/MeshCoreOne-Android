@@ -144,6 +144,7 @@ data class NavigationState(
     val generation: Long = 0,
     val initialContactLinkGeneration: Long? = null,
     internal val contactLookupRevision: Long = 0,
+    internal val commitRevision: Long = 0,
     val failure: NavigationFailure? = null,
     val navigationReady: Boolean = false,
     val pendingNotifications: SnapshotList<PendingNotificationRoute> = SnapshotList.empty(),
@@ -163,6 +164,7 @@ data class NavigationState(
             "Connection generations must be nonnegative"
         }
         require(contactLookupRevision >= 0) { "Contact lookup revision must be nonnegative" }
+        require(commitRevision >= 0) { "Navigation commit revision must be nonnegative" }
         require(initialContactLinkGeneration == null || initialContactLinkGeneration in 0 until generation) {
             "Initial contact context must precede its assigned radio generation"
         }

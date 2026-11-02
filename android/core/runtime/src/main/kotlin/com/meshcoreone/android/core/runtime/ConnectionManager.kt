@@ -109,6 +109,52 @@ class ConnectionManager(
     override val connectionIntent: ConnectionIntent get() = values.value.intent
     override val connectionState: DeviceConnectionState get() = values.value.state
     val processEpoch = epoch
+    data class NavigationLifecycleStamp internal constructor(
+        internal val revision: Long,
+        internal val lastGeneration: Long,
+        internal val activeGeneration: Long?,
+        internal val retainedGeneration: Long?,
+    )
+
+    /**
+     * The action must only inspect lifecycle state or perform a non-blocking atomic commit. It must not
+     * suspend, publish observable state, or acquire a delivery/staging lock.
+     */
+    fun <T> withNavigationCommitBoundary(action: () -> T): T = synchronized(lock, action)
+
+    fun captureNavigationLifecycle(): NavigationLifecycleStamp = synchronized(lock) {
+        NavigationLifecycleStamp(revision, nextGeneration, active?.number, retained?.number)
+    }
+
+    fun isNavigationLifecycleCurrent(stamp: NavigationLifecycleStamp): Boolean = synchronized(lock) {
+        !closed && revision == stamp.revision && nextGeneration == stamp.lastGeneration &&
+            active?.number == stamp.activeGeneration && retained?.number == stamp.retainedGeneration &&
+            (active?.let(::isCurrent) ?: true)
+    }
+
+    fun isNavigationSessionCurrent(token: SessionToken, allowUnpublished: Boolean = false): Boolean =
+        synchronized(lock) {
+            val owner = active
+            owner != null && isCurrent(owner) && owner.token == token &&
+                (values.value.token == token || allowUnpublished && values.value.token == null)
+        }
+
+    fun isInitialNavigationSession(stamp: NavigationLifecycleStamp, token: SessionToken): Boolean =
+        synchronized(lock) {
+            val owner = active
+            if (owner == null || !isNavigationSessionCurrent(token, allowUnpublished = true)) {
+                false
+            } else if (stamp.activeGeneration != null) {
+                stamp.activeGeneration == owner.number && stamp.revision == revision &&
+                    stamp.lastGeneration == nextGeneration
+            } else {
+                stamp.retainedGeneration == null &&
+                    revision == Math.incrementExact(stamp.revision) &&
+                    owner.number > stamp.lastGeneration &&
+                    nextGeneration == owner.number
+            }
+        }
+
     private var nextGeneration = 0L
     private var revision = 0L
     private var active: RadioGeneration? = null

@@ -58,6 +58,9 @@ class SessionRegistry {
 
     val current: RadioSessionContainer? get() = synchronized(lock) { live }
 
+    internal fun <T> withNavigationCommitBoundary(action: (RadioSessionContainer?) -> T): T =
+        synchronized(lock) { action(live) }
+
     /** Containers created since process start (leak accounting). */
     val created: Int get() = synchronized(lock) { createdCount }
     val tornDown: Int get() = synchronized(lock) { tornDownCount }

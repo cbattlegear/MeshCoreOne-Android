@@ -58,12 +58,14 @@ internal class ContactLinkConfirmation(
 ) {
     private val session = dependencies.session
     private val radio = link.targetRadioId ?: session.currentRadioId()
+    private val isCurrentNavigationSession = session.captureContactNavigationValidity(link.generation)
     private val mutableState = MutableStateFlow(ContactLinkConfirmationState())
     private val operation = Mutex()
     val state = mutableState.asStateFlow()
 
     private fun isCurrent(): Boolean = navigation.state.value.let {
-        link.deliveryId != null && it.pendingContactLink?.deliveryId == link.deliveryId && it.generation == link.generation &&
+        isCurrentNavigationSession() && link.deliveryId != null &&
+            it.pendingContactLink?.deliveryId == link.deliveryId && it.generation == link.generation &&
             (radio == null || session.currentRadioId() == radio)
     }
 
@@ -96,7 +98,7 @@ internal class ContactLinkConfirmation(
 
     private suspend fun confirmCurrent(): Boolean {
         if (!isCurrent() || state.value.loading || state.value.importing || state.value.failure != null) return false
-        state.value.existing?.let { return navigation.completeContactLink(link, it) }
+        state.value.existing?.let { return navigation.completeContactLink(link, it, isCurrentNavigationSession) }
         val isCurrentSession = session.captureSessionValidity()
         val device = session.connectedDevice()
         val service = session.contactService()
@@ -135,7 +137,9 @@ internal class ContactLinkConfirmation(
             check(added.radioId == device.radioId && added.publicKey == link.publicKey) {
                 "Imported contact lookup returned a mismatched identity"
             }
-            return navigation.completeContactLink(link, added, isCurrentSession)
+            return navigation.completeContactLink(link, added) {
+                isCurrentNavigationSession() && isCurrentSession()
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: NodesContactFailure.ContactTableFull) {
@@ -157,6 +161,8 @@ internal class ContactLinkConfirmation(
         )
         if (isCurrent()) mutableState.update { it.copy(failure = UiErrorMapper().message(failure)) }
     }
+
+    fun dismiss(): Boolean = navigation.completeContactLink(link)
 }
 
 @Composable
@@ -170,7 +176,7 @@ internal fun AppPendingContact(dependencies: NodesFeatureDependencies, navigatio
         var importJob by remember { mutableStateOf<Job?>(null) }
         val dismiss = {
             importJob?.cancel()
-            navigation.completeContactLink(link)
+            holder.dismiss()
             Unit
         }
         LaunchedEffect(holder) { holder.load() }

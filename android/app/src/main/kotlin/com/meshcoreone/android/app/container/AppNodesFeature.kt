@@ -82,6 +82,8 @@ private class AppNodesSession(private val container: AppContainer) : NodesSessio
         val current = container.sessions.current
         return { current != null && container.isCurrentSession(current) }
     }
+    override fun captureContactNavigationValidity(generation: Long): () -> Boolean =
+        container.captureContactNavigationSession(generation)
     override fun connectionState() = container.appState.connectionState
     override fun connectedDevice() = container.appState.connectedDevice
     override fun currentRadioId() = container.appState.currentRadioId

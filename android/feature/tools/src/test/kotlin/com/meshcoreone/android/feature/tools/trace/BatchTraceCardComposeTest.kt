@@ -29,6 +29,7 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -58,9 +59,9 @@ class BatchTraceCardComposeTest {
     private var frameNanos = 0L
     private val initialState = TracePathState(batchEnabled = true, currentTraceIndex = 1, batchPresentationActive = true)
     private val state = MutableStateFlow(initialState)
-    @Volatile private var collectedState: TracePathState? = null
-    @Volatile private var renderedState: TracePathState? = null
-    private val observedState = state.onEach { collectedState = it }
+    private val collectedState = AtomicReference<TracePathState?>(null)
+    private val renderedState = AtomicReference<TracePathState?>(null)
+    private val observedState = state.onEach { collectedState.set(it) }
 
     @Before fun mount() {
         host = Robolectric.buildActivity(Activity::class.java).setup().visible()
@@ -75,7 +76,7 @@ class BatchTraceCardComposeTest {
             setParentCompositionContext(recomposer)
             setContent {
                 val snapshot = observedState.collectAsStateWithLifecycle(initialValue = initialState).value
-                SideEffect { renderedState = snapshot }
+                SideEffect { renderedState.set(snapshot) }
                 CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
                     MaterialTheme { TraceResults(snapshot) }
                 }
@@ -84,7 +85,7 @@ class BatchTraceCardComposeTest {
         host.get().setContentView(content)
         advanceFrames()
         assertTrue(recomposer.currentState.value >= Recomposer.State.Idle, "The lifecycle-aware recomposer must run")
-        assertEquals(state.value, renderedState, "The mounted results must observe the initial state")
+        assertEquals(state.value, renderedState.get(), "The mounted results must observe the initial state")
     }
 
     @After fun destroy() {
@@ -212,12 +213,12 @@ class BatchTraceCardComposeTest {
             state.value = snapshot
             updateRan.set(true)
         }
-        advanceFrames { renderedState == snapshot }
+        advanceFrames { renderedState.get() == snapshot }
         assertTrue(updateRan.get(), "The UI-thread state update must execute")
         assertEquals(snapshot, state.value, "The source flow must contain the updated state")
         assertTrue(state.subscriptionCount.value > 0, "The lifecycle-aware collector must be active")
-        assertEquals(snapshot, collectedState, "The lifecycle-aware collector must receive the updated state")
-        assertEquals(snapshot, renderedState, "The mounted results must observe every state transition")
+        assertEquals(snapshot, collectedState.get(), "The lifecycle-aware collector must receive the updated state")
+        assertEquals(snapshot, renderedState.get(), "The mounted results must observe every state transition")
     }
 
     private fun advanceFrames(until: () -> Boolean = { true }) {

@@ -221,7 +221,7 @@ def utc_seconds(value):
 
 
 def emergency_reboot_proof(confirm_host):
-    """Verify a full reboot; the operator, not missing runner history, identifies the abandoned work."""
+    """Verify the current reboot only; historical invocation attribution is operator-affirmed."""
     observation = windows_reboot_observation()
     actor = operator_identity()
     host = observation["host"]
@@ -229,7 +229,10 @@ def emergency_reboot_proof(confirm_host):
         not isinstance(confirm_host, str) or confirm_host.casefold() != host.casefold()
         or host.casefold() != actor["host"].casefold()
     ):
-        raise PortError("Confirm the actual original execution host with --confirm-host-reboot")
+        raise PortError(
+            "Confirm the actual current host with --confirm-host-reboot; "
+            "original invocation host/time attribution is your affirmation, not verified history"
+        )
     boot, reported = event_identity(
         observation["boot_xml"], "Microsoft-Windows-Kernel-Boot", 27, observation["boot_event"], host,
     )
@@ -242,7 +245,7 @@ def emergency_reboot_proof(confirm_host):
     return {
         "kind": "operator-confirmed-emergency-after-full-reboot", "host": host,
         "boot_utc": observation["boot"], "boot_timestamp": boundary, "observation": observation,
-        "operator_confirmed_original_host": confirm_host,
+        "historical_invocation_binding": "not-independently-verified",
         "supervisor_cleanup": None, "historical_release": "unknown",
     }
 
@@ -670,12 +673,21 @@ def main(argv=None):
     status.add_argument("--receipt-output", type=Path)
     emergency = commands.add_parser(
         "emergency-recover",
-        help="Abandon an old local invocation after a verified full host reboot; no runner history required",
+        help="Record operator-confirmed abandonment after a current full reboot; no historical cleanup proof",
+        description=(
+            "This proposed emergency disposition relies on your affirmation that --owner belonged "
+            "to this Windows host before its current full reboot. The controller verifies the current "
+            "host/boot and checks any retained row; absent invocation host/time attribution and "
+            "historical cleanup are not independently verified."
+        ),
     )
     emergency.add_argument("--owner", required=True)
     emergency.add_argument(
         "--confirm-host-reboot", required=True,
-        help="Name of the original Windows host; confirms this invocation was abandoned before its full reboot",
+        help=(
+            "Affirm that --owner belonged to the named current Windows host before its full reboot; "
+            "this historical attribution is supplied by the operator, not established by code"
+        ),
     )
     for name in ("recover", "check"):
         command = commands.add_parser(name)

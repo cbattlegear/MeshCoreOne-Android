@@ -1096,7 +1096,7 @@ class Ledger:
             }
 
     def emergency_recover(self, owner: str, confirm_host: str):
-        """Explicitly abandon one pre-reboot local invocation; never invent its missing history."""
+        """Record operator-affirmed abandonment; do not certify missing historical host/time evidence."""
         from .execution_recovery import emergency_reboot_proof, operator_identity, receipt_key
 
         if not isinstance(owner, str) or re.fullmatch(r"local-check:[0-9a-f]{32}", owner) is None:
@@ -1114,6 +1114,10 @@ class Ledger:
                     + ", ".join(f"{row['resource']} by {row['owner']}" for row in held)
                 )
             evidence = emergency_reboot_proof(confirm_host)
+            evidence["operator_attestation"] = {
+                "owner": owner, "original_host": confirm_host,
+                "invocation_predates_current_boot": True,
+            }
             row = held[0] if held else None
             if row is not None:
                 receipt = {**dict(row), "payload": decode_json(row["payload"]), "record_state": "hard"}
@@ -1127,7 +1131,7 @@ class Ledger:
                     or not completion.parent.name.startswith("meshcore-execution-")
                     or completion.parent.resolve() != completion.parent
                 ):
-                    raise PortError("Emergency recovery cannot identify this receipt as original-host local work")
+                    raise PortError("Receipt path is not a canonical local execution path on the current host")
             previous = connection.execute("""
                 SELECT * FROM execution_emergencies WHERE repository=? AND owner=?
             """, (self.repository, owner)).fetchone()

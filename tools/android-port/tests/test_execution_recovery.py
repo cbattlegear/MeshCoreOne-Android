@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -182,10 +183,33 @@ class ExecutionRecoveryTests(unittest.TestCase):
         evidence = json.loads(result["audit"]["reboot_evidence"])
         self.assertIsNone(evidence["supervisor_cleanup"])
         self.assertEqual(evidence["historical_release"], "unknown")
+        self.assertEqual(evidence["historical_invocation_binding"], "not-independently-verified")
+        self.assertEqual(evidence["operator_attestation"], {
+            "owner": self.receipt["owner"], "original_host": "FIXTURE-HOST",
+            "invocation_predates_current_boot": True,
+        })
         self.assertIsNone(result["audit"]["original_row"])
         self.assertEqual(self.ledger.hard_lock_records(), [])
         self.assertEqual(self.audit_rows(), [])
         self.assertFalse(Path(self.receipt["payload"]["completion"]).exists())
+
+    def test_absent_owner_attribution_is_operator_affirmation_not_historical_verification(self):
+        observation, _ = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        unknown_owner = "local-check:" + "d" * 32
+        with self.reboot_authority(observation):
+            result = self.ledger.emergency_recover(unknown_owner, "fixture-host")
+        self.assertIsNone(result["audit"]["original_row"])
+        evidence = json.loads(result["audit"]["reboot_evidence"])
+        self.assertEqual(evidence["operator_attestation"]["owner"], unknown_owner)
+        self.assertEqual(evidence["historical_invocation_binding"], "not-independently-verified")
+        self.assertEqual(evidence["historical_release"], "unknown")
+        self.assertIsNone(evidence["supervisor_cleanup"])
+        self.assertEqual(self.ledger.hard_lock_records(), [])
+        self.assertEqual(self.audit_rows(), [])
+        self.assertEqual(recovery.recover_owner(self.ledger, unknown_owner), {
+            "emergency_reconciled": True, "already_reconciled": True, "audit": result["audit"],
+        })
 
     def test_emergency_recovery_rejects_wrong_host_hybrid_and_stale_boot(self):
         observation, _ = self.reboot_fixture()
@@ -298,6 +322,44 @@ class ExecutionRecoveryTests(unittest.TestCase):
         with self.ledger.transaction() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM execution_emergencies").fetchone()[0], 0)
 
+    def test_new_execution_racing_emergency_commits_after_audit_and_is_never_removed(self):
+        observation, boundary = self.reboot_fixture()
+        self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
+        self.ledger.acquire_hard_lock(
+            "gradle-execution", self.receipt["owner"], self.receipt["payload"], boundary - 120,
+        )
+        observing, peer_attempting = threading.Event(), threading.Event()
+        proof = recovery.emergency_reboot_proof
+
+        def verify_boot(host):
+            observing.set()
+            self.assertTrue(peer_attempting.wait(5), "New execution did not contend with emergency transaction")
+            return proof(host)
+
+        def acquire_new_execution():
+            self.assertTrue(observing.wait(5), "Emergency transaction never reached boot verification")
+            peer_attempting.set()
+            return self.ledger.acquire_hard_lock("native-execution", "new-owner", {"new": True}, time.time())
+
+        with self.reboot_authority(observation), \
+                patch.object(recovery, "emergency_reboot_proof", side_effect=verify_boot), \
+                ThreadPoolExecutor(max_workers=2) as pool:
+            emergency = pool.submit(self.ledger.emergency_recover, self.receipt["owner"], "fixture-host")
+            newer = pool.submit(acquire_new_execution)
+            result, _ = emergency.result(), newer.result()
+        self.assertFalse(result["already_reconciled"])
+        current = self.ledger.hard_lock_records()
+        self.assertEqual([(row["resource"], row["owner"]) for row in current], [
+            ("native-execution", "new-owner"),
+        ])
+        with patch.object(recovery, "emergency_reboot_proof") as verify, \
+                self.assertRaisesRegex(PortError, "new-owner"):
+            self.ledger.emergency_recover(self.receipt["owner"], "fixture-host")
+        verify.assert_not_called()
+        self.assertEqual(self.ledger.hard_lock_records(), current)
+        with self.ledger.transaction() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM execution_emergencies").fetchone()[0], 1)
+
     def test_emergency_recovery_rejects_foreign_or_malformed_retained_receipt(self):
         observation, boundary = self.reboot_fixture()
         self.ledger.release_hard_lock(self.receipt["resource"], self.receipt["owner"])
@@ -344,6 +406,8 @@ class ExecutionRecoveryTests(unittest.TestCase):
                 contextlib.redirect_stdout(output):
             self.assertEqual(recovery.main(["status"]), 0)
         self.assertEqual(json.loads(output.getvalue())["emergencies"], [result["audit"]])
+        self.ledger.acquire_hard_lock("native-execution", "new-owner", {"new": True}, time.time())
+        current = self.ledger.hard_lock_records()
         with patch.object(recovery, "trusted_context", return_value=self.ledger), \
                 patch.object(recovery.subprocess, "run", return_value=subprocess.CompletedProcess(
                     [], 19,
@@ -356,6 +420,32 @@ class ExecutionRecoveryTests(unittest.TestCase):
         ])
         self.assertNotIn("--emergency", check.call_args.args[0])
         self.assertEqual(self.audit_rows(), [])
+        self.assertEqual(self.ledger.hard_lock_records(), current)
+
+    def test_emergency_help_states_unverified_operator_attribution_without_opening_ledger(self):
+        output = io.StringIO()
+        with patch.object(recovery, "trusted_context") as trusted, \
+                contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as stopped:
+            recovery.main(["emergency-recover", "--help"])
+        self.assertEqual(stopped.exception.code, 0)
+        text = " ".join(output.getvalue().split())
+        self.assertIn("relies on your affirmation", text)
+        self.assertIn("not independently verified", text)
+        self.assertIn("not established by code", text)
+        trusted.assert_not_called()
+
+    def test_unreviewed_emergency_source_refuses_before_mutation_or_process_launch(self):
+        with patch.object(recovery, "trusted_context", side_effect=PortError(
+            "Recovery requires reviewed default-base source"
+        )), patch.object(self.ledger, "emergency_recover") as emergency, \
+                patch.object(recovery.subprocess, "run") as process, \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(recovery.main([
+                "emergency-recover", "--owner", self.receipt["owner"], "--confirm-host-reboot", "fixture-host",
+            ]), 1)
+        emergency.assert_not_called()
+        process.assert_not_called()
+        self.assertEqual(self.ledger.hard_lock_records(), [self.receipt])
 
     def test_emergency_recovery_archives_exact_preboot_row_and_refuses_postboot_row(self):
         observation, boundary = self.reboot_fixture()

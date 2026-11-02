@@ -229,20 +229,27 @@ runtime integrity, readiness, admission, nonzero discovery and actual outcomes.
 An installation-interlocked runtime update remains a separately authorized,
 quiescent operation after recovery, never a side effect of this command.
 
-### Emergency recovery without runner history
+### Proposed operator-confirmed reconciliation without runner history
 
 For an abandoned **local Windows-to-WSL check**, missing sessions, supervisors,
 receipts, admission files or old process logs need not block the runner forever.
-After a full Windows **Restart**, use this explicit operator escape hatch on the
-original host and canonical ledger:
+The source proposes an explicit operator-confirmed abandonment after a full
+Windows **Restart**, on the operator-affirmed original host and canonical ledger.
+Using this disposition is a separate operator decision, not implicitly authorized
+by a request to keep work moving. The following is the proposed procedure, not
+confirmation that it has been approved or run:
 
 ```powershell
 python .\tools\android-port\controller\execution_recovery.py emergency-recover --owner local-check:bed26c5e533a4e26a2c166d0716ab314 --confirm-host-reboot BATTLEGEAR
 ```
 
-Replace the owner and host for another invocation. `--confirm-host-reboot` confirms
-that this was the original local host and the selected invocation was abandoned
-before its current full reboot. It is not a request to restart the machine.
+Replace the owner and host for another invocation. `--confirm-host-reboot` is the
+operator's affirmation that this was the original local host and the selected
+invocation was abandoned before its current full reboot. **The code does not
+independently establish that historical attribution.** With an absent row it can
+record any syntactically valid local-check owner: verifying the current machine's
+boot is not proof that the named invocation ever ran here or preceded that boot.
+It is not a request to restart the machine.
 Use **Restart**, not shutdown with Fast Startup, sleep, hibernate or restarting WSL.
 The controller reads the current native Windows boot time and Kernel-Boot event 27,
 requires a matching host and cold boot (`BootType=0`), and refuses missing,
@@ -251,18 +258,22 @@ required, and the command does not kill processes, reboot, install or run tests.
 
 The ledger transaction refuses every unrelated native/Gradle/JVM-slot,
 disposable or runtime-install owner. If the exact old `gradle-execution` row is
-still held, it must belong to this host's local temporary execution directory and
-predate the verified boot; the command archives its raw row before removing
+still held, its path must match this host's local temporary execution directory and
+its recorded acquisition must predate the verified boot; the command archives its raw row before removing
 only that row. A missing row is recorded as missing, never recreated. A newer
 invocation, even with the same owner token, is refused. Repeating the operation
 returns the original emergency audit without changing newer work.
 
 This is **explicit abandonment**, not a fabricated supervisor completion.
 `status` exposes its separate `execution_emergencies` audit, identifying the actual
-operator and current boot while retaining `supervisor_cleanup=null` and historical
-release `unknown`. Ordinary recovery still requires genuine cleanup; no existing
-history, completion files or original receipts are rewritten. The unexplained old
-Windows owner in #440 can use this route even when all runner history is missing.
+operator and current boot separately from an `operator_attestation` containing the
+selected owner, affirmed original host and affirmed preboot invocation. The audit
+retains `historical_invocation_binding=not-independently-verified`,
+`supervisor_cleanup=null` and historical release `unknown`. Ordinary recovery
+still requires genuine cleanup; no existing history, completion files or original
+receipts are rewritten. The unexplained old
+Windows owner in #440 is the intended candidate for this proposed reconciliation,
+subject to the operator's explicit attribution and abandonment decision.
 It does not recover the separate remote Linux invocation in #444.
 
 The source must first land on the reviewed origin default branch: the existing

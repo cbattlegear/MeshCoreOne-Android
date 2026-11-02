@@ -80,6 +80,7 @@ RULES = {
     },
     "scaffold": {
         "exact": {
+            "tools/android-port/controller/apk_alignment.py",
             "tools/android-port/oracle/run_tests.py",
             "tools/android-port/oracle/foundation_ci.py",
             "tools/android-port/oracle/test_ci.py",
@@ -134,7 +135,11 @@ RULES = {
         ),
     },
     "benchmark": {
-        "exact": {"android/app/build.gradle.kts", "android/app/proguard-rules.pro"},
+        "exact": {
+            "android/app/build.gradle.kts", "android/app/proguard-rules.pro",
+            "tools/android-port/controller/apk_alignment.py",
+            "tools/android-port/controller/performance.py",
+        },
         "prefix": ("android/benchmark/", "android/build-logic/"),
     },
 }

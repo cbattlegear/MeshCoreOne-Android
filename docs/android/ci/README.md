@@ -48,7 +48,9 @@ interrupt.
 
 Benchmark inputs under `android/benchmark/`, shared build logic, changes to
 `android/app/build.gradle.kts` or `android/app/proguard-rules.pro`, and shared
-Gradle inputs select the declared `benchmark` scope. The Linux build job runs
+Gradle inputs select the declared `benchmark` scope. Changes to the benchmark
+build verifier or shared APK-alignment producer also select benchmark; the
+shared alignment producer additionally selects scaffold. The Linux build job runs
 `ci.py run --stage benchmark` only when selected, and the required aggregate
 check requires that job to succeed. Workflow validation checks the actual
 guarded stage commands, exit handling and aggregate result bindings, rather than

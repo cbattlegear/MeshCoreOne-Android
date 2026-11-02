@@ -72,6 +72,14 @@ class WorkflowScopeTests(unittest.TestCase):
                 self.assertTrue(plan["full_scaffold"])
                 self.assertIn("inspect", plan["stages"])
 
+    def test_benchmark_verification_producers_select_their_real_consumers(self):
+        for path, selected in (
+            ("tools/android-port/controller/performance.py", ("controller", "benchmark")),
+            ("tools/android-port/controller/apk_alignment.py", ("controller", "scaffold", "benchmark")),
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(classify([path]), {scope: scope in selected for scope in SCOPES})
+
     def test_codec_source_and_harness_schedule_codec(self):
         for path in (
             "MC1Services/Sources/MC1Services/Services/AppBackupEnvelope.swift",

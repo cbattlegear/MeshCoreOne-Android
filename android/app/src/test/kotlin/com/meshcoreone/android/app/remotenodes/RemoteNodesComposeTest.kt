@@ -125,6 +125,11 @@ class RemoteNodesComposeTest {
     }
     private fun expand(id: Int) = compose.onNodeWithText(text(id), useUnmergedTree = true).performScrollTo().performClick()
 
+    private fun settleMapComposition() {
+        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        compose.waitForIdle()
+    }
+
     @Test fun neighborHostUsesRealPersistedFilterAndLiveRestoreWithoutLosingThePannedCamera() {
         val key = com.meshcoreone.android.core.protocol.bytes.Bytes(byteArrayOf(1, 2, 3, 4, 5, 6) + ByteArray(26))
         fixture.contacts = fixture.contacts + fixture.contact.copy(
@@ -142,8 +147,7 @@ class RemoteNodesComposeTest {
         compose.onNodeWithTag("remote-tab:TELEMETRY").performClick()
         expand(L.remoteNodesStatusNeighbors)
         compose.onNodeWithText(text(L.remoteNodesStatusViewOnMap)).performScrollTo().performClick()
-        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
-        compose.waitForIdle()
+        settleMapComposition()
         compose.waitUntil(5_000) { renderedMap?.points?.any { it.label == "Located neighbor" } == true }
         compose.onNodeWithText("Move fixture camera").performScrollTo().performClick()
         val panned = nextCamera
@@ -429,6 +433,7 @@ class RemoteNodesComposeTest {
     private fun movePickerCamera(camera: MapCamera) {
         compose.runOnIdle { nextCamera = camera }
         compose.onNodeWithText("Move fixture camera").performScrollTo().performClick()
+        settleMapComposition()
         compose.runOnIdle {
             val state = requireNotNull(renderedMap)
             assertEquals("Camera reports must preserve both zoom spans without refitting", camera, state.camera)
@@ -439,6 +444,7 @@ class RemoteNodesComposeTest {
     @Test fun savedLocationPickerPreservesRepeatedPanAndZoomReports() {
         show(); open(); expand(L.remoteNodesSettingsIdentityLocation)
         compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
+        settleMapComposition()
         compose.runOnIdle {
             assertEquals(MapCamera(GeoPoint(37.7, -122.4), .05, .05), requireNotNull(renderedMap).camera)
         }
@@ -446,6 +452,7 @@ class RemoteNodesComposeTest {
         movePickerCamera(MapCamera(GeoPoint(39.0, -122.0), .3, .7))
         compose.onNodeWithText(text(L.remoteNodesCancel)).performScrollTo().performClick()
         compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
+        settleMapComposition()
         compose.runOnIdle {
             assertEquals("Reopening must initialize from the unchanged saved location",
                 MapCamera(GeoPoint(37.7, -122.4), .05, .05), requireNotNull(renderedMap).camera)
@@ -457,6 +464,7 @@ class RemoteNodesComposeTest {
         fixture.location = Coordinate(0.0, 0.0)
         show(); open(); expand(L.remoteNodesSettingsIdentityLocation)
         compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
+        settleMapComposition()
         compose.runOnIdle {
             assertEquals(MapCamera(GeoPoint(0.0, 0.0), 80.0, 80.0), requireNotNull(renderedMap).camera)
         }

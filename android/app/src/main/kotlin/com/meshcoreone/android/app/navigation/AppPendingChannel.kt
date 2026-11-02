@@ -45,7 +45,7 @@ internal fun AppPendingChannel(feature: AppChatsFeature, navigation: NavigationC
         confirmButton = {
             val connection by feature.connectionState.collectAsState()
             TextButton(enabled = radio != null && connection == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
-                !state.isLoading && !state.isSubmitting, onClick = {
+                !state.isLoading && !state.isSubmitting && state.committedWrite == null, onClick = {
                 scope.launch {
                     val channel = if (link != null) holder.joinLink(ChannelLink(
                         link.name, link.secret, link.regionScope, link.hasHashtagSecretMismatch,

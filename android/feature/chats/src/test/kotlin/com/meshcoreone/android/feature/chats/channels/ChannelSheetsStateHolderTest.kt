@@ -3,6 +3,7 @@
 package com.meshcoreone.android.feature.chats.channels
 
 import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -17,6 +18,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
@@ -203,9 +207,104 @@ class ChannelSheetsStateHolderTest {
 
         val existing = channel(3u, "#Ops")
         rig.data.channels += existing
+        rig.holder.open(ChannelSheetPage.JOIN_HASHTAG)
         rig.holder.updateHashtag("ops")
         assertEquals(existing, rig.holder.joinHashtag())
         assertEquals(0, rig.service.passphraseCalls)
+    }
+
+    @Test
+    fun `post-save failure cannot resubmit the same confirmation but a new form is independent`() = runBlocking {
+        for (hashtag in listOf(false, true)) {
+            val rig = rig(emptyList(), 4u)
+            rig.holder.load()
+            rig.holder.updateHashtag("ops")
+            val failure = IllegalStateException("post-save fetch")
+            rig.service.completionFailure = failure
+            val link = ChannelLink("#ops", Bytes(ByteArray(16)))
+            suspend fun join() = if (hashtag) rig.holder.joinHashtag() else rig.holder.joinLink(link)
+            assertNull(join())
+            val saved = rig.data.channels.single()
+            val receipt = assertNotNull(rig.holder.state.value.committedWrite)
+            assertEquals(ChannelWriteReceipt(EntityKey(saved.radioId, saved.id), saved.index), receipt)
+            assertEquals(failure, assertIs<ChannelSheetError.AlreadyCommitted>(rig.holder.state.value.failure).cause)
+            assertFalse(rig.holder.state.value.isSubmitting)
+            assertNull(rig.holder.state.value.createdChannel, "A committed receipt is not a fabricated success DTO")
+            rig.service.completionFailure = null
+            rig.holder.clearFailure()
+            assertIs<ChannelSheetError.AlreadyCommitted>(rig.holder.state.value.failure)
+            assertNull(join())
+            assertEquals(listOf(saved), rig.data.channels)
+            rig.holder.back()
+            rig.holder.open(ChannelSheetPage.JOIN_PRIVATE)
+            assertNull(rig.holder.state.value.committedWrite)
+            assertEquals(2u, assertNotNull(rig.holder.joinLink(link)).index)
+        }
+    }
+
+    @Test
+    fun `cancellation after returned commit preserves cancellation and blocks resubmission`() = runBlocking {
+        for (hashtag in listOf(false, true)) {
+            val rig = rig(emptyList(), 4u)
+            rig.holder.updateHashtag("ops")
+            val cancelled = CancellationException("after returned save UUID")
+            rig.service.completionFailure = cancelled
+            val link = ChannelLink("#ops", Bytes(ByteArray(16)))
+            try {
+                if (hashtag) rig.holder.joinHashtag() else rig.holder.joinLink(link)
+                throw AssertionError("Expected original cancellation")
+            } catch (failure: CancellationException) {
+                assertTrue(failure === cancelled)
+            }
+            val saved = rig.data.channels.single()
+            assertEquals(ChannelWriteReceipt(EntityKey(saved.radioId, saved.id), saved.index), rig.holder.state.value.committedWrite)
+            assertEquals(cancelled, assertIs<ChannelSheetError.AlreadyCommitted>(rig.holder.state.value.failure).cause)
+            assertFalse(rig.holder.state.value.isSubmitting)
+            rig.service.completionFailure = null
+            assertNull(if (hashtag) rig.holder.joinHashtag() else rig.holder.joinLink(link))
+            assertEquals(listOf(saved), rig.data.channels)
+        }
+    }
+
+    @Test
+    fun `a held allocation cannot admit a second submission from the same confirmation`() = runBlocking {
+        for (hashtag in listOf(false, true)) {
+            val rig = rig(emptyList(), 4u)
+            rig.holder.updateHashtag("ops")
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            rig.service.beforeAllocation = {
+                entered.complete(Unit)
+                release.await()
+            }
+            val link = ChannelLink("#ops", Bytes(ByteArray(16)))
+            suspend fun join() = if (hashtag) rig.holder.joinHashtag() else rig.holder.joinLink(link)
+            val first = async(start = CoroutineStart.UNDISPATCHED) { join() }
+            try {
+                assertTrue(entered.isCompleted)
+                assertTrue(rig.holder.state.value.isSubmitting)
+                assertNull(rig.holder.state.value.committedWrite)
+                val duplicate = async(start = CoroutineStart.UNDISPATCHED) { join() }
+                assertTrue(duplicate.isCompleted, "Duplicate consent must not enter the held service")
+                assertNull(duplicate.await())
+                assertEquals(1, rig.service.allocationCalls)
+                assertTrue(rig.data.channels.isEmpty())
+                assertTrue(rig.holder.state.value.isSubmitting)
+                assertNull(rig.holder.state.value.failure)
+                assertEquals(listOf("channel confirmation already submitting"), rig.diagnostics)
+            } finally {
+                release.complete(Unit)
+            }
+            val joined = assertNotNull(first.await())
+            assertEquals(listOf(joined), rig.data.channels)
+            assertEquals(1, rig.service.allocationCalls)
+            assertFalse(rig.holder.state.value.isSubmitting)
+            assertEquals(joined, rig.holder.state.value.createdChannel)
+            assertEquals(
+                ChannelWriteReceipt(EntityKey(joined.radioId, joined.id), joined.index),
+                rig.holder.state.value.committedWrite,
+            )
+        }
     }
 
     private fun rig(channels: List<ChannelDTO>, maxChannels: UByte): ChannelRig {
@@ -251,17 +350,34 @@ private class FakeChannelService(private val data: FakeChannelData) : ChannelShe
     var passphraseCalls = 0
     var publicCalls = 0
     var failure: Throwable? = null
+    var completionFailure: Throwable? = null
+    var beforeAllocation: (suspend () -> Unit)? = null
+    var allocationCalls = 0
 
-    override suspend fun createChannelWithSecret(radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes): ChannelDTO {
+    override suspend fun createChannelWithSecret(
+        radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes, onCommitted: (ChannelWriteReceipt) -> Unit,
+    ): ChannelDTO {
+        allocationCalls++
+        beforeAllocation?.invoke()
         val index = freeSlot(maxChannels)
         setChannelWithSecret(radioId, index, name, secret)
-        return requireNotNull(data.fetchChannel(radioId, index))
+        val saved = requireNotNull(data.fetchChannel(radioId, index))
+        onCommitted(ChannelWriteReceipt(EntityKey(radioId, saved.id), index))
+        completionFailure?.let { throw it }
+        return saved
     }
-    override suspend fun joinHashtagChannel(radioId: RadioId, maxChannels: UByte, name: String): ChannelDTO {
+    override suspend fun joinHashtagChannel(
+        radioId: RadioId, maxChannels: UByte, name: String, onCommitted: (ChannelWriteReceipt) -> Unit,
+    ): ChannelDTO {
+        allocationCalls++
+        beforeAllocation?.invoke()
         data.channels.firstOrNull { it.name.equals(name, ignoreCase = true) }?.let { return it }
         val index = freeSlot(maxChannels)
         setChannel(radioId, index, name, name)
-        return requireNotNull(data.fetchChannel(radioId, index))
+        val saved = requireNotNull(data.fetchChannel(radioId, index))
+        onCommitted(ChannelWriteReceipt(EntityKey(radioId, saved.id), index))
+        completionFailure?.let { throw it }
+        return saved
     }
     private fun freeSlot(maxChannels: UByte): UByte =
         (1 until maxChannels.toInt()).map(Int::toUByte).firstOrNull { index -> data.channels.none { it.index == index } }

@@ -48,6 +48,7 @@ fun ChannelOptionsSheet(
     onShare: (String) -> Unit,
     onCopy: (String) -> Unit,
     qrCode: @Composable (String) -> Unit,
+    failureText: @Composable (Throwable) -> String = { it.message ?: it.javaClass.simpleName },
 ) {
     val state by holder.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -68,7 +69,7 @@ fun ChannelOptionsSheet(
             }
             state.failure?.let {
                 Text(
-                    it.message ?: it.javaClass.simpleName,
+                    failureText(it),
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.clickable(onClick = holder::clearFailure).padding(8.dp),
                 )
@@ -83,7 +84,7 @@ fun ChannelOptionsSheet(
                 ) { scope.launch { holder.joinPrivate()?.let(onChannelReady) } }
                 ChannelSheetPage.JOIN_PUBLIC -> {
                     Text(androidx.compose.ui.res.stringResource(R.string.l10n_app_chats_chats_joinpublic_description))
-                    SubmitButton(state.isSubmitting, R.string.l10n_app_chats_chats_joinpublic_addbutton) {
+                    SubmitButton(state.isSubmitting, R.string.l10n_app_chats_chats_joinpublic_addbutton, enabled = state.committedWrite == null) {
                         scope.launch { holder.joinPublic()?.let(onChannelReady) }
                     }
                 }
@@ -100,7 +101,7 @@ fun ChannelOptionsSheet(
                     SubmitButton(
                         state.isSubmitting,
                         R.string.l10n_app_chats_chats_joinprivate_joinbutton,
-                        enabled = ChannelSheetsStateHolder.isValidHashtag(state.name),
+                        enabled = state.committedWrite == null && ChannelSheetsStateHolder.isValidHashtag(state.name),
                     ) { scope.launch { holder.joinHashtag()?.let(onChannelReady) } }
                 }
                 ChannelSheetPage.SCAN_QR -> onScanRequested()
@@ -134,6 +135,7 @@ fun JoinChannelConfirmationSheet(
     link: ChannelLink,
     onDismiss: () -> Unit,
     onJoined: (com.meshcoreone.android.core.model.ChannelDTO) -> Unit,
+    failureText: @Composable (Throwable) -> String = { it.message ?: it.javaClass.simpleName },
 ) {
     val state by holder.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -165,7 +167,7 @@ fun JoinChannelConfirmationSheet(
                 )
             }
             state.failure?.let {
-                Text(it.message ?: it.javaClass.simpleName, color = MaterialTheme.colorScheme.error)
+                Text(failureText(it), color = MaterialTheme.colorScheme.error)
             }
             when {
                 state.isLoading -> CircularProgressIndicator()
@@ -187,7 +189,7 @@ fun JoinChannelConfirmationSheet(
                             }
                         }
                     },
-                    enabled = !state.isSubmitting,
+                    enabled = !state.isSubmitting && state.committedWrite == null,
                     modifier = Modifier.fillMaxWidth().sharedTouchTarget(),
                 ) {
                     Text(androidx.compose.ui.res.stringResource(R.string.l10n_app_chats_chats_joinprivate_joinbutton))
@@ -267,7 +269,8 @@ private fun ChannelNameAndSecretForm(
     SubmitButton(
         state.isSubmitting,
         if (secretEditable) R.string.l10n_app_chats_chats_joinprivate_joinbutton else R.string.l10n_app_chats_chats_createprivate_createbutton,
-        enabled = state.name.isNotEmpty() && (!secretEditable || ChannelSheetsStateHolder.parseSecret(secret) != null),
+        enabled = state.committedWrite == null && state.name.isNotEmpty() &&
+            (!secretEditable || ChannelSheetsStateHolder.parseSecret(secret) != null),
         onClick = onSubmit,
     )
 }

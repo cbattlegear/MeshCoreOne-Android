@@ -302,44 +302,54 @@ class ChannelService(
 
     // region Writes
 
-    suspend fun createChannelWithSecret(radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes): ChannelDTO {
+    suspend fun createChannelWithSecret(
+        radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes,
+        onCommitted: (EntityKey, UByte) -> Unit = { _, _ -> },
+    ): ChannelDTO {
         if (!validateSecret(secret)) throw ChannelServiceError.SecretHashingFailed()
-        return allocateChannel(radioId, maxChannels, name, secret, reuseName = false)
+        return allocateChannel(radioId, maxChannels, name, secret, reuseName = false, onCommitted = onCommitted)
     }
 
-    suspend fun joinHashtagChannel(radioId: RadioId, maxChannels: UByte, name: String): ChannelDTO =
-        allocateChannel(radioId, maxChannels, name, hashSecret(name), reuseName = true)
+    suspend fun joinHashtagChannel(
+        radioId: RadioId, maxChannels: UByte, name: String, onCommitted: (EntityKey, UByte) -> Unit = { _, _ -> },
+    ): ChannelDTO = allocateChannel(radioId, maxChannels, name, hashSecret(name), reuseName = true, onCommitted = onCommitted)
 
     private suspend fun allocateChannel(
         radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes, reuseName: Boolean,
+        onCommitted: (EntityKey, UByte) -> Unit,
     ): ChannelDTO {
-        val needsRead = mutations.withLock {
-            ensureMutationAvailable()
-            val known = knownSlots[radioId].orEmpty()
-            val existing = reuseName && dataStore.fetchChannels(radioId).any { it.index in known && it.name.equals(name, ignoreCase = true) }
-            !existing && (1 until maxChannels.toInt()).any { it.toUByte() !in known }
+        var committed: PersistedWrite? = null
+        try {
+            val needsRead = mutations.withLock {
+                ensureMutationAvailable()
+                val known = knownSlots[radioId].orEmpty()
+                val existing = reuseName && dataStore.fetchChannels(radioId).any { it.index in known && it.name.equals(name, ignoreCase = true) }
+                !existing && (1 until maxChannels.toInt()).any { it.toUByte() !in known }
+            }
+            // A reconnect may deliberately skip the coordinator's channel phase. Consent can request
+            // a real read; the allocation phase below still revalidates after this suspension.
+            if (needsRead) syncChannels(radioId, maxChannels, usePipelinedRead = false)
+            val channel = mutations.withLock {
+                ensureMutationAvailable()
+                val known = knownSlots[radioId].orEmpty()
+                val channels = dataStore.fetchChannels(radioId)
+                if (reuseName) channels.firstOrNull { it.index in known && it.name.equals(name, ignoreCase = true) }
+                    ?.let { return@withLock it }
+                val unresolved = (1 until maxChannels.toInt()).map(Int::toUByte).filterNot { it in known }
+                if (unresolved.isNotEmpty()) throw ChannelMutationError.SyncIncomplete(unresolved.snapshot())
+                val used = channels.map { it.index }.toSet()
+                val index = (1 until maxChannels.toInt()).map(Int::toUByte).firstOrNull { it !in used }
+                    ?: throw ChannelMutationError.NoAvailableSlots()
+                committed = writeChannelLocked(radioId, index, name, secret)
+                dataStore.fetchChannel(radioId, index) ?: throw ChannelServiceError.ChannelNotFound()
+            }
+            if (committed != null) refreshDecryptionCache(radioId)
+            return channel
+        } finally {
+            // Only a UUID actually returned by saveChannel is acknowledged. Publication is outside
+            // mutation/cache locks and survives later fetch/cache failure or caller cancellation.
+            committed?.let { onCommitted(it.key, it.index) }
         }
-        // A reconnect may deliberately skip the coordinator's channel phase. Consent can request
-        // a real read; the allocation phase below still revalidates after this suspension.
-        if (needsRead) syncChannels(radioId, maxChannels, usePipelinedRead = false)
-        var changed = false
-        val channel = mutations.withLock {
-            ensureMutationAvailable()
-            val known = knownSlots[radioId].orEmpty()
-            val channels = dataStore.fetchChannels(radioId)
-            if (reuseName) channels.firstOrNull { it.index in known && it.name.equals(name, ignoreCase = true) }
-                ?.let { return@withLock it }
-            val unresolved = (1 until maxChannels.toInt()).map(Int::toUByte).filterNot { it in known }
-            if (unresolved.isNotEmpty()) throw ChannelMutationError.SyncIncomplete(unresolved.snapshot())
-            val used = channels.map { it.index }.toSet()
-            val index = (1 until maxChannels.toInt()).map(Int::toUByte).firstOrNull { it !in used }
-                ?: throw ChannelMutationError.NoAvailableSlots()
-            writeChannelLocked(radioId, index, name, secret)
-            changed = true
-            dataStore.fetchChannel(radioId, index) ?: throw ChannelServiceError.ChannelNotFound()
-        }
-        if (changed) refreshDecryptionCache(radioId)
-        return channel
     }
 
     /** Sets (creates or updates) a channel on the device, hashing [passphrase] into its secret. */
@@ -354,23 +364,25 @@ class ChannelService(
 
     /** Writes to the radio, mirrors locally, and notifies when an existing occupant's secret changed. */
     private suspend fun writeChannel(radioId: RadioId, index: UByte, name: String, secret: Bytes) {
-        val changed = mutations.withLock {
+        val committed = mutations.withLock {
             ensureMutationAvailable()
             writeChannelLocked(radioId, index, name, secret)
         }
-        if (changed) currentHandler()?.invoke(radioId, setOf(index).snapshotSet())
+        if (committed.occupantChanged) currentHandler()?.invoke(radioId, setOf(index).snapshotSet())
         refreshDecryptionCache(radioId)
     }
 
-    private suspend fun writeChannelLocked(radioId: RadioId, index: UByte, name: String, secret: Bytes): Boolean {
+    private data class PersistedWrite(val key: EntityKey, val index: UByte, val occupantChanged: Boolean)
+
+    private suspend fun writeChannelLocked(radioId: RadioId, index: UByte, name: String, secret: Bytes): PersistedWrite {
         val truncatedName = name.utf8Prefix(ProtocolLimits.MAX_USABLE_NAME_BYTES)
         val prior = dataStore.fetchChannel(radioId, index)
-        retainUncertainWrite(
+        val savedId = retainUncertainWrite(
             send = { session.setChannel(index, truncatedName, secret) },
             reconcile = { dataStore.saveChannel(radioId, ChannelInfo(index, truncatedName, secret)) },
         )
         knownSlots[radioId] = knownSlots[radioId].orEmpty() + index
-        return prior != null && prior.secret != secret
+        return PersistedWrite(EntityKey(radioId, savedId), index, prior != null && prior.secret != secret)
     }
 
     /** Clears a channel by writing an empty name and zero secret, then deletes it locally. */
@@ -399,13 +411,13 @@ class ChannelService(
         uncertainWrite?.let { throw ChannelMutationError.ReconciliationRequired(it) }
     }
 
-    private suspend fun retainUncertainWrite(send: suspend () -> Unit, reconcile: suspend () -> Unit) {
+    private suspend fun <T> retainUncertainWrite(send: suspend () -> Unit, reconcile: suspend () -> T): T {
         currentCoroutineContext().ensureActive()
         var acknowledged = false
         try {
             send()
             acknowledged = true
-            reconcile()
+            return reconcile()
         } catch (failure: Exception) {
             if (acknowledged || failure !is MeshCoreException.DeviceError) {
                 uncertainWrite = failure

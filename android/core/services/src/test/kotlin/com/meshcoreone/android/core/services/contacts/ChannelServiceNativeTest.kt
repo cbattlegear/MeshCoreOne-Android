@@ -29,10 +29,137 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 
 class ChannelServiceNativeTest {
+    @TestFactory
+    fun persistedWriteOutcomes(): List<DynamicTest> = channelsCases("WP-405 returned persistence UUID",
+        "post-save channel fetch failure reports the actual commit without fabricating a DTO" to {
+            persistedWriteOutcome(inCache = false, cancel = false)
+        },
+        "post-save channel fetch cancellation reports the actual commit and propagates cancellation" to {
+            persistedWriteOutcome(inCache = false, cancel = true)
+        },
+        "post-save cache refresh failure reports the actual commit without fabricating a DTO" to {
+            persistedWriteOutcome(inCache = true, cancel = false)
+        },
+        "post-save cache refresh cancellation reports the actual commit and propagates cancellation" to {
+            persistedWriteOutcome(inCache = true, cancel = true)
+        },
+        "a store write that never returns its UUID cannot manufacture a known-commit acknowledgement" to {
+            val radio = channelsRadioId()
+            val base = ChannelsMockSession()
+            val rows = ChannelsInMemoryStore()
+            val saved = CompletableDeferred<Unit>()
+            val store = object : ChannelPersisting by rows {
+                override suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): java.util.UUID {
+                    rows.saveChannel(radioId, info)
+                    saved.complete(Unit)
+                    awaitCancellation()
+                }
+            }
+            val service = initializedAllocationService(radio, base, store)
+            val commits = mutableListOf<EntityKey>()
+            val request = async(start = CoroutineStart.UNDISPATCHED) {
+                service.createChannelWithSecret(radio, 4u, "Saved but not returned", channelsSecret(0x11)) { key, _ ->
+                    commits += key
+                }
+            }
+            assertTrue(saved.isCompleted)
+            assertEquals(1, rows.fetchChannels(radio).size)
+            request.cancelAndJoin()
+            assertTrue(request.isCancelled)
+            assertTrue(commits.isEmpty())
+            assertFailsWith<ChannelMutationError.ReconciliationRequired> {
+                service.createChannelWithSecret(radio, 4u, "Must not retry", channelsSecret(0x22))
+            }
+            assertEquals(1, base.recordedSetChannels.size)
+        },
+        "commit observer can reenter allocation after both mutation and cache locks are released" to {
+            val radio = channelsRadioId()
+            val rows = ChannelsInMemoryStore()
+            val base = ChannelsMockSession()
+            val cache = ChannelsDecryptionCapture()
+            val service = initializedAllocationService(radio, base, rows, cache)
+            var observed: EntityKey? = null
+            val saved = service.createChannelWithSecret(radio, 4u, "#saved", channelsSecret(0x11)) { key, index ->
+                observed = key
+                assertEquals(1u, index)
+                val reentrant = async(start = CoroutineStart.UNDISPATCHED) {
+                    service.createChannelWithSecret(radio, 4u, "Nested consent", channelsSecret(0x22))
+                }
+                assertTrue(reentrant.isCompleted, "Observer cannot run under the allocation or cache mutex")
+            }
+            assertEquals(EntityKey(radio, saved.id), observed)
+            assertEquals(listOf<UByte>(1u, 2u), base.recordedSetChannels.map { it.index })
+            assertEquals(listOf<UByte>(1u, 2u), cache.indexUpdates.last())
+        },
+    )
+
+    private suspend fun CoroutineScope.persistedWriteOutcome(inCache: Boolean, cancel: Boolean) {
+        val radio = channelsRadioId()
+        val base = ChannelsMockSession()
+        val rows = ChannelsInMemoryStore()
+        val reached = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val failure = IllegalStateException("post-save ${if (inCache) "cache" else "channel"} read")
+        var inject = true
+        suspend fun afterSaved() {
+            if (inject && rows.fetchChannel(radio, 1u) != null) {
+                reached.complete(Unit)
+                release.await()
+                throw failure
+            }
+        }
+        val store = object : ChannelPersisting by rows {
+            override suspend fun fetchChannel(radioId: RadioId, index: UByte): com.meshcoreone.android.core.model.ChannelDTO? {
+                if (!inCache) afterSaved()
+                return rows.fetchChannel(radioId, index)
+            }
+            override suspend fun fetchChannels(radioId: RadioId): SnapshotList<com.meshcoreone.android.core.model.ChannelDTO> {
+                if (inCache) afterSaved()
+                return rows.fetchChannels(radioId)
+            }
+        }
+        val service = initializedAllocationService(radio, base, store, ChannelsDecryptionCapture())
+        val commits = mutableListOf<Pair<EntityKey, UByte>>()
+        val outcome = CompletableDeferred<Throwable?>()
+        val pending = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                service.createChannelWithSecret(radio, 4u, "Committed", channelsSecret(0x11)) { key, index ->
+                    commits += key to index
+                }
+                outcome.complete(null)
+            } catch (cancelled: CancellationException) {
+                outcome.complete(cancelled)
+                throw cancelled
+            } catch (error: Exception) {
+                outcome.complete(error)
+            }
+        }
+        assertTrue(reached.isCompleted, "The hold must follow ACK and a returned persistence UUID")
+        val saved = rows.fetchChannels(radio).single()
+        assertEquals(1u, saved.index)
+        assertTrue(commits.isEmpty(), "Observer must not run inside a held mutation/cache operation")
+        if (cancel) {
+            pending.cancelAndJoin()
+            assertTrue(pending.isCancelled)
+            assertIs<CancellationException>(outcome.await())
+        } else {
+            release.complete(Unit)
+            pending.join()
+            assertTrue(outcome.await() === failure)
+        }
+        assertEquals(listOf(EntityKey(radio, saved.id) to 1.toUByte()), commits)
+        inject = false
+        assertEquals(2u, service.createChannelWithSecret(radio, 4u, "Distinct consent", channelsSecret(0x22)).index)
+        assertEquals(saved, rows.fetchChannel(radio, 1u))
+        assertEquals(listOf<UByte>(1u, 2u), base.recordedSetChannels.map { it.index })
+    }
+
     @TestFactory
     fun allocationThroughSave(): List<DynamicTest> = channelsCases("WP-405 allocation",
         "two accepted joins refresh allocation after the first actual acknowledgement and save" to {

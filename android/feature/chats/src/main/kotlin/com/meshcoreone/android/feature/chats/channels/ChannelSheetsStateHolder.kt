@@ -29,6 +29,7 @@ data class ChannelSheetsState(
     val secretHex: String = "",
     val generatedSecret: Bytes? = null,
     val createdChannel: ChannelDTO? = null,
+    val committedWrite: ChannelWriteReceipt? = null,
     val shareUri: String? = null,
     val failure: Throwable? = null,
 )
@@ -76,12 +77,12 @@ class ChannelSheetsStateHolder(
             } else {
                 it.generatedSecret
             }
-            it.copy(page = page, generatedSecret = secret, failure = null, createdChannel = null, shareUri = null)
+            it.copy(page = page, generatedSecret = secret, failure = null, createdChannel = null, committedWrite = null, shareUri = null)
         }
     }
 
     fun back() = mutableState.update {
-        it.copy(page = ChannelSheetPage.OPTIONS, name = "", secretHex = "", failure = null, createdChannel = null, shareUri = null)
+        it.copy(page = ChannelSheetPage.OPTIONS, name = "", secretHex = "", failure = null, createdChannel = null, committedWrite = null, shareUri = null)
     }
 
     fun updateName(value: String) = mutableState.update { it.copy(name = utf8Prefix(value, ProtocolLimits.MAX_USABLE_NAME_BYTES)) }
@@ -116,7 +117,7 @@ class ChannelSheetsStateHolder(
         val name = mutableState.value.name
         if (!isValidHashtag(name)) return fail(ChannelSheetError.InvalidHashtag)
         return submit {
-            dependencies.service.joinHashtagChannel(requireRadio(), maxChannels, "#$name")
+            dependencies.service.joinHashtagChannel(requireRadio(), maxChannels, "#$name", ::recordCommit)
         }
     }
 
@@ -134,13 +135,17 @@ class ChannelSheetsStateHolder(
         }
     }
 
-    fun clearFailure() = mutableState.update { it.copy(failure = null) }
+    fun clearFailure() = mutableState.update {
+        it.copy(failure = it.committedWrite?.let { receipt ->
+            it.failure as? ChannelSheetError.AlreadyCommitted ?: ChannelSheetError.AlreadyCommitted(receipt, it.failure)
+        })
+    }
 
     private suspend fun writeWithSecret(name: String, secret: Bytes, shareAfter: Boolean = false): ChannelDTO? {
         if (name.isEmpty()) return fail(ChannelSheetError.InvalidName)
         if (secret.size != ProtocolLimits.CHANNEL_SECRET_SIZE) return fail(ChannelSheetError.InvalidSecret)
         return submit {
-            val channel = dependencies.service.createChannelWithSecret(requireRadio(), maxChannels, name, secret)
+            val channel = dependencies.service.createChannelWithSecret(requireRadio(), maxChannels, name, secret, ::recordCommit)
             if (shareAfter) {
                 mutableState.update {
                     it.copy(
@@ -155,20 +160,44 @@ class ChannelSheetsStateHolder(
     }
 
     private suspend fun submit(operation: suspend () -> ChannelDTO): ChannelDTO? {
-        mutableState.update { it.copy(isSubmitting = true, failure = null) }
+        while (true) {
+            val current = mutableState.value
+            val receipt = current.committedWrite
+            if (receipt != null) {
+                val failure = current.failure as? ChannelSheetError.AlreadyCommitted
+                    ?: ChannelSheetError.AlreadyCommitted(receipt, current.failure)
+                if (!mutableState.compareAndSet(current, current.copy(failure = failure))) continue
+                dependencies.diagnostics.report("channel confirmation already committed", failure)
+                return null
+            }
+            if (current.isSubmitting) {
+                dependencies.diagnostics.report(
+                    "channel confirmation already submitting",
+                    IllegalStateException("Channel confirmation is already in progress"),
+                )
+                return null
+            }
+            if (mutableState.compareAndSet(current, current.copy(isSubmitting = true, failure = null))) break
+        }
         return try {
             operation().also { result ->
                 mutableState.update { it.copy(isSubmitting = false, createdChannel = result) }
             }
         } catch (cancelled: CancellationException) {
-            mutableState.update { it.copy(isSubmitting = false) }
+            mutableState.update {
+                it.copy(isSubmitting = false, failure = it.committedWrite?.let { receipt -> ChannelSheetError.AlreadyCommitted(receipt, cancelled) })
+            }
             throw cancelled
         } catch (failure: Exception) {
-            mutableState.update { it.copy(isSubmitting = false, failure = failure) }
+            mutableState.update {
+                it.copy(isSubmitting = false, failure = it.committedWrite?.let { receipt -> ChannelSheetError.AlreadyCommitted(receipt, failure) } ?: failure)
+            }
             dependencies.diagnostics.report("write channel", failure)
             null
         }
     }
+
+    private fun recordCommit(receipt: ChannelWriteReceipt) = mutableState.update { it.copy(committedWrite = receipt) }
 
     private fun requireRadio(): RadioId = radioId ?: throw ChannelSheetError.NoDeviceConnected
     private fun fail(error: ChannelSheetError): ChannelDTO? {
@@ -211,7 +240,9 @@ class ChannelSheetsStateHolder(
     }
 }
 
-sealed class ChannelSheetError(message: String) : Exception(message) {
+sealed class ChannelSheetError(message: String, cause: Throwable? = null) : Exception(message, cause) {
+    class AlreadyCommitted(val receipt: ChannelWriteReceipt, cause: Throwable? = null) :
+        ChannelSheetError("Channel was saved. Verify it in Chats; this confirmation will not write it again.", cause)
     data object NoDeviceConnected : ChannelSheetError("No device connected")
     data object NoAvailableSlots : ChannelSheetError("No available channel slots")
     data object InvalidName : ChannelSheetError("Invalid channel name")

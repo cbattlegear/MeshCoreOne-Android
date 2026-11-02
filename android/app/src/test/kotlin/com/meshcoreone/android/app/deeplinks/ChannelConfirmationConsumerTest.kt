@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
 import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
 import com.meshcoreone.android.app.navigation.AppPendingChannel
+import com.meshcoreone.android.app.navigation.AppChannelsContent
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
 import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
@@ -36,8 +37,11 @@ import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -64,6 +68,241 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
     }
 
     @After fun destroyHost() { host.pause().stop().destroy() }
+
+    private fun emptyChannelReply(index: Int): Bytes = Bytes.of(0x12, index) + Bytes(ByteArray(48))
+
+    @Test fun existingHashtagFromMountedOptionsAfterDisconnectNavigatesCachedConversationWithoutRadioWork() = runTest {
+        val h = ContainerHarness(this, store)
+        val secret = Bytes.fromHex("00112233445566778899AABBCCDDEEFF")
+        val occupant = Bytes.of(0x12, 1) + Bytes.utf8("#Ops").paddedOrTruncated(32) + secret
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> when (frame[0].toInt()) {
+                0x1f -> listOf(if (frame[1].toInt() == 1) occupant else emptyChannelReply(frame[1].toInt()))
+                0x20 -> listOf(Bytes.of(0))
+                else -> null
+            } }
+        }
+        val showing = mutableStateOf(true)
+        val navigation = h.container.navigation
+        try {
+            h.container.foreground.activityStarted()
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val radio = assertNotNull(h.appState.currentRadioId)
+            h.eventually("actual channel sync saves the offline hashtag destination") {
+                h.appState.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced
+            }
+            val cached = assertNotNull(store.fetchChannel(radio, 1u))
+            compose.runOnUiThread {
+                host.get().setContent { MeshCoreTheme(motionScale = 0f) {
+                    if (showing.value) AppChannelsContent(h.container.chatsFeature, navigation) { showing.value = false }
+                } }
+            }
+            val option = host.get().getString(R.string.l10n_app_chats_chats_channeloptions_joinhashtag_title)
+            compose.waitUntil(10_000) {
+                h.scheduler.runCurrent()
+                compose.onAllNodesWithText(option).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(option).performClick()
+            compose.onNode(hasSetTextAction()).performTextInput("ops")
+            h.manager.disconnect(com.meshcoreone.android.core.runtime.RuntimeDisconnectReason.USER_INITIATED)
+            h.settle()
+            assertNull(h.sessions.current)
+            val before = h.links.radios.single().sent.toList()
+            val links = h.links.radios.size
+            compose.onNodeWithText(host.get().getString(R.string.l10n_app_chats_chats_joinprivate_joinbutton)).performClick()
+            compose.waitUntil(10_000) {
+                h.scheduler.runCurrent()
+                !showing.value
+            }
+            assertEquals(ChatSelection.Channel(cached), navigation.state.value.chatsSelectedRoute)
+            assertEquals(cached, store.fetchChannel(radio, 1u))
+            assertEquals(before, h.links.radios.single().sent, "Offline cached navigation performs neither reads nor writes")
+            assertEquals(links, h.links.radios.size, "No new connection is created for cached navigation")
+            assertNull(h.sessions.current)
+        } finally {
+            compose.runOnUiThread { host.get().setContent {} }
+            h.container.close()
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+    fun postSaveFetchFailureDisablesOnlyThatDeliveryAndIdenticalReplacementCanBeConsented() = runTest {
+        postSaveRetryControl(inCache = false, cancel = false)
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+    fun postSaveFetchCancellationDisablesOnlyThatDeliveryAndIdenticalReplacementCanBeConsented() = runTest {
+        postSaveRetryControl(inCache = false, cancel = true)
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+    fun postSaveCacheFailureDisablesOnlyThatDeliveryAndIdenticalReplacementCanBeConsented() = runTest {
+        postSaveRetryControl(inCache = true, cancel = false)
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+    fun postSaveCacheCancellationDisablesOnlyThatDeliveryAndIdenticalReplacementCanBeConsented() = runTest {
+        postSaveRetryControl(inCache = true, cancel = true)
+    }
+
+    private suspend fun TestScope.postSaveRetryControl(inCache: Boolean, cancel: Boolean) {
+        val savedBy = java.util.concurrent.atomic.AtomicReference<Job?>(null)
+        val returnedId = java.util.concurrent.atomic.AtomicReference<java.util.UUID?>(null)
+        val probe = java.util.concurrent.atomic.AtomicBoolean(false)
+        val reached = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val failure = IllegalStateException("held real post-save ${if (inCache) "cache" else "channel"} read")
+        suspend fun afterSaved() {
+            if (probe.get() && returnedId.get() != null && currentCoroutineContext()[Job] === savedBy.get()) {
+                reached.complete(Unit)
+                release.await()
+                throw failure
+            }
+        }
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): java.util.UUID {
+                val id = store.saveChannel(radioId, info)
+                if (probe.get() && info.name == "#test" && savedBy.compareAndSet(null, currentCoroutineContext()[Job])) {
+                    returnedId.set(id)
+                }
+                return id
+            }
+            override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? {
+                if (!inCache) afterSaved()
+                return store.fetchChannel(radioId, index)
+            }
+            override suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO> {
+                if (inCache) afterSaved()
+                return store.fetchChannels(radioId)
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> when (frame[0].toInt()) {
+                0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
+                0x20 -> listOf(Bytes.of(0))
+                else -> null
+            } }
+        }
+        val width = mutableStateOf(390.dp)
+        val navigation = h.container.navigation
+        val external = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))
+        val uri = "meshcore://channel/add?name=%23test&secret=00112233445566778899AABBCCDDEEFF&region_scope=testregion"
+        val secret = Bytes.fromHex("00112233445566778899AABBCCDDEEFF")
+        val selections = java.util.Collections.synchronizedList(mutableListOf<ChatSelection?>())
+        val observer = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            navigation.state.collect { selections += it.chatsSelectedRoute }
+        }
+        try {
+            h.container.foreground.activityStarted()
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            h.eventually("initial channel sync completes") {
+                h.appState.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced
+            }
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val firmware = h.links.radios.single()
+            val before = firmware.sent.count { it[0].toInt() == 0x20 }
+            val existing = ChannelDTO(radioId = radio, index = 0u, name = "Existing conversation")
+            store.saveChannel(existing)
+            navigation.navigateToChannel(existing)
+            val initialStacks = navigation.state.value.stacks
+            external.routeExternal(uri)
+            val first = assertNotNull(navigation.state.value.pendingChannelConfirmation)
+            compose.runOnUiThread {
+                host.get().setContent { Box(Modifier.width(width.value)) { MeshCoreTheme(motionScale = 0f) {
+                    NativeNavigationShell(navigation, chats = h.container.chatsFeature)
+                } } }
+            }
+            fun awaitEnabled() = compose.waitUntil(10_000) {
+                h.scheduler.runCurrent()
+                !compose.onNodeWithText(host.get().getString(L.commonOk))
+                    .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
+            }
+            awaitEnabled()
+            probe.set(true)
+            compose.onNodeWithText(host.get().getString(L.commonOk)).performClick()
+            h.eventually("actual ACK and returned Room UUID precede held read", virtualBudgetMillis = 0) { reached.isCompleted }
+            val saved = assertNotNull(store.fetchChannel(radio, 1u))
+            assertEquals(returnedId.get(), saved.id)
+            assertEquals("#test", saved.name)
+            assertEquals(secret, saved.secret)
+            assertEquals(ChannelFloodScope.Inherit, saved.floodScope, "Failed setup has not applied the requested local region")
+            assertEquals(before + 1, firmware.sent.count { it[0].toInt() == 0x20 })
+            assertEquals(first, navigation.state.value.pendingChannelConfirmation)
+            compose.onNodeWithText(host.get().getString(L.commonOk)).assertIsNotEnabled()
+            val requestJob = assertNotNull(savedBy.get())
+            if (cancel) requestJob.cancel(CancellationException("cancel after actual returned Room UUID"))
+            else release.complete(Unit)
+            compose.waitUntil(10_000) {
+                h.scheduler.runCurrent()
+                requestJob.isCompleted
+            }
+            assertEquals(cancel, requestJob.isCancelled)
+            probe.set(false)
+            for (value in listOf(1080, 390, 1080)) {
+                compose.runOnIdle { width.value = value.dp }
+                h.scheduler.runCurrent()
+                compose.onNodeWithText(host.get().getString(L.commonOk)).assertIsNotEnabled()
+                compose.onAllNodesWithText(host.get().getString(L.commonOk)).assertCountEquals(1)
+                compose.onNodeWithText(host.get().getString(L.commonOk)).performTouchInput { click() }
+                compose.onNodeWithTag(if (value < 780) "single-pane" else "list-detail").assertIsDisplayed()
+                assertEquals(first, navigation.state.value.pendingChannelConfirmation)
+                assertEquals(before + 1, firmware.sent.count { it[0].toInt() == 0x20 }, "Retry control cannot dispatch again")
+                assertEquals(listOf<UByte>(0u, 1u), store.fetchChannels(radio).map { it.index })
+                assertEquals(saved, store.fetchChannel(radio, 1u))
+                assertEquals(ChatSelection.Channel(existing), navigation.state.value.chatsSelectedRoute)
+                assertEquals(initialStacks, navigation.state.value.stacks)
+            }
+            assertFalse(synchronized(selections) {
+                selections.any { it is ChatSelection.Channel && it.channel.id == saved.id }
+            }, "A saved-but-incomplete result must not fabricate a successful navigation")
+
+            external.routeExternal(uri)
+            val second = assertNotNull(navigation.state.value.pendingChannelConfirmation)
+            assertNotEquals(first.deliveryId, second.deliveryId)
+            awaitEnabled()
+            assertEquals(before + 1, firmware.sent.count { it[0].toInt() == 0x20 }, "New delivery is not consent")
+            compose.onNodeWithText(host.get().getString(L.commonOk)).performClick()
+            h.eventually("independently consented identical delivery completes", virtualBudgetMillis = 0) {
+                navigation.state.value.pendingChannelConfirmation == null
+            }
+            val joined = assertNotNull(store.fetchChannel(radio, 2u))
+            assertNotEquals(saved.id, joined.id)
+            assertEquals(secret, joined.secret)
+            assertEquals("#test", joined.name)
+            assertEquals(ChannelFloodScope.Region("testregion"), joined.floodScope)
+            assertEquals(saved, store.fetchChannel(radio, 1u))
+            assertEquals(listOf(
+                PacketBuilder.setChannel(1u, "#test", secret), PacketBuilder.setChannel(2u, "#test", secret),
+            ), firmware.sent.filter { it[0].toInt() == 0x20 }.drop(before))
+            compose.waitUntil(10_000) {
+                h.scheduler.runCurrent()
+                navigation.state.value.let { it.pendingChannel == null && it.chatsSelectedRoute == ChatSelection.Channel(joined) }
+            }
+            val completed = navigation.state.value
+            assertEquals(NavigationDestination.Chat(ChatSelection.Channel(joined)), completed.activeStack.last().destination)
+            assertEquals(initialStacks.getValue(AppTab.CHATS).toList(), completed.activeStack.dropLast(1))
+            assertEquals(initialStacks.filterKeys { it != AppTab.CHATS }, completed.stacks.filterKeys { it != AppTab.CHATS })
+            compose.onAllNodesWithText(host.get().getString(L.commonOk)).assertCountEquals(0)
+            val entry = hasTestTag("entry:${completed.activeStack.last().id}")
+            compose.onNode(entry).assertIsDisplayed()
+            compose.onNode(hasSetTextAction() and hasAnyAncestor(entry), useUnmergedTree = true).assertIsDisplayed()
+        } finally {
+            observer.cancel()
+            probe.set(false)
+            release.complete(Unit)
+            compose.runOnUiThread { host.get().setContent {} }
+            h.container.close()
+        }
+    }
 
     @Test fun externalPrivateHashtagWarningPrecedesConsentAndPersistsExactSecretAndScope() = runTest {
         confirmPrivateHashtag(fromChat = false, name = "#avion-testing2", region = "testregion")
@@ -302,7 +541,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
         h.links.configureRadio = { radio ->
             radio.modelName = "Heltec V3"
             radio.respond = { frame -> when (frame[0].toInt()) {
-                0x1f -> listOf(if (frame[1].toInt() == 1) occupant else Bytes.of(1, 2))
+                0x1f -> listOf(if (frame[1].toInt() == 1) occupant else emptyChannelReply(frame[1].toInt()))
                 0x20 -> listOf(Bytes.of(0))
                 else -> null
             } }
@@ -373,11 +612,15 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
         val retryRead = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var holdRetry = false
+        var failObservation = !joinFirst
         var retryIndex: UByte = 1u
         val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun batchSaveChannels(
                 radioId: RadioId, configured: SnapshotList<ChannelInfo>, unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
             ): SnapshotList<ChannelDTO> {
+                if (failObservation && configured.any { it.index == 1.toUByte() }) {
+                    throw IllegalStateException("Channel observation could not be persisted")
+                }
                 if (holdRetry && configured.any { it.index == retryIndex }) {
                     retryRead.complete(Unit)
                     release.await()
@@ -388,12 +631,10 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
         val occupantSecret = Bytes.fromHex("11111111111111111111111111111111")
         val remote = mutableMapOf(1 to (Bytes.of(0x12, 1) + Bytes.utf8("Radio occupant").paddedOrTruncated(32) + occupantSecret))
-        var unknownSlot = !joinFirst
         h.links.configureRadio = { radio ->
             radio.respond = { frame ->
                 when (frame[0].toInt()) {
-                    0x1f -> if (frame[1].toInt() == 1 && unknownSlot) listOf(Bytes.of(1, 6))
-                        else listOf(remote[frame[1].toInt()] ?: Bytes.of(1, 2))
+                    0x1f -> listOf(remote[frame[1].toInt()] ?: emptyChannelReply(frame[1].toInt()))
                     0x20 -> {
                         remote[frame[1].toInt()] = Bytes.of(0x12) + frame.slice(1, frame.size)
                         listOf(Bytes.of(0))
@@ -414,8 +655,9 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             val firmware = h.links.radios.single()
             val before = firmware.sent.count { it[0].toInt() == 0x20 }
             val navigation = h.container.navigation
-            val existing = ChannelDTO(radioId = radio, index = 0u, name = "Existing conversation")
+            val existing = ChannelDTO(radioId = radio, index = 0u, name = "Existing conversation", secret = Bytes(ByteArray(16)))
             store.saveChannel(existing)
+            remote[0] = Bytes.of(0x12, 0) + Bytes.utf8(existing.name).paddedOrTruncated(32) + existing.secret
             navigation.navigateToChannel(existing)
             compose.runOnUiThread {
                 host.get().setContent { MeshCoreTheme(motionScale = 0f) {
@@ -460,9 +702,14 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 message = null
                 expected = first
             }
-            unknownSlot = false
-            holdRetry = true
             val service = assertNotNull(h.sessions.current).channelService
+            if (!joinFirst) {
+                failObservation = false
+                assertTrue(service.syncChannels(radio, h.container.chatsFeature.maximumChannels(), false).errors.isEmpty())
+                assertEquals(occupantSecret, store.fetchChannel(radio, 1u)?.secret,
+                    "Explicit recovery establishes real authority; a generic unindexed error is not an empty-slot reply")
+            }
+            holdRetry = true
             val retry = backgroundScope.async { service.retryFailedChannels(radio, SnapshotList.of(retryIndex)) }
             h.eventually("actual configured retry reply is held before Room batch commit", virtualBudgetMillis = 0) {
                 retryRead.isCompleted
@@ -481,7 +728,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             assertEquals(before + if (joinFirst) 1 else 0, firmware.sent.count { it[0].toInt() == 0x20 })
             assertEquals(pending, navigation.state.value.pendingChannelConfirmation)
             if (accepted != null) assertEquals(accepted.secret, store.fetchChannel(radio, accepted.index)?.secret)
-            else assertNull(store.fetchChannel(radio, 1u))
+            else assertEquals(occupantSecret, store.fetchChannel(radio, 1u)?.secret)
 
             release.complete(Unit)
             h.eventually("retry batch commits and separately confirmed join finishes", virtualBudgetMillis = 0) {
@@ -531,8 +778,11 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
         var holdAcknowledgements = false
         h.links.configureRadio = { radio ->
             radio.respond = { frame ->
-                if (frame[0].toInt() != 0x20) null
-                else if (holdAcknowledgements) emptyList() else listOf(Bytes.of(0))
+                when (frame[0].toInt()) {
+                    0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
+                    0x20 -> if (holdAcknowledgements) emptyList() else listOf(Bytes.of(0))
+                    else -> null
+                }
             }
         }
         val width = mutableStateOf(390.dp)
@@ -689,7 +939,11 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
         }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
         h.links.configureRadio = { radio ->
-            radio.respond = { frame -> if (frame[0].toInt() == 0x20) listOf(Bytes.of(0)) else null }
+            radio.respond = { frame -> when (frame[0].toInt()) {
+                0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
+                0x20 -> listOf(Bytes.of(0))
+                else -> null
+            } }
         }
         val width = mutableStateOf(390.dp)
         try {
@@ -815,8 +1069,13 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
     private suspend fun TestScope.confirmPrivateHashtag(fromChat: Boolean, name: String, region: String?) {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { radio ->
-            radio.respond = { frame -> if (frame[0].toInt() == 0x20) listOf(Bytes.of(0)) else null }
+            radio.respond = { frame -> when (frame[0].toInt()) {
+                0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
+                0x20 -> listOf(Bytes.of(0))
+                else -> null
+            } }
         }
+
         try {
             h.manager.connect(h.target())
             h.settle()

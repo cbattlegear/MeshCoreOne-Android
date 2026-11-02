@@ -1,6 +1,6 @@
 # WP-405 evidence
 
-## Issue #417 allocation-through-save candidate: execution pending
+## Issue #417 allocation-through-save candidate: exact-head failure
 
 This local follow-up starts from `0c8e3cb22816673d2373fb20f2cbab3744387eaf`,
 against trusted/current main `5878b5357dc9fe9986f002fe68763aca0bc35303`,
@@ -12,14 +12,41 @@ The existing advisory owner `d76f0641-87d4-4218-92e9-3cdf3f972471` evolved
 revision 13 -> 14 -> 15 with homogeneous production/test operations; this is
 not a privileged current-controller receipt.
 
-Added, not yet executed: three mounted two-consent/pre-ACK methods on SDK 31
-and 37, two mounted READY/retry-overlap methods plus one ESP32 reconnect/skip
-recovery method on both SDKs, fifteen native
-service allocation/concurrency/failure cases, and one holder stale-snapshot
-case. The original thirteen mounted methods and all original source families
-remain. The mounted partial-sync case deliberately uses a device-error read
-and the real explicitly invoked retry; automatic delayed-retry-controller
-scheduling is not claimed as executed.
+Published head `9782d78c8580f10da71784396e019e3150c5bea7` failed
+[run 41463646130](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41463646130).
+The Android job `125338919312` original log reports 1,893 App tests completed,
+31 failed. Twenty confirmation cases reported superseded-generation
+cancellation; eight timed out waiting for confirmation consumption; three
+region cases returned null. The log does not identify their failing region
+vector. Classifier and controller/policy jobs passed; aggregate Android failed.
+No rerun or second CI-result bundle is produced.
+
+## Issue #417 local outcome/fixture follow-up: Android unverified
+
+The unpublished follow-up starts from the failed exact head above. The same
+stored advisory identity evolved revision 15 -> 16 -> 17 -> 18 for the
+existing pending dialog, feature/app channel rendering seams and existing
+region-consumer test. It retains actual returned store UUIDs through later
+fetch/cache failure or cancellation, prevents same-confirmation resubmission,
+and preserves read-only cached hashtag navigation after disconnect.
+
+Added definitions, not execution evidence: six native outcome cases, three
+holder methods covering both join kinds, four mounted post-save failure/
+cancellation methods and one mounted offline options-sheet method. Existing
+methods/assertion families remain. Fixture corrections use indexed empty
+ChannelInfo responses instead of unindexed negative packets that the actual
+query matcher ignores. The partial READY fixture now covers observation
+persistence failure, explicit authoritative recovery and a real held retry
+batch; it does not prove automatic delayed timeout retry or recovery of an
+uncorrelated wire reply. Region-join assertions now include vector/failure
+diagnostics without removing any vectors.
+
+The additional holder regression suspends the first allocation before its
+commit, submits a second consent programmatically and requires immediate
+rejection without a second service call, lost progress or fabricated result.
+It then releases the original operation and checks the exact saved row and
+returned receipt. Production submission admission is one StateFlow
+compare-and-set rather than a separate guard and progress update.
 
 Declared local checks: `python .\tools\android-port\controller\validate.py`
 PASS (1,866 references, 64 WPs, 178 edges);
@@ -27,8 +54,11 @@ PASS (1,866 references, 64 WPs, 178 edges);
 `git --no-pager diff --check` PASS. An initial mixed AndroidOnly/PortedFrom
 annotation caused a traceability-disposition failure and was corrected without
 changing validator policy. No local Android/Gradle execution or manual workflow
-dispatch is authorized or performed; Kotlin compilation and new runtime cases
-remain explicitly unverified until the normal exact-head hosted checks.
+dispatch is authorized or performed; compilation and runtime behavior of this
+local follow-up remain explicitly unverified. Trusted native-copy admission,
+producer API landing and coordinated occupant/restore/notification ownership
+remain prerequisites for their affected integration; none is inferred from
+source-only checks or another owner's unpublished candidate.
 Do not resolve the high review thread or infer full #417/#398 acceptance from
 source changes or these dependency-free checks.
 

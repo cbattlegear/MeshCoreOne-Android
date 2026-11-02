@@ -156,3 +156,16 @@ segmentation parity; Android-device/platform validation remains open for human
 review. Local Android/Gradle execution, device behavior, and broader locale
 tailoring remain unverified. Swift codec/SwiftData oracle jobs were skipped by
 workflow selection and are not claimed as verified.
+
+The documentation-only follow-up head
+`e772505ba3b2b9e60cd503f34e8273579b252d88` was checked in Android candidate
+run `41398170548`. Both attempt 1 and the normal failed-job retry (attempt 2)
+failed `:app:testDebugUnitTest` in the unrelated
+`AndroidMalwareDomainFilterTest.publishes a new policy revision after a network
+refresh[31]`, with `TimeoutCancellationException: Timed out waiting for 5000 ms`
+at `AndroidMalwareDomainFilterTest.kt:73`. The earlier exact-code hosted run
+`41396546339` passed. Retain both failed attempts and the earlier pass; this
+does not establish the timeout's root cause or that it is flaky. No malware
+sources were changed, and the failure is not attributed to WP-306. The PR stays
+draft and unmerged pending clean required checks and human Android-runtime
+validation.

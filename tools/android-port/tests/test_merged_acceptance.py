@@ -742,10 +742,15 @@ class MergedAcceptanceTests(unittest.TestCase):
                 self.assertRaisesRegex(PortError, "changed trusted CI readers"):
             reader.verify_trusted_readers(BASE, HEAD)
 
-    def test_scoped_run_checks_real_selection_and_positive_controller_discovery(self):
+    def test_scoped_run_accepts_historical_five_key_report_and_requires_discovery(self):
         reader, _, _, _, _ = self.fixture()
-        scopes = {"controller": True, "scaffold": False, "protocol": False,
-                  "backup": False, "benchmark": False, "external-oracle": False}
+        current_scopes = {"controller": True, "scaffold": False, "protocol": False,
+                          "backup": False, "benchmark": False, "external-oracle": False}
+        scopes = {key: value for key, value in current_scopes.items() if key != "benchmark"}
+        self.assertEqual(
+            tuple(scopes),
+            ("controller", "scaffold", "protocol", "backup", "external-oracle"),
+        )
         report = {"base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
                   "paths": ["tools/android-port/controller/engine.py"], "scopes": scopes}
         native = {"suite": "android/accessibility-tests", "base": BASE, "head": HEAD, "selected": False,
@@ -771,12 +776,49 @@ class MergedAcceptanceTests(unittest.TestCase):
         with patch("controller.repair_acceptance.read_job_log", side_effect=log), \
                 patch("oracle.workflow_scope.merge_base", return_value=BASE), \
                 patch("oracle.workflow_scope.changed_paths", return_value=report["paths"]), \
-                patch("oracle.workflow_scope.classify", return_value=scopes), \
+                patch("oracle.workflow_scope.classify", return_value=current_scopes), \
                 patch("controller.merged_acceptance.tree", return_value={}):
             reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
             counts["discovered"] = counts["run"] = counts["passed"] = 0
             controller_log = line("Run controller tests once", counts)
             with self.assertRaisesRegex(PortError, "missing, skipped or failed"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
+    def test_scoped_run_rejects_historical_report_when_benchmark_scope_is_required(self):
+        reader, _, _, _, _ = self.fixture()
+        paths = [
+            "android/benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt"
+        ]
+        current_scopes = {"controller": False, "scaffold": False, "protocol": False,
+                          "backup": False, "benchmark": True, "external-oracle": False}
+        legacy_scopes = {key: value for key, value in current_scopes.items() if key != "benchmark"}
+        report = {"base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
+                  "paths": paths, "scopes": legacy_scopes}
+        native = {"suite": "android/accessibility-tests", "base": BASE, "head": HEAD,
+                  "selected": False, "result": "NOT SELECTED", "committed_files": 0}
+        scope_log = (
+            "job\tClassify changed inputs with fail-safe defaults\t"
+            f"2026-10-10T11:00:00Z {json.dumps(report)}\n"
+            "job\tClassify changed inputs with fail-safe defaults\t"
+            f"2026-10-10T11:00:00Z {json.dumps(native)}\n"
+        )
+        jobs = [
+            {"id": index, "name": name, "run_id": 1, "head_sha": HEAD,
+             "status": "completed", "conclusion": conclusion}
+            for index, (name, conclusion) in enumerate((
+                ("Classify candidate scopes", "success"),
+                ("Controller and workflow policy", "success"),
+                ("One Linux Android build", "success"),
+                ("Swift codec oracle", "skipped"),
+                ("SwiftData restore and export oracle", "skipped"),
+            ), 1)
+        ]
+        with patch("controller.repair_acceptance.read_job_log", return_value=scope_log), \
+                patch("oracle.workflow_scope.merge_base", return_value=BASE), \
+                patch("oracle.workflow_scope.changed_paths", return_value=paths), \
+                patch("oracle.workflow_scope.classify", return_value=current_scopes), \
+                patch("controller.merged_acceptance.tree", return_value={}):
+            with self.assertRaisesRegex(PortError, "scope does not match"):
                 reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
 
     def test_scoped_product_changes_cannot_pass_without_runnable_module_tests(self):

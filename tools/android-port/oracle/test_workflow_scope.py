@@ -42,11 +42,12 @@ class WorkflowScopeTests(unittest.TestCase):
             "android/benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt",
             "android/benchmark/build.gradle.kts",
             "android/build-logic/convention/src/main/kotlin/AndroidConventionPlugin.kt",
+            "android/app/proguard-rules.pro",
         ):
             with self.subTest(path=path):
                 expected_scopes = (
                     ("benchmark", "scaffold")
-                    if path.startswith("android/build-logic/") else ("benchmark",)
+                    if path.startswith(("android/build-logic/", "android/app/")) else ("benchmark",)
                 )
                 expected = {scope: scope in expected_scopes for scope in SCOPES}
                 self.assertEqual(classify([path]), expected)

@@ -32,6 +32,9 @@ class NoImplementationFound(PortError):
     pass
 
 
+LEGACY_SCOPE_KEYS = ("controller", "scaffold", "protocol", "backup", "external-oracle")
+
+
 def timestamp(value, label):
     if not isinstance(value, str):
         raise PortError(f"Missing {label} timestamp")
@@ -667,6 +670,21 @@ class MergedAcceptance:
         report, native_report = reports[0], native[0]
         diff_base = merge_base(self.manifest.repo, base, head)
         paths = changed_paths(self.manifest.repo, diff_base, head)
+        expected_scopes = classify(paths)
+        reported_scopes = report.get("scopes")
+        legacy_scopes = {key: expected_scopes[key] for key in LEGACY_SCOPE_KEYS}
+
+        def matches_scope_map(value, expected):
+            return (
+                isinstance(value, dict) and set(value) == set(expected)
+                and all(type(enabled) is bool for enabled in value.values())
+                and value == expected
+            )
+
+        scope_matches = matches_scope_map(reported_scopes, expected_scopes) or (
+            expected_scopes["benchmark"] is False
+            and matches_scope_map(reported_scopes, legacy_scopes)
+        )
         before, after = tree(self.manifest.repo, base), tree(self.manifest.repo, head)
         family = lambda path: path == NATIVE_SUITE or path.startswith(NATIVE_SUITE + "/")
         committed = {path for path in after if family(path)}
@@ -683,7 +701,7 @@ class MergedAcceptance:
         if (
             report.get("base") != base or report.get("head") != head
             or report.get("diff_base") != diff_base or report.get("fail_safe") is not False
-            or report.get("paths") != paths or report.get("scopes") != classify(paths)
+            or report.get("paths") != paths or not scope_matches
             or native_report.get("base") != base or native_report.get("head") != head
             or native_report.get("selected") is not native_selected
             or native_report.get("result") != ("SELECTED" if native_selected else "NOT SELECTED")
@@ -691,7 +709,7 @@ class MergedAcceptance:
             or native_report["committed_files"] != len(committed)
         ):
             raise PortError("Hosted scope does not match the trusted exact-candidate diff")
-        scopes = report["scopes"]
+        scopes = expected_scopes
         controller_job = job("Controller and workflow policy", "success")
         if scopes["controller"] or native_report["selected"]:
             reports = log_objects(read_job_log(self, controller_job["id"]), "Run controller tests once")

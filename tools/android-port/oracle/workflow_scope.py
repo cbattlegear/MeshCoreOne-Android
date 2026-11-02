@@ -134,7 +134,7 @@ RULES = {
         ),
     },
     "benchmark": {
-        "exact": {"android/app/build.gradle.kts"},
+        "exact": {"android/app/build.gradle.kts", "android/app/proguard-rules.pro"},
         "prefix": ("android/benchmark/", "android/build-logic/"),
     },
 }

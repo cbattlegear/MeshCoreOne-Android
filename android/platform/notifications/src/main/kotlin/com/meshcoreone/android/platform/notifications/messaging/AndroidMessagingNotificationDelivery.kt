@@ -36,14 +36,23 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 
-class AndroidMessagingNotificationDelivery(
+class AndroidMessagingNotificationDelivery internal constructor(
     context: Context,
     scope: CoroutineScope,
     routeAction: suspend (NotificationResponse) -> Boolean,
-    private val launcherIntent: (Context) -> Intent? = { appContext ->
-        appContext.packageManager.getLaunchIntentForPackage(appContext.packageName)
-    },
+    private val launcherIntent: (Context) -> Intent?,
 ) : NotificationDeliveryPort {
+    constructor(
+        context: Context,
+        scope: CoroutineScope,
+        routeAction: suspend (NotificationResponse) -> Boolean,
+    ) : this(
+        context,
+        scope,
+        routeAction,
+        { appContext -> appContext.packageManager.getLaunchIntentForPackage(appContext.packageName) },
+    )
+
     private val context = context.applicationContext
     private val manager = this.context.getSystemService(NotificationManager::class.java)
     private val shortcutManager = this.context.getSystemService(ShortcutManager::class.java)

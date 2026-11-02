@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -20,7 +21,8 @@ from controller.engine import Controller
 from controller.gates import merge_decision, validate_evidence, verify_completion, verify_pr_gates
 from controller.ledger import Identity, Ledger
 from controller.native_review import (
-    CI_PATH, COMPRESSED_REVIEW_MARKER, RESULT_MARKER, REVIEW_MARKER, WORKFLOW_PATH, NativeReview, main,
+    CI_PATH, COMPRESSED_REVIEW_MARKER, PUBLICATION_MARKER, PUBLICATION_STEP, RESULT_MARKER,
+    REVIEW_MARKER, WORKFLOW_PATH, NativeReview, main,
 )
 from controller.publication import encode_structured_body
 from controller.render import marker
@@ -258,6 +260,109 @@ print("file/module deferred imports reached; no authority or network")
         self.assertEqual(
             [call[2]["conclusion"] for call in api.calls if call[0] == "PATCH"], ["success"],
         )
+
+    def normalized_publication(self, *, current=True):
+        native, api, prefix, value = self.fixture(current=current)
+        run = api.routes[("GET", prefix + "/actions/runs/2")]
+        run["status"] = "in_progress"
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        checks[:] = [check for check in checks if check["name"] == "android-ci"]
+        next_id = iter((201, 202))
+
+        def create(payload):
+            check_id = next(next_id)
+            check = {
+                **copy.deepcopy(payload), "id": check_id, "app": {"id": 10},
+                "details_url": f"https://github.com/{native.policy['repository']}/runs/{check_id}",
+            }
+            checks.append(check)
+            api.routes[("PATCH", prefix + f"/check-runs/{check_id}")] = (
+                lambda update: check.update(copy.deepcopy(update)) or copy.deepcopy(check)
+            )
+            return copy.deepcopy(check)
+
+        api.routes[("POST", prefix + "/check-runs")] = create
+        stdout = io.StringIO()
+        with patch("controller.native_review.git", return_value=BASE.encode()), patch("sys.stdout", stdout):
+            native.publish("WP-003", 123, 90, 2, 1)
+        run["status"] = "completed"
+        log = f"Native review WP-003 PR 123 receipt 90\t{PUBLICATION_STEP}\t2026-11-02T18:25:20Z {stdout.getvalue()}"
+        return native, api, prefix, value, checks, log
+
+    def test_normalized_server_checks_roundtrip_only_with_authenticated_job_receipt(self):
+        for current in (True, False):
+            with self.subTest(current=current):
+                native, api, _, value, checks, log = self.normalized_publication(current=current)
+                self.assertIn(PUBLICATION_MARKER, log)
+                self.assertTrue(all("/runs/" in check["details_url"] for check in checks[1:]))
+                with patch("controller.repair_acceptance.read_job_log", return_value=log) as reader:
+                    actual = GitHubGateAuthority(native.backend, native.manifest, native.policy).reviewed_candidate(
+                        "WP-003", Identity(pr_number=123), BASE,
+                    )
+                reader.assert_called_once()
+                self.assertIs(reader.call_args.args[0].backend, native.backend)
+                self.assertEqual(reader.call_args.args[1], 80)
+                self.assertEqual(actual["binding"], asdict(value.binding))
+                post = next(call for call in api.calls if call[0] == "POST" and call[1].endswith("/check-runs"))
+                self.assertEqual(post[2]["details_url"],
+                                 f"https://github.com/{value.binding.repository}/actions/runs/2")
+
+    def test_normalized_url_alone_or_forged_job_receipt_cannot_establish_provenance(self):
+        for kind in ("missing", "duplicate", "wrong-step", "wrong-check", "wrong-result",
+                     "wrong-job", "wrong-url", "foreign-url", "wrong-app", "wrong-external",
+                     "wrong-head", "failed-run", "stale-attempt", "changed-summary", "unreadable"):
+            with self.subTest(kind=kind):
+                native, api, prefix, _, checks, log = self.normalized_publication()
+                if kind == "missing":
+                    log = ""
+                elif kind == "duplicate":
+                    log *= 2
+                elif kind == "wrong-step":
+                    log = log.replace(PUBLICATION_STEP, "Fetch candidate objects as data only")
+                elif kind == "wrong-check":
+                    log = log.replace('"check_ids":[201]', '"check_ids":[202]')
+                elif kind == "wrong-result":
+                    log = log.replace('"result_sha256":"', '"result_sha256":"0')
+                elif kind == "wrong-job":
+                    api.routes[("GET", prefix + "/actions/runs/2/attempts/1/jobs?per_page=100&page=1")]["jobs"][0]["run_id"] = 3
+                elif kind in ("wrong-url", "foreign-url"):
+                    checks[-1]["details_url"] = (
+                        f"https://github.com/{native.policy['repository']}/runs/202" if kind == "wrong-url"
+                        else "https://github.com/other/repo/runs/201"
+                    )
+                elif kind == "wrong-app":
+                    checks[-1]["app"]["id"] = 999
+                elif kind == "wrong-external":
+                    checks[-1]["external_id"] = "copied:3:1"
+                elif kind == "wrong-head":
+                    checks[-1]["head_sha"] = BASE
+                elif kind == "failed-run":
+                    api.routes[("GET", prefix + "/actions/runs/2")]["conclusion"] = "failure"
+                elif kind == "stale-attempt":
+                    api.routes[("GET", prefix + "/actions/runs/2")]["run_attempt"] = 2
+                elif kind == "changed-summary":
+                    checks[-1]["output"]["summary"] += " "
+                with patch("controller.repair_acceptance.read_job_log", return_value=log,
+                           side_effect=PortError("Hosted log reader unavailable") if kind == "unreadable" else None), \
+                        self.assertRaises((PortError, json.JSONDecodeError)):
+                    native.bundle("WP-003", Identity(pr_number=123))
+
+    def test_partial_terminal_publication_never_emits_a_check_receipt(self):
+        native, api, prefix, _ = self.fixture()
+        api.routes[("GET", prefix + "/actions/runs/2")]["status"] = "in_progress"
+        ids = iter((201, 202))
+        api.routes[("POST", prefix + "/check-runs")] = lambda payload: {"id": next(ids)}
+        api.routes[("PATCH", prefix + "/check-runs/201")] = {}
+
+        def failed_write(payload):
+            raise PortError("Terminal check write refused")
+
+        api.routes[("PATCH", prefix + "/check-runs/202")] = failed_write
+        stdout = io.StringIO()
+        with patch("controller.native_review.git", return_value=BASE.encode()), patch("sys.stdout", stdout), \
+                self.assertRaisesRegex(PortError, "Terminal check write refused"):
+            native.publish("WP-003", 123, 90, 2, 1)
+        self.assertNotIn(PUBLICATION_MARKER, stdout.getvalue())
 
     def test_outstanding_review_request_cannot_publish_success(self):
         native, api, prefix, _ = self.fixture(current=True)

@@ -16,24 +16,22 @@ import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
 import androidx.core.app.ActivityOptionsCompat
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.ContactDTO
-import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.nodes.NodesNavigation
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -189,6 +187,68 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         assertTrue(harness.contactService.avatars.isEmpty())
         assertNull(actionNode(controller.get().getString(C.contactsDetailAvatarCropChoose)))
         assertTrue(harness.store.contacts.all { it.avatarImageData == null })
+    }
+
+    @Test
+    fun changingContactWithACropOpenDiscardsItWithoutSaving() {
+        start()
+        pick(file = true)
+        result()
+        awaitAction(controller.get().getString(C.contactsDetailAvatarCropChoose))
+        val replacement = Fixtures.contact(radioId = contact.radioId, name = "Replacement target")
+        harness.store.contacts += replacement
+        controller.get().runOnUiThread { selected.value = replacement }
+        advanceFrames()
+        awaitText(replacement.displayName)
+        assertNull(actionNode(controller.get().getString(C.contactsDetailAvatarCropChoose)))
+        assertTrue(harness.contactService.avatars.isEmpty())
+    }
+
+    @Test
+    fun savingAnnouncesProgressAndPreventsASecondSelectionUntilTheStoreCompletes() {
+        start()
+        val gate = CompletableDeferred<Unit>()
+        harness.contactService.avatarBehavior = { _, _ -> gate.await(); throw java.io.IOException("write rejected") }
+        pick(file = true)
+        result()
+        action(C.contactsDetailAvatarCropChoose)
+        awaitText(controller.get().getString(C.contactsDetailAvatarSavingAnnouncement))
+        val chooser = assertNotNull(actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource)))
+        assertTrue(chooser.config.contains(SemanticsProperties.Disabled))
+        gate.complete(Unit)
+        awaitText("failed: write rejected")
+        action(C.contactsCommonOk)
+        val recovered = assertNotNull(actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource)))
+        kotlin.test.assertFalse(recovered.config.contains(SemanticsProperties.Disabled))
+        assertNull(harness.store.contacts.single().avatarImageData)
+    }
+
+    @Test
+    fun disconnectingWhileCroppingReportsUnavailableWithoutSaving() {
+        start()
+        pick(file = true)
+        result()
+        awaitAction(controller.get().getString(C.contactsDetailAvatarCropChoose))
+        harness.session.contacts = null
+        action(C.contactsDetailAvatarCropChoose)
+        awaitText(controller.get().getString(C.contactsDetailErrorServicesUnavailable))
+        assertTrue(harness.contactService.avatars.isEmpty())
+        assertNull(harness.store.contacts.single().avatarImageData)
+    }
+
+    @Test
+    fun saveContinuesWhenTheProfileRowLeavesTheLazyViewport() {
+        start()
+        val gate = CompletableDeferred<Unit>()
+        harness.contactService.avatarBehavior = { _, _ -> gate.await(); throw java.io.IOException("retained operation") }
+        pick(file = true)
+        result()
+        action(C.contactsDetailAvatarCropChoose)
+        awaitText(controller.get().getString(C.contactsDetailAvatarSavingAnnouncement))
+        scrollToAction(controller.get().getString(C.contactsDetailEditPath))
+        gate.complete(Unit)
+        awaitText("failed: retained operation")
+        assertNull(harness.store.contacts.single().avatarImageData)
     }
 
     @Test

@@ -93,6 +93,7 @@ internal fun ContactDetailScreen(
     val state by holder.state.collectAsStateWithLifecycle()
     val pathState by holder.path.state.collectAsStateWithLifecycle()
     val contact = state.contact
+    val avatarEditor = key(holder) { rememberContactAvatarEditor(holder) }
     var showShare by remember { mutableStateOf(false) }
     var showPathEditor by remember { mutableStateOf(false) }
     var resetPathConfirmation by remember { mutableStateOf(false) }
@@ -113,9 +114,7 @@ internal fun ContactDetailScreen(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(contact.displayName, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
-                key(holder) {
-                    ContactAvatarEditor(holder)
-                }
+                avatarEditor()
                 Text(stringResource(contact.type.localizedNameRes()), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     contact.publicKey.uppercaseHexString(" "),

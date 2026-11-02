@@ -19,6 +19,7 @@ WP-311 identity, branch, dirty files and ledger remain untouched. Trusted
 Actual CLI `admit` returned `wp-owned` for feature modify/create/test and this
 record-evidence path; pinned-source, declared-verification and provenance invariants apply.
 #495's owner confirmed no live avatar-path overlap; its retained technical hold is unchanged.
+The actual changed-path lists for #495 and #508 also contain none of this repair's targets.
 
 ## Behavior and native adaptation
 
@@ -34,6 +35,7 @@ record-evidence path; pinned-source, declared-verification and provenance invari
 - The holder includes radio ID and public key as well as UUID in its UI lifetime key.
   Late results cannot target a replacement holder; saving rechecks the selected radio
   after encoding and captures the target key/service/store before mutation.
+  Picker registration, work and dialogs are screen-owned, outside recycled list rows.
 - Missing service/store, encode failure and persistence failure are not successful saves.
   Saving includes encoding, prevents duplicate operations and resets in `finally`,
   including cancellation. The existing localized error dialog presents failures.
@@ -52,3 +54,18 @@ iOS codec, durable Room or hardware evidence.
 `git diff --check`: passed.
 An initial affected `check.py --worktree` request was refused before execution because
 affected checks require an immutable committed candidate. It is not a failed product test.
+
+The supported exact-candidate local command for initial candidate
+`cac0a05bcf07a1abe02f970ccdb805c5615bbb72` was:
+
+```
+python tools\android-port\local\check.py --commit cac0a05bcf07a1abe02f970ccdb805c5615bbb72 --affected-base 1e1ff70345f203b41f9a8b04836c2cc4640500c9
+```
+
+It was refused before Android execution:
+`Installed execution runtime is old or mismatched: controller/merged_acceptance.py`.
+The separate runtime owner subsequently reported a trusted, interlocked installation.
+No runtime, execution locks or shared storage were changed by this repair session.
+Hosted run [41543533335](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41543533335)
+was started on that initial candidate, then cancelled as superseded before using its
+results as acceptance. Latest-candidate focused verification is still pending.

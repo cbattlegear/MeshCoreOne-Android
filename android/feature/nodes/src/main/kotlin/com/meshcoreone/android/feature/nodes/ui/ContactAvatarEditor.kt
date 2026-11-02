@@ -100,9 +100,9 @@ internal object ContactAvatarMedia {
 }
 
 @Composable
-internal fun ContactAvatarEditor(holder: ContactDetailStateHolder) {
+internal fun rememberContactAvatarEditor(holder: ContactDetailStateHolder): @Composable () -> Unit {
     val state by holder.state.collectAsStateWithLifecycle()
-    if (state.contact.type != ContactType.CHAT) return
+    if (state.contact.type != ContactType.CHAT) return {}
     val scope = rememberCoroutineScope()
     val resolver = LocalContext.current.contentResolver
     var active by remember { mutableStateOf(true) }
@@ -148,19 +148,6 @@ internal fun ContactAvatarEditor(holder: ContactDetailStateHolder) {
     val photo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), receive)
     val file = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), receive)
     val busy = picking || loading || state.isSavingAvatar
-    Column {
-        ContactAvatar(state.contact, 96.dp, avatar)
-        TextButton(onClick = { choosing = true }, enabled = !busy) {
-            Text(stringResource(C.contactsDetailAvatarChooseSource))
-        }
-        if (loading || state.isSavingAvatar) {
-            CircularProgressIndicator()
-            if (state.isSavingAvatar) {
-                Text(stringResource(C.contactsDetailAvatarSavingAnnouncement),
-                    Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-            }
-        }
-    }
     if (choosing) {
         AlertDialog(
             onDismissRequest = { choosing = false },
@@ -175,6 +162,9 @@ internal fun ContactAvatarEditor(holder: ContactDetailStateHolder) {
                         } catch (error: android.content.ActivityNotFoundException) {
                             picking = false
                             holder.avatarFailure(error)
+                        } catch (error: SecurityException) {
+                            picking = false
+                            holder.avatarFailure(error)
                         }
                     }) { Text(stringResource(C.contactsDetailAvatarChoosePhoto)) }
                     TextButton(onClick = {
@@ -183,6 +173,9 @@ internal fun ContactAvatarEditor(holder: ContactDetailStateHolder) {
                         try {
                             file.launch(arrayOf("image/*"))
                         } catch (error: android.content.ActivityNotFoundException) {
+                            picking = false
+                            holder.avatarFailure(error)
+                        } catch (error: SecurityException) {
                             picking = false
                             holder.avatarFailure(error)
                         }
@@ -209,5 +202,21 @@ internal fun ContactAvatarEditor(holder: ContactDetailStateHolder) {
                 scope.launch { holder.saveAvatar { ContactAvatarMedia.encode(selected, chosen) } }
             },
         )
+    }
+    // Keep launchers, work and dialogs in the screen lifetime, not a recycled LazyColumn row.
+    return {
+        Column {
+            ContactAvatar(state.contact, 96.dp, avatar)
+            TextButton(onClick = { choosing = true }, enabled = !busy) {
+                Text(stringResource(C.contactsDetailAvatarChooseSource))
+            }
+            if (loading || state.isSavingAvatar) {
+                CircularProgressIndicator()
+                if (state.isSavingAvatar) {
+                    Text(stringResource(C.contactsDetailAvatarSavingAnnouncement),
+                        Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                }
+            }
+        }
     }
 }

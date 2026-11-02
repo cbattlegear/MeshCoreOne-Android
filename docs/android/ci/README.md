@@ -911,6 +911,17 @@ After **supervised review and merge of the publisher**, dispatch the deployed wo
 gh workflow run android-parity-review.yml --ref main -f work_package=WP-xxx -f pull_request=<number> -f review_id=<actual-review-id>
 ```
 
+The documented direct-file `inspect` command establishes the `controller`
+package context after adding the controller directory to `sys.path`, so deferred
+relative imports work in file mode as well as `python -m controller.native_review`.
+An isolated subprocess regression reaches deferred staging and repair-receipt
+imports in both modes with network sockets disabled and GitHub/token environment
+variables removed. If an `ImportError` nevertheless occurs during publication
+after checks are created, the publisher completes those checks with failure and
+rethrows the original exception; an offline fake-check regression verifies this
+without mutating any live check. This source behavior does not itself establish a
+trusted review, publisher deployment or successful publication.
+
 Only this workflow may publish `parity-review` (and the legacy `gate-integrity` check); local
 `publish` fails before mutation. Publication creates in-progress checks first and
 records failures explicitly. Interrupted publication remains pending/failed, never
@@ -920,6 +931,36 @@ authenticated GitHub server facts, never invented or taken from candidate JSON.
 The immutable Actions job identity includes the WP/PR/review ID and is reconciled
 through the exact run-attempt jobs API; another PR's successful default-branch run
 cannot be reused by changing a check's summary or `external_id`.
+GitHub can return a GitHub Actions-created check's own
+`https://github.com/<repository>/runs/<check-id>` URL instead of the submitted
+workflow `details_url`. The publisher therefore emits one
+`android-port-native-publication-v1` JSON line after all terminal check writes,
+binding the exact check IDs and SHA-256 of their complete result summary.
+For this exact normalized self-URL only, the consumer additionally requires that
+receipt from the authenticated successful publisher job's
+`Validate current server facts and publish exact-head checks` step, read in
+memory through the existing bounded hosted-log reader. App identity, current
+base/head, workflow, run/attempt, WP/PR/review job identity, external ID and result
+bindings are still mandatory. A copied check, another check's URL, missing or
+duplicate receipt, wrong digest, unavailable log or unsuccessful run fails closed.
+Live protected-gate and historical merged-scope recognition share this same
+check/URL/receipt verifier. Historical recognition still selects only checks
+completed before merge, binds the original successful run attempt and source
+review timestamp, and distinguishes bounded scope from whole-WP completion.
+The existing exact workflow-URL route remains unchanged.
+
+The observed check `125465865624` from run `41500266388` returned the normalized
+self-URL and cannot be reconciled by the old workflow-URL-only consumer.
+This observation does not establish whether the POST or PATCH changed the URL;
+the [Checks API](https://docs.github.com/en/rest/checks/runs) documents
+`details_url` on both requests but does not promise its preservation for
+Actions-created checks. Repeating the URL in a PATCH is not treated as a proven
+repair. Historical normalized checks without the new publisher log receipt
+remain blocked; this change neither modifies them nor authorizes a retry.
+Candidate tests model the observed server representation, not a live publication
+experiment. Deployment, independent review and any required protected-gate
+decision remain separate; the one-time bootstrap exception for #526 does not
+apply to this repair.
 Legacy custom-publisher bundles remain readable when that publisher is configured.
 The controller revalidates the authenticated review and the successful publisher run.
 Native completion validates the server PR's actual merged head/merge commit for both normal and squash

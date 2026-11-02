@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.datastore
 
 import androidx.datastore.core.DataStoreFactory
+import androidx.datastore.core.FileStorage
 import androidx.datastore.core.Serializer
 import androidx.datastore.preferences.core.Preferences
 import com.meshcoreone.android.core.model.snapshot
@@ -12,9 +13,12 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
 import kotlin.test.*
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -24,6 +28,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -135,6 +141,100 @@ class PreferenceBoundaryTest {
                 a.close()
                 b.close()
             }
+        }
+    }
+
+    @Test
+    @Config(sdk = [31, 37])
+    fun vendorDirtyReadCanSuppressTheCommittedValueForAnExistingObserver() = runTest(timeout = 10.seconds) {
+        observeDuringFileReplacement(serialized = false)
+    }
+
+    @Test
+    @Config(sdk = [31, 37])
+    fun serializedFileReadObservesTheCommitWhenSubscriptionStartsDuringReplacement() = runTest(timeout = 10.seconds) {
+        observeDuringFileReplacement(serialized = true)
+    }
+
+    private suspend fun TestScope.observeDuringFileReplacement(serialized: Boolean) {
+        val file = File(temporary.newFolder(), MeshCoreStorage.PREFERENCE_FILENAME)
+        val lifetime = SupervisorJob()
+        val writing = CompletableDeferred<Unit>()
+        val replace = CompletableDeferred<Unit>()
+        val delegate = BoundedPreferencesSerializer()
+        var pauseWrite = false
+        val serializer = object : Serializer<Preferences> {
+            override val defaultValue = delegate.defaultValue
+            override suspend fun readFrom(input: InputStream) = delegate.readFrom(input)
+            override suspend fun writeTo(t: Preferences, output: OutputStream) {
+                if (pauseWrite) {
+                    pauseWrite = false
+                    writing.complete(Unit)
+                    replace.await()
+                }
+                delegate.writeTo(t, output)
+            }
+        }
+        val raw = FileStorage(serializer) { file }
+        val data = DataStoreFactory.create(
+            storage = if (serialized) SerializedFileStorage(raw) else raw,
+            scope = CoroutineScope(coroutineContext + lifetime),
+        )
+        val reporter = RecordingReporter()
+        val preferences = PreferenceStore(data, StorageAccess {}, reporter)
+        val values = Channel<Double>(Channel.UNLIMITED)
+        var observer: Job? = null
+        var cancelledReader: Job? = null
+        var cancelledReadReturned = false
+        try {
+            assertEquals(0.0, preferences.get(AppStorageKey.lastStaleCleanupDate))
+            preferences.set(AppStorageKey.lastStaleCleanupDate, 0.0)
+            val before = file.readBytes()
+            pauseWrite = true
+            val committed = 1793603518.0
+            val writer = async { preferences.set(AppStorageKey.lastStaleCleanupDate, committed) }
+            writing.await()
+            assertContentEquals(before, file.readBytes(), "Writer has advanced its version but not replaced the file")
+            observer = launch { preferences.observe(AppStorageKey.lastStaleCleanupDate).collect(values::send) }
+            testScheduler.runCurrent()
+            if (serialized) {
+                assertTrue(values.tryReceive().isFailure, "A dirty file must not become the initial observation")
+                val reader = launch {
+                    preferences.snapshot()
+                    cancelledReadReturned = true
+                }
+                cancelledReader = reader
+                testScheduler.runCurrent()
+                assertFalse(reader.isCompleted)
+                reader.cancel()
+                assertTrue(reader.isCancelled)
+                assertFalse(writer.isCompleted, "Cancelling a waiting reader must not cancel the writer")
+            } else {
+                assertEquals(0.0, values.tryReceive().getOrThrow(), "Negative control must reach the dirty read")
+            }
+            replace.complete(Unit)
+            writer.await()
+            testScheduler.runCurrent()
+            cancelledReader?.join()
+            assertFalse(cancelledReadReturned, "A cancelled snapshot must not return normally")
+            assertEquals(committed, preferences.get(AppStorageKey.lastStaleCleanupDate))
+            val persisted = file.inputStream().use { delegate.readFrom(it) }
+            assertEquals(committed, PreferenceSnapshot.from(persisted)[AppStorageKey.lastStaleCleanupDate])
+            if (serialized) {
+                assertEquals(committed, values.tryReceive().getOrThrow())
+            } else {
+                assertTrue(values.tryReceive().isFailure, "Vendor collector suppressed the equal-version commit")
+            }
+            preferences.set(AppStorageKey.lastStaleCleanupDate, committed + 1)
+            testScheduler.runCurrent()
+            assertEquals(committed + 1, values.tryReceive().getOrThrow(), "A later version must still be observed")
+            assertTrue(reporter.failures.isEmpty())
+        } finally {
+            replace.complete(Unit)
+            cancelledReader?.cancelAndJoin()
+            observer?.cancelAndJoin()
+            lifetime.cancelAndJoin()
+            values.close()
         }
     }
 
@@ -261,8 +361,8 @@ class PreferenceBoundaryTest {
             }
         }
         val data = DataStoreFactory.create(
-            serializer, scope = CoroutineScope(lifetime + Dispatchers.IO),
-            produceFile = { File(directory, MeshCoreStorage.PREFERENCE_FILENAME) },
+            storage = SerializedFileStorage(FileStorage(serializer) { File(directory, MeshCoreStorage.PREFERENCE_FILENAME) }),
+            scope = CoroutineScope(lifetime + Dispatchers.IO),
         )
         val reporter = RecordingReporter()
         val preferences = PreferenceStore(data, StorageAccess {}, reporter)

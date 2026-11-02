@@ -432,14 +432,15 @@ internal fun TraceResultCard(result: TraceResult?, state: TracePathState) {
                 )
             }
             if (batchStatus != null) {
-                val text = if (!state.isBatchInProgress) {
+                val batchRunning = state.isBatchInProgress && !batchStatus.isComplete
+                val text = if (!batchRunning) {
                     C.contactsResultsBatchSuccess(resources, batchStatus.successCount, batchStatus.size, batchStatus.successPercent)
                 } else {
                     C.contactsResultsBatchProgress(resources, batchStatus.currentIndex, batchStatus.size)
                 }
                 val label = if (batchStatus.isComplete) {
                     C.contactsResultsBatchCompleteLabel(resources, batchStatus.successCount, batchStatus.size, batchStatus.successPercent)
-                } else if (state.isBatchInProgress) {
+                } else if (batchRunning) {
                     C.contactsResultsBatchProgressLabel(resources, batchStatus.currentIndex, batchStatus.size)
                 } else text
                 Row(
@@ -447,7 +448,7 @@ internal fun TraceResultCard(result: TraceResult?, state: TracePathState) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (state.isBatchInProgress) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 16.dp, maxHeight = 16.dp), strokeWidth = 2.dp)
+                    if (batchRunning) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 16.dp, maxHeight = 16.dp), strokeWidth = 2.dp)
                     Text(text, style = MaterialTheme.typography.bodyMedium)
                 }
             }

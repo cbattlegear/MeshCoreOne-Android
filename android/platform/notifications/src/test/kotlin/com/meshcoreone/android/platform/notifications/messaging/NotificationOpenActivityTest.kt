@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.ResolveInfo
@@ -19,6 +20,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -32,6 +34,12 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.annotation.RealObject
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowActivity
+import org.robolectric.util.ReflectionHelpers.ClassParameter
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37])
@@ -61,6 +69,7 @@ class NotificationOpenActivityTest {
 
     @After
     fun tearDown() {
+        ReplacementDuringLaunchShadow.afterLaunch = null
         NotificationActionDispatcher.resetForTesting()
     }
 
@@ -128,6 +137,53 @@ class NotificationOpenActivityTest {
             listOf(NotificationResponse(payload, null, null), NotificationResponse(secondPayload, null, null)),
             received,
         )
+    }
+
+    @Test
+    @Config(shadows = [ReplacementDuringLaunchShadow::class])
+    fun replacementPostedAfterTapSurvivesOlderPostRetirement() = runTest {
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val received = mutableListOf<NotificationResponse>()
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) {
+            received += it
+            true
+        }
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                AndroidMessagingNotificationDelivery.CHANNEL_MESSAGES_SILENT,
+                "Messages",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        val original = request("reused").copy(threadIdentifier = null)
+        delivery.post(original)
+        val oldNotification = manager.activeNotifications.single().notification
+        oldNotification.contentIntent.send()
+        val oldLaunch = shadowOf(context).nextStartedActivity
+        val oldPostId = oldNotification.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)
+        val replacement = original.copy(payload = NotificationPayload.DirectMessage(contact, UUID(0, 99)))
+        var newPostId: String? = null
+        ReplacementDuringLaunchShadow.afterLaunch = {
+            runBlocking { delivery.post(replacement) }
+            newPostId = manager.activeNotifications.single().notification.extras
+                .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)
+        }
+        val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, oldLaunch).create()
+        try {
+            assertEquals(launcher, shadowOf(controller.get()).nextStartedActivity.component)
+            assertNotNull(newPostId)
+            assertFalse(oldPostId == newPostId)
+            assertTrue(NotificationActionDispatcher.drainOnce())
+            assertEquals(listOf(NotificationResponse(payload, null, null)), received)
+            assertEquals(
+                newPostId,
+                manager.activeNotifications.single().notification.extras
+                    .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+            )
+        } finally {
+            controller.destroy()
+        }
     }
 
     @Test
@@ -230,4 +286,25 @@ class NotificationOpenActivityTest {
         threadIdentifier = contact.id.toString(),
         payload = payload,
     )
+
+    @Implements(Activity::class)
+    class ReplacementDuringLaunchShadow : ShadowActivity() {
+        @RealObject
+        private lateinit var activity: Activity
+
+        @Implementation
+        fun startActivity(intent: Intent) {
+            Shadow.directlyOn(
+                activity,
+                Activity::class.java,
+                "startActivity",
+                ClassParameter.from(Intent::class.java, intent),
+            )
+            afterLaunch?.invoke()
+        }
+
+        companion object {
+            var afterLaunch: (() -> Unit)? = null
+        }
+    }
 }

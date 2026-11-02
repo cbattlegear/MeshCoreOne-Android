@@ -2,7 +2,6 @@
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.app.Activity
-import android.app.NotificationManager
 import android.content.Intent
 import android.os.Bundle
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
@@ -25,9 +24,10 @@ class NotificationOpenActivity : Activity() {
             }
             val identity = intent.data
             val segments = identity?.pathSegments
+            val postId = intent.getStringExtra(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)
             if (identity?.scheme != "meshcore-notification" || identity.authority != "action" ||
                 segments?.size != 2 || segments[0].isEmpty() ||
-                segments[1] != AndroidMessagingNotificationDelivery.ACTION_OPEN
+                segments[1] != AndroidMessagingNotificationDelivery.ACTION_OPEN || postId.isNullOrEmpty()
             ) {
                 logger.warning("Rejected malformed notification content identity")
                 return
@@ -45,10 +45,7 @@ class NotificationOpenActivity : Activity() {
                 ),
             )
             if (result == EnqueueResult.DELIVERED_OR_QUEUED) {
-                getSystemService(NotificationManager::class.java).cancel(
-                    AndroidMessagingNotificationDelivery.TAG_PREFIX + segments[0],
-                    AndroidMessagingNotificationDelivery.NOTIFICATION_ID,
-                )
+                AndroidMessagingNotificationDelivery.retireContentNotification(this, segments[0], postId)
             } else {
                 logger.warning("Notification content queue is full; notification remains available for another tap")
             }

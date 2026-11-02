@@ -6,12 +6,14 @@ import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -51,6 +53,8 @@ class BatchTraceCardComposeTest {
     private lateinit var host: ActivityController<Activity>
     private lateinit var owner: ScreenOwner
     private lateinit var content: ComposeView
+    private val frameClock = BroadcastFrameClock()
+    private var frameNanos = 0L
     private val state = MutableStateFlow(
         TracePathState(batchEnabled = true, currentTraceIndex = 1, batchPresentationActive = true),
     )
@@ -66,6 +70,10 @@ class BatchTraceCardComposeTest {
         content = ComposeView(host.get()).apply {
             setViewTreeLifecycleOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
+            // Keep the real lifecycle-aware recomposer while advancing its frames deterministically.
+            setParentCompositionContext(
+                createLifecycleAwareWindowRecomposer(coroutineContext = frameClock, lifecycle = owner.lifecycle),
+            )
             setContent {
                 val snapshot by observedState.collectAsStateWithLifecycle(initialValue = state.value)
                 SideEffect { renderedState = snapshot }
@@ -84,6 +92,7 @@ class BatchTraceCardComposeTest {
         owner.registry.currentState = Lifecycle.State.DESTROYED
         host.windowFocusChanged(false)
         host.pause().stop().destroy()
+        frameClock.cancel()
     }
 
     @Test fun mountedProgressCompletionAndCancelledPartialResultsRemainAccessible() {
@@ -213,7 +222,11 @@ class BatchTraceCardComposeTest {
 
     private fun advanceFrames() {
         repeat(6) {
-            host.get().runOnUiThread { Snapshot.sendApplyNotifications() }
+            host.get().runOnUiThread {
+                Snapshot.sendApplyNotifications()
+                frameNanos += 16_000_000L
+                frameClock.sendFrame(frameNanos)
+            }
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
         }
         host.get().runOnUiThread {

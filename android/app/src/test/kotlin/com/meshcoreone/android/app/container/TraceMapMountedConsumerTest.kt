@@ -44,7 +44,7 @@ class TraceMapMountedConsumerTest {
     private val radio = RadioId(UUID(0, 1))
     private val north = ContactDTO(
         id = UUID(0, 2), radioId = radio, publicKey = Bytes(ByteArray(32) { 1 }),
-        name = "North", typeRawValue = 1u, latitude = 37.0, longitude = -122.0,
+        name = "North", typeRawValue = 2u, latitude = 37.0, longitude = -122.0,
         lastHeardTimestamp = null,
     )
     private val south = north.copy(
@@ -52,7 +52,7 @@ class TraceMapMountedConsumerTest {
         name = "South", latitude = 38.0, isFavorite = true,
     )
     private val hill = DiscoveredNodeDTO(
-        UUID(0, 4), radio, Bytes(ByteArray(32) { 3 }), "Hill", 1u,
+        UUID(0, 4), radio, Bytes(ByteArray(32) { 3 }), "Hill", 2u,
         Instant.EPOCH, 0u, 39.0, -121.0, 255u, Bytes.EMPTY, null, null,
     )
     private val panned = MapCamera(GeoPoint(10.0, 20.0), 0.3, 0.4)

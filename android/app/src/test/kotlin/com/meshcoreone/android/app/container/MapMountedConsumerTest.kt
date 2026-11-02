@@ -171,7 +171,9 @@ class MapMountedConsumerTest {
         assertFalse(pin.clusterable)
         compose.onNodeWithTag("pick:${pin.id}").performClick()
         compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
-        assertTrue(dispatched.last().points.none { it.style == MapPinStyle.DROPPED_PIN })
+        compose.waitUntil(5_000) {
+            dispatched.lastOrNull()?.points?.none { it.style == MapPinStyle.DROPPED_PIN } == true
+        }
         assertEquals(MapCamera(focus, 0.01, 0.01), dispatched.last().camera)
     }
 

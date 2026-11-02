@@ -7,6 +7,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -98,7 +99,9 @@ class PendingExternalRouteTest {
         }
         pending.markReady()
         val delivery = PendingExternalRoute.Delivery("failure", "meshcore://map?lat=1&lon=2")
-        assertEquals(failure, assertFailsWith<IllegalStateException> { pending.submit(delivery) })
+        val caught = assertFailsWith<IllegalStateException> { pending.submit(delivery) }
+        assertEquals(failure.message, caught.message)
+        assertTrue(generateSequence<Throwable>(caught) { it.cause }.any { it === failure })
         assertEquals(delivery, pending.snapshot())
         assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.retry())
         assertEquals(2, calls)

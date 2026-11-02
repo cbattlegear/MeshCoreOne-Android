@@ -26,11 +26,13 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.onEach
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -52,7 +54,9 @@ class BatchTraceCardComposeTest {
     private val state = MutableStateFlow(
         TracePathState(batchEnabled = true, currentTraceIndex = 1, batchPresentationActive = true),
     )
+    @Volatile private var collectedState: TracePathState? = null
     @Volatile private var renderedState: TracePathState? = null
+    private val observedState = state.onEach { collectedState = it }
 
     @Before fun mount() {
         host = Robolectric.buildActivity(Activity::class.java).setup().visible()
@@ -63,7 +67,7 @@ class BatchTraceCardComposeTest {
             setViewTreeLifecycleOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
             setContent {
-                val snapshot by state.collectAsStateWithLifecycle()
+                val snapshot by observedState.collectAsStateWithLifecycle(initialValue = state.value)
                 SideEffect { renderedState = snapshot }
                 CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
                     MaterialTheme { TraceResults(snapshot) }
@@ -194,8 +198,16 @@ class BatchTraceCardComposeTest {
     }
 
     private fun render(snapshot: TracePathState) {
-        host.get().runOnUiThread { state.value = snapshot }
+        val updateRan = AtomicBoolean()
+        host.get().runOnUiThread {
+            state.value = snapshot
+            updateRan.set(true)
+        }
         advanceFrames()
+        assertTrue(updateRan.get(), "The UI-thread state update must execute")
+        assertEquals(snapshot, state.value, "The source flow must contain the updated state")
+        assertTrue(state.subscriptionCount.value > 0, "The lifecycle-aware collector must be active")
+        assertEquals(snapshot, collectedState, "The lifecycle-aware collector must receive the updated state")
         assertEquals(snapshot, renderedState, "The mounted results must observe every state transition")
     }
 

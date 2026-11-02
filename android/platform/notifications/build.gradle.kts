@@ -19,7 +19,6 @@ dependencies {
     testImplementation(libs.androidx.test.runner)
     testImplementation(libs.androidx.test.ext.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(project(":core:services"))
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)

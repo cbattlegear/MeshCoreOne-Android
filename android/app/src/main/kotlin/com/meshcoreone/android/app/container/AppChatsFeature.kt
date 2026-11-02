@@ -707,7 +707,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     ): RoomConversationDependencies {
         val initiatingSession = token?.let { expected -> container.sessions.current?.takeIf { it.token == expected } }
         return room(room) {
-            if (initiatingSession == null || initiatingSession.token.radioId != room.radioId || !isCurrentSession()) {
+            if (initiatingSession == null || initiatingSession.token.radioId != room.radioId || !isCurrentSession() ||
+                session(room.radioId) !== initiatingSession
+            ) {
                 throw MessageServiceException(MessageServiceError.NotConnected)
             }
             initiatingSession

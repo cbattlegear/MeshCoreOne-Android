@@ -352,6 +352,84 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun cachedRoomAuthenticationWaitsForReadyAndCanRetry() = runTest {
+        val roomKey = key(40)
+        val roomName = "Syncing room"
+        val h = ContainerHarness(
+            this, store, sessionConfiguration = SessionConfiguration(contactStreamInactivityTimeout = 60.0),
+        )
+        h.links.configureRadio = { radio ->
+            radio.knownContacts += Bytes.of(3) + roomKey + Bytes.of(3, 0, 0) + Bytes(ByteArray(64)) +
+                Bytes.utf8(roomName).paddedOrTruncated(32) + le32(1) + le32(0) + le32(0) + le32(1)
+            radio.respond = { command ->
+                when (command[0].toInt()) {
+                    0x04 -> listOf(Bytes.of(2) + le32(1))
+                    0x1a -> listOf(
+                        Bytes.of(0x06, 0, 0xaa, 0xbb, 0xcc, 0xdd) + le32(1_000),
+                        Bytes.of(0x85, 1) + roomKey.prefix(6),
+                    )
+                    0x1b -> listOf(Bytes.of(1, 2))
+                    else -> null
+                }
+            }
+        }
+        val connecting = backgroundScope.async { h.manager.connect(h.target()) }
+        try {
+            h.eventually("session is bound while contact sync is held") {
+                h.manager.connectionState == DeviceConnectionState.SYNCING &&
+                    h.container.navigation.state.value.boundSessionToken == h.sessions.current?.token &&
+                    h.sessions.current != null && h.links.radios.last().sent.any { it[0].toInt() == 0x04 }
+            }
+            val initialSession = assertNotNull(h.sessions.current)
+            val radio = initialSession.token.radioId
+            val room = RemoteNodeSessionDTO(
+                radioId = radio, publicKey = roomKey, name = roomName,
+                role = RemoteNodeRole.ROOM_SERVER, isConnected = false, unreadCount = 3,
+            )
+            store.saveContact(ContactDTO(
+                radioId = radio, publicKey = roomKey, name = roomName, typeRawValue = 3u,
+                outPathLength = 0u, lastHeardTimestamp = null,
+            ))
+            store.saveRemoteNodeSessionDTO(room)
+            mount(h)
+            compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
+                compose.onAllNodesWithContentDescription(roomName, substring = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithContentDescription(roomName, substring = true).performClick()
+            compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
+                compose.onAllNodesWithTag("room-authentication-password").fetchSemanticsNodes().size == 1
+            }
+            compose.onNodeWithTag("room-authentication-password").performTextInput("test password")
+            compose.onNodeWithTag("room-authentication-submit").performClick()
+            compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
+                compose.onAllNodesWithTag("room-authentication-error").fetchSemanticsNodes().size == 1
+            }
+            val firmware = h.links.radios.last()
+            assertEquals(DeviceConnectionState.SYNCING, h.manager.connectionState)
+            assertTrue(firmware.sent.none { it[0].toInt() == 0x1a || it[0].toInt() == 0x1b })
+            assertEquals(room.id, h.container.navigation.state.value.pendingRoomAuthentication?.id)
+            assertNull(h.container.navigation.state.value.chatsSelectedRoute)
+            assertEquals(3L, assertNotNull(store.fetchRemoteNodeSession(EntityKey(radio, room.id))).unreadCount)
+
+            firmware.push(firmware.knownContacts.single())
+            firmware.push(Bytes.of(4) + le32(0))
+            h.eventually("held contact sync reaches READY") { h.manager.connectionState == DeviceConnectionState.READY }
+            connecting.await()
+            assertSame(initialSession, h.sessions.current)
+            compose.onNodeWithTag("room-authentication-submit").performClick()
+            await(h) { (h.container.navigation.state.value.chatsSelectedRoute as? ChatSelection.Room)?.session?.isConnected == true }
+            assertTrue(firmware.sent.any { it[0].toInt() == 0x1a })
+            assertNull(h.container.navigation.state.value.pendingRoomAuthentication)
+        } finally {
+            connecting.cancelAndJoin()
+            unmount()
+            h.container.close()
+        }
+    }
+
     @Test fun staleRoomAuthenticationCannotUseASameRadioSuccessor() = runTest {
         val h = ContainerHarness(this, store)
         val target = h.target()

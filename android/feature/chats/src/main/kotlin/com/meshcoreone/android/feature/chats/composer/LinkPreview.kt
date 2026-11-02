@@ -80,9 +80,10 @@ object LinkOpenPolicy {
 }
 
 /**
- * One link-preview card's lifecycle. Order of checks: malware blocklist (a warning card, no fetch),
- * the SSRF guard (hidden), then the cached/auto-resolved preview. A tap on the disabled card fetches
- * once; repeated taps while loading are ignored, and cancellation is never converted into a failure.
+ * One link-preview card's lifecycle. Cached content remains available offline after the malware
+ * blocklist check; the SSRF guard runs before any new automatic or manual network fetch. A tap on
+ * the disabled card fetches once; repeated taps while loading are ignored, and cancellation is
+ * never converted into a failure.
  */
 class LinkPreviewStateHolder(
     private val url: String,
@@ -119,12 +120,12 @@ class LinkPreviewStateHolder(
                 mutableState.value = LinkPreviewCardState.Malware(url)
                 return
             }
-            if (!safety.isSafe(url)) return hide()
             val cached = if (manual) null else port.cachedPreview(url)
             if (cached != null) {
                 mutableState.value = LinkPreviewCardState.Loaded(cached)
                 return
             }
+            if (!safety.isSafe(url)) return hide()
             mutableState.value = LinkPreviewCardState.Loading(url)
             val outcome = if (manual) port.manualFetch(url) else port.preview(url, isChannelMessage)
             mutableState.value = when (outcome) {

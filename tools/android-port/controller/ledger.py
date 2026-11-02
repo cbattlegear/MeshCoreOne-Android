@@ -1,14 +1,16 @@
 import json
 import math
+import os
 import re
 import sqlite3
+import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from .errors import PortError
-from .model import SHA
+from .model import REFERENCE_SHA, SHA
 from .paths import conflicts, git_path
 from .schema import decode_json, digest, nonempty, positive_integer
 
@@ -38,6 +40,39 @@ HARD_LOCK_RESOURCES = {
 }
 EXECUTION_INTERLOCK_VERSION = 2
 EXECUTION_RESOURCES = {"native-execution", "gradle-execution"}
+
+
+def validate_merged_implementation(repository: str, wp: str, proof: dict):
+    from .gates import Binding
+    from .schema import fields
+
+    fields(proof, {
+        "kind", "binding", "pr_number", "merge_commit_sha", "merge_parent_sha",
+        "ci", "ci_run_ids", "review_ids", "approval_id",
+    }, label="merged implementation completion")
+    binding = Binding.parse(proof["binding"])
+    ci = proof["ci"]
+    if (
+        proof["kind"] != "merged-implementation"
+        or binding.repository != repository or binding.work_package != wp
+        or binding.source_sha != REFERENCE_SHA
+        or type(proof["pr_number"]) is not int or proof["pr_number"] < 1
+        or not isinstance(proof["merge_commit_sha"], str)
+        or SHA.fullmatch(proof["merge_commit_sha"]) is None
+        or not isinstance(proof["merge_parent_sha"], str)
+        or SHA.fullmatch(proof["merge_parent_sha"]) is None
+        or not isinstance(ci, dict) or set(ci) != {"run_id", "run_attempt", "check_id"}
+        or any(type(ci.get(key)) is not int or ci[key] < 1 for key in ci)
+        or proof["ci_run_ids"] != [ci["run_id"]]
+        or not isinstance(proof["review_ids"], list)
+        or any(type(value) is not int or value < 1 for value in proof["review_ids"])
+        or len(set(proof["review_ids"])) != len(proof["review_ids"])
+        or proof["approval_id"] is not None and (
+            type(proof["approval_id"]) is not int or proof["approval_id"] < 1 or not proof["review_ids"]
+        )
+    ):
+        raise PortError("Malformed merged implementation completion")
+    return proof
 
 
 @dataclass(frozen=True)
@@ -103,6 +138,12 @@ class Ledger:
                     PRIMARY KEY (repository, key)
                 )
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS accepted_completions (
+                    repository TEXT NOT NULL, wp TEXT NOT NULL, proof TEXT NOT NULL,
+                    PRIMARY KEY (repository, wp)
+                )
+            """)
             columns = {
                 row["name"] for row in connection.execute("PRAGMA table_info(leases)")
             }
@@ -162,6 +203,14 @@ class Ledger:
                     receipt_sha256 TEXT NOT NULL, original_row TEXT NOT NULL,
                     actor TEXT NOT NULL, cleanup TEXT NOT NULL, recovered_at REAL NOT NULL,
                     PRIMARY KEY (repository, resource, receipt_sha256)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS execution_emergencies (
+                    repository TEXT NOT NULL, owner TEXT NOT NULL,
+                    original_row TEXT, actor TEXT NOT NULL, reboot_evidence TEXT NOT NULL,
+                    reconciled_at REAL NOT NULL,
+                    PRIMARY KEY (repository, owner)
                 )
             """)
 
@@ -1047,6 +1096,67 @@ class Ledger:
                 },
             }
 
+    def emergency_recover(self, owner: str, confirm_host: str):
+        """Record operator-affirmed abandonment; do not certify missing historical host/time evidence."""
+        from .execution_recovery import emergency_reboot_proof, operator_identity, receipt_key
+
+        if not isinstance(owner, str) or re.fullmatch(r"local-check:[0-9a-f]{32}", owner) is None:
+            raise PortError("Emergency recovery requires an exact local-check invocation owner")
+        with self.transaction() as connection:
+            held = connection.execute("""
+                SELECT * FROM hard_locks WHERE repository=? AND
+                (resource IN ('native-execution','gradle-execution','disposable-native-execution',
+                              'installed-git-common-runtime') OR resource LIKE 'gradle-execution:%')
+                ORDER BY resource
+            """, (self.repository,)).fetchall()
+            if any(row["resource"] != "gradle-execution" or row["owner"] != owner for row in held):
+                raise PortError(
+                    "Emergency recovery refuses other ownership: "
+                    + ", ".join(f"{row['resource']} by {row['owner']}" for row in held)
+                )
+            evidence = emergency_reboot_proof(confirm_host)
+            evidence["operator_attestation"] = {
+                "owner": owner, "original_host": confirm_host,
+                "invocation_predates_current_boot": True,
+            }
+            row = held[0] if held else None
+            if row is not None:
+                receipt = {**dict(row), "payload": decode_json(row["payload"]), "record_state": "hard"}
+                receipt_key(receipt)
+                if not 0 < receipt["acquired"] < evidence["boot_timestamp"]:
+                    raise PortError("Emergency recovery refuses an invocation acquired after the current boot")
+                completion = Path(receipt["payload"]["completion"])
+                temp = Path(tempfile.gettempdir())
+                if (
+                    not temp.is_absolute() or completion.parent.parent != temp.resolve()
+                    or not completion.parent.name.startswith("meshcore-execution-")
+                    or completion.parent.resolve() != completion.parent
+                ):
+                    raise PortError("Receipt path is not a canonical local execution path on the current host")
+            previous = connection.execute("""
+                SELECT * FROM execution_emergencies WHERE repository=? AND owner=?
+            """, (self.repository, owner)).fetchone()
+            if previous is not None:
+                if row is not None:
+                    raise PortError("Previously abandoned owner reappeared; emergency recovery refuses newer work")
+                return {"emergency_reconciled": True, "already_reconciled": True, "audit": dict(previous)}
+            audit = {
+                "repository": self.repository, "owner": owner,
+                "original_row": json.dumps(dict(row)) if row is not None else None,
+                "actor": json.dumps(operator_identity()),
+                "reboot_evidence": json.dumps(evidence), "reconciled_at": time.time(),
+            }
+            connection.execute("""
+                INSERT INTO execution_emergencies
+                (repository,owner,original_row,actor,reboot_evidence,reconciled_at)
+                VALUES (:repository,:owner,:original_row,:actor,:reboot_evidence,:reconciled_at)
+            """, audit)
+            if row is not None:
+                connection.execute("""
+                    DELETE FROM hard_locks WHERE repository=? AND resource='gradle-execution' AND owner=?
+                """, (self.repository, owner))
+            return {"emergency_reconciled": True, "already_reconciled": False, "audit": audit}
+
     def transition(self, wp: str, attempt: str, state: str, identity: Identity | None = None):
         if state not in STATES:
             raise PortError(f"Unknown execution state: {state}")
@@ -1121,6 +1231,34 @@ class Ledger:
                 "UPDATE leases SET state='pending',reservation=0,completion=NULL WHERE repository=? AND wp=?",
                 (self.repository, wp),
             )
+
+    def accepted_completion(self, wp: str):
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT proof FROM accepted_completions WHERE repository=? AND wp=?",
+                (self.repository, wp),
+            ).fetchone()
+            return validate_merged_implementation(self.repository, wp, decode_json(row["proof"])) if row else None
+
+    def remember_completion(self, wp: str, proof: dict, authoritative: bool):
+        if authoritative is not True or not isinstance(proof, dict):
+            raise PortError("Completion requires authenticated merged-PR facts")
+        validate_merged_implementation(self.repository, wp, proof)
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT proof FROM accepted_completions WHERE repository=? AND wp=?",
+                (self.repository, wp),
+            ).fetchone()
+            if row:
+                previous = decode_json(row["proof"])
+                if previous != proof:
+                    raise PortError("Conflicting accepted implementation PR; reconcile the actual identities")
+                return previous
+            connection.execute(
+                "INSERT INTO accepted_completions (repository, wp, proof) VALUES (?, ?, ?)",
+                (self.repository, wp, json.dumps(proof)),
+            )
+            return proof
 
     def complete(self, wp: str, attempt: str, proof: dict, authoritative: bool):
         if authoritative is not True:
@@ -1236,17 +1374,40 @@ class Ledger:
     def recover_merge(self, payload: dict, receipt: dict, authoritative: bool):
         from .model import SHA
 
-        if authoritative is not True or receipt.get("merged") is not True or not isinstance(receipt.get("sha"), str):
+        if (
+            authoritative is not True or not isinstance(payload, dict) or not isinstance(receipt, dict)
+            or receipt.get("merged") is not True or not isinstance(receipt.get("sha"), str)
+        ):
             raise PortError("Merge recovery requires an actual verified merged-PR receipt")
         if SHA.fullmatch(receipt["sha"]) is None:
             raise PortError("Malformed actual merge commit")
         with self.transaction() as connection:
+            lease = self.unpack(connection.execute(
+                "SELECT * FROM leases WHERE repository=? AND wp=?",
+                (self.repository, payload.get("work_package")),
+            ).fetchone())
+            if (
+                lease is None or payload.get("attempt") != lease["attempt"]
+                or type(payload.get("reservation_revision")) is not int
+                or payload["reservation_revision"] != lease["revision"]
+                or type(payload.get("pr_number")) is not int
+                or payload["pr_number"] != lease["identity"]["pr_number"]
+                or payload.get("binding") != lease["binding"]
+                or payload.get("base_sha") != lease["binding"].get("base_sha")
+                or payload.get("policy_revision") != lease["binding"].get("policy_revision")
+                or not isinstance(payload.get("expected_head_sha"), str)
+                or SHA.fullmatch(payload["expected_head_sha"]) is None
+                or lease["state"] not in ("review_wait", "gate_wait", "merge_wait", "completed")
+            ):
+                raise PortError("Merge recovery disagrees with the current attempt/revision/PR/binding/state")
             row = connection.execute(
                 "SELECT * FROM operations WHERE repository=? AND key='merge-lane'", (self.repository,)
             ).fetchone()
             if row is None or row["payload_hash"] != digest(payload):
                 return False
             if row["state"] == "confirmed":
+                if decode_json(row["identity"]) != receipt:
+                    raise PortError("Conflicting confirmed merge receipt")
                 return True
             if row["state"] != "intent":
                 raise PortError("Unknown merge-lane state")

@@ -17,7 +17,7 @@ from controller.scope_amendment import (
     SHARED_LOCATION_CACHE_CAPABILITY, shared_location_cache_predecessor,
     REACTION_WIRE_CLASSIFICATION_CAPABILITY, reaction_wire_classification_predecessor,
     SHORTCUT_LIFECYCLE_TEST_CAPABILITY, shortcut_lifecycle_test_predecessor,
-    routine_support_predecessor,
+    completion_policy_predecessor, routine_support_predecessor,
 )
 
 
@@ -121,7 +121,9 @@ class ConsumerSupportCapabilityTests(unittest.TestCase):
                     self.engine.admit("WP-404", self.manifest.wp("WP-404")["write_paths"], wrong, operation)
 
     def test_shortcut_lifecycle_inverse_restores_entire_actual_61fc_policy_and_roundtrip(self):
-        current = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        current = completion_policy_predecessor(
+            json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        )
         before = copy.deepcopy(current)
         original = json.loads(subprocess.check_output([
             "git", "-C", str(REPO), "show",
@@ -276,7 +278,9 @@ class ConsumerSupportCapabilityTests(unittest.TestCase):
                                   wrong, "reconcile-reaction-wire-classification")
 
     def test_reaction_wire_classification_predecessor_restores_entire_actual_de20_policy(self):
-        current = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        current = completion_policy_predecessor(
+            json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        )
         current = shortcut_lifecycle_test_predecessor(current)
         before = copy.deepcopy(current)
         original = json.loads(subprocess.check_output([
@@ -451,7 +455,9 @@ class ConsumerSupportCapabilityTests(unittest.TestCase):
 
     def test_shared_location_cache_predecessor_restores_entire_actual_d2b_policy(self):
         current = reaction_wire_classification_predecessor(
-            json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+            completion_policy_predecessor(
+                json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+            )
         )
         before = copy.deepcopy(current)
         original = json.loads(subprocess.check_output([
@@ -589,7 +595,9 @@ class ConsumerSupportCapabilityTests(unittest.TestCase):
 
     def test_rx_projection_regression_predecessor_restores_entire_actual_3498_policy(self):
         current = shared_location_cache_predecessor(
-            json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+            completion_policy_predecessor(
+                json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+            )
         )
         before = copy.deepcopy(current)
         original = json.loads(subprocess.check_output([
@@ -719,7 +727,9 @@ class ConsumerSupportCapabilityTests(unittest.TestCase):
 
     def test_backup_post_commit_restores_entire_actual_trusted_base_and_every_existing_rule(self):
         current = rx_projection_regression_predecessor(
-            json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+            completion_policy_predecessor(
+                json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+            )
         )
         before = copy.deepcopy(current)
         original = json.loads(subprocess.check_output([
@@ -840,7 +850,9 @@ class ConsumerSupportCapabilityTests(unittest.TestCase):
 
     def test_host_scoped_jvm_predecessor_restores_entire_actual_a8_policy(self):
         current = backup_post_commit_predecessor(
-            json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+            completion_policy_predecessor(
+                json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+            )
         )
         before = copy.deepcopy(current)
         previous = host_scoped_jvm_predecessor(current)
@@ -992,7 +1004,9 @@ class ConsumerSupportCapabilityTests(unittest.TestCase):
         original = json.loads(subprocess.check_output([
             "git", "-C", str(REPO), "show", BASE + ":docs/android/automation-policy.json",
         ], encoding="utf-8"))
-        actual = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        actual = completion_policy_predecessor(
+            json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        )
         without_wp503 = wp503_accessibility_source_binding_predecessor(actual)
         merged_support = json.loads(subprocess.check_output([
             "git", "-C", str(REPO), "show",

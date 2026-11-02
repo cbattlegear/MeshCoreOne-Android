@@ -1,11 +1,12 @@
 import re
+from dataclasses import asdict
 
 from .backends import CloudBackend
 from .engine import GateBundle, TerminalMerge
 from .errors import PortError
-from .gates import Binding, policy_revision, validate_evidence
-from .ledger import Identity
-from .model import Manifest, SHA
+from .gates import Binding, policy_revision, validate_evidence, verify_pr_gates
+from .ledger import Identity, validate_merged_implementation
+from .model import Manifest, REFERENCE_SHA, SHA
 from .publication import GATE_MARKER, decode_bundle
 from .render import marker
 from .schema import decode_json, fields, positive_integer
@@ -19,6 +20,95 @@ class GitHubGateAuthority:
 
     def __init__(self, backend: CloudBackend, manifest: Manifest, policy: dict):
         self.backend, self.manifest, self.policy = backend, manifest, policy
+
+    def merged_implementation(self, wp_id: str, identity: Identity | None = None):
+        from .merged_acceptance import MergedAcceptance, NoImplementationFound
+
+        reader = MergedAcceptance(self.backend, self.manifest, self.policy)
+        number = identity.pr_number if identity is not None else None
+        try:
+            original = reader.discover_implementation(wp_id)
+        except NoImplementationFound:
+            if number is None:
+                raise
+        else:
+            if number != original:
+                number, identity = original, None
+        return reader.evaluate(wp_id, number, merged=True)
+
+    def merged_scope(self, wp_id: str, identity: Identity):
+        from .merged_acceptance import MergedAcceptance
+
+        number = positive_integer(identity.pr_number, "Existing implementation PR")
+        return MergedAcceptance(self.backend, self.manifest, self.policy).evaluate(
+            wp_id, number, merged=True, completion=False,
+        )
+
+    def reviewed_candidate(self, wp_id: str, identity: Identity, base_sha: str):
+        from .merged_acceptance import MergedAcceptance
+        from .native_review import NativeReview
+        from .repair_acceptance import verify_repair
+
+        number = positive_integer(identity.pr_number, "Existing implementation PR")
+        reader = MergedAcceptance(self.backend, self.manifest, self.policy)
+        reader.require_no_requested_changes(number)
+        value = (
+            self.bundle(wp_id, identity) if self.policy["trusted_gate_publisher_app_id"]
+            else NativeReview(self.backend, self.manifest, self.policy).bundle(wp_id, identity)
+        )
+        if value.binding.base_sha != base_sha:
+            raise PortError("Review does not bind the current default-branch base")
+        if value.evidence.get("schema_version") == 3:
+            result = verify_repair(
+                value, value.evidence["repair_scope"], self.manifest, self.policy, value.catalog,
+            )
+        else:
+            result = verify_pr_gates(
+                value.pr, value.evidence, value.review, value.approvals,
+                value.binding, self.manifest, self.policy, value.catalog,
+            )
+        return {
+            "binding": asdict(value.binding), "ci_run_ids": result["ci_run_ids"],
+            "approval_id": result["approval_id"],
+        }
+
+    def confirm_merged(self, wp_id: str, proof: dict):
+        if not isinstance(proof, dict):
+            raise PortError("Malformed previously accepted completion")
+        kind = proof.get("kind")
+        if kind not in (None, "merged-implementation"):
+            raise PortError("A bounded scope is not a previously accepted WP implementation")
+        if kind == "merged-implementation":
+            validate_merged_implementation(self.policy["repository"], wp_id, proof)
+        elif (
+            any(not isinstance(proof.get(key), str) or re.fullmatch(r"[0-9a-f]{64}", proof[key]) is None
+                for key in ("evidence_sha256", "review_sha256"))
+            or not isinstance(proof.get("ci_run_ids"), list) or not proof["ci_run_ids"]
+            or any(type(value) is not int or value < 1 for value in proof["ci_run_ids"])
+            or proof.get("approval_id") is not None
+            and (type(proof["approval_id"]) is not int or proof["approval_id"] < 1)
+        ):
+            raise PortError("Malformed legacy accepted completion")
+        binding = Binding.parse(proof.get("binding"))
+        number = positive_integer(proof.get("pr_number"), "Accepted PR")
+        merge_sha = proof.get("merge_commit_sha")
+        if (
+            binding.repository != self.policy["repository"] or binding.work_package != wp_id
+            or binding.source_sha != REFERENCE_SHA
+            or not isinstance(merge_sha, str) or SHA.fullmatch(merge_sha) is None
+        ):
+            raise PortError("Accepted completion has invalid repository/WP/source/merge identity")
+        pr = self.backend.api.request("GET", f"{self.backend.prefix}/pulls/{number}")
+        if (
+            pr.get("number") != number or pr.get("merged") is not True
+            or pr.get("head", {}).get("sha") != binding.head_sha
+            or pr.get("merge_commit_sha") != merge_sha
+            or pr.get("base", {}).get("repo", {}).get("full_name") != binding.repository
+            or proof.get("kind") == "merged-implementation"
+            and pr.get("base", {}).get("ref") != self.policy["default_branch"]
+        ):
+            raise PortError("Previously accepted implementation no longer matches the server merge")
+        return proof
 
     def merged_terminal(self, wp_id: str, session_id: str, receipt: dict, expected_base_sha: str):
         if (
@@ -108,14 +198,15 @@ class GitHubGateAuthority:
             raise PortError("Implementation PR targets another repository")
         head = pr.get("head", {}).get("sha")
         checks = self.backend.pages(f"{prefix}/commits/{head}/check-runs", "check_runs")
+        legacy_checks = {"android-ci", "parity-review", "gate-integrity"}
         latest = {}
         for check in checks:
             name = check.get("name")
-            if name in self.policy["required_checks"]:
+            if name in legacy_checks:
                 positive_integer(check.get("id"), "Check-run ID")
                 if name not in latest or check["id"] > latest[name]["id"]:
                     latest[name] = check
-        if latest.keys() != set(self.policy["required_checks"]):
+        if latest.keys() != legacy_checks:
             raise PortError("Missing server-side required checks")
         publisher = latest["gate-integrity"]
         if publisher.get("app", {}).get("id") != self.policy["trusted_gate_publisher_app_id"]:

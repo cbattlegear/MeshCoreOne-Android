@@ -31,7 +31,7 @@ def base_manifest():
 
 
 def historical_policy_text():
-    from controller.scope_amendment import routine_support_predecessor
+    from controller.scope_amendment import completion_policy_predecessor, routine_support_predecessor
 
     text = (REPO / "docs" / "android" / "automation-policy.json").read_text(encoding="utf-8")
     marker = '      },\n      {\n        "id": "reviewed-support-'
@@ -40,7 +40,11 @@ def historical_policy_text():
     start = text.index(marker)
     end = text.index('    ]\n  },', start)
     projected = text[:start] + '      }\n' + text[end:]
-    if json.loads(projected) != routine_support_predecessor(json.loads(text)):
+    projected = projected.replace(
+        '"required_checks": ["android-ci", "parity-review"],',
+        '"required_checks": ["android-ci", "parity-review", "gate-integrity"],',
+    )
+    if json.loads(projected) != completion_policy_predecessor(routine_support_predecessor(json.loads(text))):
         raise ValueError("Text and object historical policy projections differ")
     return projected
 
@@ -51,7 +55,7 @@ def policy(backend="local"):
         "dispatch_mode": backend, "paused": False, "activation_approved": True,
         "trusted_check_app_ids": [10], "trusted_workflow_ids": [20],
         "trusted_gate_publisher_app_id": 10, "branch_rules_proven": True,
-        "foundation_required": [],
+        "foundation_required": [], "required_checks": ["android-ci", "parity-review", "gate-integrity"],
     })
     return value
 

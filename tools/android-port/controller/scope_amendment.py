@@ -1527,11 +1527,25 @@ def debug_packaging_predecessor(policy):
     return result
 
 
+def completion_policy_predecessor(policy):
+    """Project the exact acceptance-transport change without changing historic policy."""
+    if not isinstance(policy, dict):
+        raise PortError("Completion policy projection requires an object")
+    result = copy.deepcopy(policy)
+    if "required_checks" not in result:
+        return result
+    if result["required_checks"] == ["android-ci", "parity-review"]:
+        result["required_checks"] = ["android-ci", "parity-review", "gate-integrity"]
+    elif result["required_checks"] != ["android-ci", "parity-review", "gate-integrity"]:
+        raise PortError("Unexpected required-check policy outside the completion amendment")
+    return result
+
+
 def review_policy_predecessor(policy):
     """Reverse exact authorized process deltas; historical policy receipts stay immutable."""
     result = debug_packaging_predecessor(rooms_avatar_predecessor(
         rooms_message_actions_predecessor(mention_picker_predecessor(
-            message_actions_translation_predecessor(disposable_predecessor(policy))))))
+            message_actions_translation_predecessor(disposable_predecessor(completion_policy_predecessor(policy)))))))
     if "review_policy" not in result:
         return result
     if result.pop("review_policy") != REVIEW_POLICY:

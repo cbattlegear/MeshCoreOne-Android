@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.content
 
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
 import com.meshcoreone.android.core.services.content.LinkPreviewScraper
+import com.meshcoreone.android.core.services.content.UrlSafetyChecker
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -97,15 +98,40 @@ class OkHttpContentFetchingTest {
     )
 
     @Test
-    fun `loadImageData rejects a redirect to a private host`() = runBlocking {
-        HttpFixture { response(ByteArray(0), status = "302 Found", extra = "Location: http://127.0.0.1/secret.jpg\r\n") }
-            .use { server ->
-                controlledClient().use { client ->
+    fun `loadImageData rejects a private redirect before connecting to its listening target`() = runBlocking {
+        HttpFixture { response(byteArrayOf(1)) }.use { privateTarget ->
+            HttpFixture {
+                response(
+                    ByteArray(0),
+                    status = "302 Found",
+                    extra = "Location: http://127.0.0.1:${privateTarget.port}/secret.jpg\r\n",
+                )
+            }.use { server ->
+                val safetyAttempts = ConcurrentLinkedQueue<Pair<String, String>>()
+                OkHttpContentFetching(
+                    lookup = { host ->
+                        if (host == fixtureHost) listOf(loopback) else InetAddress.getAllByName(host).toList()
+                    },
+                    addressSafe = { host, address ->
+                        val addressText = address.hostAddress.orEmpty()
+                        safetyAttempts.add(host to addressText)
+                        (host == fixtureHost && address.isLoopbackAddress) ||
+                            !UrlSafetyChecker.isPrivateOrReserved(addressText)
+                    },
+                ).use { client ->
                     val scraper = LinkPreviewScraper(client, BitmapPreviewImageProcessor(), isUrlSafe = { true })
                     assertNull(scraper.loadImageData("http://$fixtureHost:${server.port}/photo.jpg"))
-                    assertEquals(1, server.accepts.get(), "private redirect must be rejected BEFORE another connect")
+                    assertEquals(1, server.accepts.get(), "the public fixture must receive the original request")
+                    assertTrue(
+                        safetyAttempts.any { (host, address) ->
+                            host == "127.0.0.1" && UrlSafetyChecker.isPrivateOrReserved(address)
+                        },
+                        "the redirect target must reach the production private-address predicate",
+                    )
+                    assertEquals(0, privateTarget.accepts.get(), "the private redirect target must receive no connection")
                 }
             }
+        }
     }
 
     @Test

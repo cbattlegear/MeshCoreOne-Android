@@ -5,7 +5,8 @@ application, production CI, reviewer execution, signing, repository settings or 
 `automation-policy.json` keeps fleet dispatch **off** and activation unapproved, with no configured
 legacy publisher/workflow IDs and branch rules unproven. The dispatch wrapper also defaults its
 effective pause to true; `status.policy_paused` reports the separate committed policy value.
-The 64 active macro WPs require actual merged PR and acceptance evidence; the retired translation
+The 64 active macro WPs require reviewed, merged implementations of their declared scope and any
+applicable non-software evidence; the retired translation
 WP-406 is neither pending implementation nor completed. Historical installation counts remain history.
 
 ## Pinned inventory and authority
@@ -22,16 +23,22 @@ hardware/execution locks and protected merge gates remain separate blockers. Nev
 claims or edit SQLite directly to manufacture ownership, completion or successor authority.
 
 `dispatch.py status` scopes its `blockers` to automated dispatch/repair/merge and reports
-`local_authoring` separately. Neither that report nor an advisory claim authorizes a merge or proves
-acceptance. Missing local Android readiness records an unverified candidate; it does not prohibit
+`local_authoring` separately. Its `completion_status: "not-checked"` means the dry run has not
+queried GitHub; it is not a finding that a merged WP lacks acceptance. Neither that report nor an
+advisory claim authorizes a merge or proves acceptance. Missing local Android readiness records an unverified candidate; it does not prohibit
 feature-branch publication for the candidate's existing hosted checks.
 
 Code review does **not** require another human or a formal GitHub `APPROVED` review. The deployed
 `review_policy` uses trusted read/search-only review, which an authorized coordinator can arrange even
-when the coordinator is the PR author. The supported
-[native review publication route](ci/README.md#native-authenticated-review-publication-bounded-wp-003-repair)
-uses an authenticated `COMMENTED` review and the default-branch publisher; it does not require a
-custom GitHub App or activation of the autonomous fleet. Do not fabricate reviewer results or
+when the coordinator is the PR author. The controller revalidates the authenticated staged review
+and its actual candidate checks. The
+[native review route](ci/README.md#native-authenticated-review-publication-bounded-wp-003-repair)
+can publish one `parity-review` check from the trusted default-branch workflow after deployment and
+manual dispatch. Branch protection must separately require that check to enforce review for manual
+merges; existing rules may still require `gate-integrity` and have not been changed or proven here.
+The route does not require a custom GitHub App or activation of the autonomous fleet. A bare author
+comment or green CI is not an independent review.
+Do not fabricate reviewer results or
 mistake an empty GitHub `reviewDecision` for a missing separate-person approval.
 
 Actual human acceptance is retained for WP-001 architecture/license decisions, WP-505 hardware,
@@ -109,8 +116,9 @@ This Python-only tooling runs natively on Windows; it has no JDK/Android SDK/Gra
 Gradle builds to run, do that work from WSL (or another Linux environment) rather than native
 Windows, since native-Windows Gradle/AGP behavior is not covered by CI.
 Dispatcher commands default to dry-run: no network, ledger writes, backlog issues, workers or merge.
-Use global `--live` only after separately approved setup; missing capability is a nonzero `BLOCKED`,
-never a simulated successful launch. All 64 active handoffs fit the 65,536-character issue-body bound.
+Live dispatch and merge require separately approved setup; the read-only merged inspection below does
+not activate them. Missing capability is a nonzero `BLOCKED`, never a simulated successful launch.
+All 64 active handoffs fit the 65,536-character issue-body bound.
 Wide read-only inputs (notably WP-501) reference the complete manifest/scope digest and deterministic
 `files --wp WP-501 --page N --page-size 100 --expected-manifest-sha <digest>
 --expected-source-sha <commit>` retrieval. Every page repeats the pin/scope/selection hashes, total count
@@ -122,12 +130,28 @@ implementation scope or metadata itself still needs human review. `files` never 
 `report` without artifacts reports **traceability only**, with zero verified feature completions.
 An offline report evaluation requires `--wp --binding --pr --evidence --review --approvals`
 (and `--catalog` for original tests); it never records completion or grants authority.
-Malformed/missing/zero-test evidence fails. A real live report additionally needs an existing
-leased task/session/PR, a completed worker and authenticated trusted publisher facts.
+Malformed/missing/zero-test evidence fails. A live report that records a worker's completion still
+needs its existing leased task/session/PR and a completed worker. For a read-only check of an already
+merged implementation, after this controller is merged run from a clean current-default-branch
+checkout with the existing GitHub read credential in `ANDROID_PORT_GITHUB_TOKEN`:
 
-No Android CI or Gradle tasks are invented here. Except for WP-000's actual Python commands,
-verification entries are explicitly unconfigured and block automatic launch/acceptance until the
-supervised build/CI/test WPs supply real commands. UI/service/protocol placeholders never count as parity.
+```powershell
+python .\tools\android-port\controller\dispatch.py --live report --wp WP-209 --inspect-merged
+```
+
+An optional `--pr-number` inspects that exact PR rather than discovering the implementation.
+This reads GitHub and hosted logs, does not create or alter a ledger, and does not launch a worker
+or activate dispatch. If the merged head is absent locally, it reads the PR's Git objects into
+temporary storage without changing repository refs. An explicitly selected partial PR is reported
+as an accepted scope with `dependency_unlock: false`, not as an unaccepted change. It reports
+blockers rather than inventing missing device, human or other evidence.
+Live dependency reconciliation performs the same recognition automatically; this command is an
+optional inspection, not a new acceptance step.
+
+No Android CI or Gradle tasks are invented here. The exact obsolete WP-000 placeholder alone does not
+block dispatch when the subsequently declared project software lane exists. Eligible module WPs can use
+that lane for completion; other WPs still require an applicable contract. A different substantive
+verification blocker remains in force. UI/service/protocol placeholders never count as parity.
 The strict stdlib runner rejects a missing directory, zero discovered tests, errors/failures and skipped
 mandatory tests; raw unittest discovery alone would otherwise exit successfully with zero tests.
 
@@ -158,8 +182,18 @@ Tests use fake APIs/callbacks, not actual assignments, sessions, comments or mer
 
 Execution states are `pending`, `leased`, `dispatching`, `running`, `repair_wait`, `review_wait`,
 `gate_wait`, `merge_wait`, `completed`, `blocked` and `uncertain`. Inactivity/draft changes/closed issues
-are not completion. Only a real completed task can become ready, and only a real merged implementation
-PR with verified evidence can satisfy a dependency. A terminal failed/cancelled task is not a port.
+are not completion. A reviewed, checked implementation merged by the maintainer accepts its declared
+scope and can satisfy a dependency without a second completion receipt. A bounded repair accepts only
+its own scope: it neither completes unrelated work nor reopens an earlier accepted implementation.
+For the new policy, the authenticated review check identifies which scope was reviewed; no special
+PR-description phrase is required. Historical native review checks also identify the reviewed scope;
+older PRs without them are reconciled conservatively from their original merged declarations and actual
+checks. A merge does not erase disclosed deviations or turn fake-based tests into evidence of real
+integrations. Consumers must verify any omitted integration they actually need. It also does not supply
+missing device, hardware, legal or human evidence. An authenticated, bound human acceptance already
+present in the published review is reused rather than requested again.
+Current or ambiguous workers retain their reservations until actually reconciled. A terminal
+failed/cancelled task is not a port.
 
 `ANDROID_PORT_LEDGER` names one absolute, access-controlled, **durable shared** SQLite file outside
 tracked source. Its parent must already exist. Both native-local and cloud adapters must use the same
@@ -339,14 +373,15 @@ Operational pause/mode/activation switches are checked independently for every s
 from the review-semantic digest, so unpausing does not invalidate already accepted evidence. Actual
 gate/owner/acceptance/publisher/workflow changes still require bound revalidation, never silent migration.
 
-The reviewer emits only the strict JSON schema in its unchanged read/search-only profile.
-It cannot execute tests or publish its own check. The separately authenticated publisher stages
-immutable reference/candidate/diff/evidence and validates the result. PR comments/instructions and
-candidate artifacts are untrusted data, never scripts or approval.
+The trusted reviewer uses the unchanged read/search-only profile; it cannot execute tests or publish
+its own check. The coordinator stages immutable reference/candidate/diff inputs and records the
+authenticated review. The trusted publisher and controller validate that review, capabilities, real
+hosted checks and applicable human gates. Candidate instructions and artifacts are untrusted data,
+never scripts or approval. Existing publisher-backed receipts remain readable.
 
-`GitHubGateAuthority` reads real PR/files (including rename old paths), checks and Actions run identities.
-It accepts structured `<!-- android-port-gate-bundle-v1 -->` output **only** from the separately
-configured publisher app. The bundle contains schema1, binding, evidence, review, approvals and the
+`GitHubGateAuthority` reads real PR/files (including rename old paths), review, checks and Actions run
+identities. Structured `<!-- android-port-gate-bundle-v1 -->` output is accepted only from its
+configured legacy publisher. The bundle contains binding, evidence, review, approvals and the
 independently approved original-case catalog. Candidate JSON/PR prose is not that authority.
 Candidate android-ci runs must actually target the candidate SHA; privileged review/gate runners
 must execute the trusted base SHA on workflow_dispatch, not candidate code via pull_request_target/
@@ -365,7 +400,7 @@ WP-505, WP-506, configured release/signing/legal paths and `needs-human`. A real
 typed human acceptance, including on the maintainer's own PR. Exact source/head/base/policy and
 server-side review identity remain bound. Historical untyped `APPROVED` records and
 `android-port-approval` stamps remain readable; they are not a new separate-person requirement.
-The native publication route described above is the current supported coordinator transport.
+The authenticated native review described above is the supported coordinator transport.
 
 This public personal repository has `allow_auto_merge=false`. No native organization merge queue is
 assumed. The default engine obtains a durable serialized merge lane, rechecks exact head/current base,
@@ -373,8 +408,12 @@ and uses REST merge with a head guard, never admin bypass. Because REST has no b
 verifies live **strict current-base required-check** branch protection and enforce-admins before mutation.
 A concurrent base advance is rejected by those rules, not waved through. Missing rules or a server
 failure/unconfirmed merge retains uncertainty; no fake merge receipt or automatic blind retry.
-Required checks are `android-ci`, `parity-review`, `gate-integrity` on every PR/merge-group candidate,
-including infrastructure changes. WP-003 must prove them before activation.
+The proposed required checks are `android-ci` and `parity-review`. The single trusted review check can
+preserve branch protection for manual PR merges after it is deployed and required; the old duplicate
+`gate-integrity` check is no longer in the policy. Existing branch rules have not been changed and may
+still require it. The review publisher targets PR heads, not merge-group heads; merge-group enforcement
+is not proven. Legacy three-check receipts remain readable. WP-003 must prove strict no-bypass
+protection before activation.
 
 ## Workflow trust and supervised handoff
 

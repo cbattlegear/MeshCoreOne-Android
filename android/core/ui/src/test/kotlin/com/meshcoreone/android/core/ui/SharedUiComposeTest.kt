@@ -37,6 +37,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -51,6 +55,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -64,11 +69,19 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.designsystem.ColorScheme
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.designsystem.ThemeRegistry
+import com.meshcoreone.android.core.designsystem.ThemeColor
+import com.meshcoreone.android.core.designsystem.accessibleForeground
+import com.meshcoreone.android.core.designsystem.toComposeColor
+import com.meshcoreone.android.core.designsystem.toThemeColor
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -92,6 +105,10 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
+import com.meshcoreone.android.core.protocol.model.BatteryInfo
+import com.meshcoreone.android.core.services.contacts.AdvertisementError
+import com.meshcoreone.android.core.services.remote.BinaryProtocolError
+import com.meshcoreone.android.core.services.remote.RoomServerError
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
@@ -100,6 +117,8 @@ import java.util.UUID
 import java.util.Locale
 import java.time.Duration
 import kotlin.test.*
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -142,6 +161,18 @@ class SharedUiComposeTest {
         controller.pause().stop().destroy()
     }
     private fun content(block: @Composable () -> Unit) { controller.get().setContent(content = block) }
+
+    private fun nativeGlyphPixels(node: SemanticsNode): Bitmap {
+        // Draw the owning Compose view; Robolectric does not deliver PixelCopy callbacks.
+        val view = assertIs<ViewRootForTest>(node.root).view
+        val bounds = node.boundsInRoot
+        return compose.runOnUiThread {
+            val window = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(window))
+            Bitmap.createBitmap(window, bounds.left.roundToInt(), bounds.top.roundToInt(),
+                bounds.width.roundToInt(), bounds.height.roundToInt())
+        }
+    }
 
     private fun nativeFrame() {
         // MainTestClock does not drain Android's snapshot and window-attachment queues.
@@ -339,6 +370,81 @@ class SharedUiComposeTest {
         capture("failure-retry", dialog = true)
         retry.performClick()
         compose.runOnIdle { assertEquals(listOf("dismiss", "retry"), order) }
+    }
+
+    @Test fun selectedTypedErrorsRenderIndependentFrozenCopyInTheActualMaterialDialog() {
+        val error = mutableStateOf<PresentedUiError?>(null)
+        content {
+            MeshCoreTheme(motionScale = 0f) {
+                PresentedErrorAlert(error.value, { error.value = null }, UiErrorActions())
+            }
+        }
+        val cases = listOf(
+            AdvertisementError.NotConnected() to "Not connected to device.",
+            RoomServerError.PermissionDenied() to "Permission denied.",
+            BinaryProtocolError.Timeout() to "Request timed out.",
+            PersistenceStoreException(PersistenceStoreError.ContactNotFound) to "Contact not found.",
+            SettingsServiceException(SettingsServiceError.SessionError(MeshCoreException.NotConnected())) to "Not connected to device.",
+        )
+        for ((failure, expected) in cases) {
+            compose.runOnIdle { error.value = UiErrorMapper().present(failure) }
+            compose.onNode(hasText(expected) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+            compose.runOnIdle { assertSame(failure, assertNotNull(error.value).originalFailure) }
+            compose.onNode(hasText("OK") and hasAnyAncestor(isDialog())).performClick()
+            compose.runOnIdle { assertNull(error.value) }
+        }
+    }
+
+    @Test fun actualRadioMenuUsesTheCurrentOcvBatteryReadingAndSharedNativeGlyph() {
+        val radio = mutableStateOf(RadioStatusState(DeviceConnectionState.READY, device, BatteryInfo(3100)))
+        var normalForeground = Color.Unspecified
+        content {
+            MeshCoreTheme(motionScale = 0f) {
+                val primary = MaterialTheme.colorScheme.onSurface
+                SideEffect { normalForeground = primary }
+                BLEStatusIndicatorView(radio.value, RadioStatusActions({}, {}, {}, {}))
+            }
+        }
+        resize(360)
+        compose.onNodeWithContentDescription(resources.getString(S.bleStatusAccessibilityLabel)).performClick()
+        for ((voltage, expected, filled) in listOf(
+            Triple(3100L, "0% (3.10v)", 0), Triple(3360L, "15% (3.36v)", 1),
+            Triple(3475L, "25% (3.48v)", 1), Triple(3720L, "50% (3.72v)", 2),
+            Triple(3940L, "75% (3.94v)", 3), Triple(4190L, "100% (4.19v)", 4),
+        )) {
+            compose.runOnIdle { radio.value = radio.value.copy(battery = BatteryInfo(voltage)) }
+            compose.onNodeWithText(expected).assertIsDisplayed()
+            val row = compose.onNodeWithContentDescription("Battery: $expected", useUnmergedTree = true).fetchSemanticsNode()
+            assertEquals(1, row.children.count { it.config.contains(SharedEmittedForeground) })
+            val glyph = compose.onNode(SemanticsMatcher.keyIsDefined(SharedEmittedForeground) and
+                hasAnyAncestor(hasContentDescription("Battery: $expected")), useUnmergedTree = true)
+            val surface = glyph.fetchSemanticsNode().config[SharedPaintedSurface]
+            val seed = when (voltage) {
+                3100L -> ThemeColor.hex(0xFF3B30)
+                3360L -> ThemeColor.hex(0xFF9500)
+                else -> normalForeground.toThemeColor()
+            }
+            val foreground = accessibleForeground(seed, surface.toThemeColor(), 4.5).toComposeColor()
+            assertEquals(foreground, glyph.fetchSemanticsNode().config[SharedEmittedForeground])
+            assertFalse(row.config.contains(SemanticsProperties.ProgressBarRangeInfo))
+            val pixels = nativeGlyphPixels(glyph.fetchSemanticsNode())
+            for ((x, y) in listOf(pixels.width * 0.95f to pixels.height / 2f, pixels.width * 0.44f to 0f)) {
+                val actual = pixels.getPixel(x.toInt(), y.toInt())
+                for (shift in listOf(0, 8, 16)) {
+                    assertTrue(abs(((actual ushr shift) and 255) - ((foreground.toArgb() ushr shift) and 255)) <= 1,
+                        "Mounted $expected battery must paint its cap and outline, even with empty fill")
+                }
+            }
+            val span = pixels.width * 0.88f - 6f
+            for (segment in 0..<4) {
+                val actual = pixels.getPixel((3f + span * (segment + 0.5f) / 4).toInt(), pixels.height / 2)
+                val expectedPixel = if (segment < filled) foreground.toArgb() else surface.toArgb()
+                for (shift in listOf(0, 8, 16)) {
+                    assertTrue(abs(((actual ushr shift) and 255) - ((expectedPixel ushr shift) and 255)) <= 1,
+                        "Mounted $expected battery segment $segment does not match its OCV reading")
+                }
+            }
+        }
     }
 
     @Test fun nativeRegionDialogKeepsInvalidInputFocusAndBackCancelsWithoutAnAction() {

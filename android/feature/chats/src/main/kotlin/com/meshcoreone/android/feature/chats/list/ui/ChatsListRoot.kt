@@ -29,6 +29,7 @@ import com.meshcoreone.android.feature.chats.list.ChatListFeatureDependencies
 import com.meshcoreone.android.feature.chats.list.ChatListMessage
 import com.meshcoreone.android.feature.chats.list.ChatListStateHolder
 import com.meshcoreone.android.feature.chats.list.ChatRoute
+import com.meshcoreone.android.feature.chats.list.ConversationActionError
 import com.meshcoreone.android.feature.chats.list.NewChatStateHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -125,7 +126,12 @@ private fun CoroutineScope.launchHolder(block: suspend () -> Unit) {
 private fun chatMessageText(message: ChatListMessage, failureText: @Composable (Throwable) -> UiText): UiText = when (message) {
     ChatListMessage.LoadConversationsFailed -> UiText.Resource(AppChatsStrings.chatsErrorLoadConversationsFailed)
     is ChatListMessage.Verbatim -> UiText.Verbatim(message.text)
-    is ChatListMessage.Failure -> failureText(message.cause)
+    is ChatListMessage.Failure -> chatListFailureText(message.cause) ?: failureText(message.cause)
+}
+
+internal fun chatListFailureText(failure: Throwable): UiText? = when (failure) {
+    ConversationActionError.NotConnected -> UiText.Resource(AppChatsStrings.chatsErrorNotConnectedToDelete)
+    else -> null
 }
 
 @Composable

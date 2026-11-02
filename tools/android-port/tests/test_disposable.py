@@ -2149,7 +2149,9 @@ class DisposableGuestTests(unittest.TestCase):
         self.assert_legacy()
 
     def test_resource_and_capability_inverse_restore_entire_actual_ad40165_policy(self):
-        current = load_json(REPO / "docs/android/automation-policy.json")
+        from controller.scope_amendment import completion_policy_predecessor
+
+        current = completion_policy_predecessor(load_json(REPO / "docs/android/automation-policy.json"))
         previous = json.loads(subprocess.check_output([
             "git", "-C", str(REPO), "show",
             "ad40165c93d1bc21e073f91102971719b078ad02:docs/android/automation-policy.json",

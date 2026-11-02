@@ -52,7 +52,7 @@ def render(manifest: Manifest, policy: dict, wp_id: str, attempt="unclaimed-dry-
         f"Manifest SHA-256: {manifest.sha256}",
         f"Policy revision: {policy_revision(manifest, policy)}",
         f"Attempt: {attempt}",
-        "Dependencies (merged PR + independently verified acceptance, never closed issues): "
+        "Dependencies (actual merged implementations and applicable evidence, never closed issues): "
         + (", ".join(wp["depends_on"]) or "none"),
         f"Human gate: {wp['human_gate']}; supervised bootstrap: {wp['supervised']}",
         "",
@@ -90,7 +90,7 @@ def render(manifest: Manifest, policy: dict, wp_id: str, attempt="unclaimed-dry-
     software_lane = []
     if not wp["verification"]["configured"] and not wp["verification"]["commands"]:
         software_lane = [
-            "Project-wide declared software lane (not whole-WP or device acceptance):",
+            "Project-wide declared software lane:",
             json.dumps(declared_software_lane(manifest), ensure_ascii=True),
         ]
     lines.extend([
@@ -101,15 +101,14 @@ def render(manifest: Manifest, policy: dict, wp_id: str, attempt="unclaimed-dry-
         "## Verification",
         json.dumps(wp["verification"], ensure_ascii=True),
         *software_lane,
-        "An empty verification entry for an eligible Android module WP can use the shared whole-WP "
-        "contract; it does not by itself block dispatch or an already-assigned, capability-admitted bounded repair. "
-        "Original-inventory, non-module, release and explicitly partially configured WPs still require "
-        "their specific verification contract. For full-WP completion use the schema-4 verification scope "
-        "and native review schema 3 documented in docs/android/ci/README.md: cover every acceptance "
-        "and original case family, and bind actual hosted methods and required native/human evidence. "
-        "Use the existing declared affected or scaffold checks for its actual candidate and applicable "
-        "acceptance; do not require a separate WP-003 binding or issue solely for an empty macro entry. "
-        "Those checks do not prove whole-WP or device acceptance.",
+        "The obsolete bootstrap-only verification entry does not by itself block dispatch or an already-assigned, "
+        "capability-admitted repair. Eligible module WPs can use the declared project-wide software lane for "
+        "completion; other WPs still need an applicable verification contract. Use existing declared affected "
+        "or scaffold checks for the exact candidate; do not require a separate WP-003 binding or issue solely "
+        "for an empty entry. Explicit substantive verification blockers and applicable device, human, "
+        "hardware, legal and release requirements remain. A reviewed, checked, merged implementation accepts "
+        "its declared scope; a repair accepts its own scope without reopening an earlier accepted implementation "
+        "or completing other work. Name concrete unverified items, not boilerplate disclaimers.",
         "Missing or failed local checks leave the candidate unverified but do not prevent feature-branch "
         "publication; report their outcomes and use the exact-candidate hosted checks.",
         "Port every in-scope original case/parameter family from the independently approved WP-004 catalog; "
@@ -122,7 +121,7 @@ def render(manifest: Manifest, policy: dict, wp_id: str, attempt="unclaimed-dry-
         f"{wp_id} <reason>. Generated outputs name generator and inputs.",
         "",
         "## PR and stop",
-        f"Title: [{wp_id}] <bounded change>; include the marker at the top in the PR body.",
+        f"Title: [{wp_id}] <descriptive change>; include the marker at the top in the PR body.",
         "Use the repository template honestly. Link only an existing issue; do not invent Closes syntax.",
         f"Record deviations/evidence only under docs/android/deviations/{wp_id}.md and "
         f"docs/android/evidence/{wp_id}/.",

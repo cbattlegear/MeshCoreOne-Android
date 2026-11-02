@@ -153,6 +153,34 @@ class BackendTests(unittest.TestCase):
         self.assertTrue(result.ambiguous)
         self.assertEqual(result.worker_state, "unknown")
 
+    def test_known_current_pr_ignores_terminal_history_but_not_another_live_pr_or_task(self):
+        cloud, api, prefix, tasks = cloud_fixture()
+        prs = [
+            {"id": 456, "number": 123, "body": marker("WP-101"),
+             "title": "[WP-101] repair", "state": "closed"},
+            {"id": 111, "number": 122, "body": "",
+             "title": "[WP-101] original port", "state": "closed"},
+            {"id": 112, "number": 121, "body": marker("WP-101"),
+             "title": "[WP-101] previous repair", "state": "closed"},
+        ]
+        api.routes[("GET", prefix + "/pulls?state=all&per_page=100&page=1")] = prs
+        current = {"id": "task-1", "state": "completed", "custom_agent": {"id": "protocol-porter"},
+                   "artifacts": [{"provider": "github", "type": "pull", "data": {"id": 456}}]}
+        old = {"id": "task-old", "state": "completed", "name": "[WP-101] old attempt"}
+        api.routes[("GET", tasks + "/tasks?per_page=100&page=1")] = {"tasks": [current, old]}
+        known = Identity(issue_number=7, task_id="task-1", pr_number=123)
+        observation = cloud.reconcile("WP-101", known)
+        self.assertEqual(observation.identity, known)
+        self.assertEqual(observation.worker_state, "completed")
+        self.assertFalse(observation.pr_open)
+        prs[1]["state"] = "open"
+        with self.assertRaisesRegex(PortError, "Another open PR"):
+            cloud.reconcile("WP-101", known)
+        prs[1]["state"] = "closed"
+        old["state"] = "in_progress"
+        with self.assertRaisesRegex(PortError, "Unmapped WP cloud task"):
+            cloud.reconcile("WP-101", known)
+
     def test_archived_known_task_is_fetched_by_identity_not_forgotten(self):
         cloud, api, _, tasks = cloud_fixture()
         api.routes[("GET", tasks + "/tasks/task-archived")] = {
@@ -358,6 +386,7 @@ class AuthorityTests(unittest.TestCase):
         api.routes[("GET", prefix + "/pulls/123/reviews?per_page=100&page=1")] = [{
             "id": 99, "state": "APPROVED", "commit_id": HEAD, "user": {"login": "cbattlegear"},
             "body": f"<!-- android-port-approval:{value.binding.key} -->",
+            "submitted_at": "2026-10-10T11:00:00Z",
         }]
         return GitHubGateAuthority(cloud, manifest, cloud.policy), api, prefix, value
 
@@ -369,6 +398,19 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(result.pr["base_sha"], BASE)
         self.assertEqual(result.pr["changed_paths"], value.pr["changed_paths"])
         self.assertFalse(any(c[0] in ("POST", "PUT", "PATCH") for c in api.calls))
+
+    def test_reviewed_candidate_preserves_legacy_custom_publisher_validation(self):
+        authority, api, prefix, value = self.fixture()
+        pr = api.routes[("GET", prefix + "/pulls/123")]
+        pr.update(merged=False, state="open", draft=False, merge_commit_sha=None)
+        pr["base"]["sha"] = BASE
+        proof = authority.reviewed_candidate("WP-000", Identity(pr_number=123), BASE)
+        self.assertEqual(proof["binding"], asdict(value.binding))
+        self.assertEqual(proof["ci_run_ids"], [1, 2, 3])
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        checks[-1]["app"]["id"] = 999
+        with self.assertRaisesRegex(PortError, "isolated trusted publisher"):
+            authority.reviewed_candidate("WP-000", Identity(pr_number=123), BASE)
 
     def test_terminal_merge_receipt_is_bound_to_real_merged_pr_and_changed_paths(self):
         authority, api, prefix, value = self.fixture()

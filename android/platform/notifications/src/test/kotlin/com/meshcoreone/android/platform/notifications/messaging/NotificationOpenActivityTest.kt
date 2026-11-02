@@ -168,18 +168,21 @@ class NotificationOpenActivityTest {
             EntityKey(RadioId(UUID(0, 20)), UUID(0, 21)), UUID(0, 3),
         )
         val first = delivery.buildNotification(original)
+        val firstPostId = requireNotNull(first.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID))
         val tag = AndroidMessagingNotificationDelivery.TAG_PREFIX + original.id.value
-        fun assertVisible(notification: Notification) {
+        fun assertVisible(expectedPostId: String) {
             assertEquals(
-                notification.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
-                manager.activeNotifications.single().notification.extras
-                    .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+                expectedPostId,
+                requireNotNull(manager.activeNotifications.single().notification.extras
+                    .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)),
             )
         }
         manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, first)
-        assertVisible(first)
+        assertVisible(firstPostId)
         val second = delivery.buildNotification(original.copy(payload = otherRadioPayload))
-        assertVisible(first)
+        val secondPostId = requireNotNull(second.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID))
+        assertFalse(firstPostId == secondPostId)
+        assertVisible(firstPostId)
         first.actions.zip(second.actions).forEach { (a, b) ->
             assertFalse(a.actionIntent == b.actionIntent)
         }
@@ -191,7 +194,7 @@ class NotificationOpenActivityTest {
                 assertEquals(!reply, action.actionIntent.isImmutable)
                 val saved = shadowOf(action.actionIntent).savedIntent
                 assertEquals(
-                    notification.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+                    requireNotNull(notification.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)),
                     saved.data?.getQueryParameter("post"),
                 )
                 val fillIn = Intent()
@@ -217,10 +220,10 @@ class NotificationOpenActivityTest {
 
         assertTokens(first, payload) // B is built but not published; A is still visible.
         manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, second)
-        assertVisible(second)
+        assertVisible(secondPostId)
         assertTokens(second, otherRadioPayload)
         manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, first)
-        assertVisible(first)
+        assertVisible(firstPostId)
         assertTokens(first, payload) // Reverse build/post ordering must not rewrite either retained token.
         assertTokens(second, otherRadioPayload)
         assertEquals(8, received.size)

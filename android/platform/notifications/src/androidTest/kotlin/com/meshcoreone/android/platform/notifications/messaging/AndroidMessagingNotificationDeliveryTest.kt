@@ -81,7 +81,8 @@ class AndroidMessagingNotificationDeliveryTest {
     }
 
     @Test
-    fun contentLaunchPreservesPayloadAndWarmStartFlags() = runTest {
+    fun privateContentLaunchPreservesPayloadAndCreatesDistinctEntries() = runTest {
+        val delivery = delivery(this)
         val payloads = listOf(
             NotificationPayload.DirectMessage(contact, message),
             NotificationPayload.ChannelMessage(contact.radioId, 17u, message),
@@ -94,19 +95,18 @@ class AndroidMessagingNotificationDeliveryTest {
             NotificationPayload.ChannelQuickReplyFailed(contact.radioId, 3u),
         )
         payloads.forEachIndexed { index, payload ->
-            val launch = launcher()
             val request = request().copy(id = NotificationId("content/$index"), payload = payload)
-            val pending = delivery(this, launch).contentPendingIntent(request)
+            val launch = delivery.contentLaunchIntent(request)
+            val pending = delivery.contentPendingIntent(request)
 
             assertTrue(pending.isActivity)
             assertTrue(pending.isImmutable)
-            assertEquals(ComponentName(context.packageName, "com.meshcoreone.android.MainActivity"), launch.component)
+            assertEquals(ComponentName(context, NotificationOpenActivity::class.java), launch.component)
             assertEquals("com.meshcoreone.android.notification.OPEN", launch.action)
             assertEquals("meshcore-notification://action/content%2F$index/OPEN", launch.dataString)
             assertEquals(payload, NotificationPayloadCodec.read(launch))
             assertFalse(launch.hasExtra(NotificationActionReceiver.EXTRA_ACTION))
-            assertTrue(launch.flags and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)
-            assertTrue(launch.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
+            assertFalse(launch.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
         }
     }
 
@@ -124,15 +124,19 @@ class AndroidMessagingNotificationDeliveryTest {
         assertEquals(firstPending, delivery.contentPendingIntent(first))
     }
 
-    private fun launcher() =
-        Intent().setComponent(ComponentName(context.packageName, "com.meshcoreone.android.MainActivity"))
+    @Test
+    @Suppress("DEPRECATION")
+    fun notificationEntryIsNotExportedAndCannotRemainInTheBackStack() {
+        val info = context.packageManager.getActivityInfo(
+            ComponentName(context, NotificationOpenActivity::class.java),
+            0,
+        )
+        assertFalse(info.exported)
+        assertTrue(info.flags and android.content.pm.ActivityInfo.FLAG_NO_HISTORY != 0)
+        assertTrue(info.flags and android.content.pm.ActivityInfo.FLAG_EXCLUDE_FROM_RECENTS != 0)
+    }
 
-    private fun delivery(scope: TestScope, launch: Intent = launcher()) = AndroidMessagingNotificationDelivery(
-        context,
-        scope,
-        { true },
-        launcherIntent = { launch },
-    )
+    private fun delivery(scope: TestScope) = AndroidMessagingNotificationDelivery(context, scope) { true }
 
     private fun request() = NotificationRequest(
         id = NotificationId(message.toString()),

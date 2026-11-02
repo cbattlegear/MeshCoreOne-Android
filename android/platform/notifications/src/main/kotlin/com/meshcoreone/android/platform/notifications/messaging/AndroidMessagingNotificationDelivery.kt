@@ -36,23 +36,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 
-class AndroidMessagingNotificationDelivery internal constructor(
+class AndroidMessagingNotificationDelivery(
     context: Context,
     scope: CoroutineScope,
     routeAction: suspend (NotificationResponse) -> Boolean,
-    private val launcherIntent: (Context) -> Intent?,
 ) : NotificationDeliveryPort {
-    constructor(
-        context: Context,
-        scope: CoroutineScope,
-        routeAction: suspend (NotificationResponse) -> Boolean,
-    ) : this(
-        context,
-        scope,
-        routeAction,
-        { appContext -> appContext.packageManager.getLaunchIntentForPackage(appContext.packageName) },
-    )
-
     private val context = context.applicationContext
     private val manager = this.context.getSystemService(NotificationManager::class.java)
     private val shortcutManager = this.context.getSystemService(ShortcutManager::class.java)
@@ -222,22 +210,20 @@ class AndroidMessagingNotificationDelivery internal constructor(
     }
 
     internal fun contentPendingIntent(request: NotificationRequest): PendingIntent {
-        val launchIntent = launcherIntent(context)
-            ?: error("No launcher Activity is registered for ${context.packageName}")
-        val intent = NotificationPayloadCodec.write(
-            launchIntent
-                .setAction(ACTION_PREFIX + ACTION_OPEN)
-                .setData(Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$ACTION_OPEN"))
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            request.payload,
-        )
         return PendingIntent.getActivity(
             context,
             requestCode(request.id, ACTION_OPEN),
-            intent,
+            contentLaunchIntent(request),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
     }
+
+    internal fun contentLaunchIntent(request: NotificationRequest): Intent = NotificationPayloadCodec.write(
+        Intent(context, NotificationOpenActivity::class.java)
+            .setAction(ACTION_PREFIX + ACTION_OPEN)
+            .setData(Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$ACTION_OPEN")),
+        request.payload,
+    )
 
     private fun publishConversationShortcut(request: NotificationRequest) {
         if (request.category !in MESSAGE_CATEGORIES || request.threadIdentifier == null) return

@@ -186,6 +186,49 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { unmount(); h.container.close() }
     }
 
+    @Test fun disconnectedRoomNotificationFromChatsRootShowsAuthenticationWithoutOpeningTheRoom() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val room = RemoteNodeSessionDTO(
+                radioId = radio, publicKey = key(40), name = "Root room",
+                role = RemoteNodeRole.ROOM_SERVER, isConnected = false, unreadCount = 3,
+            )
+            store.saveContact(ContactDTO(
+                radioId = radio, publicKey = room.publicKey, name = room.name, typeRawValue = 3u,
+                lastHeardTimestamp = null,
+            ))
+            store.saveRemoteNodeSessionDTO(room)
+            val navigation = h.container.navigation
+            mount(h)
+            h.settle()
+            compose.waitForIdle()
+            val previous = navigation.state.value.stacks.getValue(AppTab.CHATS)
+            assertEquals(AppTab.CHATS, navigation.state.value.selectedTab)
+            assertEquals(1, previous.size)
+            assertNull(navigation.state.value.chatsSelectedRoute)
+            val payload = NotificationPayload.RoomMessage(room.name, EntityKey(radio, room.id), UUID.randomUUID())
+
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(payload, null, null)))
+            await(h) { compose.onAllNodesWithTag("room-authentication-cancel").fetchSemanticsNodes().size == 1 }
+            compose.onNodeWithTag("room-authentication-sheet").assertIsDisplayed()
+            assertEquals(room.id, navigation.state.value.pendingRoomAuthentication?.id)
+            assertEquals(previous, navigation.state.value.stacks.getValue(AppTab.CHATS))
+            assertNull(navigation.state.value.chatsSelectedRoute)
+            assertEquals(3L, assertNotNull(store.fetchRemoteNodeSession(EntityKey(radio, room.id))).unreadCount)
+
+            compose.onNodeWithTag("room-authentication-cancel").performClick()
+            await(h) { navigation.state.value.pendingRoomAuthentication == null }
+            assertEquals(previous, navigation.state.value.stacks.getValue(AppTab.CHATS))
+            assertNull(navigation.state.value.chatsSelectedRoute)
+            assertEquals(3L, assertNotNull(store.fetchRemoteNodeSession(EntityKey(radio, room.id))).unreadCount)
+        } finally {
+            unmount()
+            h.container.close()
+        }
+    }
+
     @Test fun disconnectedRoomNotificationKeepsThePreviousChatAndUnreadStateAcrossResizeAndCancel() = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Prior peer") }

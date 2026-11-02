@@ -10,7 +10,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from unittest.mock import patch
 
-from fixtures import BASE, HEAD, MERGE, REPO, base_manifest, bundle, policy
+from fixtures import BASE, HEAD, MERGE, REPO, base_manifest, bundle, policy, test_manifest
 from controller.engine import GateBundle
 from controller.errors import PortError
 from controller.gates import Binding, policy_revision, verify_completion, verify_pr_gates
@@ -20,6 +20,9 @@ from controller.repair_acceptance import (
     COMPRESSED_SCOPE_MARKER, SCOPE_MARKER, authenticated_scope, instrumentation_results, validate_build_log,
     validate_hosted_methods as validate_compiled_hosted_methods, validate_scope, verify_native, verify_repair,
     retained_repairs_execution, scoped_candidate_sources, scoped_retained_sources,
+    INFRASTRUCTURE_ACCEPTANCE, INFRASTRUCTURE_PATH_OPERATIONS, INFRASTRUCTURE_SCOPE_ID,
+    INFRASTRUCTURE_SCOPE_KIND, INFRASTRUCTURE_VERIFICATION, verify_infrastructure_acceptance,
+    validate_infrastructure_scope,
 )
 from controller.schema import digest, load_json
 from controller.publication import encode_structured_body
@@ -106,6 +109,38 @@ def whole_fixture():
     return manifest, rules, replace(value, evidence=evidence, review=review, catalog=catalog), scope
 
 
+def infrastructure_fixture():
+    manifest, rules = test_manifest("WP-003"), policy()
+    paths = sorted((
+        ".github/workflows/android-ci.yml",
+        "docs/android/ci/bounded-infrastructure-review.md",
+        "tools/android-port/controller/native_review.py",
+        "tools/android-port/oracle/test_ci.py",
+        "tools/android-port/oracle/test_workflow_scope.py",
+        "tools/android-port/oracle/workflow_scope.py",
+        "tools/android-port/tests/test_native_review.py",
+    ))
+    value = bundle(manifest, rules, "WP-003", changed_paths=paths, merged=False)
+    scope = {
+        "schema_version": 1, "kind": INFRASTRUCTURE_SCOPE_KIND, "scope_id": INFRASTRUCTURE_SCOPE_ID,
+        "binding": asdict(value.binding), "paths": paths,
+        "verification": copy.deepcopy(INFRASTRUCTURE_VERIFICATION),
+    }
+    url = f"https://github.com/{rules['repository']}/actions/runs/1/attempts/1"
+    acceptance = [
+        {"id": item["id"], "result": "PASS", "evidence": [url]}
+        for item in INFRASTRUCTURE_ACCEPTANCE
+    ]
+    evidence = {
+        "schema_version": 5, **asdict(value.binding), "changed_paths": paths,
+        "runs": [{"check": "android-ci", "run_id": 1, "run_attempt": 1}],
+        "retained_artifacts": [], "acceptance": acceptance,
+        "verification_scope": scope,
+    }
+    review = {**value.review, "acceptance": copy.deepcopy(acceptance), "human_gate_required": True}
+    return manifest, rules, replace(value, evidence=evidence, review=review), scope
+
+
 def build_log(modules, **changes):
     from controller.ci import TASKS
 
@@ -125,6 +160,83 @@ def build_log(modules, **changes):
 
 
 class RepairContractTests(unittest.TestCase):
+    def test_infrastructure_scope_admits_only_exact_paths_and_capability_operations(self):
+        manifest, rules, value, scope = infrastructure_fixture()
+        self.assertEqual(
+            validate_infrastructure_scope(scope, value.binding, manifest, rules, value.pr["changed_paths"]),
+            tuple(scope["paths"]),
+        )
+        self.assertEqual(
+            INFRASTRUCTURE_PATH_OPERATIONS["tools/android-port/oracle/workflow_scope.py"],
+            ("add-or-update-validator-rule", "traceability-validation"),
+        )
+        self.assertEqual(
+            INFRASTRUCTURE_PATH_OPERATIONS["tools/android-port/oracle/test_ci.py"],
+            ("add-regression-fixture-or-test", "traceability-validation"),
+        )
+
+    def test_infrastructure_scope_rejects_unknown_stale_or_untested_contracts(self):
+        for mutation in ("scope-id", "scope-kind", "unknown-path", "missing-test", "stale-head", "unknown-verification"):
+            manifest, rules, value, scope = infrastructure_fixture()
+            paths = list(scope["paths"])
+            if mutation == "scope-id":
+                scope["scope_id"] += "-other"
+            elif mutation == "scope-kind":
+                scope["kind"] = "whole-wp"
+            elif mutation == "unknown-path":
+                paths.append("tools/android-port/controller/unreviewed_reader.py")
+                paths.sort()
+                scope["paths"] = paths
+            elif mutation == "missing-test":
+                paths = [path for path in paths if path not in INFRASTRUCTURE_PATH_OPERATIONS or "/test_" not in path]
+                scope["paths"] = paths
+            elif mutation == "stale-head":
+                scope["binding"]["head_sha"] = BASE
+            else:
+                scope["verification"]["job_name"] = "candidate-selected-job"
+            with self.subTest(mutation=mutation), self.assertRaises(PortError):
+                validate_infrastructure_scope(scope, value.binding, manifest, rules, value.pr["changed_paths"])
+
+    def test_infrastructure_acceptance_is_typed_bounded_and_requires_positive_actual_ci(self):
+        manifest, rules, value, scope = infrastructure_fixture()
+        result = verify_infrastructure_acceptance(value, scope, manifest, rules)
+        self.assertEqual(result["kind"], "bounded-infrastructure-verification")
+        self.assertFalse(result["wp_complete"])
+        self.assertFalse(result["dependency_unlock"])
+        for consumer in (verify_pr_gates, verify_completion):
+            with self.assertRaisesRegex(PortError, "Bounded"):
+                consumer(
+                    value.pr, value.evidence, value.review, value.approvals,
+                    value.binding, manifest, rules, value.catalog,
+                )
+        for mutation in ("zero-runs", "duplicate-run", "stale-attempt", "wrong-check",
+                         "missing-acceptance", "duplicate-acceptance", "retained-bundle",
+                         "malformed-paths", "stale-evidence-binding"):
+            manifest, rules, value, scope = infrastructure_fixture()
+            evidence = copy.deepcopy(value.evidence)
+            if mutation == "zero-runs":
+                evidence["runs"] = []
+            elif mutation == "duplicate-run":
+                evidence["runs"].append(copy.deepcopy(evidence["runs"][0]))
+            elif mutation == "stale-attempt":
+                evidence["runs"][0]["run_attempt"] = 0
+            elif mutation == "wrong-check":
+                evidence["runs"][0]["check"] = "candidate-publisher"
+            elif mutation == "missing-acceptance":
+                evidence["acceptance"].pop()
+            elif mutation == "duplicate-acceptance":
+                evidence["acceptance"].append(copy.deepcopy(evidence["acceptance"][0]))
+            elif mutation == "retained-bundle":
+                evidence["retained_artifacts"] = [{"path": "ci-results.zip", "sha256": "a" * 64}]
+            elif mutation == "stale-evidence-binding":
+                evidence["head_sha"] = BASE
+            else:
+                evidence["changed_paths"] = ["tools/android-port/controller/native_review.py", {}]
+            with self.subTest(mutation=mutation), self.assertRaises(PortError):
+                verify_infrastructure_acceptance(
+                    replace(value, evidence=evidence), scope, manifest, rules,
+                )
+
     def test_scoped_candidate_sources_include_consumer_tests_and_native_bindings_without_conflicts(self):
         _, _, _, scope = fixture()
         scope["coverage"][0]["production_bindings"] = {PATH: "5" * 40}

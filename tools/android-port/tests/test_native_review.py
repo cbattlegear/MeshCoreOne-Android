@@ -25,6 +25,10 @@ from controller.native_review import (
     REVIEW_MARKER, WORKFLOW_PATH, NativeReview, main,
 )
 from controller.publication import encode_structured_body
+from controller.repair_acceptance import (
+    INFRASTRUCTURE_ACCEPTANCE, INFRASTRUCTURE_SCOPE_ID, INFRASTRUCTURE_SCOPE_KIND,
+    INFRASTRUCTURE_VERIFICATION,
+)
 from controller.render import marker
 from controller.schema import digest
 from controller.workflows import parse_yaml, validate_publisher
@@ -174,6 +178,80 @@ print("file/module deferred imports reached; no authority or network")
         backend = CloudBackend(api, manifest, rules, settings(None))
         return NativeReview(backend, manifest, rules), api, prefix, value
 
+    def infrastructure_fixture(self):
+        native, api, prefix, original = self.fixture(current=True)
+        paths = sorted((
+            ".github/workflows/android-ci.yml",
+            "tools/android-port/controller/native_review.py",
+            "tools/android-port/oracle/test_ci.py",
+            "tools/android-port/oracle/test_workflow_scope.py",
+            "tools/android-port/oracle/workflow_scope.py",
+            "tools/android-port/tests/test_native_review.py",
+        ))
+        scope = {
+            "schema_version": 1, "kind": INFRASTRUCTURE_SCOPE_KIND, "scope_id": INFRASTRUCTURE_SCOPE_ID,
+            "binding": asdict(original.binding), "paths": paths,
+            "verification": copy.deepcopy(INFRASTRUCTURE_VERIFICATION),
+        }
+        url = f"https://github.com/{native.policy['repository']}/actions/runs/1/attempts/1"
+        acceptance = [
+            {"id": item["id"], "result": "PASS", "evidence": [url]}
+            for item in INFRASTRUCTURE_ACCEPTANCE
+        ]
+        evidence = {
+            "schema_version": 5, **asdict(original.binding), "changed_paths": paths,
+            "runs": [{"check": "android-ci", "run_id": 1, "run_attempt": 1}],
+            "retained_artifacts": [], "acceptance": acceptance,
+            "verification_scope": scope,
+        }
+        review = {**original.review, "acceptance": copy.deepcopy(acceptance), "human_gate_required": True}
+        approval = {
+            "kind": "human-acceptance", "review_id": 99, "reviewer": "cbattlegear", "state": "COMMENTED",
+            "head_sha": HEAD, "base_sha": BASE, "policy_revision": original.binding.policy_revision,
+            "binding_key": original.binding.key,
+        }
+        value = replace(
+            original, pr={**original.pr, "changed_paths": paths},
+            evidence=evidence, review=review, approvals=[approval],
+        )
+        self.staged = {"binding": asdict(value.binding), "changed_paths": paths}
+        receipt = {
+            "schema_version": 4, "binding": asdict(value.binding),
+            "method": "authenticated-coordinator-read-only", "staging_sha256": digest(self.staged),
+            "review": review, "evidence": evidence, "approvals": [approval],
+        }
+        body = REVIEW_MARKER + json.dumps(receipt)
+        self.reviews(api, prefix)[0]["body"] = body
+        self.reviews(api, prefix).append({
+            "id": 99, "state": "COMMENTED", "commit_id": HEAD,
+            "user": {"login": "cbattlegear", "type": "User"},
+            "body": f"<!-- android-port-acceptance:{value.binding.key} -->",
+            "submitted_at": "2026-10-10T12:00:00Z",
+        })
+        api.routes[("GET", prefix + "/pulls/123/files?per_page=100&page=1")] = [
+            {"filename": path} for path in paths
+        ]
+        api.routes[("GET", prefix + "/actions/runs/1/attempts/1/jobs?per_page=100&page=1")] = {"jobs": [{
+            "id": 81, "name": INFRASTRUCTURE_VERIFICATION["job_name"], "run_id": 1,
+            "head_sha": HEAD, "status": "completed", "conclusion": "success",
+        }]}
+        return native, api, prefix, value, scope
+
+    @staticmethod
+    def infrastructure_controller_log(**overrides):
+        report = {
+            "discovered": 9, "run": 9, "passed": 9, "failed": 0, "errors": 0, "skipped": 0,
+            "scope": "controller fixtures only; not Android/iOS/hardware parity",
+            "discovered_by_root": {
+                "tools/android-port/tests": 3, "tools/android-port/local": 2,
+                "android/parity-tests": 1, "tools/android-port/oracle": 3,
+            },
+        }
+        report.update(overrides)
+        return (
+            f"job\tRun controller tests once\t2026-10-10T12:00:00Z {json.dumps(report)}\n"
+        )
+
     def reviews(self, api, prefix):
         return api.routes[("GET", prefix + "/pulls/123/reviews?per_page=100&page=1")]
 
@@ -205,6 +283,167 @@ print("file/module deferred imports reached; no authority or network")
         actual, _ = native.evaluate("WP-003", 123, 90)
         self.assertEqual(actual.binding, value.binding)
         self.assertEqual(actual.review["summary"], receipt["review"]["summary"])
+
+    def test_bounded_infrastructure_route_uses_exact_candidate_review_and_original_controller_oracle_log(self):
+        native, api, prefix, value, _ = self.infrastructure_fixture()
+        with patch(
+            "controller.repair_acceptance.read_job_log",
+            return_value=self.infrastructure_controller_log(),
+        ) as read_log:
+            actual, result = native.evaluate("WP-003", 123, 90)
+        self.assertEqual(actual.evidence["schema_version"], 5)
+        self.assertEqual(result["acceptance_kind"], "bounded-infrastructure-verification")
+        self.assertFalse(result["wp_complete"])
+        self.assertFalse(result["dependency_unlock"])
+        self.assertEqual(read_log.call_args.args[1], 81)
+        self.assertEqual(result["ci_run_ids"], [1])
+        self.assertEqual(value.binding, actual.binding)
+        self.assertFalse(any(call[0] != "GET" and not call[3] for call in api.calls))
+
+    def test_infrastructure_staging_is_data_only_and_binds_current_paths(self):
+        native, api, _, _, scope = self.infrastructure_fixture()
+        with patch("controller.native_review.stage_review", return_value=self.staged):
+            staged = native.stage_infrastructure("WP-003", 123, scope)
+        self.assertEqual(staged["state"], "staged-data-only")
+        self.assertEqual(staged["staging_sha256"], digest(self.staged))
+        self.assertEqual(staged["verification_scope"], scope)
+        self.assertFalse(staged["authoritative"])
+        self.assertFalse(any(call[0] != "GET" and not call[3] for call in api.calls))
+        scope["paths"].append("tools/android-port/controller/not-admitted.py")
+        scope["paths"].sort()
+        with self.assertRaises(PortError):
+            native.stage_infrastructure("WP-003", 123, scope)
+
+    def test_bounded_infrastructure_route_rejects_stale_runs_unauthorized_apps_and_bad_logs(self):
+        for mutation in (
+            "stale-attempt", "wrong-workflow", "wrong-app", "skipped-job",
+            "duplicate-job", "zero-oracle-tests", "malformed-discovery", "candidate-path",
+        ):
+            native, api, prefix, _, scope = self.infrastructure_fixture()
+            source = self.reviews(api, prefix)[0]
+            receipt = json.loads(source["body"][len(REVIEW_MARKER):])
+            log = self.infrastructure_controller_log()
+            if mutation == "stale-attempt":
+                receipt["evidence"]["runs"][0]["run_attempt"] = 2
+            elif mutation == "wrong-workflow":
+                api.routes[("GET", prefix + "/actions/runs/1")]["workflow_id"] = 999
+            elif mutation == "wrong-app":
+                checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+                next(check for check in checks if check["name"] == "android-ci")["app"]["id"] = 999
+            elif mutation == "skipped-job":
+                api.routes[("GET", prefix + "/actions/runs/1/attempts/1/jobs?per_page=100&page=1")]["jobs"][0]["conclusion"] = "skipped"
+            elif mutation == "duplicate-job":
+                jobs = api.routes[("GET", prefix + "/actions/runs/1/attempts/1/jobs?per_page=100&page=1")]["jobs"]
+                jobs.append(copy.deepcopy(jobs[0]))
+            elif mutation == "zero-oracle-tests":
+                log = self.infrastructure_controller_log(discovered_by_root={
+                    "tools/android-port/tests": 4, "tools/android-port/local": 2,
+                    "android/parity-tests": 1, "tools/android-port/oracle": 0,
+                })
+            elif mutation == "malformed-discovery":
+                log = self.infrastructure_controller_log(discovered_by_root=["not", "a", "mapping"])
+            else:
+                scope["paths"].append("tools/android-port/controller/untrusted_reader.py")
+                scope["paths"].sort()
+                receipt["evidence"]["changed_paths"] = scope["paths"]
+            if mutation in ("stale-attempt", "candidate-path"):
+                source["body"] = REVIEW_MARKER + json.dumps(receipt)
+            with self.subTest(mutation=mutation), patch(
+                "controller.repair_acceptance.read_job_log", return_value=log,
+            ), self.assertRaises(PortError):
+                native.evaluate("WP-003", 123, 90)
+
+    def test_infrastructure_source_receipt_rejects_missing_altered_and_duplicate_receipts(self):
+        for mutation in ("missing-scope", "stale-evidence-schema", "duplicate-review"):
+            native, api, prefix, _, _ = self.infrastructure_fixture()
+            source = self.reviews(api, prefix)[0]
+            receipt = json.loads(source["body"][len(REVIEW_MARKER):])
+            if mutation == "missing-scope":
+                del receipt["evidence"]["verification_scope"]
+                source["body"] = REVIEW_MARKER + json.dumps(receipt)
+            elif mutation == "stale-evidence-schema":
+                receipt["evidence"]["schema_version"] = 4
+                source["body"] = REVIEW_MARKER + json.dumps(receipt)
+            else:
+                self.reviews(api, prefix).append(copy.deepcopy(source))
+            with self.subTest(mutation=mutation), patch(
+                "controller.repair_acceptance.read_job_log",
+                return_value=self.infrastructure_controller_log(),
+            ), self.assertRaises(PortError):
+                native.evaluate("WP-003", 123, 90)
+
+    def test_infrastructure_publisher_receipt_requires_one_exact_original_log_record(self):
+        native, api, prefix, value, _ = self.infrastructure_fixture()
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        selected = [check for check in checks if check["name"] in ("parity-review", "gate-integrity")]
+        summary = RESULT_MARKER + json.dumps({"acceptance_kind": "bounded-infrastructure-verification"})
+        expected = {
+            "check_ids": sorted(check["id"] for check in selected),
+            "result_sha256": hashlib.sha256(summary.encode("utf-8")).hexdigest(),
+        }
+
+        def publisher_log(records):
+            return "\n".join(
+                f"job\t{PUBLICATION_STEP}\t2026-10-10T12:00:00Z "
+                f"{PUBLICATION_MARKER}{json.dumps(record)}"
+                for record in records
+            )
+
+        run = {"id": 2, "run_attempt": 1}
+        suite = {"app": {"id": 10}}
+        with patch("controller.repair_acceptance.read_job_log", return_value=publisher_log([expected])):
+            native.verify_published_checks(selected, summary, value.binding, run, suite, 123, 90)
+        for records in ([], [expected, expected], [{**expected, "result_sha256": "0" * 64}]):
+            with self.subTest(records=records), patch(
+                "controller.repair_acceptance.read_job_log", return_value=publisher_log(records),
+            ), self.assertRaisesRegex(PortError, "publisher check receipt"):
+                native.verify_published_checks(selected, summary, value.binding, run, suite, 123, 90)
+
+    def test_infrastructure_publisher_rejects_candidate_ref_actor_and_workflow(self):
+        for mutation in ("candidate-ref", "unauthorized-actor", "wrong-workflow"):
+            native, api, prefix, _, _ = self.infrastructure_fixture()
+            run = api.routes[("GET", prefix + "/actions/runs/2")]
+            if mutation == "candidate-ref":
+                run["head_branch"] = "candidate-branch"
+            elif mutation == "unauthorized-actor":
+                run["actor"]["login"] = "untrusted"
+            else:
+                run["path"] = ".github/workflows/candidate.yml"
+            with self.subTest(mutation=mutation), self.assertRaises(PortError):
+                native.workflow_run(
+                    2, 1, WORKFLOW_PATH, BASE, ("workflow_dispatch",),
+                    review_identity=("WP-003", 123, 90),
+                )
+
+    def test_infrastructure_authority_uses_bounded_non_completing_consumer(self):
+        from controller.native_review import NativeReview
+
+        native, _, _, value, _ = self.infrastructure_fixture()
+        authority = GitHubGateAuthority(native.backend, native.manifest, native.policy)
+        with patch.object(NativeReview, "bundle", return_value=value):
+            proof = authority.reviewed_candidate("WP-003", Identity(pr_number=123), BASE)
+        self.assertEqual(proof["binding"], asdict(value.binding))
+        self.assertEqual(proof["ci_run_ids"], [1])
+
+    def test_infrastructure_publisher_and_bundle_consumer_must_agree_on_scope_kind(self):
+        native, api, prefix, value, _ = self.infrastructure_fixture()
+        reviews = self.reviews(api, prefix)
+        body = reviews[0]["body"]
+        summary = RESULT_MARKER + json.dumps({
+            "binding": asdict(value.binding), "pr_number": 123, "review_id": 90,
+            "review_body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+            "publisher_run_id": 2, "publisher_run_attempt": 1,
+            "acceptance_kind": "bounded-repair", "wp_complete": False, "dependency_unlock": False,
+        })
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?per_page=100&page=1")]["check_runs"]
+        for check in checks:
+            if check["name"] in ("parity-review", "gate-integrity"):
+                check["output"]["summary"] = summary
+        with patch(
+            "controller.repair_acceptance.read_job_log",
+            return_value=self.infrastructure_controller_log(),
+        ), self.assertRaisesRegex(PortError, "stale review/binding provenance"):
+            native.bundle("WP-003", Identity(pr_number=123))
 
     def test_authority_reconciles_native_checks_without_invented_application_ids(self):
         native, api, _, value = self.fixture()

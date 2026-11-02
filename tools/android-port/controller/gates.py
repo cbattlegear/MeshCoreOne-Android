@@ -238,6 +238,8 @@ def validate_cases(evidence: dict, manifest: Manifest, wp: dict, catalog: dict |
 def validate_evidence(evidence: dict, binding: Binding, manifest: Manifest, policy: dict, catalog=None):
     if isinstance(evidence, dict) and evidence.get("schema_version") == 2:
         return validate_hosted_evidence(evidence, binding, manifest, catalog)
+    if isinstance(evidence, dict) and evidence.get("schema_version") == 5:
+        raise PortError("Bounded infrastructure verification is not full-WP gate/completion evidence")
     if isinstance(evidence, dict) and evidence.get("schema_version") == 4:
         from .repair_acceptance import validate_scope
         from .verification import require_shared_whole_lane
@@ -409,8 +411,8 @@ def validate_approval(approvals: list[dict], binding: Binding, policy: dict, aut
 
 def verify_pr_gates(pr: dict, evidence: dict, review: dict, approvals: list[dict],
                     binding: Binding, manifest: Manifest, policy: dict, catalog=None) -> dict:
-    if isinstance(evidence, dict) and evidence.get("schema_version") == 3:
-        raise PortError("Bounded repair acceptance is not full-WP gate/completion evidence")
+    if isinstance(evidence, dict) and evidence.get("schema_version") in (3, 5):
+        raise PortError("Bounded acceptance is not full-WP gate/completion evidence")
     if (
         binding.source_sha != manifest.data["reference"]["commit"]
         or binding.manifest_sha256 != manifest.sha256
@@ -450,8 +452,8 @@ def verify_pr_gates(pr: dict, evidence: dict, review: dict, approvals: list[dict
 
 def verify_completion(pr: dict, evidence: dict, review: dict, approvals: list[dict],
                       binding: Binding, manifest: Manifest, policy: dict, catalog=None) -> dict:
-    if isinstance(evidence, dict) and evidence.get("schema_version") == 3:
-        raise PortError("Bounded repair cannot complete a WP or unlock dependencies")
+    if isinstance(evidence, dict) and evidence.get("schema_version") in (3, 5):
+        raise PortError("Bounded acceptance cannot complete a WP or unlock dependencies")
     if pr.get("merged") is not True or not isinstance(pr.get("merge_commit_sha"), str):
         raise PortError("Dependency completion requires a merged implementation PR, not a closed issue")
     if SHA.fullmatch(pr["merge_commit_sha"]) is None:

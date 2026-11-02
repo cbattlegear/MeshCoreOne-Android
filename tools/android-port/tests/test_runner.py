@@ -33,6 +33,37 @@ class RunnerDiscoveryTests(unittest.TestCase):
             for call in discover.call_args_list:
                 self.assertEqual(call.kwargs, {"pattern": "*test*.py"})
 
+    def test_same_named_modules_in_distinct_roots_are_both_discovered(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first = Path(temporary) / "first"
+            second = Path(temporary) / "second"
+            first.mkdir()
+            second.mkdir()
+            for root, case in ((first, "First"), (second, "Second")):
+                (root / "test_shared_name.py").write_text(
+                    "import unittest\n"
+                    f"class {case}(unittest.TestCase):\n"
+                    " def test_discovered(self): self.assertTrue(True)\n",
+                    encoding="utf-8",
+                )
+            try:
+                suite = discover_suites([first, second])
+                def test_ids(collection):
+                    for test in collection:
+                        if isinstance(test, unittest.TestSuite):
+                            yield from test_ids(test)
+                        else:
+                            yield test.id()
+
+                self.assertEqual(
+                    sorted(test_ids(suite)),
+                    ["test_shared_name.First.test_discovered", "test_shared_name.Second.test_discovered"],
+                )
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(run_suite(suite, 0), 0)
+            finally:
+                sys.modules.pop("test_shared_name", None)
+
     def test_suffix_named_mandatory_cases_are_executed_not_omitted(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -46,6 +77,24 @@ class RunnerDiscoveryTests(unittest.TestCase):
             self.assertEqual(suite.countTestCases(), 1)
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(run_suite(suite, 0), 0)
+
+    def test_controller_report_binds_positive_discovery_per_test_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "test_controller_oracle.py").write_text(
+                "import unittest\n"
+                "class Required(unittest.TestCase):\n"
+                " def test_required(self): self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            discovered_by_root = {}
+            suite = discover_suites([root], discovered_by_root)
+            self.assertEqual(discovered_by_root, {root.as_posix(): 1})
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(run_suite(suite, 0, discovered_by_root), 0)
+            report = json.loads(output.getvalue().splitlines()[-1])
+            self.assertEqual(report["discovered_by_root"], discovered_by_root)
 
     def test_missing_empty_or_duplicate_additional_directory_fails_closed(self):
         with tempfile.TemporaryDirectory() as temporary:

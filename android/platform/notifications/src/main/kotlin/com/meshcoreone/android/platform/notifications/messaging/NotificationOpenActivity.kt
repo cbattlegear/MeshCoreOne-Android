@@ -27,7 +27,8 @@ class NotificationOpenActivity : Activity() {
             val postId = intent.getStringExtra(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)
             if (identity?.scheme != "meshcore-notification" || identity.authority != "action" ||
                 segments?.size != 2 || segments[0].isEmpty() ||
-                segments[1] != AndroidMessagingNotificationDelivery.ACTION_OPEN || postId.isNullOrEmpty()
+                segments[1] != AndroidMessagingNotificationDelivery.ACTION_OPEN || postId.isNullOrEmpty() ||
+                identity.getQueryParameter("post") != postId
             ) {
                 logger.warning("Rejected malformed notification content identity")
                 return

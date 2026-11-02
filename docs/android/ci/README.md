@@ -54,10 +54,12 @@ check requires that job to succeed.
 Mixed selections run the benchmark stage before scaffold so scaffold outputs
 remain authoritative. Merged acceptance requires the exact build-job log to
 contain both the successful benchmark task-graph report and the WP-504
-build-infrastructure report. These checks compile and inspect the harness,
-dataset assertions and APKs; they do not measure performance or claim WP-504
-device acceptance. Historical five-key scope reports remain valid only when
-the current trusted classification does not require benchmark verification.
+build-infrastructure report, including consistent phase counts, typed APK
+metadata and nonempty 16KB-aligned native library evidence. These checks compile
+and inspect the harness, dataset assertions and APKs; they do not measure
+performance or claim WP-504 device acceptance. Historical five-key scope
+reports remain valid only when the current trusted classification does not
+require benchmark verification.
 
 Hosted Gradle task-output caching is enabled. Only `:core:data:testDebugUnitTest`
 is explicitly eligible for test-result caching; all other Gradle `Test` tasks

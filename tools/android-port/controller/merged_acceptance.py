@@ -66,6 +66,34 @@ def log_objects(log, step):
     return objects
 
 
+def _validate_benchmark_alignment(value, label, *, artifact=False):
+    fields(
+        value,
+        {"static_16kb_alignment_verified", "elf_pt_load_alignment",
+         "physical_device_or_native_runtime_verified"},
+        optional={"package", "min_sdk", "target_sdk", "debuggable"} if artifact else None,
+        label=label,
+    )
+    libraries = value["elf_pt_load_alignment"]
+    if (
+        value["static_16kb_alignment_verified"] is not True
+        or value["physical_device_or_native_runtime_verified"] is not False
+        or not isinstance(libraries, dict) or not libraries
+        or any(
+            not isinstance(name, str) or not name.startswith("lib/") or not name.endswith(".so")
+            or not isinstance(segments, list) or not segments
+            or any(
+                type(alignment) is not int or alignment < 16384 or alignment & (alignment - 1)
+                for alignment in segments
+            )
+            for name, segments in libraries.items()
+        )
+    ):
+        raise PortError(f"{label}: malformed or overclaimed native alignment evidence")
+    if artifact and not any(name.endswith("/libmaplibre.so") for name in libraries):
+        raise PortError(f"{label}: missing MapLibre native alignment evidence")
+
+
 def validate_benchmark_build_log(log):
     from .ci_evidence import counts
     from .local_scope import TASKS
@@ -88,6 +116,7 @@ def validate_benchmark_build_log(log):
             or type(value.get("tasks")) is not int or value["tasks"] <= 0
             for value in phases.values()
         )
+        or graph["tasks"] != sum(phase["tasks"] for phase in phases.values())
     ):
         raise PortError("Hosted benchmark stage report is incomplete or does not bind declared harness tasks")
 
@@ -97,33 +126,38 @@ def validate_benchmark_build_log(log):
     if len(verification) != 1:
         raise PortError("Missing/ambiguous WP-504 build-infrastructure report in authoritative hosted log")
     value = verification[0]
-    counts(value.get("dataset_assertions"), minimum=8)
-    artifacts = value.get("artifacts")
+    fields(value, {
+        "scope", "dataset_assertions", "artifacts", "instrumentation_producer_compiled",
+        "instrumentation_producer_alignment", "performance_measured", "baseline_profiles_collected",
+        "device_battery_anr_or_strictmode_verified",
+    }, label="WP-504 build-infrastructure report")
+    counts(value["dataset_assertions"], minimum=8)
+    artifacts = value["artifacts"]
     expected_packages = {
         "benchmark": "com.meshcoreone.android.benchmark",
         "profile": "com.meshcoreone.android.benchmark",
         "release": "com.meshcoreone.android",
     }
     if (
-        value.get("instrumentation_producer_compiled") is not True
-        or not isinstance(value.get("instrumentation_producer_alignment"), dict)
-        or not value["instrumentation_producer_alignment"].get("elf_pt_load_alignment")
+        value["instrumentation_producer_compiled"] is not True
         or not isinstance(artifacts, dict)
         or set(artifacts) != set(expected_packages)
-        or any(
-            not isinstance(artifacts.get(variant), dict)
-            or artifacts[variant].get("package") != package
-            or artifacts[variant].get("min_sdk") != 31
-            or artifacts[variant].get("target_sdk") != 37
-            or artifacts[variant].get("debuggable") is not False
-            or not artifacts[variant].get("elf_pt_load_alignment")
-            for variant, package in expected_packages.items()
-        )
-        or value.get("performance_measured") is not False
-        or value.get("baseline_profiles_collected") is not False
-        or value.get("device_battery_anr_or_strictmode_verified") is not False
+        or value["performance_measured"] is not False
+        or value["baseline_profiles_collected"] is not False
+        or value["device_battery_anr_or_strictmode_verified"] is not False
     ):
         raise PortError("Hosted benchmark build-infrastructure evidence is incomplete or overclaims measurements")
+    _validate_benchmark_alignment(value["instrumentation_producer_alignment"], "instrumentation producer")
+    for variant, package in expected_packages.items():
+        artifact = artifacts[variant]
+        if (
+            not isinstance(artifact, dict) or artifact.get("package") != package
+            or type(artifact.get("min_sdk")) is not int or artifact["min_sdk"] != 31
+            or type(artifact.get("target_sdk")) is not int or artifact["target_sdk"] != 37
+            or artifact.get("debuggable") is not False
+        ):
+            raise PortError(f"Hosted benchmark {variant} APK inspection is incomplete")
+        _validate_benchmark_alignment(artifact, f"{variant} APK", artifact=True)
 
 
 def declares_completion(wp, body):

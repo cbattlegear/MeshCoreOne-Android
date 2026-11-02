@@ -888,7 +888,9 @@ class MergedAcceptanceTests(unittest.TestCase):
             "artifacts": {
                 variant: {
                     "package": package, "min_sdk": 31, "target_sdk": 37,
-                    "debuggable": False, "elf_pt_load_alignment": ["lib/arm64-v8a/libmaplibre.so"],
+                    "debuggable": False, "static_16kb_alignment_verified": True,
+                    "elf_pt_load_alignment": {"lib/arm64-v8a/libmaplibre.so": [16384, 65536]},
+                    "physical_device_or_native_runtime_verified": False,
                 }
                 for variant, package in (
                     ("benchmark", "com.meshcoreone.android.benchmark"),
@@ -897,7 +899,11 @@ class MergedAcceptanceTests(unittest.TestCase):
                 )
             },
             "instrumentation_producer_compiled": True,
-            "instrumentation_producer_alignment": {"elf_pt_load_alignment": ["lib/arm64-v8a/libtest.so"]},
+            "instrumentation_producer_alignment": {
+                "static_16kb_alignment_verified": True,
+                "elf_pt_load_alignment": {"lib/arm64-v8a/libtest.so": [16384]},
+                "physical_device_or_native_runtime_verified": False,
+            },
             "performance_measured": False, "baseline_profiles_collected": False,
             "device_battery_anr_or_strictmode_verified": False,
         }
@@ -934,7 +940,14 @@ class MergedAcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(PortError, "missing, skipped or failed"):
                 reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
 
-        for kind in ("missing-stage", "skipped-stage", "wrong-tasks", "missing-infrastructure", "zero-dataset"):
+        for kind in (
+            "missing-stage", "skipped-stage", "wrong-tasks", "missing-infrastructure", "zero-dataset",
+            "inconsistent-graph-total", "missing-alignment-flag", "malformed-alignment",
+            "empty-load-segments", "misaligned-load-segment", "nonpower-load-segment",
+            "boolean-load-segment", "missing-maplibre", "missing-runtime-flag", "device-claim",
+            "noninteger-sdk", "missing-producer-alignment-flag", "malformed-producer-alignment",
+            "unknown-infrastructure-field",
+        ):
             changed_stage = copy.deepcopy(stage_report)
             changed_infrastructure = copy.deepcopy(infrastructure_report)
             if kind == "missing-stage":
@@ -945,8 +958,46 @@ class MergedAcceptanceTests(unittest.TestCase):
                 changed_stage["tasks"] = [":app:assembleDebug"]
             elif kind == "missing-infrastructure":
                 changed_infrastructure.pop("artifacts")
-            else:
+            elif kind == "zero-dataset":
                 changed_infrastructure["dataset_assertions"]["passed"] = 0
+            elif kind == "inconsistent-graph-total":
+                changed_stage["resolved_task_graph"]["tasks"] += 1
+            elif kind == "missing-alignment-flag":
+                changed_infrastructure["artifacts"]["benchmark"].pop("static_16kb_alignment_verified")
+            elif kind == "malformed-alignment":
+                changed_infrastructure["artifacts"]["profile"]["elf_pt_load_alignment"] = True
+            elif kind == "empty-load-segments":
+                changed_infrastructure["artifacts"]["release"]["elf_pt_load_alignment"] = {
+                    "lib/arm64-v8a/libmaplibre.so": [],
+                }
+            elif kind == "misaligned-load-segment":
+                changed_infrastructure["artifacts"]["benchmark"]["elf_pt_load_alignment"] = {
+                    "lib/arm64-v8a/libmaplibre.so": [4096],
+                }
+            elif kind == "nonpower-load-segment":
+                changed_infrastructure["artifacts"]["benchmark"]["elf_pt_load_alignment"] = {
+                    "lib/arm64-v8a/libmaplibre.so": [24576],
+                }
+            elif kind == "boolean-load-segment":
+                changed_infrastructure["artifacts"]["benchmark"]["elf_pt_load_alignment"] = {
+                    "lib/arm64-v8a/libmaplibre.so": [True],
+                }
+            elif kind == "missing-maplibre":
+                changed_infrastructure["artifacts"]["profile"]["elf_pt_load_alignment"] = {
+                    "lib/arm64-v8a/libother.so": [16384],
+                }
+            elif kind == "missing-runtime-flag":
+                changed_infrastructure["artifacts"]["release"].pop("physical_device_or_native_runtime_verified")
+            elif kind == "device-claim":
+                changed_infrastructure["artifacts"]["release"]["physical_device_or_native_runtime_verified"] = True
+            elif kind == "noninteger-sdk":
+                changed_infrastructure["artifacts"]["benchmark"]["min_sdk"] = 31.0
+            elif kind == "missing-producer-alignment-flag":
+                changed_infrastructure["instrumentation_producer_alignment"].pop("static_16kb_alignment_verified")
+            elif kind == "malformed-producer-alignment":
+                changed_infrastructure["instrumentation_producer_alignment"]["elf_pt_load_alignment"] = True
+            elif kind == "unknown-infrastructure-field":
+                changed_infrastructure["unexpected"] = True
             changed_log = line(
                 "Run parallel Gradle validation and Android tasks", changed_infrastructure,
             ) + line("Run parallel Gradle validation and Android tasks", changed_stage)

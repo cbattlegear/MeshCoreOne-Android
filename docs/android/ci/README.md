@@ -66,9 +66,9 @@ must immediately follow them. Added or altered intermediate steps cannot replace
 the verifier or change its execution environment before those checks. Candidate
 source changes still require independent trusted-reader review.
 PowerShell build-script `#requires` directives are rejected before comment filtering,
-including case, indentation and argument-whitespace variants: module requirements
-can load code before the fixed commands. Genuinely inert comments remain allowed,
-including `#requires` text in the Bash scope and aggregate scripts.
+including ASCII case, indentation and argument-whitespace variants: module
+requirements can load code before the fixed commands. Genuinely inert comments,
+including Unicode lookalikes and `#requires` text in Bash scripts, remain allowed.
 Only the fixed event-name and event-path expressions are allowed in the scope
 script. Embedded control or non-LF line separators are rejected rather than
 being parsed differently from the shell. Other GitHub expression expansion is

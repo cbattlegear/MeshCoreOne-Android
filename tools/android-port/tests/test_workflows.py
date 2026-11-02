@@ -609,6 +609,9 @@ class WorkflowTests(unittest.TestCase):
             "#\trequires -Modules WorkflowGuardRegressionOnly\n"
             "##requires -Modules WorkflowGuardRegressionOnly\n"
             "# Note about #requires -Modules WorkflowGuardRegressionOnly\n\n"
+            "#requ\u0131res -Modules WorkflowGuardRegressionOnly\n"
+            "#requ\u0130res -Modules WorkflowGuardRegressionOnly\n"
+            "#require\u017f -Modules WorkflowGuardRegressionOnly\n\n"
         )
         gradle = next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "gradle")
         gate = workflow["jobs"]["android-ci"]["steps"][0]

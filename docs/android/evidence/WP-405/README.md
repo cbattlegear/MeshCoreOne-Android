@@ -21,19 +21,24 @@ regression.
 
 The candidate cancels/retires A at B submission, routes B independently and
 atomically guards validity/cancellation with synchronous router writes.
-`ExternalRouteReplacementTest` defines six methods covering known/unknown
+`ExternalRouteReplacementTest` defines seven methods covering known/unknown
 contact results, distinct/identical URI deliveries, duplicate IDs, deliberately
 non-cooperative A, the window before B enters the router, actual navigation and
 confirmation state, channel/hashtag paths, metadata and once-only delivery.
 The synchronous-write method additionally asserts that both real contact
 navigation and confirmation effects hold the exact submission-invalidation
 monitor, rather than relying on an unprotected check/write sequence.
+The post-commit cancellation method cancels the caller immediately after the
+real contact navigation/confirmation write and requires cancellation to
+propagate without leaving a replayable ID. It covers both queued and unconfined
+dispatch with known and unknown contacts, retaining the original pre-commit
+cancellation/retry case.
 `PendingExternalRouteTest` retains all five original assertions and adds
 failure/retry, A/B/C pre-router replacement and a forced queued-submission
 caller-ownership regression. The latter queues B from the initial child's
 cancellation handler while A holds the staging mutex, checking that staging
 and routing claim cannot interleave across callers. Total targeted
-definitions: 19 methods across these two classes and `AppDeepLinkRouterTest`;
+definitions: 20 methods across these two classes and `AppDeepLinkRouterTest`;
 this is an inventory, **not a discovered/passed test count**.
 
 Light validation performed:

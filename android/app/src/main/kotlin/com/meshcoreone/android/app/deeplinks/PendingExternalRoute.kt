@@ -59,7 +59,9 @@ class PendingExternalRoute(
             val next = pending ?: return@coroutineScope SubmitOutcome.Staged
             if (!ready || inFlight != null) return@coroutineScope SubmitOutcome.Staged
             val guard = CommitGuard()
-            Routing(next, guard, async(guard, start = CoroutineStart.LAZY) { route(next.uri) })
+            Routing(next, guard, async(guard, start = CoroutineStart.LAZY) {
+                route(next.uri).also { guard.recordCompletion() }
+            })
                 .also { inFlight = it }
         }
         try {
@@ -78,9 +80,18 @@ class PendingExternalRoute(
             currentCoroutineContext().ensureActive()
             if (mutex.withLock { routing.superseded }) SubmitOutcome.Superseded else throw cancelled
         } finally {
-            // Caller cancellation must release the slot without dropping its retryable delivery.
+            // A committed effect cannot become retryable just because its caller was cancelled.
             withContext(NonCancellable) {
-                mutex.withLock { if (inFlight === routing) inFlight = null }
+                routing.execution.join()
+                mutex.withLock {
+                    if (inFlight === routing) {
+                        if (routing.guard.wasCommitted()) {
+                            if (pending?.id == routing.delivery.id) pending = null
+                            rememberConsumed(routing.delivery.id)
+                        }
+                        inFlight = null
+                    }
+                }
             }
         }
     }
@@ -94,8 +105,15 @@ class PendingExternalRoute(
     internal class CommitGuard : AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<CommitGuard>
         private var current = true
+        private var committed = false
 
         fun invalidate() = synchronized(this) { current = false }
+        fun recordCompletion() = synchronized(this) { committed = true }
+        fun wasCommitted(): Boolean = synchronized(this) { committed }
+
+        fun commitOutcome(block: () -> DeepLinkRouteOutcome): DeepLinkRouteOutcome = commit {
+            block().also { committed = true }
+        }
 
         fun <T> commit(block: () -> T): T = synchronized(this) {
             if (!current) throw CancellationException("External link delivery superseded")

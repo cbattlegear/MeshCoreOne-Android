@@ -21,11 +21,15 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 
@@ -186,6 +190,36 @@ class ExternalRouteReplacementTest {
     }
 
     @Test
+    fun cancellationAfterContactCommitPropagatesWithoutMakingTheDeliveryReplayable() = runTest {
+        for (dispatcher in listOf(StandardTestDispatcher(testScheduler), UnconfinedTestDispatcher(testScheduler))) {
+            for (known in listOf(false, true)) {
+                val environment = Environment()
+                environment.contactLookup = { if (known) contact() else null }
+                var commits = 0
+                environment.beforeContactCommit = { commits++ }
+                val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+                pending.markReady()
+                val delivery = PendingExternalRoute.Delivery("committed", contactUri)
+                val caller = async(dispatcher, start = CoroutineStart.LAZY) { pending.submit(delivery) }
+                environment.afterContactCommit = {
+                    caller.cancel(CancellationException("cancel after navigation write"))
+                }
+                caller.start()
+                caller.join()
+                assertTrue(caller.isCancelled)
+                val committed = environment.navigation.state.value
+                if (known) assertEquals(contact(), committed.pendingContactDetail)
+                else assertEquals(ContactLinkRequest("Alice", key, ContactType.CHAT), committed.pendingContactLink)
+                assertNull(pending.snapshot(), "A committed target must not be left available for retry")
+                assertIs<PendingExternalRoute.SubmitOutcome.Staged>(pending.retry())
+                assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(pending.submit(delivery))
+                assertEquals(1, commits)
+                assertEquals(committed, environment.navigation.state.value)
+            }
+        }
+    }
+
+    @Test
     fun obsoleteChannelAndHashtagLookupsCannotReplaceTheNewMapNavigation() = runTest {
         for (uri in listOf(channelUri, "meshcoreone://hashtag/test")) {
             for (known in listOf(false, true)) {
@@ -230,6 +264,7 @@ class ExternalRouteReplacementTest {
         var contactLookup: suspend () -> ContactDTO? = { null }
         var channelLookup: suspend () -> List<ChannelDTO> = { emptyList() }
         var beforeContactCommit: () -> Unit = {}
+        var afterContactCommit: () -> Unit = {}
         override var selectedTab: AppTab
             get() = navigation.state.value.selectedTab
             set(value) = navigation.selectTab(value)
@@ -239,11 +274,13 @@ class ExternalRouteReplacementTest {
         override fun navigateToContactDetail(contact: ContactDTO) {
             beforeContactCommit()
             navigation.navigateToContactDetail(contact)
+            afterContactCommit()
         }
         override fun navigateToChannel(channel: ChannelDTO) = navigation.navigateToChannel(channel)
         override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact) {
             beforeContactCommit()
             navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType))
+            afterContactCommit()
         }
         override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel) =
             navigation.stageChannelLink(

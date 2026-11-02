@@ -30,8 +30,10 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         if (uri.scheme.equals(MeshCoreUriParser.SCHEME, ignoreCase = true)) {
             return when (val link = MeshCoreUriParser.parse(uriText)) {
                 is MeshCoreDeepLink.Map -> {
-                    commitIfActive { environment.navigateToMap(link.latitude, link.longitude) }
-                    DeepLinkRouteOutcome.Navigated
+                    commitOutcomeIfActive {
+                        environment.navigateToMap(link.latitude, link.longitude)
+                        DeepLinkRouteOutcome.Navigated
+                    }
                 }
                 is MeshCoreDeepLink.Contact -> routeContact(link)
                 is MeshCoreDeepLink.Channel -> routeChannel(link)
@@ -54,7 +56,7 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         val existing = environment.currentRadioId?.let { radioId ->
             lookupOrNull { environment.fetchContact(radioId, link.publicKey) }
         }
-        return commitIfActive {
+        return commitOutcomeIfActive {
             if (existing != null) {
                 environment.navigateToContactDetail(existing)
                 DeepLinkRouteOutcome.Navigated
@@ -69,7 +71,7 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         val existing = environment.currentRadioId?.let { radioId ->
             lookupOrNull { environment.fetchChannels(radioId) }?.firstOrNull { it.secret == link.secret }
         }
-        return commitIfActive {
+        return commitOutcomeIfActive {
             if (existing != null) {
                 environment.navigateToChannel(existing)
                 DeepLinkRouteOutcome.Navigated
@@ -85,7 +87,7 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
             lookupOrNull { environment.fetchChannels(radioId) }
                 ?.let { HashtagDeepLinkSupport.findChannelByName(link.fullName, it) }
         }
-        return commitIfActive {
+        return commitOutcomeIfActive {
             if (existing != null) {
                 environment.navigateToChannel(existing)
                 DeepLinkRouteOutcome.Navigated
@@ -101,6 +103,13 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         val commit = { context.ensureActive(); block() }
         val guard = context[PendingExternalRoute.CommitGuard]
         return if (guard == null) commit() else guard.commit(commit)
+    }
+
+    private suspend fun commitOutcomeIfActive(block: () -> DeepLinkRouteOutcome): DeepLinkRouteOutcome {
+        val context = currentCoroutineContext()
+        val commit = { context.ensureActive(); block() }
+        val guard = context[PendingExternalRoute.CommitGuard]
+        return if (guard == null) commit() else guard.commitOutcome(commit)
     }
 
     private suspend fun <T> lookupOrNull(block: suspend () -> T): T? = try {

@@ -17,6 +17,8 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
 import kotlinx.coroutines.test.runTest
@@ -228,6 +230,95 @@ class NotificationOpenActivityTest {
     }
 
     @Test
+    @Config(shadows = [DeferredPublicationShadow::class])
+    fun snapshotCleanupPreservesNewerSubmittedPostAndItsTapIncludingDelayedPublication() = runTest {
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val received = mutableListOf<NotificationResponse>()
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { received += it; true }
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                AndroidMessagingNotificationDelivery.CHANNEL_MESSAGES_SILENT, "Messages",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        val publication = Shadow.extract<DeferredPublicationShadow>(manager)
+        for (delayed in listOf(false, true)) {
+            val original = request("snapshot-$delayed").copy(threadIdentifier = null)
+            delivery.post(original)
+            val selected = delivery.deliveredNotifications()
+            assertNotNull(selected.single().postIdentity)
+            publication.defer = delayed
+            val replacementPayload = NotificationPayload.DirectMessage(contact, UUID(0, if (delayed) 201 else 200))
+            delivery.post(original.copy(payload = replacementPayload))
+            val cancellations = publication.cancellations
+            assertEquals(
+                listOf(SnapshotRemovalOutcome.SUPERSEDED),
+                delivery.removeDeliveredSnapshot(selected).toList(),
+            )
+            assertEquals(cancellations, publication.cancellations)
+            publication.publish()
+            publication.defer = false
+            val replacement = manager.activeNotifications.single().notification
+            replacement.contentIntent.send()
+            val launch = shadowOf(context).nextStartedActivity
+            assertEquals(replacementPayload, NotificationPayloadCodec.read(launch))
+            val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, launch).create()
+            try {
+                assertEquals(launcher, shadowOf(controller.get()).nextStartedActivity.component)
+                assertTrue(NotificationActionDispatcher.drainOnce())
+                assertEquals(replacementPayload, received.last().payload)
+                assertTrue(manager.activeNotifications.isEmpty())
+            } finally {
+                controller.destroy()
+            }
+        }
+    }
+
+    @Test
+    fun snapshotCleanupUnknownHistoryNeverFallsBackButExplicitLogicalRemovalStillWorks() = runTest {
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { true }
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                AndroidMessagingNotificationDelivery.CHANNEL_MESSAGES_SILENT, "Messages",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        val request = request("unknown-submission")
+        val notification = delivery.buildNotification(request)
+        val tag = AndroidMessagingNotificationDelivery.TAG_PREFIX + request.id.value
+        // A platform post without this process's submission record models unknown history, not process death.
+        manager.notify(tag, AndroidMessagingNotificationDelivery.NOTIFICATION_ID, notification)
+        val selected = delivery.deliveredNotifications()
+        assertNotNull(selected.single().postIdentity)
+        assertEquals(
+            listOf(SnapshotRemovalOutcome.UNKNOWN_IDENTITY),
+            delivery.removeDeliveredSnapshot(selected).toList(),
+        )
+        assertEquals(
+            listOf(SnapshotRemovalOutcome.UNKNOWN_IDENTITY),
+            delivery.removeDeliveredSnapshot(SnapshotList.of(selected.single().copy(postIdentity = null))).toList(),
+        )
+        assertEquals(1, manager.activeNotifications.size)
+        delivery.removeDelivered(SnapshotList.of(request.id))
+        assertTrue(manager.activeNotifications.isEmpty())
+        delivery.post(request.copy(threadIdentifier = null))
+        val older = delivery.deliveredNotifications()
+        delivery.post(request.copy(
+            threadIdentifier = null,
+            payload = NotificationPayload.DirectMessage(contact, UUID(0, 202)),
+        ))
+        assertEquals(
+            listOf(SnapshotRemovalOutcome.SUPERSEDED),
+            delivery.removeDeliveredSnapshot(older).toList(),
+        )
+        delivery.removeDelivered(SnapshotList.of(request.id))
+        assertTrue(manager.activeNotifications.isEmpty())
+    }
+
+    @Test
     fun dismissedPostHistoryIsBoundedAndEvictionCannotRetireAnUnknownOrNewerPost() = runTest {
         shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         val received = mutableListOf<NotificationResponse>()
@@ -243,6 +334,7 @@ class NotificationOpenActivityTest {
         val original = request("evicted-history").copy(threadIdentifier = null)
         delivery.post(original)
         val originalNotification = manager.activeNotifications.single().notification
+        val originalSnapshot = delivery.deliveredNotifications()
         repeat(300) { index ->
             val id = "dismissed-$index"
             delivery.post(request(id).copy(threadIdentifier = null))
@@ -256,6 +348,10 @@ class NotificationOpenActivityTest {
             ReflectionHelpers.getStaticField<Map<String, String>>(
                 AndroidMessagingNotificationDelivery::class.java, "submittedPosts",
             ).size,
+        )
+        assertEquals(
+            listOf(SnapshotRemovalOutcome.UNKNOWN_IDENTITY),
+            delivery.removeDeliveredSnapshot(originalSnapshot).toList(),
         )
         originalNotification.contentIntent.send()
         val originalLaunch = shadowOf(context).nextStartedActivity

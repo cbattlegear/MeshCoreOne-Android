@@ -46,5 +46,9 @@ class NotificationFixture(
         override suspend fun setBadgeCount(count: Long): Unit = error("Unexpected badge write")
         override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> = error("Unexpected platform read")
         override suspend fun removeDelivered(ids: SnapshotList<NotificationId>): Unit = error("Unexpected platform removal")
+        override suspend fun removeDeliveredSnapshot(
+            selected: SnapshotList<DeliveredNotification>,
+        ): SnapshotList<com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome> =
+            error("Unexpected platform snapshot removal")
     }
 }

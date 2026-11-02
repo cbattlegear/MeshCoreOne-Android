@@ -142,18 +142,17 @@ are Foundation reference outputs, not Android execution results. No broader
 locale-policy or device claim is made.
 
 Hosted exact-candidate verification for head
-`ab1e3ea2be30f4a586c7ff1977ced296f4bc2f36`, based on
+`46a7303da5ce23cf5d349f1c8d0dcd4a2c74a556`, based on
 `d85ac9f8a5367615099bc215acc8d022c11eb75b`, completed successfully in Android
-candidate run `41394912165`. Its Linux Android build and aggregate `android-ci`
-passed; the required PR checklist passed in run `41394912723`. Hosted JUnit
-evidence reports `discovered=42, passed=42, failed=0, errors=0, skipped=0`
-for the selected chat suite. The report positively discovers and passes
+candidate run `41396546339`. Its Linux Android build and aggregate `android-ci`
+passed. Hosted JUnit evidence records 444 named `feature:chats` test cases as
+passed, with no failed, errored or skipped cases. It positively discovers and passes
 `ChatTextMatchingTest.localizedStandardContains oracle`,
 `ChatTextMatchingTest.independent Unicode search probes retain search over all
 filters`, and `ConversationFilteringTest.search preserves Foundation expansion
-boundaries across every filter`. The fresh review on this head identified no
-open inline findings, but requested closer verification of SDK-dependent
-segmentation; the hosted JUnit execution supplies that JVM evidence. Local
-Android/Gradle execution, device behavior, and broader locale tailoring remain
-unverified. Swift codec/SwiftData oracle jobs were skipped by workflow
-selection and are not claimed as verified.
+boundaries across every filter`. The fresh review on this head found no code
+findings but noted that host-JVM tests do not establish Android runtime `\X`
+segmentation parity; Android-device/platform validation remains open for human
+review. Local Android/Gradle execution, device behavior, and broader locale
+tailoring remain unverified. Swift codec/SwiftData oracle jobs were skipped by
+workflow selection and are not claimed as verified.

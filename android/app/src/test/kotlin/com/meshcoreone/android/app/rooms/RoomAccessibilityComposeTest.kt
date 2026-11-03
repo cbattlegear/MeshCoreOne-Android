@@ -511,15 +511,10 @@ class RoomAccessibilityComposeTest {
             ) return ContactLinkCompletion.WrongTarget
             if (captured.disposition == ContactLinkCaptureDisposition.IgnoredSelfContact)
                 return ContactLinkCompletion.IgnoredSelfContact
-            val result = if (existing == null) {
-                stageContactLink(link)
-                ContactLinkCompletion.ConfirmationStaged
-            } else {
-                navigateToContactDetail(existing)
-                ContactLinkCompletion.Navigated
-            }
+            if (existing == null) stageContactLink(link)
+            navigateToContactDetail(existing)
             contactRevision = Math.incrementExact(contactRevision)
-            return result
+            return ContactLinkCompletion.Navigated
         }
         override fun navigateToMap(latitude: Double, longitude: Double) { maps += latitude to longitude }
         override fun navigateToContactDetail(contact: ContactDTO) { navigatedContacts += contact }

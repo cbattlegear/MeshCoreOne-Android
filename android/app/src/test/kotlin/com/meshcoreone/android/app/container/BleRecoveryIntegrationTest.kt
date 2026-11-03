@@ -28,6 +28,7 @@ import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.model.PersistenceKeys
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.MeshEvent
 import com.meshcoreone.android.core.runtime.LastConnectionStore
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.runtime.RuntimeIssueReporter
@@ -106,15 +107,34 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             assertNull(f.factory.transportFor(first.token), "old session cannot identify the live transport")
 
             val before = assertNotNull(store.fetchDevice(f.target.deviceId))
-            firstPeer.shadow.lateConnected()
-            firstPeer.shadow.notify(firstPeer.rx, FirmwareRadio(key(99), "Stale identity").selfPacket().toByteArray())
-            firstPeer.shadow.lose(BluetoothGatt.GATT_INSUFFICIENT_AUTHENTICATION)
-            f.pump()
-            assertEquals(before, store.fetchDevice(f.target.deviceId), "old native callbacks cannot overwrite the current radio")
-            assertEquals(fresh, f.container.sessions.current)
-            assertEquals(DeviceConnectionState.READY, f.manager.connectionState)
-            assertEquals(2, f.peers.size)
-            assertEquals(1, f.container.sessions.outstanding)
+            val selfInfoKeys = mutableListOf<Bytes>()
+            val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                fresh.toolEvents().collect { event ->
+                    if (event is MeshEvent.SelfInfo) selfInfoKeys += event.info.publicKey
+                }
+            }
+            try {
+                val currentPeer = f.peers.last()
+                val identityFrame = FirmwareRadio(key(99), "Stale identity").selfPacket().toByteArray()
+                currentPeer.shadow.notify(currentPeer.rx, identityFrame)
+                f.until("current GATT self-info reaches the fresh session observer") { selfInfoKeys == listOf(key(99)) }
+                assertEquals(before, store.fetchDevice(f.target.deviceId),
+                    "Room alone cannot detect self-info consumed by an already-ready session")
+
+                firstPeer.shadow.lateConnected()
+                firstPeer.shadow.notify(firstPeer.rx, identityFrame)
+                firstPeer.shadow.lose(BluetoothGatt.GATT_INSUFFICIENT_AUTHENTICATION)
+                f.pump()
+                assertEquals(listOf(key(99)), selfInfoKeys, "retired GATT must not emit self-info into the fresh session")
+                currentPeer.shadow.notify(currentPeer.rx, FirmwareRadio(key(7)).selfPacket().toByteArray())
+                f.until("current GATT observer remains live after stale callbacks") { selfInfoKeys.size >= 2 }
+                assertEquals(listOf(key(99), key(7)), selfInfoKeys, "only current-GATT self-info reaches the fresh session")
+                assertEquals(before, store.fetchDevice(f.target.deviceId), "old native callbacks cannot overwrite the current radio")
+                assertEquals(fresh, f.container.sessions.current)
+                assertEquals(DeviceConnectionState.READY, f.manager.connectionState)
+                assertEquals(2, f.peers.size)
+                assertEquals(1, f.container.sessions.outstanding)
+            } finally { observer.cancel() }
         } finally { f.close() }
     }
 

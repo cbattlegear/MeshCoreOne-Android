@@ -4,6 +4,8 @@ package com.meshcoreone.android.app.deeplinks
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkLookup
+import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
+import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.navigation.MapFocusRequest
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
@@ -20,7 +22,6 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
-import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import java.util.UUID
@@ -684,20 +685,24 @@ class ExternalRouteReplacementTest {
         ): ContactLinkContext = CapturedLookup(navigation.captureContactLinkLookup(
             publicKey, radio, null, null, null, true, publications,
         ))
-        override fun isContactLinkContextCurrent(context: ContactLinkContext, publicKey: Bytes): Boolean {
+        override fun resolveContactLinkContext(
+           context: ContactLinkContext, publicKey: Bytes,
+        ): ContactLinkLookupResolution {
            val lookup = (context as CapturedLookup).lookup
-           return lookup.publicKey == publicKey && navigation.isCapturedContactLookupCurrent(
-               lookup, navigation.state.value.boundSessionToken, lookup.allowsInitialBinding,
+           if (lookup.publicKey != publicKey) return ContactLinkLookupResolution.Stale
+           return navigation.resolveCapturedContactLookup(
+               lookup, navigation.state.value.boundSessionToken, lookup.allowsInitialBinding, null,
            )
         }
-        override fun completeContactLookup(
-            context: ContactLinkContext, link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
+        override fun completeResolvedContactLookup(
+            context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
+            link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
             selectChats: Boolean, publications: ContactLinkPublications,
-        ): ContactLinkCompletion {
+        ): ContactLinkResolvedCompletion {
             val lookup = (context as CapturedLookup).lookup
             beforeContactCommit()
-            val result = navigation.completeCapturedContactLookup(
-                lookup, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
+            val result = navigation.completeResolvedCapturedContactLookup(
+                lookup, target, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
                 null, true, null, selectChats, publications,
             )
             afterContactCommit()

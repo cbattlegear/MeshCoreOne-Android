@@ -1,6 +1,8 @@
 // PortedFrom: MC1/Views/Chats/Navigation/ChatLinkRouter.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.deeplinks
 
+import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
+import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
 import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
@@ -59,18 +61,23 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
             }
             if (guard == null) capture() else guard.commit(capture)
         }
-        if (original != null) {
-            val current = checkNotNull(guard).commit {
-                coroutineContext.ensureActive()
-                environment.isContactLinkContextCurrent(original, link.publicKey)
-            }
-            if (!current) return DeepLinkRouteOutcome.ContactLookupFailed(ContactLookupContextStale())
-        }
         if (captured.disposition == ContactLinkCaptureDisposition.StaleContext) {
             return commitOutcomeIfActive { DeepLinkRouteOutcome.ContactLookupRejected }
         }
-        val existing = if (captured.disposition == ContactLinkCaptureDisposition.Lookup) {
-            captured.radioId?.let { radioId ->
+        val resolve = {
+            coroutineContext.ensureActive()
+            environment.resolveContactLinkContext(captured, link.publicKey)
+        }
+        val target = when (val resolution = if (guard == null) resolve() else guard.commit(resolve)) {
+            ContactLinkLookupResolution.Stale ->
+                return if (original != null) DeepLinkRouteOutcome.ContactLookupFailed(ContactLookupContextStale())
+                else commitOutcomeIfActive { DeepLinkRouteOutcome.ContactLookupRejected }
+            is ContactLinkLookupResolution.Current -> resolution
+        }
+        val existing = if (captured.disposition == ContactLinkCaptureDisposition.Lookup &&
+            link.publicKey != target.selfPublicKey
+        ) {
+            target.radioId?.let { radioId ->
                 try {
                     environment.fetchContact(radioId, link.publicKey)
                 } catch (cancelled: CancellationException) {
@@ -88,7 +95,15 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         } else null
         return ContactLinkPublications().use { publications ->
             commitOutcomeIfActive {
-                when (environment.completeContactLookup(captured, link, existing, external, publications)) {
+                val completion = environment.completeResolvedContactLookup(
+                    captured, target, link, existing, external, publications,
+                )
+                val outcome = when (completion) {
+                    ContactLinkResolvedCompletion.TargetChanged ->
+                        return@commitOutcomeIfActive DeepLinkRouteOutcome.ContactLookupFailed(ContactLookupTargetChanged())
+                    is ContactLinkResolvedCompletion.Completed -> completion.outcome
+                }
+                when (outcome) {
                     ContactLinkCompletion.Navigated -> DeepLinkRouteOutcome.Navigated
                     ContactLinkCompletion.ConfirmationStaged -> DeepLinkRouteOutcome.ConfirmationStaged
                     ContactLinkCompletion.IgnoredSelfContact -> DeepLinkRouteOutcome.IgnoredSelfContact

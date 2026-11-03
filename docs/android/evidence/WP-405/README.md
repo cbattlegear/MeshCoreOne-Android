@@ -2,16 +2,71 @@
 
 ## Issue #544: first-graph process-store contact lookup
 
-Retry-origin correction: `fced652cd946129e4902e66f989d2bf08000d061`
+### Origin-bound resolution and completion (source only)
+
+The Boolean retry precheck in `620ee9fb9e7d24d2eaea985e1f589245f089e633`
+did not resolve a retained null-radio capture's permitted first graph. It
+could skip an existing Room contact. The agreed WP-302 successor contract is
+`resolveContactLinkContext(context, publicKey): ContactLinkLookupResolution`,
+with `Stale` or an opaque `Current(radioId, selfPublicKey, origin)`.
+The router now resolves every attempt under its delivery guard, uses that
+snapshot's effective radio/self outside guards, and passes the exact same
+snapshot to `completeResolvedContactLookup`. Production snapshots are minted
+by the producer; the router never constructs one or re-captures the origin.
+
+Completion returns `TargetChanged` or `Completed(ContactLinkCompletion)`.
+`TargetChanged` means the context is still valid but the attempted radio/self
+changed, including null resolution followed by legitimate first binding.
+It maps to `ContactLookupFailed(ContactLookupTargetChanged())`, remains
+visible/unconsumed even on the first attempt, and requires explicit retry.
+Retry then resolves and reads the first graph rather than treating a skipped
+read as absence. Actual `Completed(WrongTarget)` stays terminal/rejected;
+truly stale retry stays no-write/recoverable. Holder ID/attempt arbitration,
+computed-failure publication, and cancellation retention are unchanged.
+
+Authored controls, not executed results:
+
+- Actual graph/Room null capture, precommit caller cancellation, first binding,
+  and same-delivery retry; existing-contact and first-bound self families,
+  with identical replacement isolation and exact consumed-ID assertions.
+- Actual adapter null resolution, first graph binding before conditional
+  completion, `TargetChanged` without state mutation, re-resolution and the
+  saved Room row. This deliberately split producer schedule is paired with an
+  actual router/holder first-attempt `TargetChanged` retention/retry control;
+  it is not represented as a mounted-host concurrency run.
+- Actual graph/Room retry resolution, suspended completed Room read, then
+  same-radio graph replacement or navigation-revision supersession before
+  completion; no additional publication/navigation/import/consumption.
+- Existing different/identical graph replacement families additionally retain
+  context through actual caller cancellation during lookup, with fresh B and
+  stale-attempt controls preserved.
+
+WP-302 owns the original saved-nonself first-graph control with no last-device
+preference and its preference write held, the producer implementation, and
+localized host wiring. Its exact isolated snapshot-producer successor is
+pending; the agreed signatures are not imported producer source or a build
+result. All new Kotlin source remains uncompiled/unexecuted. Execution custody,
+source composition, local-before-single-push and merge holds remain unchanged.
+
+Source-only checks for this consumer correction (Python 3.12.4):
+`python tools\android-port\controller\validate.py` PASS (1,866 tracked reference
+files), `python tools\android-port\portmap.py` PASS, and `git diff --check` PASS.
+These checks do not compile/discover/run Kotlin tests and do not satisfy the
+required combined local product verification.
+
+### Historical retry-origin and publication corrections
+
+`fced652cd946129e4902e66f989d2bf08000d061`
 still re-captured the active graph when retrying the same failed delivery.
 The holder now retains the original opaque `ContactLinkContext` through
 precommit failure/cancellation, seeds each subsequent attempt's guard with it,
 and clears it only when that delivery terminates or is superseded. The router
 does not recapture or increment the lookup revision on retry. Its adapter
-requires WP-302's synchronous read-only producer seam
+previously required WP-302's synchronous read-only producer seam
 `isContactLinkContextCurrent(context, publicKey)`, checked under the delivery
 guard before any retry store read. Store I/O still runs outside all guards and
-uses the original captured radio.
+used the original captured radio. The sealed resolution above supersedes this
+Boolean seam and permits only producer-validated first binding.
 
 Stale validation or stale-context completion on retry returns visible
 `ContactLookupFailed(ContactLookupContextStale())` without commit/consumption.
@@ -24,8 +79,10 @@ origin, plus real graph/Room different-radio and identical-radio replacement
 families with no replacement read/effect/ack and a fresh B-delivery control.
 The earlier real same-graph recovery control remains. The replacement fixture
 checks the captured public key and delegates retry validity to the producer's
-pure `isCapturedContactLookupCurrent` predicate using its current bound token
-and captured initial-binding allowance; it does not fabricate validity.
+historical pure `isCapturedContactLookupCurrent` predicate using its current bound token
+and captured initial-binding allowance; the current fixture instead delegates
+to `resolveCapturedContactLookup` and `completeResolvedCapturedContactLookup`,
+including the producer-issued target identity. It does not fabricate validity.
 An additional authored recovered-lookup schedule traverses that actual pure
 coordinator predicate before committing the retained delivery once.
 These cases are uncompiled/unexecuted. The new producer seam is absent on this

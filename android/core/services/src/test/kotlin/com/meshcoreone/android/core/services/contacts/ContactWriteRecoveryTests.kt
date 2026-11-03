@@ -261,7 +261,7 @@ class ContactWriteRecoveryTests {
             val held = object : ContactPersisting by store {
                 override suspend fun saveContactPreservingNewer(
                     radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
-                ): ContactSaveResult {
+                ): ContactSaveResult? {
                     entered.complete(Unit)
                     saveGate.await()
                     return store.saveContactPreservingNewer(radioId, frame, expectedFrame)
@@ -306,6 +306,31 @@ class ContactWriteRecoveryTests {
                 runCurrent()
                 assertEquals(newer, store.fetchContact(radioA, original.publicKey))
             }
+        }
+    }
+
+    @Test
+    fun liveSupersededCompletionRequiresReconciliationInsteadOfClaimingImportSuccess() = runTest {
+        withFixture {
+            val producer = service()
+            val original = ContactDTO.fromFrame(radioA, frame(1, "Initial"))
+            store.seed(original)
+            val result = backgroundScope.async {
+                try {
+                    producer.addOrUpdateContact(radioA, frame(1, "Imported"))
+                    null
+                } catch (failure: ContactWriteCompletionFailed) {
+                    failure
+                }
+            }
+            runCurrent()
+            val newer = original.copy(name = "Newer", lastModified = 2u, nickname = "Retained")
+            store.seed(newer)
+            radio.accept()
+            runCurrent()
+            assertNotNull(result.await())
+            assertEquals(newer, store.fetchContact(radioA, contactsKey(1)))
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
         }
     }
 

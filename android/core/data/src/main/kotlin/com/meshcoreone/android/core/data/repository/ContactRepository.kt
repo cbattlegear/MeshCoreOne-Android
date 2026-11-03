@@ -62,15 +62,15 @@ internal class ContactRepository(
         }
 
     override suspend fun saveContact(radioId: RadioId, frame: ContactFrame): ContactSaveResult =
-        saveContactFrame(radioId, frame, preserveNewer = false)
+        checkNotNull(saveContactFrame(radioId, frame, preserveNewer = false))
 
     override suspend fun saveContactPreservingNewer(
         radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
-    ): ContactSaveResult = saveContactFrame(radioId, frame, preserveNewer = true, expectedFrame = expectedFrame)
+    ): ContactSaveResult? = saveContactFrame(radioId, frame, preserveNewer = true, expectedFrame = expectedFrame)
 
     private suspend fun saveContactFrame(
         radioId: RadioId, frame: ContactFrame, preserveNewer: Boolean, expectedFrame: ContactFrame? = null,
-    ): ContactSaveResult =
+    ): ContactSaveResult? =
         context.write("saveContactFrame") {
             val existing = database.contacts().forPublicKey(radioId.value, frame.publicKey).firstOrNull()
             val stored = existing?.toDTO()
@@ -78,7 +78,7 @@ internal class ContactRepository(
                 (stored.lastModified > frame.lastModified ||
                     (stored.lastModified == frame.lastModified && stored.toContactFrame() != expectedFrame &&
                         stored.toContactFrame() != frame))) {
-                return@write ContactSaveResult(stored.id, false)
+                return@write null
             }
             val dto = stored?.updating(frame) ?: ContactDTO.fromFrame(radioId, frame)
             database.contacts().upsert(dto.toEntity())

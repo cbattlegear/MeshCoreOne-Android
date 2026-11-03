@@ -232,10 +232,14 @@ class ContactService(
                 withContext(NonCancellable) {
                     try {
                         contacts.saveContactPreservingNewer(radioId, contact, previousFrame)
+                            ?: throw ContactWriteCompletionFailed(radioId, contact.publicKey)
                         syncCoordinator?.notifyContactsChanged()
                     } catch (cancelled: CancellationException) {
                         requireContactWriteReconciliation(radioId, cancelled)
                         throw cancelled
+                    } catch (error: ContactWriteCompletionFailed) {
+                        requireContactWriteReconciliation(radioId, error)
+                        throw error
                     } catch (error: Exception) {
                         requireContactWriteReconciliation(radioId, error)
                         throw ContactWriteCompletionFailed(radioId, contact.publicKey, error)

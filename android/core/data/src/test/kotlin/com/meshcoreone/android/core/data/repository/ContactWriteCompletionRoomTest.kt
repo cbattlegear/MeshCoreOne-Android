@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -21,7 +22,7 @@ class ContactWriteCompletionRoomTest : RepositoryTest() {
         val other = original.copy(radioId = RADIO_B, name = "Other radio")
         store.saveContact(original)
         store.saveContact(other)
-        val result = store.saveContactPreservingNewer(RADIO_A, incoming, original.toContactFrame())
+        val result = assertNotNull(store.saveContactPreservingNewer(RADIO_A, incoming, original.toContactFrame()))
         assertEquals(original.id, result.id)
         assertFalse(result.isNew)
         assertEquals(original.updating(incoming), store.fetchContact(RADIO_A, incoming.publicKey))
@@ -38,7 +39,7 @@ class ContactWriteCompletionRoomTest : RepositoryTest() {
             )
             store.saveContact(newer)
             val result = store.saveContactPreservingNewer(RADIO_A, initial.copy(name = "Late"), initial)
-            assertEquals(first.id, result.id)
+            assertNull(result)
             assertEquals(newer, store.fetchContact(RADIO_A, initial.publicKey))
         }
     }
@@ -46,9 +47,9 @@ class ContactWriteCompletionRoomTest : RepositoryTest() {
     @Test
     fun intentionalEqualTimestampChangeAndInsertionStillPersist() = runTest {
         val initial = frame(name = "Initial")
-        assertTrue(store.saveContactPreservingNewer(RADIO_A, initial).isNew)
+        assertTrue(assertNotNull(store.saveContactPreservingNewer(RADIO_A, initial)).isNew)
         val updated = initial.copy(name = "Intentional")
-        assertFalse(store.saveContactPreservingNewer(RADIO_A, updated, initial).isNew)
+        assertFalse(assertNotNull(store.saveContactPreservingNewer(RADIO_A, updated, initial)).isNew)
         assertEquals("Intentional", store.fetchContact(RADIO_A, initial.publicKey)?.name)
         assertTrue(issues.isEmpty())
     }

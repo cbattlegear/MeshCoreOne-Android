@@ -42,11 +42,12 @@ interface ContactPersisting {
     suspend fun saveContact(radioId: RadioId, frame: ContactFrame): ContactSaveResult
     /**
      * Atomic accepted-write upsert preserving newer timestamps and equal-timestamp frames changed
-     * since [expectedFrame] was read. Local preferences/activity are retained even when applying.
+     * since [expectedFrame] was read. Returns null when a newer frame was retained rather than
+     * applying this one. Local preferences/activity are retained even when applying.
      */
     suspend fun saveContactPreservingNewer(
         radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame? = null,
-    ): ContactSaveResult =
+    ): ContactSaveResult? =
         throw UnsupportedOperationException("Atomic contact completion persistence is not implemented")
     suspend fun saveContact(dto: ContactDTO)
     suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long

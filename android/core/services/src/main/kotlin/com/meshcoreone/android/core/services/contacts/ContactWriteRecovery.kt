@@ -5,11 +5,14 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.util.WeakHashMap
 
-/** The radio accepted this write; a full contact sync is required, not a claimed rollback. */
+/**
+ * The radio accepted this write; a full contact sync is required, not a claimed rollback.
+ * A null cause means atomic persistence retained a newer local frame instead of this one.
+ */
 class ContactWriteCompletionFailed(
     val radioId: RadioId,
     val publicKey: Bytes,
-    cause: Exception,
+    cause: Exception? = null,
 ) : Exception("Contact accepted by radio; local completion requires reconciliation", cause)
 
 /**

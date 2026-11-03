@@ -59,6 +59,24 @@ queue changes and merged #365. No current semantic overlap was identified;
 these reports are coordination, not independent grants of capability. No other
 worktree was read or modified.
 
+The historical/courier search cannot exclude unseen allocations or drafts:
+overall current producer custody remains unknown, not "cleared." Authorization
+comes from the coordinator's assigned bounded repair and these actual
+trusted-main path/operation admissions, not merged PRs or old session labels:
+
+| Actual path | Operation | Admitted capability |
+| --- | --- | --- |
+| `android/app/src/main/kotlin/com/meshcoreone/android/app/container/AppChatsFeature.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
+| `android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/reactions/ReactionService.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
+| `android/app/src/test/kotlin/com/meshcoreone/android/app/container/HistoryReactionReplayFailureTest.kt` | `add-direct-support-wiring` | `app-build-launcher` |
+
+The actual supported claim calls for these paths returned the historical
+binding mismatch, not a new successful reservation receipt. No open WP-216 PR
+or contacted active service writer was identified, but those bounded checks do
+not prove global absence. A discovered semantic collision still requires
+serialization/transfer. This successor does not change `ChatViewModel` or its
+preview/render-cache seams, and did not wake the potential #402 producer again.
+
 ## Real-store fault and cancellation regressions
 
 `HistoryReactionReplayFailureTest` adds 30 methods to the existing App source set.
@@ -130,3 +148,29 @@ The corrected successor extracts the existing persistence helper's
 `reconcileSummary` inside `ReactionService` and exposes only that operation,
 preserving its existing logging/null/cancellation behavior and avoiding an
 internal parser API visibility change or duplicated summary implementation.
+
+## Exact successor result
+
+Corrected Kotlin candidate `0ee2a57a900d622e1e1768a2c2c27b076720bf59`
+passed its own
+[Android candidate CI run](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41604460960).
+The authoritative Android job reports `:app:testDebugUnitTest`: 1,886 discovered,
+run and passed; zero failures, errors or skips. Its method inventory includes
+all 30 `HistoryReactionReplayFailureTest` methods; both that suite and the prior
+nine-method `HistoryReactionReplayTest` report `END|SUCCESS`. The declared build
+and other selected jobs completed successfully. This is actual successor
+execution, not inherited credit from the previous history-overlap pass.
+
+The final evidence-only commit does not change those tested Kotlin bytes.
+Hosted results/logs remain authoritative: no second CI-result bundle was
+downloaded, committed, uploaded, hashed or revalidated.
+
+At final inspection, main advanced to
+`99479711bfdb7c621765f09d671068ca8b8318ce` by merged #529. Its delta from the
+tested base contains only `BleRecoveryIntegrationTest.kt` and WP-303's BLE
+evidence. The affected replay production files, trusted capability policy,
+manifest and inspected frozen Swift inputs are unchanged. No main integration
+or whole-current-base verification is claimed by this candidate's run.
+Exact current-base review/merge remains the coordinator's separate action.
+No PR was opened, no historical reservation or local execution hold was
+released, and no whole-WP or device/hardware acceptance is claimed.

@@ -67,6 +67,8 @@ internal fun TraceCodeInput(state: TracePathState, holder: TracePathStateHolder)
             )
             TextButton(
                 onClick = {
+                    outcome = null
+                    nextHopAnnouncement = null
                     clipboard.getText()?.text?.trim {
                         SwiftText.isWhitespace(it.code) || it in "\n\r\u000B\u000C\u0085\u2028\u2029"
                     }?.takeIf { it.isNotEmpty() }?.let(::edit)

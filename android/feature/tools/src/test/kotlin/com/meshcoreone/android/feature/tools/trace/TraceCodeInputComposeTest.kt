@@ -215,6 +215,32 @@ class TraceCodeInputComposeTest {
         assertEquals(2, harness.state.outboundPath.size)
     }
 
+    @Test fun emptyAndWhitespacePasteClearPriorSuccessAndErrorsWithoutChangingDraft() {
+        listOf("", " \n\t\r ", "\u200B\n \r\u200B").forEach { blank ->
+            val harness = configured()
+            mount(harness)
+            click("Add Hop")
+            paste("AA,FF,ZZ")
+            click("Add nodes: AA")
+            assertTrue(announcementTexts().containsAll(listOf("Adding as hop 2", "FF not found", "Invalid format: ZZ")))
+            paste(blank)
+            assertEquals("", input().config[SemanticsProperties.EditableText].text)
+            assertTrue(announcementTexts().isEmpty())
+            assertFalse(texts().any { it in listOf("Adding as hop 2", "FF not found", "Invalid format: ZZ") })
+            assertEquals(listOf(Bytes.of(0xAA)), harness.state.outboundPath.map { it.hashBytes })
+            assertEquals(1, harness.holder.hashSize)
+
+            setInput("BB")
+            paste(blank)
+            assertEquals("BB", input().config[SemanticsProperties.EditableText].text)
+            assertTrue(texts().contains("BB will be added"))
+            assertFalse(button("Add nodes: BB").config.contains(SemanticsProperties.Disabled))
+            assertTrue(announcementTexts().isEmpty())
+            assertEquals(listOf(Bytes.of(0xAA)), harness.state.outboundPath.map { it.hashBytes })
+            assertEquals(1, harness.holder.hashSize)
+        }
+    }
+
     private fun configured(supportsOverride: Boolean = true) = TraceHarness(configureDependencies = true).also {
         it.deps.device = device(firmwareVersionString = if (supportsOverride) "v1.11.0" else "v1.10.0")
         it.holder.setContactsForTesting(listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")))

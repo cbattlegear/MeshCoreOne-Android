@@ -6,8 +6,12 @@
 - Trusted starting base: `1e1ff70345f203b41f9a8b04836c2cc4640500c9`.
 - Read-only source: `db14559b39d32322b06477c6ae676112f583db50`.
 - Shared receipt contract: `bfd2418d99395e7302ff45dade2b67cba8611857`.
-- Candidate head and authoritative hosted result: pending real WP-208 integration
-  and exact-candidate execution; no Kotlin execution is claimed at this stage.
+- Initial combined diagnostic head: `d4c63e7027469ac63a1515e66cc0fb2f3bf53697`
+  (WP-208 producer `e98a1ecb633bdc1ac1b9be6d44f4483076fdbc7b` integrated).
+  Hosted run: <https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41581606473>,
+  attempt 1, workflow dispatch. This is a provisional diagnostic, not final
+  verification: the producer is correcting definite-unsent serializer provenance,
+  and WP-215 is reconciling existing #495 dispatcher commitment/retry hunks.
 
 ## Ownership and admission
 
@@ -28,8 +32,24 @@ Although related-consumer admission for MessageService succeeded, actual semanti
 ownership is serialized to WP-208/session
 `13a03908-afb8-42bd-9c96-57a27920076e`; WP-215 does not duplicate that producer's edit.
 The producer explicitly agreed to consume the receipt prerequisite and preserve
-the wire/owned-child boundary. Its implementation is required before integration
-can be claimed.
+the wire/owned-child boundary. The first implementation is integrated with its
+original attribution; a follow-up is required because starting IN_FLIGHT before
+the protocol serializer can misclassify provably unsent cancellation as uncertain.
+The revised producer must prove the real transport dispatch boundary, not infer
+it from a FAILED persistence row.
+
+### Existing #495 dispatcher reconciliation
+
+The trusted main starting tree predates #495's committed dispatcher improvements.
+Those are reconciled from WP-302's committed Git objects, not by modifying its
+worktree or branch: public `NotificationContentTap.enqueue(Intent)` and its
+unchanged result enum; independent `NotificationActionCommit.navigationCommitted`;
+and the `retryRequested`/completion handshake that preserves READY notifications
+during the final bounded retry delay. WP-302 confirmed WP-215 is the sole current
+dispatcher producer. Its AppContainer READY/generation seam and navigation
+consumer remain untouched. Reply wire acceptance and mark-read commitment remain
+separate from navigation commitment and from WP-401's proposed durable OPEN store.
+No enqueue result is reinterpreted as durable navigation acknowledgement.
 
 ## Deterministic regression witnesses
 
@@ -56,6 +76,8 @@ An additional App witness uses the actual Room store to assert the message is
 read and contact unread count is zero while the final write's return is held,
 then cancels the caller and checks the committed receipt after release. A
 dispatcher witness separately prevents replay of committed mark-read actions.
+Additional dispatcher cases preserve #495's navigation-commit cancellation and
+READY retries during the last delay and after the bounded retry window.
 
 ## Actual local verification
 
@@ -74,6 +96,9 @@ The shared `gradle-execution` reservation remains retained by
 `local-check:f516a7e271f444dd9cb2efcc8b995a16`. No cleanup, bypass, direct Gradle,
 competing acquisition, runtime installation or fabricated execution proof occurred.
 Product tests have not run locally; missing execution is not a failed product test.
+The original eight frozen `NotificationActionHandlerTests` configuration,
+reaction-preview and channel-fallback cases and existing Kotlin counterparts
+remain unchanged. Source/send helpers were inspected read-only at the fixed pin.
 
 Exact-commit hosted diagnostic execution must use the existing reviewed Android
 candidate CI workflow after genuine producer integration. Its real job/log/method

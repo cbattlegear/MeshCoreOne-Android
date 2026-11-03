@@ -19,6 +19,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.advanceTimeBy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -132,6 +133,64 @@ class NotificationActionDispatcherTest {
         runCurrent()
         assertEquals(1, writes)
         assertTrue(NotificationActionDispatcher.drainOnce())
+    }
+
+    @Test
+    fun navigationCommitRemainsIndependentOfReplyAcceptance() = runTest {
+        var calls = 0
+        var receipt: NotificationActionReceipt? = null
+        NotificationActionDispatcher.install(this) {
+            calls++
+            receipt = currentCoroutineContext()[NotificationActionReceipt]
+            requireNotNull(currentCoroutineContext()[NotificationActionCommit]).navigationCommitted()
+            awaitCancellation()
+        }
+        NotificationActionDispatcher.enqueue(
+            response("10000000-0000-0000-0000-000000000001").copy(action = null, userText = null),
+        )
+        runCurrent()
+        assertEquals(NotificationActionReceipt.State.READY, requireNotNull(receipt).state)
+        NotificationActionDispatcher.install(this) { calls++; true }
+        runCurrent()
+        assertEquals(1, calls)
+        assertTrue(NotificationActionDispatcher.drainOnce())
+    }
+
+    @Test
+    fun readyRetryDuringTheFinalDelayIsNotLost() = runTest {
+        var ready = false
+        var delivered = 0
+        NotificationActionDispatcher.install(this) {
+            if (!ready) false else true.also { delivered++ }
+        }
+        NotificationActionDispatcher.enqueue(response("10000000-0000-0000-0000-000000000001"))
+        runCurrent()
+        advanceTimeBy(14_750)
+        runCurrent()
+        assertEquals(0, delivered)
+        ready = true
+        NotificationActionDispatcher.retry()
+        advanceTimeBy(250)
+        runCurrent()
+        assertEquals(1, delivered)
+        assertTrue(NotificationActionDispatcher.drainOnce())
+    }
+
+    @Test
+    fun readyRetryAfterTheBoundedWindowStillDeliversTheRetainedAction() = runTest {
+        var ready = false
+        var delivered = 0
+        NotificationActionDispatcher.install(this) {
+            if (!ready) false else true.also { delivered++ }
+        }
+        NotificationActionDispatcher.enqueue(response("10000000-0000-0000-0000-000000000001"))
+        advanceTimeBy(15_001)
+        runCurrent()
+        assertEquals(0, delivered)
+        ready = true
+        NotificationActionDispatcher.retry()
+        runCurrent()
+        assertEquals(1, delivered)
     }
 
     @Test

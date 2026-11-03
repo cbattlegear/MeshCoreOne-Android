@@ -11,6 +11,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
@@ -20,6 +23,7 @@ import com.meshcoreone.android.feature.remotenodes.auth.*
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesText
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodesCatalog
 import com.meshcoreone.android.feature.remotenodes.map.*
+import com.meshcoreone.android.feature.remotenodes.resolver.NodeNameMatchKind
 import com.meshcoreone.android.feature.remotenodes.status.*
 import com.meshcoreone.android.feature.remotenodes.telemetry.MeasurementSystem
 import com.meshcoreone.android.feature.remotenodes.telemetry.formattedValue
@@ -128,12 +132,20 @@ internal fun RemoteNodeStatusContent(
                         repeaterState.neighbors, state.previousNeighborSnapshot, state.seenNeighborPrefixes,
                         repeaterState.neighborKeyDisplayByteCount, context,
                     ).forEach { row ->
-                        RemoteValue(remoteText(row.displayName), "${row.keyHex} / ${remoteText(row.snrText)} / ${remoteText(row.lastSeen)}")
-                        if (row.isNew) Text(stringResource(L.remoteNodesHistoryNew))
-                        row.snrDelta?.let { Text(remoteText(it.accessibilityDescription(locale))) }
+                        key(row.neighbor.publicKeyPrefix) {
+                            val name = remoteText(row.displayName)
+                            RemoteValue(name, "${row.keyHex} / ${remoteText(row.snrText)} / ${remoteText(row.lastSeen)}")
+                            if (row.isNew) Text(stringResource(L.remoteNodesHistoryNew))
+                            if (row.matchKind == NodeNameMatchKind.FALLBACK) RemoteNeighborPossibleMatch(name)
+                            row.snrDelta?.let { Text(remoteText(it.accessibilityDescription(locale))) }
+                        }
                     }
-                    NeighborRows.disappeared(repeaterState.neighbors, state.previousNeighborSnapshot, repeaterState.neighborKeyDisplayByteCount, context).forEach {
-                        RemoteValue(remoteText(it.displayName), stringResource(L.remoteNodesHistoryNotSeen))
+                    NeighborRows.disappeared(repeaterState.neighbors, state.previousNeighborSnapshot, repeaterState.neighborKeyDisplayByteCount, context).forEach { row ->
+                        key(row.entry.publicKeyPrefix) {
+                            val name = remoteText(row.displayName)
+                            RemoteValue(name, stringResource(L.remoteNodesHistoryNotSeen))
+                            if (row.matchKind == NodeNameMatchKind.FALLBACK) RemoteNeighborPossibleMatch(name)
+                        }
                     }
                     TextButton({ map = "neighbors" }) { Text(stringResource(L.remoteNodesStatusViewOnMap)) }
                     Button({ discoverConfirmation = true }, enabled = ready && !repeaterState.isDiscovering) { Text(remoteText(StatusSections.discoverButtonText(repeaterState))) }
@@ -197,6 +209,34 @@ internal fun RemoteNodeStatusContent(
             if (connected) helper.saveOCVSettings(state.selectedOCVPreset, if (state.selectedOCVPreset == OCVPreset.CUSTOM) OcvCustomCurve.parse(curve) else state.ocvValues)
             else helper.setStatusSectionError(RemoteNodesText.Resource(L.remoteNodesSettingsNoService))
         }
+    }
+}
+
+@Composable
+private fun RemoteNeighborPossibleMatch(name: String) {
+    var showingExplanation by remember(name) { mutableStateOf(false) }
+    val label = stringResource(L.remoteNodesStatusPossibleMatch)
+    val explanation = stringResource(L.remoteNodesStatusPossibleMatchExplanation)
+    TextButton(
+        onClick = { showingExplanation = true },
+        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+            contentDescription = "$name, $label"
+            stateDescription = explanation
+        },
+    ) {
+        Text(stringResource(L.remoteNodesStatusPossibleMatchTitle))
+    }
+    if (showingExplanation) {
+        AlertDialog(
+            onDismissRequest = { showingExplanation = false },
+            title = { Text(stringResource(L.remoteNodesStatusPossibleMatchTitle)) },
+            text = { Text(explanation, Modifier.verticalScroll(rememberScrollState())) },
+            confirmButton = {
+                TextButton({ showingExplanation = false }, Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) {
+                    Text(stringResource(L.remoteNodesDone))
+                }
+            },
+        )
     }
 }
 

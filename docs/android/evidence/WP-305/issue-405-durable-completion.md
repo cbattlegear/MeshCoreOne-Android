@@ -5,9 +5,9 @@
 - **Base:** `99479711bfdb7c621765f09d671068ca8b8318ce` (`main`)
 - **Reviewed predecessor head:** `b91f5fcbbe2f533093f2eab6e84aa641c0c9a103`
 - **Navigation follow-up:** based on `b91f5fcbbe2f533093f2eab6e84aa641c0c9a103`; the lifecycle-safe
-  busy-control candidate is `3abfd74ebb56b0b6ba2aad98435ac1e35a4a732b`. Its exact-head Android CI
-  passed; the automated review workflow completed, but the actual PR review was COMMENTED, while a
-  separate source-only review found no new blocker. Intermediate findings and corrections are recorded below.
+  busy-control candidate is `3abfd74ebb56b0b6ba2aad98435ac1e35a4a732b`. The retained-flow identity
+  repair is `3a552f5fbfc41b29a9e18b93bc11b65d4f262c5e`, pending exact-successor hosted verification.
+  Intermediate findings and corrections are recorded below.
 - **Worktree branch:** `cbattlegear-wp-305-onboarding-recovery`
 - **PR:** [#532](https://github.com/cbattlegear/MeshCoreOne-Android/pull/532) (open draft)
 - **Manifest / policy:** `e81605857f5aa7b893dcd63224fb27a45d7b0f3a` / `b12794157978d6d90ab7508d4e2852fdc2d5e4a4`
@@ -40,6 +40,11 @@
   `NavDisplay.onBack`. Its disabled semantics observe `preset.state` and
   `isCompletingWithoutDevice` through composition-lifecycle collectors, rather than a derived
   process-scope `stateIn` job. Successful completion still uses its existing programmatic navigation path.
+- The shell re-resolves the retained flow on each current-route composition and its synchronous
+  navigation callback reads the live top route and current coordinator, rather than relying on a
+  remembered route-active Boolean. Rerun completion callbacks are accepted only from the currently
+  owned flow; the shell also refuses a stale completion navigation when onboarding is no longer the
+  active route, so an off-tab completion cannot pop the selected tab's entry.
 - New mounted real-shell regressions hold radio apply and completion persistence separately. They
   verify toolbar Up, adaptive-rail tab selection, and onboarding's mounted system-Back handler keep
   the busy rerun mounted; failures remain visible, completion retry does not reapply the preset,
@@ -48,6 +53,13 @@
   also uses the same guard. With an active onboarding path, the flow's BackHandler is the reachable
   system-Back entry and consumes Back before the shell callback; a busy flow cannot normally have an
   empty path.
+- The identity-schedule regression disposes rerun flow A and pops/reopens setup in one UI-thread
+  transaction, without a Compose idle/frame barrier between the route changes. It asserts onboarding
+  is the active destination before and after while both the navigation entry ID and retained coordinator
+  change, then holds flow B's apply and verifies tab, Up, route-action and system-Back controls stay
+  blocked until completion. A separate mounted test completes stale flow A after B has replaced it and
+  verifies A cannot deliver a completion callback. An off-tab navigation regression verifies an old
+  completion cannot pop the currently selected tab's entry.
 - A repeated-successful-rerun mounted regression uses the real `AppOnboarding.Rerun` and process scope.
   It captures the actual adapter-job identity baseline after constructing app bindings, then checks
   after each of two successful reruns that the same adapter jobs remain active, the process scope stays
@@ -75,8 +87,9 @@
 | `python tools\android-port\test_inventory.py --check` | Passed (468 paths / 5,133 declarations); inventory check only, not Kotlin execution. |
 | Trusted admission for `AppOnboarding.kt` (`modify-related-consumer` → `reviewed-support-consumer`) and `OnboardingGateTest.kt` (`add-or-update-related-test` → `reviewed-support-test`) | Passed on the current base; no WP-502-owned mounted-test path was edited. |
 | Trusted admission for `NativeNavigationShell.kt` (`modify-related-consumer` → `reviewed-support-consumer`), `OnboardingFlowCoordinator.kt` (`modify` → `wp-owned`), and new `SettingsRerunNavigationTest.kt` (`add-or-update-related-test` → `reviewed-support-test`) | Passed for this assigned worktree. |
+| Independent read-only review of identity-schedule repair `3a552f5fbfc41b29a9e18b93bc11b65d4f262c5e` | No significant findings; confirmed the A→B replacement and stale-completion regressions and disjointness from WP-302 entry-provider/identity hunks. This is source review only, not hosted CI or acceptance. |
 | `git diff --check` | Passed for the source and evidence diffs. |
-| Local Android/Gradle unit tests or build | Not run: the shared local Gradle execution reservation remains held without cleanup proof and was not cleared, bypassed, or contended for. |
+| Local Android/Gradle unit tests or build | Not run for the identity-schedule successor: the shared local Gradle execution reservation remains held without cleanup proof and was not cleared, bypassed, or contended for. |
 | Exact-head hosted run [41630362683](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41630362683) | Passed on `825b6ad9a007203499a088e10102a54ce7b74f3d`; the Settings-rerun mounted suite marker succeeded and its four then-current cases passed. This candidate preceded the lifecycle leak correction. |
 | Independent review of `825b6ad9a007203499a088e10102a54ce7b74f3d` | Run [41630377176](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41630377176) found that eager process-scope `stateIn` retained each discarded rerun coordinator (`4454336766`). Replaced that derived flow with lifecycle-owned Compose observation; this was not acceptance. |
 | Exact-head hosted run [41632599536](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41632599536) | Failed on `057cd5160be8d3e732961cf655e4e5c075ec3c17`: 1 of 1,863 app tests failed because the new lifetime regression incorrectly required an empty process scope despite app adapter collectors. The actual `SettingsRerunNavigationTest` suite marker recorded failure. |

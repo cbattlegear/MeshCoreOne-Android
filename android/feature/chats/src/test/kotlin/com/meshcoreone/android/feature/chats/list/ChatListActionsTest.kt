@@ -309,14 +309,28 @@ class ChatListActionsTest {
     }
 
     @Test
-    fun `pending navigation requests are consumed once`() = scenario {
+    fun `pending navigation requests are acknowledged without user navigation`() = scenario {
         val rig = Rig(this)
         val alice = contact("Alice")
+        val channel = channel("Channel")
+        val room = room("Room")
         rig.deps.navigation.pendingChatContact.value = alice
+        rig.deps.navigation.pendingChannel.value = channel
+        rig.deps.navigation.pendingRoomSession.value = room
         rig.actions.handlePendingNavigation()
+        rig.actions.handlePendingChannelNavigation()
+        rig.actions.handlePendingRoomNavigation()
         rig.actions.handlePendingNavigation()
-        assertEquals(listOf<ChatRoute>(ChatRoute.Direct(alice)), rig.navigated)
+        rig.actions.handlePendingChannelNavigation()
+        rig.actions.handlePendingRoomNavigation()
+        assertTrue(rig.navigated.isEmpty())
+        assertEquals(
+            listOf(ChatRoute.Direct(alice), ChatRoute.Channel(channel), ChatRoute.Room(room)),
+            rig.deps.navigation.acknowledgedRoutes,
+        )
         assertNull(rig.deps.navigation.pendingChatContact.value)
+        assertNull(rig.deps.navigation.pendingChannel.value)
+        assertNull(rig.deps.navigation.pendingRoomSession.value)
     }
 
     @Test

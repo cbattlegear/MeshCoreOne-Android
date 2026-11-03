@@ -68,9 +68,8 @@ interface ChatListNavigation {
     val pendingChannel: StateFlow<ChannelDTO?>
     val pendingRoomSession: StateFlow<RemoteNodeSessionDTO?>
     val pendingRoomAuthentication: StateFlow<RemoteNodeSessionDTO?>
-    fun clearPendingChatContact()
-    fun clearPendingChannel()
-    fun clearPendingRoomSession()
+    /** Acknowledges only when the shell still owns this route as its current pending hand-off. */
+    fun acknowledgePendingRoute(route: ChatRoute): Boolean
     fun clearPendingRoomAuthentication()
 }
 

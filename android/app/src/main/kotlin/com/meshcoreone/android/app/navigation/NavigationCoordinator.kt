@@ -16,6 +16,7 @@ import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.model.snapshotMap
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.feature.chats.list.ChatRoute
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -30,6 +31,12 @@ interface NavigationLookup {
     suspend fun channel(radioId: RadioId, index: UByte): ChannelDTO?
     suspend fun room(key: EntityKey): RemoteNodeSessionDTO?
 }
+
+internal data class NavigationCleanupOwner(
+    val sessionToken: SessionToken?,
+    val radioId: RadioId?,
+    val generation: Long,
+)
 
 class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private val mutableState = NavigationStateStore(initial)
@@ -126,6 +133,33 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         it.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
             pendingRoomSession = session, chatsSelectedRoute = selection, tabBarVisible = false,
         )
+    }
+
+    internal fun acknowledgePendingChatRoute(route: ChatRoute): Boolean {
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
+            val selection = when (route) {
+                is ChatRoute.Direct -> ChatSelection.Direct(route.contact)
+                is ChatRoute.Channel -> ChatSelection.Channel(route.channel)
+                is ChatRoute.Room -> ChatSelection.Room(route.session)
+            }
+            val ownsHandoff = current.selectedTab == AppTab.CHATS &&
+                current.chatsSelectedRoute == selection &&
+                current.stacks.getValue(AppTab.CHATS).last().destination == NavigationDestination.Chat(selection) &&
+                when (route) {
+                    is ChatRoute.Direct -> current.pendingChatContact == route.contact
+                    is ChatRoute.Channel -> current.pendingChannel == route.channel
+                    is ChatRoute.Room -> current.pendingRoomSession == route.session
+                }
+            if (!ownsHandoff) return false
+            val next = when (route) {
+                is ChatRoute.Direct -> current.copy(pendingChatContact = null)
+                is ChatRoute.Channel -> current.copy(pendingChannel = null)
+                is ChatRoute.Room -> current.copy(pendingRoomSession = null)
+            }
+            if (mutableState.compareAndSet(snapshot, next)) return true
+        }
     }
 
     fun requestRoomAuthentication(session: RemoteNodeSessionDTO) = mutableState.update { current ->
@@ -361,6 +395,37 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     fun clearPerRadioSelection() = mutableState.update {
         clearRadioSelection(it).copy(generation = Math.incrementExact(it.generation))
+    }
+
+    internal fun captureCleanupOwner(): NavigationCleanupOwner = mutableState.value.let {
+        NavigationCleanupOwner(it.boundSessionToken, it.radioId, it.generation)
+    }
+
+    internal fun clearPendingLinksIfCurrent(owner: NavigationCleanupOwner): Boolean {
+        while (true) {
+            val publication = NavigationStateStore.Publication()
+            var result: Boolean? = null
+            try {
+                commitBoundary {
+                    val snapshot = mutableState.snapshot()
+                    val current = snapshot.value
+                    if (current.boundSessionToken != owner.sessionToken || current.radioId != owner.radioId ||
+                        current.generation != owner.generation
+                    ) {
+                        result = false
+                    } else {
+                        val next = clearRadioSelection(current).copy(
+                            generation = Math.incrementExact(current.generation),
+                            pendingContactLink = null, pendingChannelLink = null, pendingHashtag = null,
+                        )
+                        if (mutableState.compareAndSet(snapshot, next, publication)) result = true
+                    }
+                }
+            } finally {
+                if (result == true) mutableState.release(publication)
+            }
+            if (result != null) return result == true
+        }
     }
 
     fun clearPendingLinks() = mutableState.update {

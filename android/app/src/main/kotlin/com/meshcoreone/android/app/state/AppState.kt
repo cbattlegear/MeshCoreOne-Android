@@ -451,6 +451,11 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     /** Per-session teardown for connection loss and explicit disconnect; the coordinator registry stays. */
     fun tearDownAppStateSessionState() {
+        tearDownAppStateSessionJobs()
+        navigation.clearPendingLinks()
+    }
+
+    private fun tearDownAppStateSessionJobs() {
         val cancelled = synchronized(lock) {
             listOfNotNull(settingsEventsJob, syncDataEventsJob, advertisementEventsJob, rxLogEventsJob).also {
                 settingsEventsJob = null; syncDataEventsJob = null; advertisementEventsJob = null; rxLogEventsJob = null
@@ -458,7 +463,6 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         }
         cancelled.forEach(Job::cancel)
         messageEventDispatcher.cancelAll()
-        navigation.clearPendingLinks()
     }
 
     /** Wire services-dependent callbacks after a connection (or reset UI state after a loss). */
@@ -775,9 +779,11 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     /** Disconnect from the device; explicit disconnect runs the same per-session teardown the loss path performs. */
     suspend fun disconnect(reason: RuntimeDisconnectReason = RuntimeDisconnectReason.USER_INITIATED) {
+        val retiringOwner = navigation.captureCleanupOwner()
         connection.disconnect(reason)
         deps.platform.onDisconnectRequested()
-        tearDownAppStateSessionState()
+        if (!navigation.clearPendingLinksIfCurrent(retiringOwner)) return
+        tearDownAppStateSessionJobs()
     }
 
     /** Connect via WiFi/TCP. */

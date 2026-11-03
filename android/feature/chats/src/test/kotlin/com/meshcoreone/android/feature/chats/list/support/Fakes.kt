@@ -18,6 +18,7 @@ import com.meshcoreone.android.feature.chats.list.ChatListDataSource
 import com.meshcoreone.android.feature.chats.list.ChatListEvent
 import com.meshcoreone.android.feature.chats.list.ChatListFeatureDependencies
 import com.meshcoreone.android.feature.chats.list.ChatListNavigation
+import com.meshcoreone.android.feature.chats.list.ChatRoute
 import com.meshcoreone.android.feature.chats.list.ChatReactionClassifier
 import com.meshcoreone.android.feature.chats.list.ChannelLinkResult
 import com.meshcoreone.android.feature.chats.list.ContactLinkResult
@@ -104,9 +105,22 @@ internal class FakeNavigation : ChatListNavigation {
     override val pendingChannel = MutableStateFlow<ChannelDTO?>(null)
     override val pendingRoomSession = MutableStateFlow<RemoteNodeSessionDTO?>(null)
     override val pendingRoomAuthentication = MutableStateFlow<RemoteNodeSessionDTO?>(null)
-    override fun clearPendingChatContact() { pendingChatContact.value = null }
-    override fun clearPendingChannel() { pendingChannel.value = null }
-    override fun clearPendingRoomSession() { pendingRoomSession.value = null }
+    val acknowledgedRoutes = mutableListOf<ChatRoute>()
+    override fun acknowledgePendingRoute(route: ChatRoute): Boolean {
+        val matched = when (route) {
+            is ChatRoute.Direct -> pendingChatContact.value == route.contact
+            is ChatRoute.Channel -> pendingChannel.value == route.channel
+            is ChatRoute.Room -> pendingRoomSession.value == route.session
+        }
+        if (!matched) return false
+        when (route) {
+            is ChatRoute.Direct -> pendingChatContact.value = null
+            is ChatRoute.Channel -> pendingChannel.value = null
+            is ChatRoute.Room -> pendingRoomSession.value = null
+        }
+        acknowledgedRoutes += route
+        return true
+    }
     override fun clearPendingRoomAuthentication() { pendingRoomAuthentication.value = null }
 }
 

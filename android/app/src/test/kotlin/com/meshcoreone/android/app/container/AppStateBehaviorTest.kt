@@ -5,6 +5,8 @@
 // PortedFrom: MC1Tests/State/SystemPairingSetupAppStateTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.container
 
+import com.meshcoreone.android.app.navigation.ChannelLinkRequest
+import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.state.AppStatePlaceholder
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.app.state.MessageEventStream
@@ -14,9 +16,14 @@ import com.meshcoreone.android.core.connectivity.pairing.PairingError
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairingSetupPrompt
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.OCVPreset
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RegionSelection
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.runtime.LinkFailure
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
@@ -233,12 +240,61 @@ class AppStateBehaviorTest {
     @OriginalCase("LifecycleTransitionTests::Explicit disconnect runs the per-session teardown the loss path performs()")
     @Test fun explicitDisconnectTearsDownSession() = runTest {
         val state = appStateOf(backgroundScope)
+        val radio = RadioId(UUID.fromString("00000000-0000-0000-0000-000000000031"))
+        val token = SessionToken(
+            ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000032")),
+            Generation(1),
+            radio,
+        )
+        assertTrue(state.navigation.bindNotificationSession(radio, null, token))
+        state.navigation.setNavigationReady(true)
         state.installSettingsEventsJobForTesting(backgroundScope.launch { delay(60_000) })
         state.navigation.navigateToDiscovery()
+        state.navigation.stageChannelLink(ChannelLinkRequest("Channel", Bytes(byteArrayOf(1))))
+        state.navigation.stageHashtag(HashtagJoinRequest("channel"))
         assertTrue(state.navigation.state.value.nodesShowingDiscovery)
         state.disconnect()
         assertFalse(state.hasSettingsEventsJob)
         assertFalse(state.navigation.state.value.nodesShowingDiscovery)
+        assertNull(state.navigation.state.value.pendingChannelLink)
+        assertNull(state.navigation.state.value.pendingHashtag)
+        assertEquals(2L, state.navigation.state.value.generation)
+    }
+
+    @Test fun suspendedDisconnectCannotTearDownSameRadioReplacement() = runTest {
+        val port = FakeConnectionPort()
+        val disconnect = CompletableDeferred<Unit>()
+        port.disconnectAction = { disconnect.await() }
+        val state = appStateOf(backgroundScope, port = port)
+        val radio = RadioId(UUID.fromString("00000000-0000-0000-0000-000000000033"))
+        val epoch = ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000034"))
+        val tokenA = SessionToken(epoch, Generation(1), radio)
+        val tokenB = SessionToken(epoch, Generation(2), radio)
+        assertTrue(state.navigation.bindNotificationSession(radio, null, tokenA))
+        state.navigation.setNavigationReady(true)
+        state.navigation.navigateToDiscovery()
+        state.installSettingsEventsJobForTesting(backgroundScope.launch { delay(60_000) })
+
+        val disconnectJob = async { state.disconnect() }
+        runCurrent()
+
+        assertTrue(state.navigation.bindNotificationSession(radio, null, tokenB))
+        state.navigation.stageChannelLink(ChannelLinkRequest("Replacement", Bytes(byteArrayOf(2))))
+        state.navigation.stageHashtag(HashtagJoinRequest("replacement"))
+        state.navigation.setNavigationReady(true)
+        port.connectionState = DeviceConnectionState.CONNECTED
+        val replacement = state.navigation.state.value
+        disconnect.complete(Unit)
+        disconnectJob.await()
+
+        assertEquals(replacement, state.navigation.state.value)
+        assertEquals(tokenB, state.navigation.state.value.boundSessionToken)
+        assertTrue(state.navigation.state.value.navigationReady)
+        assertTrue(state.navigation.state.value.nodesShowingDiscovery)
+        assertNotNull(state.navigation.state.value.pendingChannelLink)
+        assertNotNull(state.navigation.state.value.pendingHashtag)
+        assertTrue(state.hasSettingsEventsJob)
+        assertEquals(DeviceConnectionState.CONNECTED, port.connectionState)
     }
 
     @OriginalCase("LifecycleTransitionTests::rapid background-active bounces keep BLE transitions ordered()")

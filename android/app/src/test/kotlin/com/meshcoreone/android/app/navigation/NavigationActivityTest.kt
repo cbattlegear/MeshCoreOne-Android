@@ -18,10 +18,13 @@ import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationContentTap
+import com.meshcoreone.android.platform.notifications.messaging.NotificationContentTapResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -76,40 +79,79 @@ class NavigationActivityTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Config(application = Application::class)
-    @Test fun notificationContentIntentsSurviveHostRecreationWithoutReplayingAndNewTapsRemainDistinct() = runTest {
+    @Test fun forgedNotificationPayloadsOnInitialAndNewLauncherIntentsAreIgnored() = runTest {
         val context = ApplicationProvider.getApplicationContext<Application>()
         val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
         val radio = RadioId(UUID.randomUUID())
         val contact = EntityKey(radio, UUID.randomUUID())
         val message = UUID.randomUUID()
-        val response = NotificationResponse(NotificationPayload.DirectMessage(contact, message), null, null)
         val delivered = mutableListOf<NotificationResponse>()
         AndroidMessagingNotificationDelivery(context, scope) { delivered += it; true }
-        val intent = Intent(context, MainActivity::class.java)
-            .setAction("com.meshcoreone.android.notification.OPEN")
-            .setData(Uri.parse("meshcore-notification://action/example/OPEN"))
-            .putExtra("mc1.notification.type", "direct")
-            .putExtra("mc1.notification.contact.radio", radio.value.toString())
-            .putExtra("mc1.notification.contact.id", contact.id.toString())
-            .putExtra("mc1.notification.message", message.toString())
+        val intent = notificationLauncherIntent(context, radio, contact.id, message)
         val controller = Robolectric.buildActivity(MainActivity::class.java, intent).setup().visible()
         try {
             testScheduler.runCurrent()
-            assertEquals(listOf(response), delivered)
+            assertTrue(delivered.isEmpty(), "An exported launcher intent is not a trusted notification entry point")
             controller.recreate()
             testScheduler.runCurrent()
-            assertEquals(listOf(response), delivered)
-
             controller.newIntent(Intent(intent))
             testScheduler.runCurrent()
-            assertEquals(listOf(response, response), delivered)
-            controller.recreate()
-            testScheduler.runCurrent()
-            assertEquals(listOf(response, response), delivered)
+            assertTrue(delivered.isEmpty(), "A forged onNewIntent payload must not enter the action queue")
         } finally {
             controller.pause().stop().destroy()
             scope.cancel()
             testScheduler.runCurrent()
         }
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Config(application = Application::class)
+    @Test fun contentTapQueueReportsCapacityWithoutDroppingAcceptedResponses() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val radio = RadioId(UUID.randomUUID())
+        val contact = EntityKey(radio, UUID.randomUUID())
+        val message = UUID.randomUUID()
+        val response = NotificationResponse(NotificationPayload.DirectMessage(contact, message), null, null)
+        val delivered = mutableListOf<NotificationResponse>()
+        AndroidMessagingNotificationDelivery(context, scope) {
+            entered.complete(Unit)
+            release.await()
+            delivered += it
+            true
+        }
+        val intent = notificationLauncherIntent(context, radio, contact.id, message)
+            .setAction("com.meshcoreone.android.notification.OPEN")
+        try {
+            repeat(32) {
+                assertEquals(NotificationContentTapResult.ENQUEUED, NotificationContentTap.enqueue(Intent(intent)))
+            }
+            assertEquals(NotificationContentTapResult.QUEUE_FULL, NotificationContentTap.enqueue(Intent(intent)))
+
+            testScheduler.runCurrent()
+            assertTrue(entered.isCompleted, "Accepted queue items remain available to the installed consumer")
+            release.complete(Unit)
+            testScheduler.runCurrent()
+            assertEquals(List(32) { response }, delivered)
+        } finally {
+            release.complete(Unit)
+            scope.cancel()
+            testScheduler.runCurrent()
+        }
+    }
+
+    private fun notificationLauncherIntent(
+        context: Application,
+        radio: RadioId,
+        contactId: UUID,
+        messageId: UUID,
+    ) = Intent(context, MainActivity::class.java)
+        .setAction("com.meshcoreone.android.notification.OPEN")
+        .setData(Uri.parse("meshcore-notification://action/example/OPEN"))
+        .putExtra("mc1.notification.type", "direct")
+        .putExtra("mc1.notification.contact.radio", radio.value.toString())
+        .putExtra("mc1.notification.contact.id", contactId.toString())
+        .putExtra("mc1.notification.message", messageId.toString())
 }

@@ -15,6 +15,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.feature.chats.list.ChatRoute
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -97,6 +98,99 @@ class NavigationStateTest {
         store.update { initial }
         assertSame(initial, store.value)
         assertFalse(store.compareAndSet(stale, initial.copy(selectedTab = AppTab.MAP)))
+    }
+
+    @Test fun pendingLinkCleanupRejectsSameRadioReplacementAdoptedAtCommitBoundary() {
+        val n = NavigationCoordinator()
+        val epoch = ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000021"))
+        val tokenA = SessionToken(epoch, Generation(1), radio)
+        val tokenB = SessionToken(epoch, Generation(2), radio)
+        assertTrue(n.bindNotificationSession(radio, null, tokenA))
+        n.setNavigationReady(true)
+        n.navigateToDiscovery()
+        n.navigateToChat(contact)
+        val retiringOwner = n.captureCleanupOwner()
+
+        var replaceAtBoundary = true
+        var replacement: NavigationState? = null
+        n.installCommitBoundary { action ->
+            if (replaceAtBoundary) {
+                replaceAtBoundary = false
+                assertTrue(n.bindNotificationSession(radio, null, tokenB))
+                n.stageContactLink(
+                    ContactLinkRequest("Replacement", Bytes(byteArrayOf(1)), ContactType.CONTACT),
+                    radio,
+                )
+                n.stageChannelLink(ChannelLinkRequest("Replacement", Bytes(byteArrayOf(2))))
+                n.stageHashtag(HashtagJoinRequest("replacement"))
+                n.setNavigationReady(true)
+                replacement = n.state.value
+            }
+            action()
+        }
+
+        assertFalse(n.clearPendingLinksIfCurrent(retiringOwner))
+        assertEquals(replacement, n.state.value)
+        assertEquals(tokenB, n.state.value.boundSessionToken)
+        assertNotNull(n.state.value.pendingContactLink?.deliveryId)
+        assertNotNull(n.state.value.pendingChannelLink)
+        assertNotNull(n.state.value.pendingHashtag)
+        assertEquals(ChatSelection.Direct(contact), n.state.value.chatsSelectedRoute)
+        assertTrue(n.state.value.nodesShowingDiscovery)
+    }
+
+    @Test fun pendingLinkCleanupHandlesUnboundStateAndRejectsItsFirstBinding() {
+        val unbound = NavigationCoordinator()
+        unbound.stageChannelLink(ChannelLinkRequest("Initial", Bytes(byteArrayOf(3))))
+        unbound.stageHashtag(HashtagJoinRequest("initial"))
+        val retiringOwner = unbound.captureCleanupOwner()
+        assertNull(retiringOwner.sessionToken)
+        assertNull(retiringOwner.radioId)
+        assertEquals(0, retiringOwner.generation)
+
+        val token = SessionToken(
+            ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000022")),
+            Generation(1),
+            radio,
+        )
+        assertTrue(unbound.bindNotificationSession(radio, null, token))
+        unbound.setNavigationReady(true)
+        val replacement = unbound.state.value
+        assertFalse(unbound.clearPendingLinksIfCurrent(retiringOwner))
+        assertEquals(replacement, unbound.state.value)
+
+        val stillUnbound = NavigationCoordinator()
+        stillUnbound.stageChannelLink(ChannelLinkRequest("Initial", Bytes(byteArrayOf(4))))
+        val initialOwner = stillUnbound.captureCleanupOwner()
+        assertTrue(stillUnbound.clearPendingLinksIfCurrent(initialOwner))
+        assertNull(stillUnbound.state.value.pendingChannelLink)
+        assertEquals(1L, stillUnbound.state.value.generation)
+    }
+
+    @Test fun staleDirectChannelAndRoomHandoffsCannotOverrideANewerChatSelection() {
+        val newerContact = contact.copy(
+            id = UUID.fromString("00000000-0000-0000-0000-000000000023"),
+            name = "Newer",
+        )
+        val staleRoutes = listOf(
+            ChatRoute.Direct(contact),
+            ChatRoute.Channel(channel),
+            ChatRoute.Room(room),
+        )
+        staleRoutes.forEach { staleRoute ->
+            val n = NavigationCoordinator()
+            when (staleRoute) {
+                is ChatRoute.Direct -> n.navigateToChat(staleRoute.contact)
+                is ChatRoute.Channel -> n.navigateToChannel(staleRoute.channel)
+                is ChatRoute.Room -> n.navigateToRoom(staleRoute.session)
+            }
+            n.navigateToChat(newerContact)
+            val newerState = n.state.value
+
+            assertFalse(n.acknowledgePendingChatRoute(staleRoute))
+            assertEquals(newerState, n.state.value)
+            assertEquals(ChatSelection.Direct(newerContact), n.state.value.chatsSelectedRoute)
+        }
     }
 
     @Test fun guardedNavigationPublishesOnlyAfterReleasingTheLifecycleBoundary() = runTest {

@@ -203,9 +203,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             override val pendingRoomAuthentication = navigationFlow { state ->
                 state.pendingRoomAuthentication?.takeIf { state.selectedTab == AppTab.CHATS }
             }
-            override fun clearPendingChatContact() = container.navigation.clearPendingNavigation()
-            override fun clearPendingChannel() = container.navigation.clearPendingChannelNavigation()
-            override fun clearPendingRoomSession() = container.navigation.clearPendingRoomNavigation()
+            override fun acknowledgePendingRoute(route: ChatRoute) =
+                container.navigation.acknowledgePendingChatRoute(route)
             override fun clearPendingRoomAuthentication() = container.navigation.clearPendingRoomAuthentication()
         }
         override val links = object : ChatLinkEnvironment {

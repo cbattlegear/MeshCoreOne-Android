@@ -416,7 +416,97 @@ class RemoteNodesComposeTest {
         input.assertTextContains("reboot")
         input.performKeyInput { pressKey(Key.Enter) }
         compose.onNodeWithTag("remote-cli-confirm").performClick()
-        compose.onNodeWithText(resources.value.getString(L.remoteNodesNodeCliRebootSent)).assertExists()
+        compose.onNodeWithText(resources.value.getString(L.remoteNodesNodeCliRebootSent))
+            .assertExists()
+            .assert(SemanticsMatcher.expectValue(
+                SemanticsProperties.StateDescription, resources.value.getString(L.remoteNodesSettingsSuccess),
+            ))
+    }
+
+    @Test fun nativeCliOutputTypesPreserveTextAndExposeSuccessErrorAndNeutralSemantics() {
+        val requests = mutableListOf<Pair<String, kotlin.time.Duration>>()
+        lateinit var colors: androidx.compose.material3.ColorScheme
+        host.get().setContent {
+            MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
+                colors = androidx.compose.material3.MaterialTheme.colorScheme
+                AppRemoteNodeCli(fixture.session, { _, command, timeout ->
+                    requests += command to timeout
+                    when (command) {
+                        "reboot" -> throw RemoteNodeError.Timeout()
+                        "set tx 22" -> throw RemoteNodeError.PermissionDenied()
+                        "rebootnow" -> "Unknown command"
+                        else -> error("Unexpected fixture command: $command")
+                    }
+                }, true)
+            }
+        }
+        fun send(command: String) {
+            val input = compose.onNodeWithTag("remote-cli-input")
+            input.performClick().performTextReplacement(command)
+            input.performKeyInput { pressKey(Key.Enter) }
+            compose.onNodeWithTag("remote-cli-confirm").performClick()
+            compose.waitForIdle()
+        }
+        fun layout(node: SemanticsNodeInteraction): TextLayoutResult {
+            val results = mutableListOf<TextLayoutResult>()
+            node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(results)) }
+            return results.single()
+        }
+        send("reboot")
+        val success = compose.onNodeWithText(text(L.remoteNodesNodeCliRebootSent))
+        success.assert(SemanticsMatcher.expectValue(
+            SemanticsProperties.StateDescription, text(L.remoteNodesSettingsSuccess),
+        )).assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Error))
+        assertEquals(androidx.compose.ui.text.font.FontWeight.Bold, layout(success).layoutInput.style.fontWeight)
+        assertEquals(colors.primary, layout(success).layoutInput.style.color)
+        send("set tx 22")
+        val failure = compose.onNodeWithText("Permission denied")
+        failure.assert(SemanticsMatcher.expectValue(SemanticsProperties.Error, "Permission denied"))
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
+        assertEquals(androidx.compose.ui.text.font.FontStyle.Italic, layout(failure).layoutInput.style.fontStyle)
+        assertEquals(colors.error, layout(failure).layoutInput.style.color)
+        send("rebootnow")
+        val response = compose.onNodeWithText("Unknown command")
+        response.assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Error))
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
+        assertEquals(androidx.compose.ui.text.font.FontWeight.Normal, layout(response).layoutInput.style.fontWeight)
+        assertEquals(androidx.compose.ui.text.font.FontStyle.Normal, layout(response).layoutInput.style.fontStyle)
+        assertEquals(colors.onSurface, layout(response).layoutInput.style.color)
+        val commands = listOf("reboot", "set tx 22", "rebootnow").map { command ->
+            "@${fixture.session.name}${text(AppToolsStrings.toolsCliPromptSuffix)} $command"
+        }
+        commands.forEach { command ->
+            val line = compose.onNodeWithText(command)
+            line.assertIsDisplayed().assertTextEquals(command)
+                .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Error))
+                .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
+            val style = layout(line).layoutInput.style
+            assertEquals(androidx.compose.ui.text.font.FontWeight.Normal, style.fontWeight)
+            assertEquals(androidx.compose.ui.text.font.FontStyle.Normal, style.fontStyle)
+            assertEquals(androidx.compose.ui.text.font.FontFamily.Monospace, style.fontFamily)
+            assertEquals(colors.onSurfaceVariant, style.color)
+        }
+        val expectedLines = listOf(
+            commands[0], text(L.remoteNodesNodeCliRebootSent),
+            commands[1], "Permission denied",
+            commands[2], "Unknown command",
+        )
+        val bounds = expectedLines.map { line ->
+            compose.onNodeWithText(line).assertIsDisplayed().assertTextEquals(line)
+                .fetchSemanticsNode().boundsInRoot
+        }
+        bounds.zipWithNext().forEachIndexed { index, (before, after) ->
+            assertTrue(
+                "Retained terminal line '${expectedLines[index]}' must precede '${expectedLines[index + 1]}'",
+                before.top < after.top && before.bottom <= after.top,
+            )
+        }
+        assertEquals(
+            listOf("reboot" to kotlin.time.Duration.parse("2s"),
+                "set tx 22" to kotlin.time.Duration.parse("10s"),
+                "rebootnow" to kotlin.time.Duration.parse("10s")),
+            requests,
+        )
     }
 
     private fun capture(id: String) {

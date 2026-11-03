@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -25,6 +26,39 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PendingExternalRouteTest {
+    @Test
+    fun computedFailureSurvivesSubmitterCancellationBeforeAwaitConsumption() = runTest {
+        val failure = IllegalStateException("store unavailable")
+        lateinit var submission: Job
+        var fail = true
+        var calls = 0
+        val pending = PendingExternalRoute {
+            calls++
+            if (fail) {
+                val computed = DeepLinkRouteOutcome.ContactLookupFailed(failure)
+                submission.cancel()
+                computed
+            } else DeepLinkRouteOutcome.Navigated
+        }
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("A", "contact-A")
+        submission = launch(start = CoroutineStart.LAZY) { pending.submit(delivery) }
+        submission.start()
+        submission.join()
+        assertTrue(submission.isCancelled)
+        val observed = assertNotNull(pending.lookupFailure.value)
+        assertEquals("A", observed.deliveryId)
+        assertEquals(failure, observed.cause)
+        assertEquals(delivery, pending.snapshot())
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
+        fail = false
+        assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.retry(observed.deliveryId, observed.attempt))
+        assertNull(pending.lookupFailure.value)
+        assertNull(pending.snapshot())
+        assertEquals(setOf("A"), pending.consumedDeliveryIds())
+        assertEquals(2, calls)
+    }
+
     @Test
     fun lookupFailureCanRetryOnceWithItsExactObservedAttempt() = runTest {
         var fail = true

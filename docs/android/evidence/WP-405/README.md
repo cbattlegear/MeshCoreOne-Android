@@ -28,6 +28,17 @@ localized failure/Try Again/Cancel consumer, passing both observed identity
 fields. There is no automatic retry policy or durable delivery guarantee.
 **Issue #544 is not end-to-end complete or runtime-verified.**
 
+Source review of `ab5ae0cde3a7753cc93ae0b32cea1aadc90be8b2` found
+a cancellation window between the child computing a failure and the parent
+consuming `await()`. The follow-up records the child outcome in an atomic
+attempt-local cell before the child returns. Non-cancellable cleanup joins
+the child and publishes that cell only if the same routing still owns the
+pending delivery and no commit occurred. A canceled parent therefore cannot
+hide a computed failure; a superseded child still cannot publish over B.
+One additional deterministic schedule cancels the submitter after computing
+the failure but before parent consumption, then retries the retained exact
+attempt. It is authored, uncompiled and unexecuted.
+
 The external adapter now calls `container.processStore.fetchContact` with the
 captured radio and public key, rather than the last-device-preference-gated
 `offlineDataStore`. This removes a source-derived false-absence window before

@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.deeplinks
 
 import com.meshcoreone.android.core.model.SnapshotSet
 import com.meshcoreone.android.core.model.snapshotSet
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
@@ -98,9 +99,11 @@ class PendingExternalRoute(
             mutableLookupFailure.value = null
             val guard = CommitGuard()
             attemptSequence = Math.incrementExact(attemptSequence)
-            Routing(next, attemptSequence, guard, async(guard, start = CoroutineStart.LAZY) {
+            val lookupFailure = AtomicReference<DeepLinkRouteOutcome.ContactLookupFailed?>(null)
+            Routing(next, attemptSequence, guard, lookupFailure, async(guard, start = CoroutineStart.LAZY) {
                 route(next.uri).also {
-                    if (it !is DeepLinkRouteOutcome.ContactLookupFailed) guard.recordCompletion()
+                    if (it is DeepLinkRouteOutcome.ContactLookupFailed) lookupFailure.set(it)
+                    else guard.recordCompletion()
                 }
             })
                 .also { inFlight = it }
@@ -112,7 +115,6 @@ class PendingExternalRoute(
                 if (routing.superseded) {
                     SubmitOutcome.Superseded
                 } else if (outcome is DeepLinkRouteOutcome.ContactLookupFailed) {
-                    routing.lookupFailure = outcome
                     SubmitOutcome.RetryableFailure(outcome)
                 } else {
                     pending = null
@@ -134,7 +136,7 @@ class PendingExternalRoute(
                             rememberConsumed(routing.delivery.id)
                         }
                         inFlight = null
-                        routing.lookupFailure?.let {
+                        routing.lookupFailure.get()?.let {
                             if (!routing.guard.wasCommitted() && pending?.id == routing.delivery.id) {
                                 mutableLookupFailure.value = LookupFailure(
                                     routing.delivery.id, routing.attempt, it.cause,
@@ -180,10 +182,10 @@ class PendingExternalRoute(
         val delivery: Delivery,
         val attempt: Long,
         val guard: CommitGuard,
+        val lookupFailure: AtomicReference<DeepLinkRouteOutcome.ContactLookupFailed?>,
         val execution: Deferred<DeepLinkRouteOutcome>,
     ) {
         var superseded = false
-        var lookupFailure: DeepLinkRouteOutcome.ContactLookupFailed? = null
     }
 
     private companion object {

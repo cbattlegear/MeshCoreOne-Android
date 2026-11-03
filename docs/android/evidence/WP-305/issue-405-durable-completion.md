@@ -39,9 +39,11 @@
 - New mounted real-shell regressions hold radio apply and completion persistence separately. They
   verify toolbar Up, adaptive-rail tab selection, and onboarding's mounted system-Back handler keep
   the busy rerun mounted; failures remain visible, completion retry does not reapply the preset,
-  and ordinary navigation resumes after successful completion. `NavDisplay.onBack` also uses the
-  same guard. With an active onboarding path, the flow's BackHandler is the reachable system-Back
-  entry and consumes Back before the shell callback; a busy flow cannot normally have an empty path.
+  and ordinary navigation resumes after successful completion. The held-commit regression asserts
+  the unique completion-error message and retry control are displayed before retry. `NavDisplay.onBack`
+  also uses the same guard. With an active onboarding path, the flow's BackHandler is the reachable
+  system-Back entry and consumes Back before the shell callback; a busy flow cannot normally have an
+  empty path.
 - The pending permission kind is now saveable across Activity recreation. A denied location result
   queued in an `ActivityResultRegistry`, saved/restored into a new registry after recreation, verifies
   both `DENIED` state and `LocationPermissionResultReporting(false)`.

@@ -224,9 +224,11 @@ class SettingsRerunNavigationTest {
 
             releaseCompletion.complete(Unit)
             flow.preset.state.first { it.completionNeedsRetry }
-            compose.onAllNodesWithText(ApplicationProvider.getApplicationContext<Context>().getString(S.alertRetryUnableToSave))
-                .assertCountEquals(1)
-            compose.onNodeWithText(ApplicationProvider.getApplicationContext<Context>().getString(L.commonTryAgain)).performClick()
+            val completionFailure = ApplicationProvider.getApplicationContext<Context>().getString(S.alertRetryUnableToSave)
+            compose.onAllNodesWithText(completionFailure).assertCountEquals(1)
+            compose.onNodeWithText(completionFailure).assertIsDisplayed()
+            val retryLabel = ApplicationProvider.getApplicationContext<Context>().getString(L.commonTryAgain)
+            compose.onNodeWithText(retryLabel).assertIsDisplayed().performClick()
             compose.waitUntil { navigation.state.value.selectedTab == AppTab.CHATS }
             assertEquals(1, applies)
             assertEquals(2, writes)

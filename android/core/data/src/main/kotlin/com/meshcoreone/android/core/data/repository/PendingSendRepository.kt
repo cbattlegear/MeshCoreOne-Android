@@ -6,11 +6,15 @@ import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import java.util.UUID
+import java.time.Instant
 
 internal class PendingSendRepository(private val context: RoomRepositoryContext) :
-    PendingSendPersisting, QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting {
+    PendingSendPersisting, QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting, ChannelSubmissionPersisting {
     override suspend fun upsertPendingSend(dto: PendingSendDTO) = context.write("upsertPendingSend") {
         val existing = database.pendingSends().byId(dto.radioId.value, dto.id)
+        if (database.channelSubmissions().byId(dto.id) != null && existing == null) {
+            rejectSubmission(EntityKey(dto.radioId, dto.id), ChannelSubmissionConflict.IDENTITY_CONFLICT)
+        }
         val candidate = dto.toEntity()
         if (existing != null && (existing.isChannel || candidate.isChannel)) {
             if (candidate.copy(
@@ -92,6 +96,88 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
 
     override suspend fun hasPendingSend(key: EntityKey): Boolean = context.read("hasPendingSend") {
         database.pendingSends().forMessage(key.radioId.value, key.id).isNotEmpty()
+    }
+
+    override suspend fun admitChannelSubmission(
+        submission: ChannelSubmission, enqueuedAt: Instant,
+    ): ChannelSubmissionEvidence = context.write("admitChannelSubmission") {
+        val identity = EntityKey(submission.origin.radioId, submission.pendingID)
+        val retained = database.channelSubmissions().byId(submission.pendingID)
+        if (retained != null) {
+            requireSubmission(retained, submission)
+            return@write submissionEvidence(retained)
+        }
+        val envelope = submission.envelope
+        if (database.channelSubmissions().hasUnreceiptedIdentity(identity.id)) {
+            rejectSubmission(identity, ChannelSubmissionConflict.UNKNOWN_LEGACY_SUBMISSION)
+        }
+        val message = database.messages().byId(identity.radioId.value, envelope.messageID)
+        if (message == null || message.directionRawValue != MessageDirection.OUTGOING.rawValue ||
+            message.contactID != null || message.channelIndex != envelope.channelIndex.toLong() ||
+            message.channelOccupantID != submission.origin.expectedOccupantID || message.text != envelope.messageText ||
+            message.timestamp != envelope.messageTimestamp.toLong()
+        ) rejectSubmission(identity, ChannelSubmissionConflict.MESSAGE_MISMATCH)
+        val next = checkedIncrement(database.pendingSends().maximumSequence(identity.radioId.value) ?: 0)
+        val pending = newSubmission(PendingSendDTO.fromEnvelope(
+            envelope, identity.radioId, id = identity.id, enqueuedAt = enqueuedAt,
+        ).copy(sequence = next))
+        val receipt = ChannelSubmissionEntity(identity.id, identity.radioId.value, envelope.messageID,
+            envelope.channelIndex.toLong(), submission.origin.expectedOccupantID, envelope.messageText,
+            envelope.messageTimestamp.toLong(), envelope.localNodeName, envelope.isResend,
+            enqueuedAt.epochSecond, enqueuedAt.nano, next, ChannelSubmissionPhase.ADMITTED.rawValue)
+        database.channelSubmissions().insert(receipt)
+        database.pendingSends().upsert(pending)
+        save()
+        submissionEvidence(receipt)
+    }
+
+    override suspend fun reconcileChannelSubmission(submission: ChannelSubmission): ChannelSubmissionReconciliation =
+        context.read("reconcileChannelSubmission") {
+            val retained = database.channelSubmissions().byId(submission.pendingID)
+                ?: return@read ChannelSubmissionReconciliation.Unknown(ChannelSubmissionUnknown.ABSENT)
+            if (retained.phaseRawValue == 3L) {
+                return@read ChannelSubmissionReconciliation.Unknown(ChannelSubmissionUnknown.REDACTED)
+            }
+            requireSubmission(retained, submission)
+            ChannelSubmissionReconciliation.Known(submissionEvidence(retained))
+        }
+
+    private fun requireSubmission(row: ChannelSubmissionEntity, submission: ChannelSubmission) {
+        val identity = EntityKey(submission.origin.radioId, submission.pendingID)
+        if (row.phaseRawValue == 3L) rejectSubmission(identity, ChannelSubmissionConflict.REDACTED_SUBMISSION)
+        if (row.radioId != identity.radioId.value || row.messageID != submission.envelope.messageID ||
+            row.channelIndex != submission.origin.channelIndex.toLong() ||
+            row.channelOccupantID != submission.origin.expectedOccupantID ||
+            row.messageText != submission.envelope.messageText ||
+            row.messageTimestamp != submission.envelope.messageTimestamp.toLong() ||
+            row.localNodeName != submission.envelope.localNodeName || row.isResend != submission.envelope.isResend
+        ) rejectSubmission(identity, ChannelSubmissionConflict.IDENTITY_CONFLICT)
+    }
+
+    private suspend fun RepositoryTransaction.submissionEvidence(row: ChannelSubmissionEntity): ChannelSubmissionEvidence {
+        val phase = ChannelSubmissionPhase.entries.firstOrNull { it.rawValue == row.phaseRawValue }
+            ?: throw DatabaseValueException("channelSubmission.phase", "Unknown or redacted submission phase")
+        val origin = ChannelHistoryScope(RadioId(row.radioId), row.validatedIndex(), row.channelOccupantID)
+        val text = row.messageText ?: throw DatabaseValueException("channelSubmission.text", "Missing retained intent")
+        val submission = ChannelSubmission(row.pendingID, origin, ChannelMessageEnvelope(row.messageID, origin.channelIndex,
+            row.isResend, text, row.validatedTimestamp(), row.localNodeName, row.channelOccupantID))
+        val pending = database.pendingSends().byId(row.radioId, row.pendingID)?.toDTO()
+        if (pending != null && (pending.radioId != origin.radioId || pending.channelMessageEnvelope() != submission.envelope)) {
+            rejectSubmission(EntityKey(origin.radioId, row.pendingID), ChannelSubmissionConflict.IDENTITY_CONFLICT)
+        }
+        return ChannelSubmissionEvidence(submission, row.enqueuedAt(),
+            row.sequence, phase, pending,
+            database.queuedChannelAttempts().forPending(row.radioId, row.pendingID).map { it.toDTO() }.snapshot())
+    }
+
+    private fun rejectSubmission(identity: EntityKey, reason: ChannelSubmissionConflict): Nothing =
+        throw PersistenceStoreException(PersistenceStoreError.InvalidData, ChannelSubmissionRejected(identity, reason))
+
+    private suspend fun RepositoryTransaction.finishSubmission(key: QueuedChannelAttemptKey, phase: ChannelSubmissionPhase) {
+        if (database.channelSubmissions().byId(key.pendingID) == null) return
+        if (database.channelSubmissions().finish(key.pendingID, key.radioId.value, key.messageID, phase.rawValue) != 1) {
+            rejectSubmission(EntityKey(key.radioId, key.pendingID), ChannelSubmissionConflict.IDENTITY_CONFLICT)
+        }
     }
 
     override suspend fun incrementPendingSendAttemptCount(key: EntityKey): Long? =
@@ -228,6 +314,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             if (database.queuedChannelAttempts().complete(
                     key.radioId.value, key.pendingID, key.messageID, key.attemptID,
                 ) != 1) reject(key, QueuedChannelAttemptConflict.CONFLICTING_SETTLEMENT)
+            finishSubmission(key, ChannelSubmissionPhase.ACCEPTED_COMPLETED)
             save()
         }
 
@@ -267,6 +354,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
                     failureSeen = if (status == MessageStatus.FAILED) false else message.failureSeen,
                 ))
             }
+            finishSubmission(key, ChannelSubmissionPhase.RETIRED)
             save()
             QueuedChannelRetirement(status, changed)
         }
@@ -279,6 +367,9 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
     private suspend fun RepositoryTransaction.newSubmission(dto: PendingSendDTO, replacing: Set<UUID> = emptySet()): PendingSendEntity {
         val row = dto.toEntity()
         val existing = database.pendingSends().byId(row.radioId, row.id)
+        if (database.channelSubmissions().byId(row.id) != null) {
+            rejectSubmission(EntityKey(dto.radioId, dto.id), ChannelSubmissionConflict.IDENTITY_CONFLICT)
+        }
         if (!row.isChannel) {
             if (existing?.isChannel == true) reject(existing, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
             return row

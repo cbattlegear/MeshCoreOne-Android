@@ -7,6 +7,7 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.canonicalString
 import java.io.File
 import java.util.UUID
@@ -31,6 +32,10 @@ class ChannelOccupantMigrationTest {
         verifyUpgrade(2)
     }
 
+    @Test fun versionThreeDispatchingJournalIsPreservedWithoutInventingSubmissionReceipts() = runTest {
+        verifyUpgrade(3)
+    }
+
     private suspend fun verifyUpgrade(startVersion: Int) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "occupant-upgrade-${UUID.randomUUID()}.db"
@@ -38,7 +43,8 @@ class ChannelOccupantMigrationTest {
         val message = UUID.randomUUID()
         val pending = UUID.randomUUID()
         val channel = UUID.randomUUID()
-        val intended = UUID.randomUUID().takeIf { startVersion == 2 }
+        val intended = UUID.randomUUID().takeIf { startVersion >= 2 }
+        val attempt = UUID.randomUUID()
         val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
             "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}1.json").readText())
             .getJSONObject("database")
@@ -46,7 +52,17 @@ class ChannelOccupantMigrationTest {
             val helper = FrameworkSQLiteOpenHelperFactory().create(
                 SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
                     .callback(object : SupportSQLiteOpenHelper.Callback(startVersion) {
-                        override fun onCreate(db: SupportSQLiteDatabase) { createLegacy(db, schema, radio, channel, message, pending, intended) }
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            createLegacy(db, schema, radio, channel, message, pending, intended)
+                            if (startVersion == 3) {
+                                MeshCoreDatabase.MIGRATION_2_3.migrate(db)
+                                db.execSQL("UPDATE pending_sends SET channelDispatchStateRawValue = 1, channelAttemptID = ? WHERE id = ?",
+                                    arrayOf(attempt.canonicalString(), pending.canonicalString()))
+                                db.execSQL("INSERT INTO queued_channel_attempts (radioId, attemptID, pendingID, messageID, channelIndex, channelOccupantID, wireTimestamp, isResend, phaseRawValue, isCompleted) VALUES (?, ?, ?, ?, 5, ?, 42, 0, 0, 0)",
+                                    arrayOf(radio.canonicalString(), attempt.canonicalString(), pending.canonicalString(),
+                                        message.canonicalString(), assertNotNull(intended).canonicalString()))
+                            }
+                        }
                         override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {
                             error("Legacy fixture must be created at its requested version")
                         }
@@ -65,9 +81,11 @@ class ChannelOccupantMigrationTest {
                 val queue = upgraded.pendingSends().forRadio(radio).single().toDTO()
                 assertEquals("legacy original\n", queue.messageText)
                 assertEquals(intended, assertNotNull(queue.channelMessageEnvelope()).channelOccupantID)
-                assertNull(queue.channelDispatchState)
-                assertNull(queue.channelAttemptID)
-                assertTrue(upgraded.queuedChannelAttempts().forPending(radio, pending).isEmpty())
+                assertEquals(if (startVersion == 3) QueuedChannelDispatchState.DISPATCHING else null, queue.channelDispatchState)
+                assertEquals(attempt.takeIf { startVersion == 3 }, queue.channelAttemptID)
+                val journal = upgraded.queuedChannelAttempts().forPending(radio, pending)
+                assertEquals(if (startVersion == 3) listOf(attempt) else emptyList(), journal.map { it.attemptID })
+                assertNull(upgraded.channelSubmissions().byId(pending))
                 assertEquals(channel, upgraded.channels().forIndex(radio, 5).single().id)
                 assertNull(upgraded.channelOccupants().forIndex(radio, 5))
                 if (intended != null) {
@@ -87,8 +105,9 @@ class ChannelOccupantMigrationTest {
                 assertNotNull(reopened.channelOccupants().forIndex(radio, 5))
                 assertEquals(intended, reopened.messages().byId(RadioId(radio).value, message)?.channelOccupantID)
                 val retained = reopened.pendingSends().forRadio(radio).single()
-                assertNull(retained.channelDispatchStateRawValue)
-                assertNull(retained.channelAttemptID)
+                assertEquals(if (startVersion == 3) 1L else null, retained.channelDispatchStateRawValue)
+                assertEquals(attempt.takeIf { startVersion == 3 }, retained.channelAttemptID)
+                assertNull(reopened.channelSubmissions().byId(pending))
                 assertEquals("legacy original\n", retained.messageText)
             } finally {
                 reopened.close()

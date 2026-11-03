@@ -124,6 +124,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
     private suspend fun RepositoryTransaction.deleteAllDeviceData(id: UUID) {
         val device = database.devices().byId(id) ?: return
         val radioId = RadioId(device.radioId)
+        database.channelSubmissions().redactRadio(radioId.value)
         database.reactions().clearRadio(radioId.value)
         val sessions = database.sessions().forRadio(radioId.value)
         for (session in sessions) {

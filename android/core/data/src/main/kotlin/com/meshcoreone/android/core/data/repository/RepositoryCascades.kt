@@ -16,6 +16,7 @@ internal suspend fun RepositoryTransaction.deleteMessageDependents(
     reactionsByMessage: Boolean,
 ) {
     for (message in messages) {
+        database.channelSubmissions().redactMessage(radioId.value, message.id)
         database.pendingSends().deleteForMessage(radioId.value, message.id)
         database.repeats().deleteForMessage(radioId.value, message.id)
         if (reactionsByMessage) database.reactions().deleteForMessage(radioId.value, message.id)

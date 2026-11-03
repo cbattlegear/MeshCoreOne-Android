@@ -312,6 +312,7 @@ internal class MessageRepository(
     }
 
     override suspend fun deleteMessage(key: EntityKey) = context.write("deleteMessage") {
+        database.channelSubmissions().redactMessage(key.radioId.value, key.id)
         database.pendingSends().deleteForMessage(key.radioId.value, key.id)
         if (database.messages().byId(key.radioId.value, key.id) != null) {
             database.reactions().deleteForMessage(key.radioId.value, key.id)

@@ -205,8 +205,10 @@ class FoundationWorkflowTests(unittest.TestCase):
     def test_only_actual_backup_bytes_cross_the_job_boundary(self):
         steps = self.workflow["jobs"]["build"]["steps"]
         uploads = [step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@")]
-        self.assertEqual(len(uploads), 2)
-        self.assertEqual({step["with"]["path"] for step in uploads}, {
+        self.assertEqual(len(uploads), 4)
+        diagnostics = [step for step in uploads if step["name"].startswith("Retain ")]
+        self.assertEqual(len(diagnostics), 2)
+        self.assertEqual({step["with"]["path"] for step in uploads if step not in diagnostics}, {
             "android/app/build/outputs/apk/debug/app-debug.apk",
             "android/core/data/build/reports/wp203/interop/",
         })
@@ -220,5 +222,13 @@ class FoundationWorkflowTests(unittest.TestCase):
         self.assertEqual(backup["with"]["if-no-files-found"], "error")
         paths = backup["with"]["path"]
         self.assertIn("wp203/interop", paths)
+        for diagnostic in diagnostics:
+            self.assertEqual(diagnostic["continue-on-error"], "true")
+            self.assertIn("success()", diagnostic["if"])
+            self.assertNotEqual(diagnostic["with"]["name"], transfers[0]["with"]["name"])
+            self.assertIn("${{ github.event.pull_request.head.sha || github.sha }}", diagnostic["with"]["name"])
+            self.assertIn("${{ github.run_id }}-${{ github.run_attempt }}", diagnostic["with"]["name"])
+            self.assertEqual(diagnostic["with"]["if-no-files-found"], "error")
+            self.assertEqual(diagnostic["with"]["retention-days"], "7")
         for upload in uploads:
             self.assertNotIn("ci-result", upload["with"]["path"])

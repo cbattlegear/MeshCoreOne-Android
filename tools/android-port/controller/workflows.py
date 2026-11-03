@@ -50,20 +50,31 @@ def validate_boundary(value: dict, text: str):
         raise PortError("Workflow token must have contents:read only")
     if any(word in text for word in ("secrets.", "pull_request_target", "workflow_run", "self-hosted", "--allow-all", "--live")):
         raise PortError("Workflow crosses candidate/privileged execution boundary")
-    for job in value.get("jobs", {}).values():
+    optional_names = {
+        "Retain generated Room v2 schema diagnostic",
+        "Retain original Room foundation JUnit diagnostics",
+        "Report optional Room diagnostic outcomes",
+    }
+    optional = []
+    for job_id, job in value.get("jobs", {}).items():
         if job.get("permissions", {"contents": "read"}) != {"contents": "read"}:
             raise PortError("Job token permissions were elevated")
         if job.get("environment") or job.get("container") or job.get("services"):
             raise PortError("Undeclared environment/shared-service build capability")
         for step in job.get("steps", []):
             if step.get("continue-on-error") == "true":
-                raise PortError("Mandatory failure cannot be converted into success")
+                if job_id != "build" or step.get("name") not in optional_names:
+                    raise PortError("Mandatory failure cannot be converted into success")
+                optional.append(step)
             if "uses" in step:
                 name, separator, pin = step["uses"].partition("@")
                 if not separator or ACTION_PINS.get(name) != pin or re.fullmatch(r"[0-9a-f]{40}", pin) is None:
                     raise PortError("Unreviewed/unpinned workflow action")
                 if name == "actions/checkout" and step.get("with", {}).get("persist-credentials") != "false":
                     raise PortError("Candidate checkout credentials would persist")
+    if optional:
+        # Only this complete exact diagnostic contract may tolerate infrastructure failure.
+        validate_room_diagnostics(value)
 
 
 def validate_candidate(value: dict, text: str):
@@ -161,6 +172,7 @@ def validate_candidate(value: dict, text: str):
         },
     }:
         raise PortError("Debug APK handoff must be successful, scaffold-only, exact-candidate/run-bound and fail on absence")
+    validate_room_diagnostics(value)
     gate_runs = "\n".join(s.get("run", "") for s in gate["steps"])
     gate_environment = {
         key: value for step in gate["steps"] for key, value in step.get("env", {}).items()
@@ -218,6 +230,86 @@ def validate_candidate(value: dict, text: str):
             raise PortError("Expensive jobs must be scope-selected and use default fail-closed dependencies")
     if jobs["external-oracle"].get("needs") != ["scope"]:
         raise PortError("The independent Swift codec oracle must not wait for controller tests")
+
+
+def validate_room_diagnostics(value):
+    jobs = value.get("jobs", {})
+    steps = jobs.get("build", {}).get("steps", [])
+    uploads = [i for i, step in enumerate(steps)
+               if step.get("name") == "Upload inspected debug APK for human testing"]
+    if len(uploads) != 1:
+        raise PortError("Room diagnostics require the existing APK handoff")
+    upload = uploads[0]
+    schema_path = "android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/2.json"
+    junit_paths = [
+        "android/core/database/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.database.ChannelOriginV2MigrationTest.xml",
+        "android/core/database/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.database.RoomBoundaryTest.xml",
+        "android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.backup.BackupTransactionTest.xml",
+        "android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.repository.InitialSchemaMigrationBoundaryTest.xml",
+        "android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.repository.NativeRepositoryBoundaryTest.xml",
+        "android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.repository.UnsignedPathReopenTest.xml",
+    ]
+    diagnostic_steps = [
+        {
+            "name": "Retain generated Room v2 schema diagnostic",
+            "id": "room_schema_diagnostic", "continue-on-error": "true",
+            "if": "${{ success() && hashFiles('"
+                  + schema_path + "') != '' }}",
+            "uses": "actions/upload-artifact@" + ACTION_PINS["actions/upload-artifact"],
+            "with": {
+                "name": "room-v2-schema-${{ github.event.pull_request.head.sha || github.sha }}"
+                        "-${{ github.run_id }}-${{ github.run_attempt }}",
+                "path": schema_path, "if-no-files-found": "error", "retention-days": "7",
+            },
+        },
+        {
+            "name": "Retain original Room foundation JUnit diagnostics",
+            "id": "room_junit_diagnostic", "continue-on-error": "true",
+            "if": "${{ success() && hashFiles("
+                  + ", ".join("'" + path + "'" for path in junit_paths) + ") != '' }}",
+            "uses": "actions/upload-artifact@" + ACTION_PINS["actions/upload-artifact"],
+            "with": {
+                "name": "room-foundation-junit-${{ github.event.pull_request.head.sha || github.sha }}"
+                        "-${{ github.run_id }}-${{ github.run_attempt }}",
+                "path": "\n".join(junit_paths) + "\n",
+                "if-no-files-found": "error", "retention-days": "7",
+            },
+        },
+    ]
+    if steps[upload + 1:upload + 3] != diagnostic_steps or any(
+        sum(step.get("name") == expected["name"] for job in jobs.values() for step in job.get("steps", [])) != 1
+        for expected in diagnostic_steps
+    ):
+        raise PortError("Room diagnostics require same-job finite original paths, exact run identity and no acceptance authority")
+    report = {
+        "name": "Report optional Room diagnostic outcomes", "if": "${{ always() }}",
+        "continue-on-error": "true",
+        "env": {
+            "ROOM_SCHEMA_OUTCOME": "${{ steps.room_schema_diagnostic.outcome }}",
+            "ROOM_JUNIT_OUTCOME": "${{ steps.room_junit_diagnostic.outcome }}",
+        },
+        "run": """$messages = @()
+foreach ($item in @(@('schema', $env:ROOM_SCHEMA_OUTCOME), @('JUnit', $env:ROOM_JUNIT_OUTCOME))) {
+  $label, $outcome = $item
+  switch ($outcome) {
+    'success' { $message = "Room $label diagnostic upload succeeded; retained bytes are not acceptance or complete evidence." }
+    'failure' { $message = "Room $label diagnostic upload FAILED; no usable artifact is established. Existing CI is not blocked by this optional upload." }
+    'skipped' { $message = "Room $label diagnostic upload SKIPPED; output may be missing or the build was not eligible. No artifact is established." }
+    default { $message = "Room $label diagnostic outcome is UNKNOWN ($outcome); no artifact is established." }
+  }
+  if ($outcome -eq 'success') { Write-Output $message } else { Write-Output "::warning::$message" }
+  $messages += $message
+}
+$messages | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+""",
+    }
+    backup = steps[upload + 3:upload + 4]
+    if (
+        len(backup) != 1 or backup[0].get("name") != "Transfer actual backup bytes to the platform oracle"
+        or steps[upload + 4:upload + 5] != [report]
+        or sum(step.get("name") == report["name"] for job in jobs.values() for step in job.get("steps", [])) != 1
+    ):
+        raise PortError("Optional Room diagnostic outcomes must be reported independently after the unchanged backup handoff")
 
 
 def validate_setup(value: dict, text: str):

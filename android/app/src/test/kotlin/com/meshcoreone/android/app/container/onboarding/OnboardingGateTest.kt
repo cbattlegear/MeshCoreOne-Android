@@ -181,7 +181,7 @@ class OnboardingGateTest {
             host.recreate()
             showFlow(dependencies)
             compose.waitForIdle()
-            val afterRecreation = dependencies.retainedFlowCoordinator()
+            val afterRecreation = checkNotNull(dependencies.retainedFlowCoordinator())
             assertSame(flow, afterRecreation)
             assertEquals(presetId, afterRecreation.preset.state.value.selectedId)
             assertTrue(afterRecreation.preset.state.value.isApplying)
@@ -235,7 +235,7 @@ class OnboardingGateTest {
             host.recreate()
             showFlow(dependencies)
             compose.waitForIdle()
-            val afterRecreation = dependencies.retainedFlowCoordinator()
+            val afterRecreation = checkNotNull(dependencies.retainedFlowCoordinator())
             assertSame(flow, afterRecreation)
 
             releaseWrite.complete(Unit)

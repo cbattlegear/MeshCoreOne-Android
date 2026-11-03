@@ -41,7 +41,7 @@ class DeviceScanCoordinatorTest {
     private fun coordinator(
         pairing: FakePairing = FakePairing(), demo: FakeDemo = FakeDemo(), permissions: FakePermissions = FakePermissions(granted),
         onConnected: () -> Unit = {},
-    ) = DeviceScanCoordinator(scope, pairing, demo, permissions, onConnected)
+    ) = DeviceScanCoordinator(scope, pairing, demo, permissions, onConnected = onConnected)
 
     @Test fun pairingSuccessAdvancesAndMarksInitiated() {
         var connected = 0

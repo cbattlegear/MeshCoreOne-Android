@@ -40,8 +40,8 @@ class DeviceScanCoordinator(
     private val pairing: OnboardingPairingPort,
     private val demo: OnboardingDemoPort,
     private val permissions: OnboardingPermissionPort,
-    private val onConnected: () -> Unit,
     private val canStartConnection: () -> Boolean = { true },
+    private val onConnected: () -> Unit,
 ) {
     private val mutable = MutableStateFlow(DeviceScanState())
     val state: StateFlow<DeviceScanState> = mutable.asStateFlow()

@@ -27,8 +27,8 @@ data class WiFiSheetState(
 class WiFiConnectionCoordinator(
     private val scope: CoroutineScope,
     private val wifi: OnboardingWiFiPort,
-    private val onConnected: () -> Unit,
     private val canStartConnection: () -> Boolean = { true },
+    private val onConnected: () -> Unit,
 ) {
     private val mutable = MutableStateFlow(WiFiSheetState())
     val state: StateFlow<WiFiSheetState> = mutable.asStateFlow()

@@ -199,3 +199,51 @@ updated same-identity contact while the outgoing entry is disposed, then require
 the surviving entry's actual picker/crop/save and correct stored target. This
 models the entry composition overlap, not physical predictive-Back gesture evidence.
 All previous recreation, stale-identity and cancellation cases remain.
+
+## Real-shell held-save regression
+
+The normal PR affected run
+[41604209373](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41604209373)
+on exact `e8d9cc08d5b37f4f8be882bee3f2e99fe339a5ea`, base
+`99479711bfdb7c621765f09d671068ca8b8318ce`, ended **failure** before this
+follow-up was authored. Linux job `125810419342` failed
+`:feature:nodes:mergeDebugUnitTestResources` with `Java heap space`.
+Its available-report aggregate was 6,278 discovered/passed, zero failed/errors/skipped,
+but explicitly `evidence_complete: false`: mandatory App and nodes reports were
+among those missing. This is not avatar-test execution or a complete product pass.
+Scope classification and controller/workflow policy passed; Swift jobs were skipped.
+This resource-stage failure does not establish the cause of the earlier avatar
+timeouts. No build/heap policy, execution lock or historical candidate was changed.
+
+The already-admitted App support test now adds
+`realNavigationPredictiveBackCancellationPreservesAnInFlightAvatarWrite` on API31/API37.
+It mounts the unchanged production `NativeNavigationShell` and its actual
+`NavDisplay`/saveable-entry decorator, with production nodes content, App contact
+adapter/service and real in-memory Room. Only `NodesContactService.updateContactAvatar`
+is intercepted: its call waits at a gate and then forwards once to the real service;
+all other service/session behavior is delegated unchanged.
+
+Two real contact-detail entries are navigated in sequence. While the selected
+entry's encoded save is held, the actual Activity Back dispatcher receives
+started/progressed/cancelled events. Both production entry tags must exist during
+progress, so coordinator state alone or a keyed-composition proxy cannot satisfy
+the assertion. Progress/cancellation must preserve the entire navigation state,
+selected contact, selected entry, saving announcement, disabled chooser and
+uncancelled pending save, with no Room mutation before gate release.
+After release, the test requires exactly one forwarded and completed actual service
+call, the matching Room avatar bytes and decoded 512x512 image, unchanged preview
+and same-UUID foreign-radio snapshots, and a usable editor whose subsequent
+cancellation cannot write again. The old singleton would cancel the selected save
+when the different preview contact is composed.
+
+The installed trusted CLI re-admitted the exact App path with operation
+`add-or-update-related-test` as `reviewed-support-test`, and this evidence path with
+`record-evidence` as `wp-owned`. No navigation-owned source or existing fixture
+was modified. WP-302's owner confirmed no active edits to the App avatar test or
+`NativeNavigationShell`; this is overlap coordination, not a reservation release.
+`C:\Python312\python.exe -B tools\android-port\controller\validate.py`,
+`C:\Python312\python.exe -B tools\android-port\portmap.py`, and `git diff --check`
+passed before publication. The new regression still needs positive hosted execution and
+independent exact-head review; it is injected host dispatcher/registry behavior,
+not a real OS gesture, OS picker, process-death, physical TalkBack or device result.
+The existing local Gradle execution hold remains in force.

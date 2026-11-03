@@ -46,6 +46,35 @@ was notified; no runtime installation, direct Gradle, unsafe WSL invocation,
 blind hosted retry or publication is substituted. Capacity cleanup alone is
 neither a slot grant nor proof that this build fits.
 
+After the execution owner completed the guarded trusted-runtime update, the
+same supported command was retried with head
+`3c5297acdc083df21ec08afd7654aeaaa103ee59` and the same base. The launcher
+admitted that invocation as
+`local-check:f516a7e271f444dd9cb2efcc8b995a16`; original reports are at
+`/home/cbattagler/meshcoreone-work/local-checks/run-OY53EZj7`.
+The trusted selector required full scaffold because the existing dynamic
+project dependency declaration in `android/core/ui/build.gradle.kts` could
+not be narrowly classified. This was the selector's required fallback, not
+a manually widened test command.
+
+Python passed 16 scaffold, 110 parity-accounting and 71 local-tool fixtures,
+with zero failures/errors/skips. Host preflight and the graph/dependency
+inventory command passed. The original scaffold log records completed
+`:core:services:compileKotlin` and ends during subsequent compilation; it
+contains no final build result or product-test discovery/result.
+
+On resumption after interruption, the shell handle was unavailable and the
+original supervisor's `cleanup.json` was absent. Supported recovery status
+retained the hard execution owner. Read-only inspection found its recorded
+Windows PID reused by a different, later-created process and no matching
+Linux build process; neither observation proves owned-child cleanup.
+The execution owner was given the exact invocation for guarded recovery, and
+the waiting WP-311 consumer was told no lane release was established. No
+ownership record, process or retained report was altered and no duplicate
+invocation was started. Available Linux disk space was approximately 1.6 GiB;
+this is not proof that disk exhaustion caused the interruption.
+The candidate remains unverified and unpublished.
+
 ## Form-instance follow-up: historical source-only held candidate
 
 This follow-up builds on local unpublished

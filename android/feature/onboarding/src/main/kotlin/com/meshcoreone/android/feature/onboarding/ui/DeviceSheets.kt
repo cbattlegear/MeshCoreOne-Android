@@ -49,6 +49,7 @@ fun NoDeviceSheetContent(
     onCancel: () -> Unit,
     isCompleting: Boolean = false,
     modifier: Modifier = Modifier,
+    canConfirm: Boolean = true,
 ) {
     Column(
         modifier.fillMaxWidth().padding(horizontal = OnboardingMetrics.cardSpacing).padding(bottom = OnboardingMetrics.largeSpacing),
@@ -58,7 +59,7 @@ fun NoDeviceSheetContent(
         Text(stringResource(O.noDeviceSheetBody), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         OnboardingPrimaryButton(
             stringResource(O.noDeviceSheetConfirm), onConfirm,
-            enabled = !isCompleting, loading = isCompleting, loadingText = stringResource(O.noDeviceSheetConfirm),
+            enabled = canConfirm && !isCompleting, loading = isCompleting, loadingText = stringResource(O.noDeviceSheetConfirm),
         )
         OutlinedButton(
             onCancel, Modifier.fillMaxWidth().heightIn(min = OnboardingMetrics.minHitTarget), enabled = !isCompleting,

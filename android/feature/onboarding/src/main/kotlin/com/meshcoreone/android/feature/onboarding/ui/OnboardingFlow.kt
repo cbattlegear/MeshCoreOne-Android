@@ -33,14 +33,22 @@ import kotlinx.coroutines.flow.emptyFlow
 @Composable
 fun OnboardingFlow(dependencies: OnboardingFeatureDependencies, onCompleted: () -> Unit, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
-    val flow = remember(dependencies) { OnboardingFlowCoordinator(scope, dependencies).also { it.restoreStartingPath() } }
+    val flow = remember(dependencies) {
+        dependencies.retainedFlowCoordinator()
+            ?: OnboardingFlowCoordinator(scope, dependencies).also { it.restoreStartingPath() }
+    }
     val requester = dependencies.rememberPermissionRequester { flow.onPermissionResult() }
     val path by flow.onboarding.onboardingPathFlow.collectAsState()
     val completed by flow.onboarding.hasCompletedOnboardingFlow.collectAsState()
     val permissionSnapshot by dependencies.permissions.snapshot.collectAsState()
     val completionError by flow.hasCompletionError.collectAsState()
     val completingWithoutDevice by flow.isCompletingWithoutDevice.collectAsState()
-    LaunchedEffect(completed) { if (completed) onCompleted() }
+    LaunchedEffect(completed) {
+        if (completed) {
+            onCompleted()
+            dependencies.onFlowCompletionHandled(flow)
+        }
+    }
     dependencies.InterceptBack(enabled = path.isNotEmpty()) { flow.back() }
 
     SharedUiScaffold(modifier.fillMaxSize()) {
@@ -113,6 +121,7 @@ private fun PairStep(
         when (sheet) {
             PairSheet.NO_DEVICE -> NoDeviceSheetContent(
                 flow::confirmNoDevice, flow::dismissPairingSheet, isCompleting = completingWithoutDevice,
+                canConfirm = flow.canCompleteWithoutDevice(),
             )
             PairSheet.TROUBLESHOOTING -> TroubleshootingSheetContent(
                 pairedCount, clearing, flow::clearStalePairings, deps::openAppSettings, flow::dismissPairingSheet,

@@ -19,15 +19,22 @@ class FakePairing(var outcome: OnboardingConnectOutcome = OnboardingConnectOutco
     override var hasLastConnectedDevice = false
     override val scanFallback: OnboardingScanFallbackPort? = null
     var pairCalls = 0
+    var retryCalls = 0
     var retried: UUID? = null
     var cleared = 0
     var throwOnPair: Throwable? = null
+    var beforeRetry: suspend () -> Unit = {}
     override suspend fun pairNewDevice(): OnboardingConnectOutcome {
         pairCalls += 1
         throwOnPair?.let { throw it }
         return outcome
     }
-    override suspend fun retryConnection(deviceId: UUID): OnboardingConnectOutcome { retried = deviceId; return outcome }
+    override suspend fun retryConnection(deviceId: UUID): OnboardingConnectOutcome {
+        retryCalls += 1
+        retried = deviceId
+        beforeRetry()
+        return outcome
+    }
     override suspend fun clearStalePairings() { cleared += 1 }
 }
 
@@ -35,9 +42,15 @@ class FakeDemo(var outcome: OnboardingConnectOutcome = OnboardingConnectOutcome.
     override val isEnabled = MutableStateFlow(false)
     var unlocked = 0
     var beforeUnlock: suspend () -> Unit = {}
+    var connectCalls = 0
+    var beforeConnect: suspend () -> Unit = {}
     override fun unlock() { unlocked += 1; isEnabled.value = true }
     override suspend fun unlockAndAwait() { beforeUnlock(); unlock() }
-    override suspend fun connectDemo(): OnboardingConnectOutcome = outcome
+    override suspend fun connectDemo(): OnboardingConnectOutcome {
+        connectCalls += 1
+        beforeConnect()
+        return outcome
+    }
 }
 
 class FakeWiFi(var outcome: OnboardingConnectOutcome = OnboardingConnectOutcome.Connected) : OnboardingWiFiPort {

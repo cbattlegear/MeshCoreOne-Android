@@ -1,5 +1,6 @@
 // AndroidOnly: WP-303 Builds OnboardingFeatureDependencies from the AppContainer and supplies the activity seams.
 // AndroidOnly: WP-211 Supply app-localized resources to the mounted regional catalog.
+// AndroidOnly: WP-305 Retain first-run and isolated Settings rerun flow sessions across Activity recreation.
 package com.meshcoreone.android.app.container.onboarding
 
 import android.content.Context
@@ -33,6 +34,8 @@ import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceExcep
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.feature.onboarding.OnboardingDemoPort
 import com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies
+import com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator
+import com.meshcoreone.android.feature.onboarding.InMemoryOnboardingFlagStore
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
 import com.meshcoreone.android.feature.onboarding.OnboardingPairingPort
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
@@ -153,11 +156,22 @@ class AppOnboarding(
     private val settingsOpener: () -> Unit,
     private val locationReporter: LocationPermissionResultReporting?,
     private val sdkInt: Int,
+    /** Process-owned scope so completion and preset work outlive an Activity composition. */
+    private val flowScope: CoroutineScope,
     /** The first-run gate: true once the persisted completion flag is set. */
     val hasCompleted: StateFlow<Boolean>,
     val pairingState: com.meshcoreone.android.app.state.AppState? = null,
 ) : OnboardingFeatureDependencies {
+    private val firstRunFlowCoordinator: OnboardingFlowCoordinator by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        OnboardingFlowCoordinator(flowScope, this).also {
+            it.restoreStartingPath()
+        }
+    }
+    private val rerunDependencies by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { Rerun(this) }
+
     override fun openAppSettings() = settingsOpener()
+
+    override fun retainedFlowCoordinator() = firstRunFlowCoordinator
 
     /** Records a finished runtime request: the location grant first (the producer reads it), then the snapshot. */
     fun onPermissionResult(kind: OnboardingPermissionKind, grants: Map<String, Boolean>) {
@@ -195,10 +209,31 @@ class AppOnboarding(
      * The same bindings with a throwaway flag store, for re-running radio setup from Settings after onboarding:
      * a completed persisted flag would otherwise end the flow on entry. Completion here persists nothing.
      */
-    fun forRerun(): OnboardingFeatureDependencies = Rerun(this)
+    fun forRerun(): OnboardingFeatureDependencies = rerunDependencies
 
     private class Rerun(private val base: AppOnboarding) : OnboardingFeatureDependencies by base {
-        override val flags: OnboardingFlagStore = com.meshcoreone.android.feature.onboarding.InMemoryOnboardingFlagStore()
+        private var sessionFlags: OnboardingFlagStore = InMemoryOnboardingFlagStore()
+        private var flowCoordinator: OnboardingFlowCoordinator? = null
+
+        override val flags: OnboardingFlagStore get() = sessionFlags
+
+        @Synchronized
+        override fun retainedFlowCoordinator(): OnboardingFlowCoordinator {
+            flowCoordinator?.let { return it }
+            return OnboardingFlowCoordinator(base.flowScope, this)
+                .also {
+                    it.restoreStartingPath()
+                    flowCoordinator = it
+                }
+        }
+
+        @Synchronized
+        override fun onFlowCompletionHandled(coordinator: OnboardingFlowCoordinator) {
+            if (flowCoordinator === coordinator) {
+                flowCoordinator = null
+                sessionFlags = InMemoryOnboardingFlagStore()
+            }
+        }
 
         @Composable
         override fun rememberPermissionRequester(onResult: () -> Unit): (OnboardingPermissionKind) -> Unit =
@@ -237,6 +272,7 @@ object AppOnboardingFactory {
             settingsOpener = platform.openAppSettings,
             locationReporter = platform.locationReporter,
             sdkInt = platform.sdkInt,
+            flowScope = scope,
             hasCompleted = platform.flags.hasCompleted,
             pairingState = container.appState,
         )

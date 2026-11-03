@@ -9,13 +9,23 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val deps: OnboardingFeatureDependencies) {
+    private var completing = false
+    private var pendingPairAfterPermission = false
     val onboarding = OnboardingState(deps.flags)
     val permissions = PermissionsCoordinator(deps.permissions)
-    val deviceScan = DeviceScanCoordinator(scope, deps.pairing, deps.demo, deps.permissions) { onboarding.append(OnboardingStep.REGION) }
-    val wifi = WiFiConnectionCoordinator(scope, deps.wifi) {
-        deviceScan.dismissSheet()
-        onboarding.append(OnboardingStep.REGION)
-    }
+    val deviceScan = DeviceScanCoordinator(
+        scope, deps.pairing, deps.demo, deps.permissions,
+        onConnected = { onboarding.append(OnboardingStep.REGION) },
+        canStartConnection = { !completing },
+    )
+    val wifi = WiFiConnectionCoordinator(
+        scope, deps.wifi,
+        onConnected = {
+            deviceScan.dismissSheet()
+            onboarding.append(OnboardingStep.REGION)
+        },
+        canStartConnection = { !completing },
+    )
     val region = RegionStepCoordinator(scope, deps.region, { deps.permissions.snapshot.value.location == PermissionStatus.GRANTED }) {
         onboarding.append(OnboardingStep.PRESET)
     }
@@ -27,9 +37,6 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     val hasCompletionError: StateFlow<Boolean> = completionError.asStateFlow()
     private val completingWithoutDevice = MutableStateFlow(false)
     val isCompletingWithoutDevice: StateFlow<Boolean> = completingWithoutDevice.asStateFlow()
-    private var completing = false
-    private var pendingPairAfterPermission = false
-
     val currentStep: OnboardingStep get() = onboarding.onboardingPath.lastOrNull() ?: OnboardingStep.WELCOME
 
     /** Resumes a partially onboarded install above the welcome root (no-op once complete). */
@@ -73,6 +80,10 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         completionError.value = false
     }
 
+    fun canCompleteWithoutDevice(): Boolean =
+        !completing && !deviceScan.state.value.localBusy &&
+            !deps.pairing.connection.value.isBusy && !wifi.state.value.isConnecting
+
     fun dismissPairingSheet() {
         if (canDismissPairingSheet()) deviceScan.dismissSheet()
     }
@@ -80,7 +91,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     fun canDismissPairingSheet(): Boolean = !completing
 
     private fun completeWithoutDevice() {
-        if (completing) return
+        if (!canCompleteWithoutDevice()) return
         completing = true
         completingWithoutDevice.value = true
         scope.launch {

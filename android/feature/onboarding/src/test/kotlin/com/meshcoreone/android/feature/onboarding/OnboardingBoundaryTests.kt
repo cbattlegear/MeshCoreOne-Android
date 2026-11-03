@@ -608,6 +608,88 @@ class OnboardingFlowCoordinatorTest {
         assertEquals(2, writes)
     }
 
+    @Test fun noDeviceCompletionCannotStartDuringHeldRetryConnection() = kotlinx.coroutines.runBlocking {
+        val connectionStarted = CompletableDeferred<Unit>()
+        val releaseConnection = CompletableDeferred<OnboardingConnectOutcome>()
+        val pairing = FakePairing().apply {
+            beforeRetry = {
+                connectionStarted.complete(Unit)
+                releaseConnection.await()
+            }
+        }
+        var writes = 0
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = false
+            override fun setBoolean(key: String, value: Boolean) = Unit
+            override suspend fun persistBoolean(key: String, value: Boolean) { writes += 1 }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags, pairing = pairing))
+        flow.getStarted()
+        flow.continueFromPermissions()
+        flow.deviceScan.showSheet(PairSheet.NO_DEVICE)
+        flow.deviceScan.retryConnection(UUID.randomUUID())
+        connectionStarted.await()
+
+        assertFalse(flow.canCompleteWithoutDevice())
+        flow.confirmNoDevice()
+        assertFalse(flow.isCompletingWithoutDevice.value)
+        assertEquals(0, writes)
+
+        releaseConnection.complete(OnboardingConnectOutcome.Connected)
+        assertEquals(OnboardingStep.REGION, flow.currentStep)
+        assertEquals(0, writes)
+    }
+
+    @Test fun heldFailingNoDeviceWriteBlocksDemoRetryAndContinueCallbacks() = kotlinx.coroutines.runBlocking {
+        val writeStarted = CompletableDeferred<Unit>()
+        val releaseWrite = CompletableDeferred<Unit>()
+        var writes = 0
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = false
+            override fun setBoolean(key: String, value: Boolean) = Unit
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                writes += 1
+                if (writes == 1) {
+                    writeStarted.complete(Unit)
+                    releaseWrite.await()
+                    error("preference write failed")
+                }
+            }
+        }
+        val demoStarted = CompletableDeferred<Unit>()
+        val demo = FakeDemo().apply {
+            beforeConnect = { demoStarted.complete(Unit) }
+        }
+        val pairing = FakePairing()
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags, demo = demo, pairing = pairing))
+        flow.getStarted()
+        flow.continueFromPermissions()
+        flow.deviceScan.showSheet(PairSheet.NO_DEVICE)
+        flow.confirmNoDevice()
+        writeStarted.await()
+
+        assertFalse(flow.canCompleteWithoutDevice())
+        flow.deviceScan.connectDemo()
+        flow.deviceScan.retryConnection(UUID.randomUUID())
+        flow.deviceScan.continueConnected()
+        assertFalse(demoStarted.isCompleted)
+        assertEquals(0, demo.connectCalls)
+        assertEquals(0, pairing.retryCalls)
+        assertEquals(OnboardingStep.PAIR, flow.currentStep)
+
+        releaseWrite.complete(Unit)
+        assertTrue(flow.hasCompletionError.value)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertEquals(PairSheet.NO_DEVICE, flow.deviceScan.state.value.sheet)
+        assertEquals(OnboardingStep.PAIR, flow.currentStep)
+
+        flow.retryCompletion()
+        assertFalse(flow.hasCompletionError.value)
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+        assertEquals(2, writes)
+        assertEquals(OnboardingStep.PAIR, flow.currentStep)
+    }
+
     @Test fun cancelCannotDismissNoDeviceCompletionWhileDurableWriteIsHeld() = kotlinx.coroutines.runBlocking {
         val writeStarted = CompletableDeferred<Unit>()
         val releaseWrite = CompletableDeferred<Unit>()

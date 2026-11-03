@@ -335,6 +335,35 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
+    fun failedDurableRecoveryRecordingRemainsExplicitAndRequiredInTheProcess() = runTest {
+        withFixture {
+            val diskFailure = IOException("test recovery flag failure")
+            var failCommits = true
+            val flags = object : ContactPreferenceFlags by preferences {
+                override fun set(key: String, value: Boolean) {
+                    if (failCommits) throw diskFailure
+                    preferences.set(key, value)
+                }
+            }
+            val producer = service(flags = flags)
+            val write = async { producer.addOrUpdateContact(radioA, frame(1, "Accepted")) }
+            runCurrent()
+            write.cancelAndJoin()
+            assertTrue(assertNotNull(write.getCompletionExceptionOrNull()).suppressed.any { it === diskFailure })
+            assertFalse(preferences.bool("contactWriteReconciliation.${radioA.value}"))
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+            radio.accept()
+            runCurrent()
+            val replacement = service(flags = flags)
+            assertSame(diskFailure, assertFailsWith<IOException> { replacement.syncContacts(radioA, null) })
+            assertTrue(replacement.needsContactWriteReconciliation(radioA))
+            failCommits = false
+            replacement.syncContacts(radioA, null)
+            assertFalse(replacement.needsContactWriteReconciliation(radioA))
+        }
+    }
+
+    @Test
     fun teardownAndDifferentRadioReplacementCannotSaveAnOldReplyIntoTheNewRadio() = runTest {
         withFixture {
             val producer = service()
@@ -445,7 +474,8 @@ class ContactWriteRecoveryTests {
             connection: MeshCoreSession = session,
             persistence: ContactPersisting = store,
             coordinator: ContactSyncCoordinating? = null,
-        ) = ContactService(connection, store, persistence, coordinator, null, preferences)
+            flags: ContactPreferenceFlags = preferences,
+        ) = ContactService(connection, store, persistence, coordinator, null, flags)
 
         suspend fun close() { sessions.asReversed().forEach { it.stop() } }
     }

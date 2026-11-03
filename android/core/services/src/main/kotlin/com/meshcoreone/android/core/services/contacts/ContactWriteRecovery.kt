@@ -24,13 +24,14 @@ internal object ContactWriteRecovery {
 
     @Synchronized
     fun snapshot(preferences: ContactPreferenceFlags, radioId: RadioId): Any? =
-        if (preferences.bool(key(radioId))) epochs.getOrPut(preferences) { mutableMapOf() }.getOrPut(radioId) { Any() }
-        else null
+        epochs[preferences]?.get(radioId) ?: if (preferences.bool(key(radioId))) {
+            epochs.getOrPut(preferences) { mutableMapOf() }.getOrPut(radioId) { Any() }
+        } else null
 
     @Synchronized
     fun require(preferences: ContactPreferenceFlags, radioId: RadioId) {
-        preferences.set(key(radioId), true)
         epochs.getOrPut(preferences) { mutableMapOf() }[radioId] = Any()
+        preferences.set(key(radioId), true)
     }
 
     @Synchronized

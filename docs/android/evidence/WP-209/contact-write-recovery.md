@@ -50,14 +50,15 @@ ContactService/service-test overlap; its UI stays with its existing owner.
 
 ## Behavioral evidence to execute
 
-`ContactWriteRecoveryTests` contains 14 deterministic methods using an actual
+`ContactWriteRecoveryTests` contains 15 deterministic methods using an actual
 `MeshCoreSession` and controlled raw frames, not a fake contact session:
 queued-before-send cancellation; retired caller plus late successful ACK;
 identical/different replacement delivery correlation; active and late rejection;
 unanswered radio acceptance followed by a fresh-session full sync; active and
 orphaned local-save failure; accepted persistence-tail serialization; greater and
 equal-timestamp newer metadata, including a live superseded completion that must
-not return import success; teardown/different-radio replacement; partial
+not return import success; failed durable recovery recording with explicit
+failure and process-retained uncertainty; teardown/different-radio replacement; partial
 snapshot and cross-service newer-uncertainty fencing. Service persistence here is
 an explicit in-memory role, not claimed Room evidence.
 

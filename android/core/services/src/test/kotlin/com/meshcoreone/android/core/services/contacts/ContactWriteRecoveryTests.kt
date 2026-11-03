@@ -339,8 +339,10 @@ class ContactWriteRecoveryTests {
         withFixture {
             val diskFailure = IOException("test recovery flag failure")
             var failCommits = true
+            var recoveryWrites = 0
             val flags = object : ContactPreferenceFlags by preferences {
                 override fun set(key: String, value: Boolean) {
+                    if (key.startsWith("contactWriteReconciliation.")) recoveryWrites++
                     if (failCommits) throw diskFailure
                     preferences.set(key, value)
                 }
@@ -348,8 +350,10 @@ class ContactWriteRecoveryTests {
             val producer = service(flags = flags)
             val write = async { producer.addOrUpdateContact(radioA, frame(1, "Accepted")) }
             runCurrent()
+            assertEquals(1, radio.writes.size)
             write.cancelAndJoin()
-            assertTrue(assertNotNull(write.getCompletionExceptionOrNull()).suppressed.any { it === diskFailure })
+            assertTrue(write.isCancelled)
+            assertEquals(1, recoveryWrites)
             assertFalse(preferences.bool("contactWriteReconciliation.${radioA.value}"))
             assertTrue(producer.needsContactWriteReconciliation(radioA))
             radio.accept()

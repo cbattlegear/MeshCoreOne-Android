@@ -412,6 +412,87 @@ only that import to the existing `org.junit.jupiter.api.Test`; exact successor
 execution is still required. No dependency, expectation or production behavior
 is changed to fix this test-framework mismatch.
 
+Standalone annotation companion `133c307c6d091249cce1fd8858bd8f0da7af4b22`
+and evidence head `1a77d7ecc52ba1912aaa88a8baa50357648b188c` ran in
+[41610937199](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41610937199).
+The run completed **FAILURE**: data 637 / 635 passed / the same two Room
+retirement failures; database 50/50 and model 172/172 passed. Services test
+compilation now succeeds and its suite executes 2,826 tests, with 2,825 passed
+and one failure:
+`ChannelDispatchFenceTest.ambiguousFailurePoisonsRadioAcrossRetirementAndReconnect`
+at line 194. The rendering rejection method is not among the failures; no
+services-wide pass is claimed. This candidate contains the earlier standalone
+fence/fixture cohort, not the fence owner's later f9e/3d/bca or held service bytes.
+The actual fence owner received the exact failure; it is not evidence against a
+different current candidate and no assertion was weakened here.
+
+Available aggregate reports contain 11,904 discovered / 11,901 passed / three
+failed / zero errors or skips; mandatory App/UI reports remain missing.
+Controller and Swift codec jobs passed separately. The completed diagnostic
+supplies scoped storage/history/df6 and fixture evidence, not queue/fence/restore
+adoption, NULL-history disposition, consumer activation or physical-radio safety.
+No second CI-result bundle is retained or revalidated.
+
+The separately assigned local-unpublished WP-208 queue owner starts from exact
+`99479711bfdb7c621765f09d671068ca8b8318ce`. Its comparison with the foundation
+required ten attributable foundation Android diffs, plus the exact e1f4 CR-to-LF
+fixture correction before applying c0fd. Omitting that normalization was incorrect
+for byte-exact patch context even though c0fd later changes the line. The owner
+stopped at the failed check, imported only the reviewed standalone normalization
+diff, and reported all foundation/journal Android deltas applying cleanly.
+No broad ancestry, history-query activation or held producer bytes were requested.
+This is composition evidence only. Storage/model/schema/Room integration-fixture
+custody remains here; consumer implementation remains separately owned.
+
+### Atomic definitely-unsent terminal retirement
+
+The local-unpublished WP-208 consumer found that exact pending deletion followed
+by a separate FAILED write still races a new submission. Neither a post-delete
+sibling sample nor broad delete is sufficient. Actual WP-201/WP-202 `modify`
+admissions passed for the new independent `QueuedChannelTerminalPersisting` role,
+the existing pending repository/store and its Room tests; WP-208 explicitly
+serialized the storage prerequisite here and retained only consumer wiring.
+
+Standalone `04ab6295205c6b196d11c6470d1df105c2cf1b17` adds
+`retireDefinitelyUnsentQueuedChannelAttempt(exactKey): QueuedChannelRetirement`.
+It validates READY/no active pointer, the exact latest retained attempt in journal
+insertion order as DEFINITELY_UNSENT, matching saved/queued outgoing proof/text/
+destination/resend metadata and no other live submission for that message.
+These checks, deletion of only the exact pending ID and FAILED-unless-DELIVERED
+commit in one Room transaction. Original text, attempt history, timestamps,
+send/repeat counters and repeats remain unchanged. `status` and `statusChanged`
+are the committed receipt; the consumer must not write FAILED again afterward.
+Only a returned changed FAILED receipt permits its submission-bound failure event.
+
+Unknown/inflight/uncertain/accepted and zero-attempt READY rows are not eligible.
+An older attempt cannot retire a later attempt or a successor submission.
+Already FAILED/DELIVERED rows return no status change; a missing/repeated handle
+is a typed missing-submission failure, not fabricated idempotent success. If a
+commit-return cancellation loses the receipt, the actual retained state must be
+reconciled without automatic resend, remap or assumed publication.
+
+Seven new real-Room methods cover latest-attempt and exact-ID/foreign preservation,
+DELIVERED/already-FAILED behavior, unknown/zero-attempt/inflight/uncertain/accepted
+rejection, both newer-submission orderings across real contexts, SQLite-trigger
+rollback after staged pending deletion, actual disk reopen and cancellation at
+the committed Room return. These declarations require exact hosted execution;
+the earlier sixteen journal methods do not verify this successor.
+The role is independent of `MessagePersisting`; no existing fake/default, schema,
+history activation, queue implementation or UI policy is added.
+
+For composition without the non-activated history interface, the unchanged 04ab
+diff was checked against a temporary Git index at df6 using `git apply --cached
+--check -C2`: PASS. Only outer context is reduced; no patch body or owner bytes
+are rewritten. This is source-only patch-context evidence, not Kotlin execution.
+
+Standalone `74746675df4d6eb4509be4cf2ae3bea03aa6d1cd` separately adapts the fence
+producer's serialized `2402237e6` correction to this older Fixture/openSession
+preimage after actual WP-201 related-test admission. It removes only the outer
+reference-identity assertion on a suspending propagated exception, retaining
+the typed ConnectionLost assertion, exact original stored synchronous quarantine
+cause and all mutation/send/retire/reconnect controls. It imports no held parent,
+production fence change or expectation weakening; exact execution is pending.
+
 ## Shared connection admission support
 
 The runtime lifecycle owner and fence owner agreed the bounded WP-201

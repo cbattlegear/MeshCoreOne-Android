@@ -165,7 +165,7 @@ class ChannelReceiveEnvelopeTest {
 
             assertEquals(2, envelopes.size)
             assertSame(original, envelopes[1])
-            assertEquals(listOf(a, b), metadata)
+            assertEquals(listOf<ChannelDTO?>(a, b), metadata)
             assertSame(ChannelReceiveOrigin.Unproved, original.origin)
             assertEquals(0, p.undeliveredCount)
             assertTrue(h.store.messages.isEmpty())

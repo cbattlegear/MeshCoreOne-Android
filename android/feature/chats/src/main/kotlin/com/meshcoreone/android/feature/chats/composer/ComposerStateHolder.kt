@@ -271,6 +271,7 @@ class ComposerStateHolder(
         storedRevision: Long?, failure: Throwable,
     ) {
         val outcome = port.creationOutcome()
+        if (outcome is ComposerCreationOutcome.Uncertain) port.retainUncertainCreation(storedRevision)
         val savedId = pendingId ?: (outcome as? ComposerCreationOutcome.Committed)?.message?.id
         val definitelyUnsaved = savedId == null && outcome is ComposerCreationOutcome.NotCommitted
         if (definitelyUnsaved && port.canRestoreDraft() && draftRevision == acceptedRevision) {

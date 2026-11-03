@@ -123,7 +123,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     private val draftLock = Any()
     private val draftRevisions = mutableMapOf<ChatConversationID, Long>()
-    private val unresolvedCreations = java.util.concurrent.ConcurrentHashMap<UUID, PendingMessageCreation>()
+    private data class UnresolvedCreation(
+        val target: ComposerTarget, val revision: Long, val slotGeneration: Int,
+        val receipt: PendingMessageCreation,
+    )
+    private val unresolvedCreations = java.util.concurrent.ConcurrentHashMap<UUID, UnresolvedCreation>()
     private data class DeferredDraft(
         val target: ComposerTarget, val text: String, val revision: Long, val slotGeneration: Int,
     )
@@ -161,6 +165,51 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     init {
         scope.launch {
             merge(changes, app.channelSlotGenerations.map { Unit }).collect {
+                for ((id, recovery) in unresolvedCreations) {
+                    try {
+                        val snapshot = recovery.receipt.snapshot
+                        if (snapshot.state == PendingMessageCreation.State.WRITING) continue
+                        val allocated = checkNotNull(snapshot.message)
+                        val target = recovery.target
+                        if (snapshot.state == PendingMessageCreation.State.COMMITTED) {
+                            deferredCommitted[id] = DeferredCommitted(target, recovery.slotGeneration, id)
+                            unresolvedCreations.remove(id, recovery)
+                            continue
+                        }
+                        if (target is ComposerTarget.Channel) {
+                            val current = store.fetchChannel(target.channel.radioId, target.channel.index)
+                            if ((app.channelSlotGenerations.value[target.conversationId] ?: 0) !=
+                                recovery.slotGeneration || current == null || current.id != target.channel.id ||
+                                current.secret != target.channel.secret || !current.isEnabled
+                            ) {
+                                report("Uncertain creation belongs to a replaced channel slot",
+                                    MessageServiceException(MessageServiceError.ChannelNotFound))
+                                continue
+                            }
+                        }
+                        val saved = store.fetchMessage(EntityKey(allocated.radioId, allocated.id))
+                        if (target is ComposerTarget.Channel &&
+                            (app.channelSlotGenerations.value[target.conversationId] ?: 0) != recovery.slotGeneration
+                        ) {
+                            report("Uncertain creation changed channel slot during reconciliation",
+                                MessageServiceException(MessageServiceError.ChannelNotFound))
+                            continue
+                        }
+                        if (saved == null) {
+                            drafts.restoreIfUnchanged(target.conversationId, recovery.revision, allocated.text)
+                        } else {
+                            if (saved != allocated) {
+                                throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                            }
+                            deferredCommitted[id] = DeferredCommitted(target, recovery.slotGeneration, id)
+                        }
+                        unresolvedCreations.remove(id, recovery)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: PersistenceStoreException) {
+                        report("Uncertain composer creation could not reconcile its exact saved identity", failure)
+                    }
+                }
                 for ((id, recovery) in deferredDrafts) {
                     val conversation = recovery.target.conversationId
                     if (drafts.revision(conversation) != recovery.revision ||
@@ -785,6 +834,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                             target, text, checkNotNull(revision), slotGeneration,
                         )
                     }
+                    override fun retainUncertainCreation(revision: Long?) {
+                        val message = checkNotNull(receipt.snapshot.message)
+                        unresolvedCreations[message.id] = UnresolvedCreation(
+                            target, checkNotNull(revision), slotGeneration, receipt,
+                        )
+                    }
                     override suspend fun recordCommittedCreationFailure(messageId: UUID) {
                         val recovery = DeferredCommitted(target, slotGeneration, messageId)
                         deferredCommitted[messageId] = recovery
@@ -806,7 +861,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                                 ComposerCreationOutcome.Committed(checkNotNull(snapshot.message))
                             PendingMessageCreation.State.WRITING,
                             PendingMessageCreation.State.UNKNOWN -> {
-                                snapshot.message?.let { unresolvedCreations[it.id] = receipt }
                                 ComposerCreationOutcome.Uncertain(snapshot.message)
                             }
                         }

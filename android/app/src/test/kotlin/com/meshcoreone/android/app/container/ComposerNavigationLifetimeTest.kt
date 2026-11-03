@@ -126,6 +126,30 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
     @Test fun channelCommittedRecoveryRetriesFailedStatusWriteWithoutSending() =
         exercise(true, Boundary.AFTER_CREATE, creationFailure = true, dispose = false,
             recoveryFailure = RecoveryFailure.STATUS_WRITE)
+    @Test fun directUnknownCreationReconcilesExactRowIntoMountedRetryWithoutSending() =
+        exercise(false, Boundary.AFTER_CREATE, creationFailure = true, reconciliationFailure = true,
+            reconcileLater = true, dispose = false)
+    @Test fun channelUnknownCreationReconcilesExactRowIntoMountedRetryWithoutSending() =
+        exercise(true, Boundary.AFTER_CREATE, creationFailure = true, reconciliationFailure = true,
+            reconcileLater = true, dispose = false)
+    @Test fun directUnknownCreationDoesNotReplayOnReplacementSession() =
+        exercise(false, Boundary.AFTER_CREATE, creationFailure = true, reconciliationFailure = true,
+            reconcileLater = true, replaceSession = true)
+    @Test fun channelUnknownCreationDoesNotReplayOnReplacementSession() =
+        exercise(true, Boundary.AFTER_CREATE, creationFailure = true, reconciliationFailure = true,
+            reconcileLater = true, replaceSession = true)
+    @Test fun directUnknownAbsentCreationRestoresOnlyAfterExactKeyRead() =
+        exercise(false, Boundary.BEFORE_CREATE, creationFailure = true, reconciliationFailure = true,
+            reconcileLater = true, failBeforeCommit = true, preserveNewer = false)
+    @Test fun channelUnknownAbsentCreationRestoresOnlyAfterExactKeyRead() =
+        exercise(true, Boundary.BEFORE_CREATE, creationFailure = true, reconciliationFailure = true,
+            reconcileLater = true, failBeforeCommit = true, preserveNewer = false)
+    @Test fun directUnknownAbsentCreationNeverOverwritesNewerDraft() =
+        exercise(false, Boundary.BEFORE_CREATE, creationFailure = true, reconciliationFailure = true,
+            reconcileLater = true, failBeforeCommit = true)
+    @Test fun channelUnknownAbsentCreationNeverOverwritesNewerDraft() =
+        exercise(true, Boundary.BEFORE_CREATE, creationFailure = true, reconciliationFailure = true,
+            reconcileLater = true, failBeforeCommit = true)
 
     private fun exercise(
         channel: Boolean, boundary: Boundary, replaceSession: Boolean = false, legacyScreenOwner: Boolean = false,
@@ -134,6 +158,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         dispose: Boolean = true, replaceSlot: Boolean = false,
         lookupFailure: Boolean = false,
         newerLiveText: String? = null, recoveryFailure: RecoveryFailure? = null,
+        reconcileLater: Boolean = false, failBeforeCommit: Boolean = false,
     ) = runTest {
         val peerKey = key(4)
         val gate = CompletableDeferred<Unit>()
@@ -151,6 +176,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         var failedChannelReads = 0
         var recoveryUnavailable = false
         var failedRecoveryOperations = 0
+        var unreadableCreation = reconciliationFailure
         suspend fun pause(at: Boundary) {
             if (boundary == at) {
                 reached.complete(Unit)
@@ -167,8 +193,11 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             }
             override suspend fun saveMessage(dto: MessageDTO) {
                 if (dto.text != original) return store.saveMessage(dto)
+                captured = dto
                 pause(Boundary.BEFORE_CREATE)
-                if (abortSlotWrite) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                if (abortSlotWrite || failBeforeCommit) {
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
                 store.saveMessage(dto)
                 creations++
                 captured = dto
@@ -179,7 +208,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 }
             }
             override suspend fun fetchMessage(key: EntityKey): MessageDTO? {
-                if (reconciliationFailure && key.id == captured?.id) {
+                if (unreadableCreation && key.id == captured?.id) {
                     throw PersistenceStoreException(PersistenceStoreError.InvalidData)
                 }
                 return store.fetchMessage(key)
@@ -357,6 +386,17 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             h.eventually("accepted operation settles after disposal") {
                 holder.state.value.sendPhase !is ComposerSendPhase.Sending
             }
+            if (reconcileLater) {
+                val saved = requireNotNull(captured)
+                assertEquals(if (failBeforeCommit) null else MessageStatus.PENDING,
+                    store.fetchMessage(EntityKey(radio, saved.id))?.status)
+                assertEquals(0, enqueues)
+                unreadableCreation = false
+                h.appState.refreshConversations()
+                if (!failBeforeCommit) h.eventually("exact identity reconciliation exposes the committed retry row") {
+                    runBlocking { store.fetchMessage(EntityKey(radio, saved.id))?.status == MessageStatus.FAILED }
+                }
+            }
             if (recoveryFailure != null) {
                 h.eventually("local committed recovery reports its storage failure") { failedRecoveryOperations > 0 }
                 val saved = requireNotNull(captured)
@@ -372,6 +412,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             val expectedDraft = when {
                 newerLiveText != null -> null
                 preserveNewer -> if (typeThenClear) null else newer
+                failBeforeCommit && reconcileLater -> original
                 lookupFailure && !replaceSlot -> original
                 replaceSession && boundary == Boundary.BEFORE_CREATE -> original
                 else -> null
@@ -398,6 +439,11 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 if (committed) assertEquals(MessageStatus.FAILED, rows.single().status)
                 assertTrue(h.links.radios.single().sent.none { it[0].toInt() in 2..3 })
                 assertNull(feature.drafts.get(target.conversationId))
+            } else if (failBeforeCommit) {
+                assertEquals(0, creations)
+                assertEquals(0, enqueues)
+                assertTrue(rows.isEmpty())
+                assertTrue(h.links.radios.all { link -> link.sent.none { it[0].toInt() in 2..3 } })
             } else if (creationFailure) {
                 assertEquals(1, creations)
                 assertEquals(1, rows.size)
@@ -406,7 +452,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 assertEquals(0, enqueues)
                 assertTrue(holder.state.value.sendPhase is ComposerSendPhase.Failed)
                 assertEquals(
-                    if (reconciliationFailure) MessageStatus.PENDING else MessageStatus.FAILED,
+                    if (reconciliationFailure && !reconcileLater) MessageStatus.PENDING else MessageStatus.FAILED,
                     rows.single().status,
                 )
                 assertTrue(h.links.radios.all { link -> link.sent.none { it[0].toInt() in 2..3 } })
@@ -416,10 +462,10 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                             it.id == rows.single().id && it.status == MessageStatus.FAILED
                         }
                     }
-                    if (!channel && !reconciliationFailure) {
+                    if (!channel && (!reconciliationFailure || reconcileLater)) {
                         assertTrue("First-message failure remains reachable from Chats",
                             store.fetchConversations(radio).any { it.id == contact.id })
-                        assertEquals(java.time.Instant.ofEpochSecond(rows.single().timestamp.toLong()),
+                        assertEquals(rows.single().date,
                             requireNotNull(store.fetchContact(EntityKey(radio, contact.id))).lastMessageDate)
                     }
                 }

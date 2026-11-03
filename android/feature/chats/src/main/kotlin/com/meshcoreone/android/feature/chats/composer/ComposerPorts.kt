@@ -61,6 +61,10 @@ interface ComposerSendPort {
 
     /** A committed create did not return, so its exact row still needs admission to the timeline. */
     suspend fun recordCommittedCreationFailure(messageId: UUID) = recordLocalEnqueueFailure(messageId)
+
+    fun retainUncertainCreation(revision: Long?) {
+        error("Uncertain creation requires an identity-based reconciliation owner")
+    }
 }
 
 sealed interface ComposerCreationOutcome {

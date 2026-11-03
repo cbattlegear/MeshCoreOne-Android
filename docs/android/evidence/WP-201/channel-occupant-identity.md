@@ -13,6 +13,46 @@ or completion of the independent queue/fence/consumer/restore producers.
 
 ### Follow-up: observable contention and current-main verification blocker
 
+#### Standalone v2 preparation stopped at actual support-path denial
+
+Assignment `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_cnfVUEu8OKDfjRbwwQ3AYv4l`
+rechecked actual main `4d54fc56593377638b57edd0335005eb30894f6e`.
+An isolated seven-path draft, based on that exact tree rather than this branch's
+ancestry, is preserved in the session's `files/standalone-origin-v2/` and
+`files/standalone-origin-v2-draft.patch`. No standalone candidate commit/head
+was created, and the managed worktree's source was not replaced.
+
+Current WP-201 modify admission passed for `MessageDTO.kt`, `SendEnvelopes.kt`,
+`MessageEntities.kt`, `MessageMappings.kt`, `MeshCoreDatabase.kt`,
+`RoomBoundaryTest.kt` and new `ChannelOriginV2MigrationTest.kt`. The draft contains
+only nullable original-occupant fields and exact equality/projections, two additive
+nullable columns in registered v1-to-v2 migration, the current-export boundary,
+and three authored controls using the genuine exported v1 database. It adds no
+authority table, identity factory, journal, service/wire/retry policy or history
+presentation change. Retained canonical model serialization and no-storage-overlap
+dispositions were used; no paused producer, historical lease or held source was
+inspected or adopted. The temporary-index diff against exact main contains seven
+paths and passes whitespace checks; it is not Kotlin/Room verification.
+
+A sound schema-version upgrade also requires existing current-schema assertions
+to reflect v2. WP-202 modify admissions passed for
+`InitialSchemaMigrationBoundaryTest.kt`, `UnsignedPathReopenTest.kt` and
+`NativeRepositoryBoundaryTest.kt`, but **WP-202 modify
+`android/core/data/src/test/kotlin/com/meshcoreone/android/core/data/backup/BackupTransactionTest.kt`
+was refused: `no trusted path+operation rule`.** At exact main, line 88 asserts
+that the reopened production database is version 1. Leaving that unchanged would
+make a v2 candidate fail; changing it without the actual rule would bypass a
+current refusal. Historical transferred assertion custody is not current admission.
+No data-test assertions or backup paths were edited in this draft.
+
+Preparation stopped at that required support-path denial. The actionable prerequisite
+is actual trusted admission and current semantic disposition for the assertion-only
+backup-test support edit, not a rewritten user authorization or fabricated owner
+receipt. Only then can all current-schema assertions be adapted and a sound,
+separately attributable standalone head/tree frozen. The authored migration/reopen/
+identity controls remain **UNEXECUTED**. There is no generated `2.json` or `3.json`,
+and no Gradle, tests, CI, publication, PR, execution-lock or held-policy change.
+
 Assignment `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_9ElZlj99QJuYiW8FBOVqc9BP`
 addresses the independent review's two validation gaps. Test-only candidate
 `dd4e7c35761ef5545474d2b88666e253e1980e3d` adds two methods (three controlled

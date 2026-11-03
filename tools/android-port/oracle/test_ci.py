@@ -175,7 +175,7 @@ class FoundationWorkflowTests(unittest.TestCase):
                         validate_candidate(value, self.text)
 
     def test_auxiliary_conditions_are_job_level_and_preserve_complete_chains(self):
-        expected = {"external-oracle": "external-oracle", "backup-oracle": "backup"}
+        expected = {"external-oracle": "external-oracle", "backup-oracle": "backup", "backup-consumer": "backup"}
         for name, scope in expected.items():
             with self.subTest(job=name):
                 job = self.workflow["jobs"][name]
@@ -189,6 +189,7 @@ class FoundationWorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow["jobs"]["build"]["needs"], ["scope"])
         self.assertEqual(self.workflow["jobs"]["external-oracle"]["needs"], ["scope"])
         self.assertEqual(self.workflow["jobs"]["backup-oracle"]["needs"], ["scope", "build"])
+        self.assertEqual(self.workflow["jobs"]["backup-consumer"]["needs"], ["scope", "backup-oracle"])
 
     def test_privilege_and_action_pin_mutations_fail(self):
         for kind in ("token", "action", "checkout"):
@@ -214,11 +215,22 @@ class FoundationWorkflowTests(unittest.TestCase):
             step for job in self.workflow["jobs"].values() for step in job["steps"]
             if step.get("uses", "").startswith("actions/download-artifact@")
         ]
-        self.assertEqual(len(transfers), 1)
-        backup = next(step for step in uploads if step["with"]["name"] == transfers[0]["with"]["name"])
+        self.assertEqual(len(transfers), 2)
+        self.assertEqual({step["with"]["name"] for step in transfers}, {
+            "backup-input-${{ github.run_id }}-${{ github.run_attempt }}",
+            "backup-swift-${{ github.run_id }}-${{ github.run_attempt }}",
+        })
+        backup = next(step for step in uploads if step["with"]["name"].startswith("backup-input-"))
         self.assertEqual(backup["if"], "${{ needs.scope.outputs.backup == 'true' }}")
         self.assertEqual(backup["with"]["if-no-files-found"], "error")
         paths = backup["with"]["path"]
         self.assertIn("wp203/interop", paths)
+        swift = self.workflow["jobs"]["backup-oracle"]["steps"][-1]
+        self.assertEqual(swift["with"]["path"].splitlines(), [
+            "${{ runner.temp }}/swift-output/" + name
+            for name in ("swift-export.meshcoreone", "swift-export.json", "swift-room-proof.json", "swift-handoff.json")
+        ])
+        self.assertEqual(swift["with"]["name"], "backup-swift-${{ github.run_id }}-${{ github.run_attempt }}")
+        self.assertEqual(swift["with"]["if-no-files-found"], "error")
         for upload in uploads:
             self.assertNotIn("ci-result", upload["with"]["path"])

@@ -359,6 +359,28 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(mode=mode), self.assertRaises(PortError):
                 validate_candidate(changed, text)
 
+    def test_backup_jobs_reject_injected_python_output_replacement_and_execution_overrides(self):
+        original, text = self.read("android-ci.yml")
+        for job in ("backup-oracle", "backup-consumer"):
+            for mode in ("extra-step", "replace-run", "step-env", "step-shell", "job-env", "job-defaults"):
+                changed = copy.deepcopy(original)
+                target = changed["jobs"][job]
+                attack = 'echo "/tmp/fake-python" >> "$GITHUB_PATH"'
+                if mode == "extra-step":
+                    target["steps"].insert(-1, {"name": "Prepare input", "run": attack})
+                elif mode == "replace-run":
+                    next(step for step in target["steps"] if "run" in step)["run"] = attack
+                elif mode == "step-env":
+                    target["steps"][-1]["env"] = {"PYTHONPATH": "/tmp/fake-python"}
+                elif mode == "step-shell":
+                    target["steps"][-1]["shell"] = "echo {0}"
+                elif mode == "job-env":
+                    target["env"] = {"PATH": "/tmp/fake-python"}
+                else:
+                    target["defaults"] = {"run": {"shell": "echo {0}"}}
+                with self.subTest(job=job, mode=mode), self.assertRaises(PortError):
+                    validate_candidate(changed, text)
+
     def test_gradle_cache_is_namespaced_and_tracks_actual_locks_and_toolchain(self):
         workflow, _ = self.read("android-ci.yml")
         cache_steps = [

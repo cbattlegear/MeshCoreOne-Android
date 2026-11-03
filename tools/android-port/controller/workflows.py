@@ -219,48 +219,81 @@ def validate_candidate(value: dict, text: str):
 
 
 def validate_backup_return(jobs):
-    consumer = jobs["backup-consumer"]
-    if (consumer.get("needs") != ["scope", "backup-oracle"]
-            or consumer.get("if") != "${{ needs.scope.outputs.backup == 'true' }}"
-            or consumer.get("runs-on") != "ubuntu-24.04" or "strategy" in consumer
-            or consumer.get("continue-on-error")):
-        raise PortError("Swift-to-Room consumer must be a selected independent Linux job after successful Swift export")
-    swift_steps = jobs["backup-oracle"]["steps"]
-    uploads = [step for step in swift_steps if step.get("uses", "").startswith("actions/upload-artifact@")]
-    expected_paths = [
-        "${{ runner.temp }}/swift-output/" + name
-        for name in ("swift-export.meshcoreone", "swift-export.json", "swift-room-proof.json", "swift-handoff.json")
+    checkout = {
+        "name": "Read-only exact candidate", "uses": "actions/checkout@" + ACTION_PINS["actions/checkout"],
+        "with": {"ref": "${{ github.event.pull_request.head.sha || github.sha }}",
+                 "fetch-depth": "0", "persist-credentials": "false"},
+    }
+    setup = {"uses": "actions/setup-python@" + ACTION_PINS["actions/setup-python"],
+             "with": {"python-version": "3.12.4"}}
+    swift_steps = [
+        {**checkout, "name": "Read-only exact candidate and frozen source objects"},
+        setup,
+        {"name": "Download actual Kotlin-produced backup bytes",
+         "uses": "actions/download-artifact@" + ACTION_PINS["actions/download-artifact"],
+         "with": {"name": "backup-input-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "path": "${{ runner.temp }}/kotlin-input"}},
+        {"name": "Execute real SwiftData restore and export",
+         "run": "python tools/android-port/oracle/wp203_interop.py "
+                '--input "${{ runner.temp }}/kotlin-input" --output "${{ runner.temp }}/swift-output" '
+                '--stage-root "${{ runner.temp }}/frozen-source"'},
+        {"name": "Transfer Swift-produced backup data to an independent Room destination",
+         "uses": "actions/upload-artifact@" + ACTION_PINS["actions/upload-artifact"],
+         "with": {
+             "name": "backup-swift-${{ github.run_id }}-${{ github.run_attempt }}",
+             "path": "".join("${{ runner.temp }}/swift-output/" + name + "\n" for name in (
+                 "swift-export.meshcoreone", "swift-export.json", "swift-room-proof.json", "swift-handoff.json",
+             )),
+             "if-no-files-found": "error", "retention-days": "1",
+         }},
     ]
-    if (len(uploads) != 1 or uploads[0] != swift_steps[-1]
-            or uploads[0].get("if") or uploads[0].get("continue-on-error")
-            or uploads[0].get("with") != {
-                "name": "backup-swift-${{ github.run_id }}-${{ github.run_attempt }}",
-                "path": "\n".join(expected_paths) + "\n", "if-no-files-found": "error", "retention-days": "1",
-            }):
-        raise PortError("Swift handoff must transfer only same-run controlled backup data after actual restore/export")
-    steps = consumer["steps"]
-    checkouts = [step for step in steps if step.get("uses", "").startswith("actions/checkout@")]
-    downloads = [step for step in steps if step.get("uses", "").startswith("actions/download-artifact@")]
-    restores = [step for step in steps if "wp203_ci.py" in step.get("run", "")]
-    command = (
-        "python tools/android-port/oracle/wp203_ci.py consumer "
-        '--state "$ANDROID_CI_STATE" --input "${{ runner.temp }}/swift-input" '
-        '--output "${{ runner.temp }}/room-consumer"'
+    pins = (
+        "${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', "
+        "'android/gradle/wrapper/gradle-wrapper.jar', 'tools/android-port/controller/toolchain-pins.json') }}"
     )
-    if (len(checkouts) != 1 or checkouts[0] != steps[0]
-            or checkouts[0].get("with") != {
-                "ref": "${{ github.event.pull_request.head.sha || github.sha }}",
-                "fetch-depth": "0", "persist-credentials": "false",
-            }
-            or len(downloads) != 1 or downloads[0].get("with") != {
-                "name": "backup-swift-${{ github.run_id }}-${{ github.run_attempt }}",
-                "path": "${{ runner.temp }}/swift-input",
-            }
-            or len(restores) != 1 or restores[0].get("run") != command
-            or steps[-1] != restores[0] or steps.index(downloads[0]) >= steps.index(restores[0])
-            or any(step.get("if") or step.get("continue-on-error") for step in steps)
-            or any(step.get("uses", "").startswith("actions/upload-artifact@") for step in steps)):
-        raise PortError("Room destination must consume exact same-run Swift data and execute mandatory tests, not upload CI results")
+    dependencies = (
+        "${{ hashFiles('android/gradle/libs.versions.toml', 'android/gradle/verification-metadata.xml', "
+        "'android/gradle/dependency-locks/*.lockfile', 'android/**/gradle.lockfile') }}"
+    )
+    cache_prefix = "android-gradle-v4-${{ runner.os }}-" + pins + "-" + dependencies + "-"
+    consumer_steps = [
+        checkout,
+        {**setup, "with": {**setup["with"], "architecture": "x64"}},
+        {"name": "Install checksum-pinned workflow parser",
+         "run": "python -m pip install --disable-pip-version-check --require-hashes "
+                "--no-deps --only-binary=:all: -r tools/android-port/controller/requirements-ci.txt --quiet"},
+        {"name": "Declare independent toolchain and Gradle cache roots", "shell": "pwsh",
+         "run": "$root = Join-Path $env:RUNNER_TEMP 'meshcoreone-consumer'\n"
+                '"ANDROID_CI_STATE=$(Join-Path (Join-Path $root \'toolchain\') \'environment.json\')" '
+                "| Out-File $env:GITHUB_ENV -Append -Encoding utf8\n"
+                '"GRADLE_USER_HOME=$(Join-Path $root \'gradle-home\')" '
+                "| Out-File $env:GITHUB_ENV -Append -Encoding utf8\n"},
+        {"name": "Restore verified Gradle dependencies", "uses": "actions/cache@" + ACTION_PINS["actions/cache"],
+         "with": {"path": "${{ env.GRADLE_USER_HOME }}",
+                  "key": cache_prefix + "${{ github.run_id }}-${{ github.run_attempt }}",
+                  "restore-keys": cache_prefix + "\n"}},
+        {"name": "Download only the same-run Swift backup data",
+         "uses": "actions/download-artifact@" + ACTION_PINS["actions/download-artifact"],
+         "with": {"name": "backup-swift-${{ github.run_id }}-${{ github.run_attempt }}",
+                  "path": "${{ runner.temp }}/swift-input"}},
+        {"name": "Provision exact first-party JDK and SDK archives", "shell": "pwsh",
+         "run": "python tools/android-port/controller/ci.py provision "
+                "--root (Split-Path $env:ANDROID_CI_STATE -Parent) --accept-sdk-license"},
+        {"name": "Execute real Swift-to-Room restore assertions",
+         "run": "python tools/android-port/oracle/wp203_ci.py consumer "
+                '--state "$ANDROID_CI_STATE" --input "${{ runner.temp }}/swift-input" '
+                '--output "${{ runner.temp }}/room-consumer"'},
+    ]
+    for name, title, needs, host, steps in (
+        ("backup-oracle", "SwiftData restore and export oracle", ["scope", "build"], "macos-26-intel", swift_steps),
+        ("backup-consumer", "Restore Swift export into independent Room", ["scope", "backup-oracle"],
+         "ubuntu-24.04", consumer_steps),
+    ):
+        if jobs[name] != {
+            "name": title, "needs": needs, "if": "${{ needs.scope.outputs.backup == 'true' }}",
+            "runs-on": host, "timeout-minutes": "40", "steps": steps,
+        }:
+            raise PortError("Backup producer/consumer require exact jobs and steps; no injected commands or execution overrides")
     gate = jobs["android-ci"]["steps"]
     environment = {key: value for step in gate for key, value in step.get("env", {}).items()}
     runs = "\n".join(step.get("run", "") for step in gate)

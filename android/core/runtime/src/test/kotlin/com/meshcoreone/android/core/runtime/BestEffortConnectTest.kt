@@ -11,24 +11,26 @@ import kotlin.test.*
 class BestEffortConnectTest {
     @TestFactory
     fun bestEffortCases() = listOf(
-        nativeCase("an auto-add query that times out still connects with the default config and reports the failure before queued recovery") {
+        nativeCase("an auto-add timeout reports its fallback but cannot publish a graph before queued physical recovery") {
             withRecoveryFixture { recovery ->
                 createRadio = { TestRadio().also { it.beforeSend = { frame -> if (frame[0].toInt() == 0x3b) delay(5_000) } } }
-                val work = backgroundScope.async { manager.connect(platform.target) }
+                val work = backgroundScope.async { runCatching { manager.connect(platform.target) } }
                 advanceTimeBy(10_000); runCurrent()
-                work.await()
-                assertEquals(DeviceConnectionState.READY, manager.connectionState)
-                assertEquals(0u, manager.connectedDevice!!.autoAddConfig.toUInt())
+                assertFalse(work.isCompleted, "queued recovery must retire the revoked owner before construction")
+                assertTrue(services.isEmpty())
+                assertNull(manager.snapshot.value.token)
                 assertTrue(diagnostics.any { it is RuntimeDiagnostic.Failure && it.operation == "getAutoAddConfig" })
                 assertTrue(manager.shouldAllowConnection(false), "A best-effort query failure must not burn retries or trip the breaker")
                 assertEquals(1, radios.size)
                 assertEquals(1, recovery.queuedCount)
                 createRadio = { TestRadio() }
                 recovery.open(); runCurrent()
+                assertIs<CancellationException>(work.await().exceptionOrNull())
                 assertEquals(DeviceConnectionState.DISCONNECTED, manager.connectionState)
                 assertEquals(1, radios.first().closes)
                 advanceTimeBy(30_000); runCurrent()
                 assertEquals(DeviceConnectionState.READY, manager.connectionState)
+                assertEquals(0u, manager.connectedDevice!!.autoAddConfig.toUInt())
                 assertEquals(2, radios.size)
                 assertTrue(manager.shouldAllowConnection(false))
             }

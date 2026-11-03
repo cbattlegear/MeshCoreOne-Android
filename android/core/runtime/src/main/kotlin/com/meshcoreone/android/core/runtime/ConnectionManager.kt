@@ -1683,14 +1683,19 @@ class ConnectionManager(
         !closed && !owner.logicalEnded && revision == owner.revision && active === owner && connectionIntent.wantsConnection
     }
 
-    private fun bindDispatchAdmission(
+    private suspend fun bindDispatchAdmission(
         owner: RadioGeneration, token: SessionToken, session: MeshCoreSession,
-    ): ChannelDispatchAdmission = synchronized(lock) {
-        requireCurrent(owner)
-        if (owner.dispatchRevoked || owner.session !== session || owner.dispatchAdmission != null) {
-            throw ConnectionError.FactoryOwnershipViolation()
+    ): ChannelDispatchAdmission {
+        val admission = synchronized(lock) {
+            requireCurrent(owner)
+            if (owner.session !== session || owner.dispatchAdmission != null) {
+                throw ConnectionError.FactoryOwnershipViolation()
+            }
+            if (owner.dispatchRevoked) null
+            else ChannelDispatchAdmission(token, session).also { owner.dispatchAdmission = it }
         }
-        ChannelDispatchAdmission(token, session).also { owner.dispatchAdmission = it }
+        // An early loss/recovery callback owns retirement, not a factory failure or another retry-budget charge.
+        return admission ?: awaitCancellation()
     }
 
     private fun revokeDispatchAdmission(owner: RadioGeneration) = synchronized(lock) {

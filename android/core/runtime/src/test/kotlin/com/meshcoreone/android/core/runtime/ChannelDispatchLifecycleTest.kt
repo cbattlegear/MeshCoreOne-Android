@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -51,7 +52,7 @@ class ChannelDispatchLifecycleTest {
                         }
                     }
                 }
-                manager.connect(platform.target)
+                val connecting = backgroundScope.async { runCatching { manager.connect(platform.target) } }
                 runCurrent()
                 assertTrue(enteredFactory.isCompleted)
                 val inputs = services.single().inputs
@@ -63,6 +64,7 @@ class ChannelDispatchLifecycleTest {
                 resumeFactory.complete(Unit)
                 runCurrent()
                 stopping.await()
+                assertNotNull(connecting.await().exceptionOrNull())
                 assertFalse(published)
                 assertEquals(1, services.single().teardowns)
             }
@@ -157,7 +159,9 @@ class ChannelDispatchLifecycleTest {
                         service.inputs.callbacks.publishServices(service) { fail("closed factory published") }
                     }
                 }
-                manager.connect(platform.target)
+                assertFailsWith<ConnectionError.FactoryOwnershipViolation> {
+                    manager.connect(ConnectionTarget.WiFi("127.0.0.1", 5000))
+                }
                 runCurrent()
                 assertTrue(services.single().inputs.dispatchAdmission.isRevoked)
                 assertEquals(1, services.single().teardowns)

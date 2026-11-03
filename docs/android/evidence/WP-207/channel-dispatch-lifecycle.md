@@ -47,6 +47,13 @@ reconnection failure, shutdown and real loss callbacks revoke admission before
 waiting. Correlation diagnostics revoke synchronously, before asynchronously
 waiting for already-admitted channel-query accounting.
 
+If recovery/loss revokes an owner before a factory exists, binding waits
+cancellably outside the manager lock for its already-queued retirement. It does
+not invent a new factory failure/retry-budget charge or allow a transient READY
+graph. The prior best-effort auto-add native regression preserves diagnostic,
+fallback, retry-budget and fresh-reconnect checks, with explicit no-graph/no-token
+assertions while recovery is paused.
+
 Factory publication is a restricted state-only commit: registered service identity
 is checked outside the boundary, actual manager owner/token/session/handle inside,
 then registry -> graph state is committed. No observer, teardown, suspend point,
@@ -82,6 +89,16 @@ No local Gradle/JVM/WSL product verification was attempted: retained
 `gradle-execution` owner `local-check:f516a7e271f444dd9cb2efcc8b995a16` has no
 cleanup proof and is unchanged. Authored Kotlin tests are unverified until the
 exact-candidate hosted job discovers and executes them without failures/skips.
+
+First hosted run [41601419363](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41601419363)
+at exact `f09fa61703c8db35a417e0b06627ad7a688be64e` failed the prerequisite
+legacy migration fixture's optional `indices` JSON read. Available reports
+contained 918 discovered tests, 917 passed and one failed, zero errors/skips;
+mandatory services/runtime/App reports were missing. Controller/policy and the
+Swift codec oracle passed, not lifecycle acceptance. The WP-201 producer supplied
+isolated `b8303ba7c` and `e1f4c05ce` fixture-only corrections, composed unchanged.
+New runtime test scheduling/expected-failure setup was corrected separately;
+no test was removed and no assertion was weakened.
 
 Full production ChannelService wiring is blocked by its owner's frozen WP-405
 dispatch/UUID-receipt/uncertainty cohort; MessageService wiring remains its current

@@ -309,7 +309,7 @@ class MergedAcceptance:
             raise PortError("Published review has stale or conflicting scope provenance")
         expected_receipt_schema = {
             "bounded-repair": 2,
-            "bounded-infrastructure-verification": 5,
+            "bounded-infrastructure-verification": 4,
         }.get(acceptance_kind)
         if infrastructure and (
             result["verification_scope_id"] != "wp003-ci-reader-route-v1"

@@ -466,7 +466,7 @@ class MergedAcceptanceTests(unittest.TestCase):
                     "scope_id": "wp003-ci-reader-route-v1", "paths": ["tools/android-port/controller/native_review.py"],
                 }
                 receipt.update(
-                    schema_version=5, independent_review={"check_run_id": 88},
+                    schema_version=4,
                     evidence={
                         "schema_version": 5, "verification_scope": scope,
                         "runs": [{"check": "android-ci", "run_id": 1, "run_attempt": 1}],

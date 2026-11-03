@@ -13,32 +13,34 @@ paths and operations fail closed. The declaration fixes the Android CI workflow,
 the controller-and-policy job, its controller test step, and all four test roots:
 controller tests, local tests, Android parity tests, and oracle tests.
 
-The publisher independently stages the exact candidate diff and checks the
-actual `android-ci` run and its original controller/oracle job log. A human
-`COMMENTED` source receipt is only a transport envelope; it is not proof that
-the coordinator's `PASS` is independent. For this bounded route, the receipt
-must reference one successful `MeshCore One independent read-only review`
-check-run whose GitHub App ID matches
-`review_policy.trusted_read_only_reviewer_app_id` from the trusted base. The
-check's authenticated output must bind the exact repository/WP/source/manifest/
-policy/base/head, PR number, staged-input digest, review bytes and review
-digest. Its check suite must independently match the same trusted App ID and
-head. The coordinator's receipt content must exactly match the review output.
-Changing the comment, staging, base, head, app, check-run or review invalidates
-the binding. The PR author may post the human receipt, but that identity alone
-cannot satisfy the independent-review check. This does not require a second
-human `APPROVED` review.
+The publisher independently stages the exact candidate diff, requires the
+authenticated exact-head read-only source review and WP-003's existing human
+acceptance gate, then checks the actual `android-ci` run and its original
+controller/oracle job log. The run, attempt, workflow, application, source
+review and receipt are bound through the existing authenticated publisher
+workflow. Positive discovery and complete, non-skipped test outcomes are
+required; retained duplicate CI bundles are not accepted. The controller log
+and success-shaped candidate output are evidence inputs, not authority by
+themselves: the exact-candidate source review must independently inspect all
+changed classifiers, assertions, tests and workflow wiring.
 
-No independent reviewer App ID is currently configured in the trusted policy,
-and the existing publisher workflow does not launch a reviewer. Consequently,
-the current deployment fails closed with a missing-capability error; configuring
-and installing a genuinely read-only reviewer App is a separate trusted-base
-bootstrap prerequisite. That App must be distinct from GitHub Actions and
-restricted from source, PR, approval, dispatch, and merge writes; its check is
-the only write it emits. The reviewer profile hash or a coordinator-authored
-review object cannot substitute for that identity. Positive local fixtures
-exercise the exact check-run binding but do not claim that such an App is
-deployed or available.
+Source receipt schema 4 uses the existing
+[coordinator-attestation policy](README.md#native-authenticated-review-publication-bounded-wp-003-repair),
+not a new reviewer identity model. An authorized coordinator performs or arranges
+the actual isolated, trusted-profile read/search-only review and records its
+complete decision as a GitHub-authenticated `COMMENTED` review. The coordinator's
+account may also be the PR author; matching logins do not prove producer
+self-review. The producer must not mint its own trusted verdict. GitHub does not
+independently measure reviewer isolation, and a unit-test fixture cannot prove
+that an operational review took place.
+
+The bounded route uses the same authenticated server receipt, full trusted-base
+staging digest and exact review bindings as the existing routes. A plain PASS,
+unregistered candidate author, bot, self-declared profile or local staged bundle
+is not an attestation. Changes to receipt content after publication invalidate
+the publisher's receipt-body digest. No separate reviewer App or second human
+`APPROVED` review is required. Actual independent review and a separate trusted
+bootstrap decision are still necessary; local tests cannot supply either.
 
 After trusted-base admission only, the reviewer can create review input with
 the data-only command:

@@ -388,8 +388,11 @@ class RepairContractTests(unittest.TestCase):
         proof = verify_repair(value, scope, manifest, rules, None)
         self.assertFalse(proof["wp_complete"])
         self.assertFalse(proof["dependency_unlock"])
-        for verifier in (verify_pr_gates, verify_completion):
-            with self.subTest(verifier=verifier), self.assertRaisesRegex(PortError, "[Bb]ounded repair"):
+        for verifier, message in (
+            (verify_pr_gates, "Bounded acceptance is not full-WP gate/completion evidence"),
+            (verify_completion, "Bounded acceptance cannot complete a WP or unlock dependencies"),
+        ):
+            with self.subTest(verifier=verifier), self.assertRaisesRegex(PortError, message):
                 verifier(value.pr, value.evidence, value.review, [], value.binding, manifest, rules)
         self.assertFalse(manifest.wp("WP-312")["verification"]["configured"])
 

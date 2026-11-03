@@ -322,6 +322,60 @@ explicit producer/consumer handling without silently dropping data or minting
 current proof. This gap is coordinated with WP-208/WP-308; neither journal
 settlement nor the physical-wire fence resolves it.
 
+### Non-activated history storage prerequisite
+
+Coordinator assignment `call_3pKMEgPGGPX06oeSQb5CgcT4` separately assigns the
+known-origin read prerequisite. Actual own-checkout `modify` admissions passed:
+WP-201 `ChannelHistoryPersisting.kt` and `MessageDaos.kt`; WP-202
+`MessageRepository.kt`, `RoomPersistenceStore.kt` and
+`ChannelHistoryPersistenceTest.kt`. WP-208 explicitly serialized the new contract,
+repository and DAO additions; the prior WP-201 owner confirmed no active query
+producer or overlap with these paths. Historical advisory reservations remain
+unchanged. The Room store edit adds only the independent interface delegation,
+not restore, lifecycle or consumer behavior.
+
+The independent nine-method `ChannelHistoryPersisting` role is exposed by the real
+Room store, not added to `MessagePersisting` or the aggregate process-store
+protocol. Existing consumers/fakes and all existing index-only APIs are unchanged.
+`ChannelHistoryScope(radioId, channelIndex, expectedOccupantID)` can be copied
+from the initiating authoritative snapshot. `saveChannelMessage(dto, origin)`
+requires the DTO's already-captured original proof and matching destination;
+it never fills NULL from the current slot, changes existing NULL/other proof, or
+rejects an otherwise valid old proof merely because replacement occurred before
+its late commit. Actual caller/App capture and MessageService receipt propagation
+remain WP-308/WP-208 producer work, not implemented here.
+
+`validateChannelMessageOrigin(exactKey)` reads the persisted original proof and
+validates the current known radio/index authority in one Room transaction. Typed
+`ChannelHistoryRejected` causes under standard `InvalidData` distinguish unknown,
+stale, missing, mismatched and unbound history. This read is not an enqueue or wire
+permit. Scoped page/window/count/summary/failure-count/reaction candidates validate
+authority and apply SQL proof predicates before ordering limits, offsets and
+anchor counts. Summary keys include the full expected origin rather than just a
+saved channel-row UUID. Existing exact-key recovery still returns the complete old
+DTO/text. No deletion or migration is needed for these queries.
+
+Every new scoped history read rejects ANY NULL-origin row in the requested slot
+with typed `UNBOUND_HISTORY`, even outside its page or timestamp range. It neither
+returns silently partial history nor chooses a policy for legitimate incoming,
+legacy or imported NULL data. Those rows and old APIs are preserved. The user was
+unavailable for that separate disposition; no option, hiding/rebinding behavior,
+recovery UX or activation was approved.
+
+Seven new real-Room test methods are authored: held initiating old save released
+after actual replacement, successful late commit and disk reopen with exact-row
+recovery; interleaved old/current SQL pagination/offset/anchor/window/count/summary/
+reaction-limit discrimination; known incoming/outgoing and same-occupant metadata/
+radio/slot controls; NULL rows of either direction through reopen with all new
+read surfaces rejecting explicitly; immutable-origin/destination rejection and
+actual SQLite-trigger rollback; unresolved/disabled/ABA/missing authority; actual
+query callbacks asserting authority and history statements run inside the Room
+transaction. The held caller gate is a storage schedule, not an actual
+MessageService receipt/consumer test or physical-radio assertion. NULL fixtures
+do not manufacture legacy codec/restore evidence. These methods have no native
+execution credit yet. Existing #535/#537, journal/wire and local execution holds
+remain unchanged.
+
 ## Shared connection admission support
 
 The runtime lifecycle owner and fence owner agreed the bounded WP-201

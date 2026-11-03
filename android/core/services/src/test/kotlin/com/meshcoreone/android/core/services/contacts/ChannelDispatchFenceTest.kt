@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.ChannelDispatchAdmission
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
@@ -30,12 +31,18 @@ class ChannelDispatchFenceTest {
         val radio = RadioId(UUID(0, 1))
         val epoch = ProcessEpoch(UUID(0, 2))
         val connection = Any()
-        val lease = fence.openSession(token(1), connection)
+        val admission = ChannelDispatchAdmission(token(1), connection)
+        val lease = fence.openSession(token(1), connection, admission)
         var occupant: UUID? = UUID(0, 3)
         val intended = occupant
         val effects = mutableListOf<String>()
 
         fun token(generation: Long, radioId: RadioId = radio) = SessionToken(epoch, Generation(generation), radioId)
+
+        fun open(token: SessionToken, connection: Any): ChannelDispatchFence.Lease =
+            fence.openSession(token, connection,
+                if (token == admission.token && connection === admission.connectionIdentity) admission
+                else ChannelDispatchAdmission(token, connection))
 
         suspend fun send(lease: ChannelDispatchFence.Lease = this.lease) =
             fence.dispatch(lease, 7u, intended, { radioId, index ->
@@ -57,6 +64,101 @@ class ChannelDispatchFenceTest {
             scope.withChannelIdentityMutation { assertEquals(f.intended, f.occupant) }
             f.fence.recordReconciled(f.lease, scope, listOf(7u))
         }
+    }
+
+    @Test
+    fun leaseRequiresExactManagerAdmissionAndCannotReplaceItsHandle() = runTest {
+        val f = preparedFixture()
+        val substituted = ChannelDispatchAdmission(f.token(1), f.connection)
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+            f.fence.openSession(f.token(1), f.connection, substituted)
+        }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+            f.fence.openSession(f.token(2), f.connection, f.admission)
+        }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+            f.fence.openSession(f.token(1), Any(), f.admission)
+        }
+        assertEquals(0L, substituted.inFlightCount)
+        assertEquals(0L, f.admission.inFlightCount)
+        f.admission.revoke()
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.open(f.token(1), f.connection) }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.send() }
+    }
+
+    @Test
+    fun managerRevocationDuringAuthorityReadPreventsAtomicWireAdmission() = runTest {
+        val f = preparedFixture()
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+            f.fence.dispatch(f.lease, 7u, f.intended, { _, _ ->
+                f.admission.revoke()
+                f.occupant
+            }) { error("Revoked during authority read") }
+        }
+        assertEquals(0L, f.admission.inFlightCount)
+        assertTrue(f.effects.isEmpty())
+    }
+
+    @Test
+    fun admittedDispatchRetainsPermitAfterRevocationAndCancellationUntilActualReturn() = runTest {
+        val f = preparedFixture()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val sending = launch {
+            f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> f.occupant }) {
+                assertEquals(1L, f.admission.inFlightCount)
+                entered.complete(Unit)
+                release.await()
+                f.effects += "accepted"
+            }
+        }
+        entered.await()
+        f.admission.revoke()
+        sending.cancel()
+        assertEquals(1L, f.admission.inFlightCount)
+        assertTrue(f.admission.isRevoked)
+        val successor = f.open(f.token(2), Any())
+        val mutation = launch { f.fence.withMutation(successor) { f.effects += "successor" } }
+        runCurrent()
+        assertFalse(mutation.isCompleted)
+        release.complete(Unit)
+        sending.join()
+        mutation.join()
+        assertTrue(sending.isCancelled)
+        assertEquals(0L, f.admission.inFlightCount)
+        assertEquals(listOf("accepted", "successor"), f.effects)
+    }
+
+    @Test
+    fun scopedMutationPermitAccountsCompletionButCannotReadmitRevokedLease() = runTest {
+        val f = preparedFixture()
+        f.gate.withChannelOperationScope { scope ->
+            f.fence.withScopedMutation(f.lease, scope) {
+                assertEquals(1L, f.admission.inFlightCount)
+                f.admission.revoke()
+                scope.withChannelIdentityMutation { f.effects += "persist admitted" }
+                assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+                    f.fence.recordReconciled(f.lease, scope, listOf(7u))
+                }
+            }
+        }
+        assertEquals(0L, f.admission.inFlightCount)
+        assertEquals(listOf("persist admitted"), f.effects)
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.send() }
+    }
+
+    @Test
+    fun managerRevokedStaleFactoryDoesNotStrandSuccessorOrResetQuarantine() = runTest {
+        val f = preparedFixture()
+        f.admission.revoke()
+        val successor = f.open(f.token(2), Any())
+        assertFalse(successor === f.lease)
+        assertFailsWith<ChannelDispatchFailure.UnreconciledSession> { f.send(successor) }
+        val failure = MeshCoreException.Timeout()
+        f.fence.quarantine(f.lease, failure)
+        assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+            f.fence.withMutation(successor) { error("Old uncertainty still blocks successor") }
+        }.cause)
     }
 
     @Test
@@ -87,7 +189,7 @@ class ChannelDispatchFenceTest {
             f.fence.dispatch(f.lease, 8u, f.intended, { _, _ -> f.occupant }) { error("unread slot must not send") }
         }
         f.fence.retire(f.lease)
-        val successor = f.fence.openSession(f.token(2), Any())
+        val successor = f.open(f.token(2), Any())
         assertFailsWith<ChannelDispatchFailure.UnreconciledSession> { f.send(successor) }
         f.gate.withChannelOperationScope { scope -> f.fence.recordReconciled(successor, scope, listOf(7u)) }
         f.send(successor)
@@ -113,7 +215,7 @@ class ChannelDispatchFenceTest {
         val f = preparedFixture()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val sameLease = f.fence.openSession(f.token(1), f.connection)
+        val sameLease = f.open(f.token(1), f.connection)
         assertSame(f.lease, sameLease)
         val send = async {
             f.fence.dispatch(sameLease, 7u, f.intended, { _, _ -> f.occupant }) {
@@ -233,7 +335,7 @@ class ChannelDispatchFenceTest {
         }
         entered.await()
         f.fence.retire(f.lease)
-        val next = f.fence.openSession(f.token(2), Any())
+        val next = f.open(f.token(2), Any())
         val successor = launch {
             f.fence.withMutation(next) { f.effects += "successor mutation" }
         }
@@ -254,12 +356,12 @@ class ChannelDispatchFenceTest {
             f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> f.occupant }) { throw failure }
         })
         assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
-            f.fence.openSession(f.token(1), f.connection)
+            f.open(f.token(1), f.connection)
         }.cause)
         assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.replace() }
         assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.send() }
         f.fence.retire(f.lease)
-        assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.fence.openSession(f.token(2), Any()) }
+        assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.open(f.token(2), Any()) }
     }
 
     @Test
@@ -291,7 +393,7 @@ class ChannelDispatchFenceTest {
         val failure = MeshCoreException.Timeout()
         f.fence.withMutation(f.lease) { f.fence.quarantine(f.lease, failure) }
         assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
-            f.fence.openSession(f.token(1), f.connection)
+            f.open(f.token(1), f.connection)
         }.cause)
         assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.send() }
     }
@@ -379,15 +481,15 @@ class ChannelDispatchFenceTest {
     @Test
     fun wrongFenceConnectionTokenOrProcessCannotBorrowLease() = runTest {
         val f = preparedFixture()
-        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.fence.openSession(f.token(1), Any()) }
-        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.fence.openSession(f.token(2), Any()) }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.open(f.token(1), Any()) }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.open(f.token(2), Any()) }
         assertFailsWith<ChannelDispatchFailure.RetiredSession> {
             ChannelDispatchFence(ChannelIdentityMutex()).withMutation(f.lease) { error("must not enter") }
         }
         f.fence.retire(f.lease)
-        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.fence.openSession(f.token(1), f.connection) }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.open(f.token(1), f.connection) }
         assertFailsWith<ChannelDispatchFailure.RetiredSession> {
-            f.fence.openSession(f.token(2).copy(epoch = ProcessEpoch(UUID(0, 99))), Any())
+            f.open(f.token(2).copy(epoch = ProcessEpoch(UUID(0, 99))), Any())
         }
     }
 
@@ -396,7 +498,7 @@ class ChannelDispatchFenceTest {
         val f = preparedFixture()
         f.fence.quarantine(f.lease, MeshCoreException.Timeout())
         val otherRadio = RadioId(UUID(0, 99))
-        val other = f.fence.openSession(f.token(1, otherRadio), Any())
+        val other = f.open(f.token(1, otherRadio), Any())
         f.gate.withChannelOperationScope { scope -> f.fence.recordReconciled(other, scope, listOf(7u)) }
         f.fence.dispatch(other, 7u, UUID(0, 50), { radio, slot ->
             assertEquals(otherRadio, radio)

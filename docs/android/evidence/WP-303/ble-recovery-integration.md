@@ -5,6 +5,16 @@ issue-closure recommendation. The maintainer subsequently authorized a normal
 scoped PR for hosted exact-candidate verification; its live job/log is
 authoritative for reproducible results, not this publication-time note.
 
+The subsequent bounded-review preparation consolidates the unchanged GATT shadow
+into `BleRecoveryIntegrationTest.kt`. The deployed verification-only contract
+requires every changed unit-test source to contain its actual selected JUnit
+methods; a separate helper-only file does not qualify. This is a source-layout
+correction, not a new test or production behavior. The final candidate therefore
+adds one Kotlin regression file and this evidence file. Its fresh exact-head
+hosted run and independently attributable coordinator source-review receipt are
+still required; neither the author's scope nor the advisory transfer is a verdict
+or a new lease.
+
 - Assigned slice: WP-303 production-composed regression for the remaining software
   integration on #383, not a reopening of #443's approved native BLE contract.
 - Trusted base: `1e1ff70345f203b41f9a8b04836c2cc4640500c9`.

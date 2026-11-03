@@ -2,6 +2,8 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.navigation.ChatSelection
+import com.meshcoreone.android.app.navigation.CapturedContactLinkContext
+import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationDestination
 import com.meshcoreone.android.app.navigation.NavigationFailure
@@ -47,6 +49,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationDelivery
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
@@ -79,6 +82,9 @@ import com.meshcoreone.android.core.services.simulator.SimulatorSeedStore
 import com.meshcoreone.android.feature.nodes.deps.Announcer
 import com.meshcoreone.android.feature.nodes.deps.StringListPreferences
 import com.meshcoreone.android.feature.nodes.deps.UserFacingMessages
+import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import java.time.Instant
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineDispatcher
@@ -344,6 +350,55 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         val lookupRevision = navigation.beginContactLinkLookup(generation)
         val isCurrentSession = captureContactNavigationSession(generation)
         return { navigation.isContactLinkLookupCurrent(lookupRevision) && isCurrentSession() }
+    }
+
+    internal fun captureContactLinkContext(
+        publicKey: Bytes, publications: ContactLinkPublications,
+    ): ContactLinkContext = withNavigationCommitBoundary {
+        val graph = sessions.current
+        val lifecycle = connectionManager.captureNavigationLifecycle()
+        val device = connectionManager.connectedDevice
+        val radio = graph?.token?.radioId ?: device?.radioId ?: connectionPort.lastConnectedRadioId
+        val selfKey = graph?.navigationPublicKey ?: device?.publicKey
+        CapturedContactLinkContext(
+            navigation.captureContactLinkLookup(
+                publicKey, radio, selfKey, graph?.token, connectionManager.snapshot.value.token,
+                if (graph == null) connectionManager.isNavigationLifecycleCurrent(lifecycle)
+                else !graph.isTornDown &&
+                    connectionManager.isNavigationSessionCurrent(graph.token, allowUnpublished = true),
+                publications,
+            ),
+            graph, lifecycle,
+        )
+    }
+
+    internal fun completeContactLookup(
+        context: ContactLinkContext, link: ContactLinkRequest, existing: ContactDTO?,
+        publications: ContactLinkPublications,
+    ): ContactLinkCompletion {
+        val captured = context as? CapturedContactLinkContext ?: return ContactLinkCompletion.StaleContext
+        return withNavigationCommitBoundary {
+            val current = sessions.current
+            val lookup = captured.lookup
+            val valid = when {
+                lookup.owner !== navigation -> false
+                current != null && lookup.radioId != null && lookup.radioId != current.token.radioId -> false
+                current == null -> captured.graph == null &&
+                    connectionManager.isNavigationLifecycleCurrent(captured.lifecycle)
+                current.isTornDown -> false
+                captured.graph != null -> current === captured.graph &&
+                    if (lookup.boundToken == current.token)
+                        connectionManager.isNavigationSessionCurrent(current.token)
+                    else lookup.allowsInitialBinding &&
+                        connectionManager.isInitialNavigationSession(captured.lifecycle, current.token)
+                else -> lookup.allowsInitialBinding &&
+                    connectionManager.isInitialNavigationSession(captured.lifecycle, current.token)
+            }
+            if (!valid) ContactLinkCompletion.StaleContext else navigation.completeCapturedContactLookup(
+                lookup, link, existing, current?.token, lookup.allowsInitialBinding,
+                current?.navigationPublicKey.takeIf { lookup.allowsInitialBinding }, publications,
+            )
+        }
     }
 
     val appState: AppState = AppState(

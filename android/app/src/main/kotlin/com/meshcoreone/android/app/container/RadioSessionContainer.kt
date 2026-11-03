@@ -105,6 +105,7 @@ class RadioSessionContainer private constructor(
     private val ownership: FactoryOwnership,
 ) : RuntimeServices, AppSession {
     override val transportType: TransportType get() = inputs.transportType
+    internal val navigationPublicKey: Bytes get() = inputs.device.publicKey
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
     private val lock = Any()
     private val knownRegionLock = Any()

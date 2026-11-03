@@ -16,12 +16,16 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.ChatRoute
+import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
+import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
@@ -77,6 +81,128 @@ class NavigationStateTest {
         store.release(first)
         assertEquals(AppTab.MAP, store.state.value.selectedTab)
         assertFalse(store.compareAndSet(original, initial.copy(selectedTab = AppTab.TOOLS)))
+    }
+
+    @Test fun coherentContactCaptureRejectsReplacementGraphBeforeItsNavigationBinding() {
+        val n = NavigationCoordinator()
+        val epoch = ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000041"))
+        val tokenA = SessionToken(epoch, Generation(1), radio)
+        val tokenB = SessionToken(epoch, Generation(2), radio)
+        assertTrue(n.bindNotificationSession(radio, null, tokenA))
+        val captured = ContactLinkPublications().use {
+            n.captureContactLinkLookup(contact.publicKey, radio, null, tokenA, tokenA, true, it)
+        }
+        val before = n.currentState
+        for (runtimeToken in listOf(null, tokenB)) {
+            val mixed = ContactLinkPublications().use {
+                n.captureContactLinkLookup(contact.publicKey, radio, null, tokenB, runtimeToken, true, it)
+            }
+            assertEquals(ContactLinkCaptureDisposition.StaleContext, mixed.disposition)
+            assertEquals(before, n.currentState)
+        }
+        assertTrue(n.bindNotificationSession(radio, null, tokenB))
+        val replacement = n.currentState
+        val outcome = ContactLinkPublications().use {
+            n.completeCapturedContactLookup(
+                captured, ContactLinkRequest("Old", contact.publicKey, ContactType.CHAT), contact,
+                tokenB, false, null, it,
+            )
+        }
+        assertEquals(ContactLinkCompletion.StaleContext, outcome)
+        assertEquals(replacement, n.currentState)
+    }
+
+    @Test fun coherentContactCaptureAllowsOnlyItsFirstBindingAndKeepsTargetMetadata() {
+        val n = NavigationCoordinator()
+        val captured = ContactLinkPublications().use {
+            n.captureContactLinkLookup(contact.publicKey, null, null, null, null, true, it)
+        }
+        val token = SessionToken(
+            ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000042")), Generation(1), radio,
+        )
+        assertTrue(n.bindNotificationSession(radio, null, token))
+        val link = ContactLinkRequest("Untrusted alias", contact.publicKey, ContactType.REPEATER)
+        assertEquals(ContactLinkCompletion.ConfirmationStaged, ContactLinkPublications().use {
+            n.completeCapturedContactLookup(captured, link, null, token, true, null, it)
+        })
+        val pending = requireNotNull(n.state.value.pendingContactLink)
+        assertEquals(radio, pending.targetRadioId)
+        assertEquals(n.state.value.generation, pending.generation)
+        assertEquals(link.name, pending.name)
+        assertEquals(link.type, pending.type)
+        assertEquals(link.publicKey, pending.publicKey)
+        assertNotNull(pending.deliveryId)
+        val beforeReplay = n.currentState
+        assertEquals(ContactLinkCompletion.StaleContext, ContactLinkPublications().use {
+            n.completeCapturedContactLookup(captured, link, null, token, true, null, it)
+        })
+        assertEquals(beforeReplay, n.currentState)
+
+        val self = NavigationCoordinator()
+        val selfLookup = ContactLinkPublications().use {
+            self.captureContactLinkLookup(contact.publicKey, null, null, null, null, true, it)
+        }
+        assertTrue(self.bindNotificationSession(radio, contact.publicKey, token))
+        assertEquals(ContactLinkCompletion.IgnoredSelfContact, ContactLinkPublications().use {
+            self.completeCapturedContactLookup(selfLookup, link, null, token, true, contact.publicKey, it)
+        })
+        assertNull(self.state.value.pendingContactLink)
+    }
+
+    @Test fun capturedContactCompletionChecksTheExactTargetAndPublishesAfterTheOuterGuard() = runTest {
+        val n = NavigationCoordinator()
+        val token = SessionToken(
+            ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000043")), Generation(1), radio,
+        )
+        assertTrue(n.bindNotificationSession(radio, null, token))
+        val guard = Any()
+        var observed = false
+        val observer = backgroundScope.launch(Dispatchers.Unconfined) {
+            n.state.collect {
+                if (it.selectedContact != null) {
+                    assertFalse(Thread.holdsLock(guard))
+                    observed = true
+                    if (it.selectedSetting == null) n.navigateToSetting(SettingsDetail.LANGUAGE)
+                }
+            }
+        }
+        val capturePublication = ContactLinkPublications()
+        val captured = synchronized(guard) {
+            n.captureContactLinkLookup(contact.publicKey, radio, null, token, token, true, capturePublication)
+        }
+        capturePublication.release()
+        val publication = ContactLinkPublications()
+        val cancellation = CancellationException("cancelled after commit")
+        val thrown = assertThrows(CancellationException::class.java) {
+            publication.use {
+                synchronized(guard) {
+                    assertEquals(ContactLinkCompletion.Navigated, n.completeCapturedContactLookup(
+                        captured, ContactLinkRequest("Alias", contact.publicKey, ContactType.CHAT), contact,
+                        token, false, null, publication,
+                    ))
+                    assertEquals(contact, n.currentState.selectedContact)
+                    assertNull(n.state.value.selectedContact)
+                    assertFalse(observed)
+                    throw cancellation
+                }
+            }
+        }
+        assertSame(cancellation, thrown)
+        assertTrue(observed)
+        assertEquals(SettingsDetail.LANGUAGE, n.state.value.selectedSetting)
+        observer.cancelAndJoin()
+
+        val wrongLookup = ContactLinkPublications().use {
+            n.captureContactLinkLookup(contact.publicKey, radio, null, token, token, true, it)
+        }
+        assertEquals(ContactLinkCompletion.WrongTarget, ContactLinkPublications().use {
+            n.completeCapturedContactLookup(
+                wrongLookup, ContactLinkRequest("Alias", contact.publicKey, ContactType.CHAT),
+                contact.copy(radioId = otherRadio), token, false, null, it,
+            )
+        })
+        assertEquals(NavigationFailure.WrongTarget(NavigationTarget.CONTACT), n.state.value.failure)
+        assertEquals(contact, n.state.value.selectedContact)
     }
 
     @Test fun ordinaryUpdateCannotPublishAnUnreleasedGuardedCommit() {

@@ -100,6 +100,43 @@ interface ChatListFeatureDependencies {
     fun conversationServices(): ChatConversationServices?
 }
 
+enum class ContactLinkCaptureDisposition { Lookup, IgnoredSelfContact, StaleContext }
+
+enum class ContactLinkCompletion { Navigated, ConfirmationStaged, IgnoredSelfContact, StaleContext, WrongTarget }
+
+interface ContactLinkContext {
+    val radioId: RadioId?
+    val selfPublicKey: com.meshcoreone.android.core.protocol.bytes.Bytes?
+    val disposition: ContactLinkCaptureDisposition
+}
+
+interface ContactLinkPublication {
+    fun release()
+}
+
+/**
+ * Single-owner synchronous capture or completion, never shared across suspension/threads.
+ * Allocate before entering guards and use `use` outside them: close is once-only, and a release
+ * failure is suppressed onto an original failure/cancellation rather than replacing it.
+ */
+class ContactLinkPublications : AutoCloseable {
+    private var publication: ContactLinkPublication? = null
+    private var released = false
+
+    fun defer(publication: ContactLinkPublication) {
+        check(!released && this.publication == null) { "Contact-link publication already assigned or released" }
+        this.publication = publication
+    }
+
+    fun release() {
+        if (released) return
+        released = true
+        publication?.release()
+    }
+
+    override fun close() = release()
+}
+
 /** Shell navigation and lookups the link router uses (iOS `appState.navigation` + `offlineDataStore`). */
 interface ChatLinkEnvironment {
     var selectedTab: AppTab
@@ -107,6 +144,12 @@ interface ChatLinkEnvironment {
     val contactLinkGeneration: Long get() = 0
     fun captureContactLinkSession(generation: Long): () -> Boolean = { true }
     val connectedDevicePublicKey: com.meshcoreone.android.core.protocol.bytes.Bytes?
+    fun captureContactLinkContext(
+        publicKey: com.meshcoreone.android.core.protocol.bytes.Bytes, publications: ContactLinkPublications,
+    ): ContactLinkContext
+    fun completeContactLookup(
+        context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?, publications: ContactLinkPublications,
+    ): ContactLinkCompletion
     val parser: MeshCoreLinkParsing
     fun navigateToMap(latitude: Double, longitude: Double)
     fun navigateToContactDetail(contact: ContactDTO)

@@ -17,6 +17,10 @@ import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.model.snapshotMap
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.list.ChatRoute
+import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
+import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkPublication
+import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -280,6 +284,92 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     internal fun isContactLinkLookupCurrent(revision: Long?): Boolean =
         revision != null && mutableState.value.contactLookupRevision == revision
+
+    internal fun captureContactLinkLookup(
+        publicKey: Bytes, radioId: RadioId?, selfPublicKey: Bytes?, graphToken: SessionToken?,
+        runtimeToken: SessionToken?, graphCurrent: Boolean, publications: ContactLinkPublications,
+    ): ContactLinkLookup {
+        var publication: NavigationStateStore.Publication? = null
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
+            val boundGraph = graphToken != null && graphCurrent && runtimeToken == graphToken &&
+                current.boundSessionToken == graphToken && current.radioId == graphToken.radioId
+            val initialGraph = graphToken != null && graphCurrent && (runtimeToken == null || runtimeToken == graphToken) &&
+                current.boundSessionToken == null && current.radioId == null
+            val offline = graphToken == null && graphCurrent && runtimeToken == null && current.boundSessionToken == null &&
+                (current.radioId == null || current.radioId == radioId)
+            val disposition = when {
+                !boundGraph && !initialGraph && !offline -> ContactLinkCaptureDisposition.StaleContext
+                publicKey == selfPublicKey -> ContactLinkCaptureDisposition.IgnoredSelfContact
+                else -> ContactLinkCaptureDisposition.Lookup
+            }
+            val revision = if (disposition == ContactLinkCaptureDisposition.Lookup)
+                Math.incrementExact(current.contactLookupRevision) else null
+            val lookup = ContactLinkLookup(
+                this, current.generation, current.boundSessionToken, current.radioId,
+                radioId, publicKey, selfPublicKey, revision, disposition,
+            )
+            if (revision == null) return lookup
+            val deferred = publication ?: contactLinkPublication(publications).also { publication = it }
+            if (mutableState.compareAndSet(snapshot, current.copy(contactLookupRevision = revision), deferred)) return lookup
+        }
+    }
+
+    private fun contactLinkPublication(publications: ContactLinkPublications): NavigationStateStore.Publication {
+        val publication = NavigationStateStore.Publication()
+        publications.defer(object : ContactLinkPublication {
+            override fun release() = mutableState.release(publication)
+        })
+        return publication
+    }
+
+    internal fun completeCapturedContactLookup(
+        lookup: ContactLinkLookup, link: ContactLinkRequest, contact: ContactDTO?,
+        currentToken: SessionToken?, allowInitialBinding: Boolean, identifiedSelfPublicKey: Bytes?,
+        publications: ContactLinkPublications,
+    ): ContactLinkCompletion {
+        if (lookup.owner !== this || lookup.disposition == ContactLinkCaptureDisposition.StaleContext)
+            return ContactLinkCompletion.StaleContext
+        var publication: NavigationStateStore.Publication? = null
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
+            val initial = allowInitialBinding && lookup.allowsInitialBinding && currentToken != null &&
+                current.initialContactLinkGeneration == lookup.generation &&
+                current.generation == Math.incrementExact(lookup.generation) &&
+                current.boundSessionToken == currentToken
+            val same = current.generation == lookup.generation && current.boundSessionToken == lookup.boundToken &&
+                current.radioId == lookup.navigationRadioId
+            if (!same && !initial) return ContactLinkCompletion.StaleContext
+            if (lookup.disposition == ContactLinkCaptureDisposition.IgnoredSelfContact)
+                return if (link.publicKey == lookup.publicKey) ContactLinkCompletion.IgnoredSelfContact
+                else ContactLinkCompletion.WrongTarget
+            if (lookup.revision == null || current.contactLookupRevision != lookup.revision)
+                return ContactLinkCompletion.StaleContext
+            if (lookup.allowsInitialBinding && lookup.publicKey == identifiedSelfPublicKey)
+                return ContactLinkCompletion.IgnoredSelfContact
+            val radio = if (initial && lookup.radioId == null) current.radioId else lookup.radioId
+            if (current.radioId != null && current.radioId != radio) return ContactLinkCompletion.StaleContext
+            val wrongTarget = link.publicKey != lookup.publicKey ||
+                contact != null && (contact.radioId != radio || contact.publicKey != lookup.publicKey)
+            val outcome = when {
+                wrongTarget -> ContactLinkCompletion.WrongTarget
+                contact == null -> ContactLinkCompletion.ConfirmationStaged
+                else -> ContactLinkCompletion.Navigated
+            }
+            val next = when {
+                wrongTarget -> current.copy(failure = NavigationFailure.WrongTarget(NavigationTarget.CONTACT))
+                contact == null -> current.stageContactLink(link, radio)
+                else -> current.push(AppTab.NODES, NavigationDestination.ContactDetail(contact)).copy(
+                    pendingContactLink = null, pendingContactDetail = contact, selectedContact = contact,
+                    nodesShowingDiscovery = false,
+                )
+            }.copy(contactLookupRevision = Math.incrementExact(current.contactLookupRevision))
+            val deferred = publication ?: contactLinkPublication(publications).also { publication = it }
+            if (mutableState.compareAndSet(snapshot, next, deferred)) return outcome
+        }
+    }
 
     // Native adaptation: Commit lookup results against their initiating context, never a post-lookup radio.
     fun completeContactLookup(

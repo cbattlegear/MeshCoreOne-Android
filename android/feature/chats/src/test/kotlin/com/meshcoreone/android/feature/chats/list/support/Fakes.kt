@@ -22,6 +22,10 @@ import com.meshcoreone.android.feature.chats.list.ChatRoute
 import com.meshcoreone.android.feature.chats.list.ChatReactionClassifier
 import com.meshcoreone.android.feature.chats.list.ChannelLinkResult
 import com.meshcoreone.android.feature.chats.list.ContactLinkResult
+import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
+import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import com.meshcoreone.android.feature.chats.list.MeshCoreLinkParser
 import com.meshcoreone.android.feature.chats.list.MeshCoreLinkParsing
 import java.time.Clock
@@ -130,6 +134,21 @@ internal class FakeLinks(
     override var currentRadioId: RadioId? = Fixtures.radio,
     override var connectedDevicePublicKey: Bytes? = null,
 ) : ChatLinkEnvironment {
+    private data class CapturedContact(
+        override val radioId: RadioId?,
+        override val selfPublicKey: Bytes?,
+        override val disposition: ContactLinkCaptureDisposition,
+        val generation: Long,
+        val revision: Long,
+        val publicKey: Bytes,
+    ) : ContactLinkContext
+
+    override var contactLinkGeneration = 0L
+    private var contactRevision = 0L
+    var afterContactCapture: () -> Unit = {}
+    var contactFetch: (suspend (RadioId, Bytes) -> ContactDTO?)? = null
+    val contactFetchRadios = mutableListOf<RadioId>()
+    val contactCompletions = mutableListOf<ContactLinkCompletion>()
     override var selectedTab: AppTab = AppTab.CHATS
     var mapFocus: Pair<Double, Double>? = null
     var contactDetail: ContactDTO? = null
@@ -141,6 +160,39 @@ internal class FakeLinks(
     var storedChannels: List<ChannelDTO> = emptyList()
     var failChannelFetch: Exception? = null
 
+    override fun captureContactLinkContext(publicKey: Bytes, publications: ContactLinkPublications): ContactLinkContext {
+        val disposition = if (publicKey == connectedDevicePublicKey)
+            ContactLinkCaptureDisposition.IgnoredSelfContact else ContactLinkCaptureDisposition.Lookup
+        if (disposition == ContactLinkCaptureDisposition.Lookup) contactRevision++
+        return CapturedContact(
+            currentRadioId, connectedDevicePublicKey, disposition, contactLinkGeneration, contactRevision, publicKey,
+        ).also { afterContactCapture() }
+    }
+
+    override fun completeContactLookup(
+        context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?, publications: ContactLinkPublications,
+    ): ContactLinkCompletion {
+        val captured = context as? CapturedContact
+        val result = when {
+            captured == null || captured.generation != contactLinkGeneration ||
+                captured.radioId != currentRadioId || captured.revision != contactRevision -> ContactLinkCompletion.StaleContext
+            captured.disposition == ContactLinkCaptureDisposition.IgnoredSelfContact -> ContactLinkCompletion.IgnoredSelfContact
+            link.publicKey != captured.publicKey ||
+                existing != null && (existing.radioId != captured.radioId || existing.publicKey != captured.publicKey) ->
+                ContactLinkCompletion.WrongTarget
+            existing == null -> {
+                stageContactLink(link)
+                ContactLinkCompletion.ConfirmationStaged
+            }
+            else -> {
+                navigateToContactDetail(existing)
+                ContactLinkCompletion.Navigated
+            }
+        }
+        contactCompletions += result
+        return result
+    }
+
     override fun navigateToMap(latitude: Double, longitude: Double) {
         mapFocus = latitude to longitude
         selectedTab = AppTab.MAP
@@ -150,7 +202,12 @@ internal class FakeLinks(
     override fun stageContactLink(link: ContactLinkResult) { pendingContact = link }
     override fun stageChannelLink(link: ChannelLinkResult) { pendingChannel = link }
     override fun stageHashtag(fullName: String) { pendingHashtag = fullName }
-    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes) = storedContacts.firstOrNull { it.publicKey == publicKey }
+    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+        contactFetchRadios += radioId
+        val fetch = contactFetch
+        return if (fetch != null) fetch(radioId, publicKey)
+        else storedContacts.firstOrNull { it.radioId == radioId && it.publicKey == publicKey }
+    }
     override suspend fun fetchChannels(radioId: RadioId): List<ChannelDTO> {
         failChannelFetch?.let { throw it }
         return storedChannels

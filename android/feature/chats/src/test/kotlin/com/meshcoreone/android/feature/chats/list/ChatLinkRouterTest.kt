@@ -3,6 +3,7 @@ package com.meshcoreone.android.feature.chats.list
 
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.model.ChannelFloodScope
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.list.support.FakeLinks
 import com.meshcoreone.android.feature.chats.list.support.Fixtures
@@ -15,10 +16,119 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertSame
+import kotlin.test.assertFailsWith
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import java.util.UUID
 import org.junit.Test
 
 class ChatLinkRouterTest {
     private fun Scenario.router(links: FakeLinks = FakeLinks()) = links to ChatLinkRouter(links, scope)
+
+    @Test fun contactCaptureDoesNotResampleRadioOrSelfIdentityAfterInitiation() = scenario {
+        val publicKey = Bytes(ByteArray(32) { 0x23 })
+        val links = FakeLinks()
+        val initiatingRadio = links.currentRadioId
+        links.afterContactCapture = {
+            links.currentRadioId = RadioId(UUID.fromString("22222222-2222-2222-2222-222222222222"))
+            links.connectedDevicePublicKey = publicKey
+            links.contactLinkGeneration++
+        }
+        ChatLinkRouter(links, scope).route("meshcore://contact/add?name=Captured&public_key=${publicKey.hexString}&type=1")
+        settle()
+        assertEquals(listOf(initiatingRadio), links.contactFetchRadios)
+        assertEquals(listOf(ContactLinkCompletion.StaleContext), links.contactCompletions)
+        assertNull(links.pendingContact)
+        assertNull(links.contactDetail)
+    }
+
+    @Test fun heldContactLookupRejectsSameRadioReplacementAndIdenticalNewDeliveryWins() = scenario {
+        val publicKey = Bytes(ByteArray(32) { 0x24 })
+        val release = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val links = FakeLinks()
+        var first = true
+        links.contactFetch = { _, _ ->
+            if (first) {
+                first = false
+                entered.complete(Unit)
+                release.await()
+            }
+            null
+        }
+        val router = ChatLinkRouter(links, scope)
+        val uri = "meshcore://contact/add?name=Identical&public_key=${publicKey.hexString}&type=1"
+        assertTrue(router.route(uri))
+        entered.await()
+        links.contactLinkGeneration++
+        assertTrue(router.route(uri))
+        settle()
+        val replacement = assertNotNull(links.pendingContact)
+        release.complete(Unit)
+        settle()
+        assertSame(replacement, links.pendingContact)
+        assertEquals(listOf(ContactLinkCompletion.ConfirmationStaged, ContactLinkCompletion.StaleContext), links.contactCompletions)
+        assertNull(links.contactDetail)
+    }
+
+    @Test fun publicationReleaseIsOnceOnlyAndPreservesTheOriginalCancellation() {
+        var releases = 0
+        val cleanupFailure = IllegalStateException("observer failed")
+        val cancellation = CancellationException("lookup cancelled")
+        val publications = ContactLinkPublications()
+        val thrown = assertFailsWith<CancellationException> {
+            publications.use {
+                it.defer(object : ContactLinkPublication {
+                    override fun release() {
+                        releases++
+                        throw cleanupFailure
+                    }
+                })
+                throw cancellation
+            }
+        }
+        publications.release()
+        assertEquals(1, releases)
+        assertSame(cancellation, thrown)
+        assertEquals(listOf(cleanupFailure), thrown.suppressed.toList())
+    }
+
+    @Test fun identicalCurrentSessionDeliverySupersedesAnOlderFoundResult() = scenario {
+        val publicKey = Bytes(ByteArray(32) { 0x25 })
+        val release = CompletableDeferred<com.meshcoreone.android.core.model.ContactDTO?>()
+        val links = FakeLinks()
+        var first = true
+        links.contactFetch = { _, _ ->
+            if (first) {
+                first = false
+                release.await()
+            } else null
+        }
+        val router = ChatLinkRouter(links, scope)
+        val uri = "meshcore://contact/add?name=Same&public_key=${publicKey.hexString}&type=1"
+        assertTrue(router.route(uri))
+        assertTrue(router.route(uri))
+        settle()
+        val replacement = assertNotNull(links.pendingContact)
+        release.complete(Fixtures.contact(publicKey = publicKey))
+        settle()
+        assertSame(replacement, links.pendingContact)
+        assertNull(links.contactDetail)
+        assertEquals(listOf(ContactLinkCompletion.ConfirmationStaged, ContactLinkCompletion.StaleContext), links.contactCompletions)
+    }
+
+    @Test fun contactLookupCancellationDoesNotStageAnAbsentResult() = scenario {
+        val links = FakeLinks()
+        links.contactFetch = { _, _ -> throw CancellationException("lookup cancelled") }
+        assertTrue(ChatLinkRouter(links, scope).route(
+            "meshcore://contact/add?name=Cancelled&public_key=${"26".repeat(32)}&type=1",
+        ))
+        settle()
+        assertTrue(links.contactCompletions.isEmpty())
+        assertNull(links.pendingContact)
+        assertNull(links.contactDetail)
+    }
 
     @Test @OriginalCase("ChatLinkRouterTests::Returns false for plain https URLs (caller falls through to systemAction)()")
     fun `Returns false for plain https URLs`() = scenario {

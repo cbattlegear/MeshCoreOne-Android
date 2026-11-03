@@ -215,6 +215,14 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             override val contactLinkGeneration get() = container.navigation.currentState.generation
             override fun captureContactLinkSession(generation: Long) = container.captureContactLinkSession(generation)
             override val connectedDevicePublicKey get() = app.connectedDevice?.publicKey
+            override fun captureContactLinkContext(publicKey: Bytes, publications: ContactLinkPublications) =
+                container.captureContactLinkContext(publicKey, publications)
+            override fun completeContactLookup(
+                context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?,
+                publications: ContactLinkPublications,
+            ) = container.completeContactLookup(
+                context, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing, publications,
+            )
             override val parser = MeshCoreLinkParser
             override fun navigateToMap(latitude: Double, longitude: Double) =
                 container.navigation.navigateToMap(latitude, longitude)

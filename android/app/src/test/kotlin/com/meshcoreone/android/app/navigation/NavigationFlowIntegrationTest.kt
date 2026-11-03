@@ -42,6 +42,8 @@ import com.meshcoreone.android.core.runtime.LastConnectionStore
 import com.meshcoreone.android.core.runtime.SystemRuntimeClock
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ChatLinkEnvironment
+import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
+import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
@@ -1022,6 +1024,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             )) for (olderFound in listOf(false, true)) {
                 navigation.clearPendingLinks()
                 navigation.clearFailure()
+                val current = assertNotNull(h.sessions.current)
+                assertTrue(navigation.bindNotificationSession(radio, current.navigationPublicKey, current.token) {
+                    h.container.isCurrentSession(current)
+                })
                 val entered = CompletableDeferred<RadioId>()
                 val release = CompletableDeferred<ContactDTO?>()
                 val rejected = CompletableDeferred<Unit>()
@@ -1377,6 +1383,34 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(replacementGap, n.state.value, "Retired callbacks cannot commit before the next binding")
             assertEquals(stack, n.state.value.activeStack)
             replacementHandshake.complete(Unit)
+            h.eventually("replacement runtime publishes before its queued navigation binding") {
+                val replacement = h.sessions.current
+                replacement != null && replacement !== oldSession &&
+                    h.manager.snapshot.value.token == replacement.token
+            }
+            val replacement = assertNotNull(h.sessions.current)
+            assertNotEquals(replacement.token, n.currentState.boundSessionToken)
+            assertEquals(oldGeneration, n.currentState.generation)
+            val beforeMixedCapture = n.currentState
+            val captured = ContactLinkPublications().use {
+                h.container.captureContactLinkContext(key(30), it)
+            }
+            assertEquals(ContactLinkCaptureDisposition.StaleContext, captured.disposition)
+            val mixedReads = AtomicInteger()
+            val rejectedCaptures = CopyOnWriteArrayList<String>()
+            val mixedChat = ChatLinkRouter(object : ChatLinkEnvironment by h.container.chatsFeature.list.links {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    mixedReads.incrementAndGet()
+                    return store.fetchContact(radioId, publicKey)
+                }
+            }, backgroundScope, com.meshcoreone.android.feature.chats.list.ChatListDiagnostics { message, _ ->
+                rejectedCaptures += message
+            })
+            assertTrue(mixedChat.route(urls.last()))
+            testScheduler.runCurrent()
+            assertEquals(0, mixedReads.get(), "A mixed initiating context must not access the store")
+            assertEquals(listOf("Contact-link initiating context is not current"), rejectedCaptures)
+            assertEquals(beforeMixedCapture, n.currentState)
             h.eventually("activated replacement becomes ready") {
                 uiScheduler.runCurrent()
                 rebuilding.isCompleted && h.manager.connectionState == DeviceConnectionState.READY &&

@@ -71,16 +71,31 @@ class ChatLinkRouter(
     private fun redacted(url: String): String = url.substringBefore('?')
 
     private fun handleContactLink(link: ContactLinkResult) {
-        if (link.publicKey == environment.connectedDevicePublicKey) return
-        val radioId = environment.currentRadioId
-        val generation = environment.contactLinkGeneration
-        val isCurrentSession = environment.captureContactLinkSession(generation)
+        val context = ContactLinkPublications().use { publications ->
+            environment.captureContactLinkContext(link.publicKey, publications)
+        }
+        when (context.disposition) {
+            ContactLinkCaptureDisposition.IgnoredSelfContact -> return
+            ContactLinkCaptureDisposition.StaleContext -> {
+                diagnostics.report("Contact-link initiating context is not current", null)
+                return
+            }
+            ContactLinkCaptureDisposition.Lookup -> Unit
+        }
         launchLookup {
-            val existing = radioId?.let { runCatchingNonCancellation { environment.fetchContact(it, link.publicKey) } }
+            val existing = context.radioId?.let {
+                runCatchingNonCancellation { environment.fetchContact(it, link.publicKey) }
+            }
             currentCoroutineContext().ensureActive()
-            if (link.publicKey == environment.connectedDevicePublicKey) return@launchLookup
-            if (!environment.completeContactLookup(link, existing, radioId, generation, isCurrentSession)) {
-                diagnostics.report("Contact-link lookup context is no longer current", null)
+            when (ContactLinkPublications().use { publications ->
+                environment.completeContactLookup(context, link, existing, publications)
+            }) {
+                ContactLinkCompletion.StaleContext ->
+                    diagnostics.report("Contact-link lookup context is no longer current", null)
+                ContactLinkCompletion.WrongTarget ->
+                    diagnostics.report("Contact-link lookup returned the wrong target", null)
+                ContactLinkCompletion.Navigated, ContactLinkCompletion.ConfirmationStaged,
+                ContactLinkCompletion.IgnoredSelfContact -> Unit
             }
         }
     }

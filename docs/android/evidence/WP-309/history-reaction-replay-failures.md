@@ -30,10 +30,12 @@ match, while successful earlier matches remain acknowledged. No broad catch or
 non-cancellable I/O hides failures. A null persistence result becomes a typed
 `PersistenceStoreException` for the existing timeline diagnostics/error surface.
 
-On retry, a committed reaction row is preserved. Its summary is rebuilt from the
-real stored reactions with `ReactionParser.buildSummary`, written successfully,
-and then returned to the actual timeline. New rows still use the existing
-`persistReactionAndUpdateSummary`; no second parser or persistence store is added.
+On retry, a committed reaction row is preserved. The service's extracted
+`reconcileSummary` rebuilds its summary from real stored reactions with the
+existing internal `ReactionParser.buildSummary`, writes it successfully, and
+returns it to the actual timeline. New rows still use the existing
+`persistReactionAndUpdateSummary`, which calls that same reconciliation helper
+after saving. No second parser, summary algorithm or persistence store is added.
 
 `ReactionService.requeuePendingReaction` and `requeuePendingDMReaction` accept
 the exact objects so `receivedAt`, parsed reaction, raw text and scope survive.
@@ -119,3 +121,12 @@ candidate's pass does not verify these new bytes. Until that run is recorded,
 the new methods are authored regressions, not passing or failing product evidence.
 No iOS reaction execution, Android device, physical radio, screenshot, TalkBack,
 signing, release or whole-WP acceptance is claimed.
+
+The initial successor `8b1c496307ede4740319d07144001f1b69b31145` failed
+[hosted compilation](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41602626530):
+the App attempted to call the service module's internal summary helper. App tests
+did not execute, so this is not passing or failing product regression evidence.
+The corrected successor extracts the existing persistence helper's
+`reconcileSummary` inside `ReactionService` and exposes only that operation,
+preserving its existing logging/null/cancellation behavior and avoiding an
+internal parser API visibility change or duplicated summary implementation.

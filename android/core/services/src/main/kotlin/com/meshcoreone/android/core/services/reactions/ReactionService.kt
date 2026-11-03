@@ -148,13 +148,17 @@ class ReactionService internal constructor(
             logger.log(Level.SEVERE, "Failed to save reaction for message ${reaction.messageID}: ${error.message}", error)
             return null
         }
+        return reconcileSummary(message, dataStore)
+    }
 
+    /** Rebuilds a committed reaction's summary without saving or replacing the reaction row again. */
+    suspend fun reconcileSummary(message: EntityKey, dataStore: ReactionPersisting): ReactionPersistResult? {
         val reactions = try {
             dataStore.fetchReactions(message)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            logger.log(Level.SEVERE, "Failed to fetch reactions for message ${reaction.messageID}: ${error.message}", error)
+            logger.log(Level.SEVERE, "Failed to fetch reactions for message ${message.id}: ${error.message}", error)
             return null
         }
 
@@ -164,10 +168,10 @@ class ReactionService internal constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            logger.log(Level.SEVERE, "Failed to update reaction summary for message ${reaction.messageID}: ${error.message}", error)
+            logger.log(Level.SEVERE, "Failed to update reaction summary for message ${message.id}: ${error.message}", error)
             return null
         }
-        return ReactionPersistResult(reaction.messageID, summary)
+        return ReactionPersistResult(message.id, summary)
     }
 
     // MARK: - DM Reactions

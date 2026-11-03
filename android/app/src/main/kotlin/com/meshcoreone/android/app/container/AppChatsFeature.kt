@@ -485,17 +485,15 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 for ((reaction, _) in reactions) {
                     kotlinx.coroutines.currentCoroutineContext().ensureActive()
                     val key = EntityKey(message.radioId, message.id)
-                    val summary = if (store.reactionExists(key, reaction.senderName, reaction.emoji)) {
+                    val result = if (store.reactionExists(key, reaction.senderName, reaction.emoji)) {
                         // A prior save may have committed before summary reconciliation failed or was cancelled.
-                        val summary = ReactionParser.buildSummary(store.fetchReactions(key))
-                        store.updateMessageReactionSummary(key, summary)
-                        summary
+                        indexing.service.reconcileSummary(key, store)
                     } else {
-                        indexing.service.persistReactionAndUpdateSummary(reaction, store)?.summary
-                            ?: throw PersistenceStoreException(
-                                PersistenceStoreError.SaveFailed("History reaction replay did not complete"),
-                            )
+                        indexing.service.persistReactionAndUpdateSummary(reaction, store)
                     }
+                    val summary = result?.summary ?: throw PersistenceStoreException(
+                        PersistenceStoreError.SaveFailed("History reaction replay did not complete"),
+                    )
                     updated = updated.copy(reactionSummary = summary)
                     completed++
                 }

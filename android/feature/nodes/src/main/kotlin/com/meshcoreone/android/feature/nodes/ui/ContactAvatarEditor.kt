@@ -1,4 +1,5 @@
 // PortedFrom: MC1/Views/Contacts/ContactDetailView.swift@db14559b39d32322b06477c6ae676112f583db50
+// Native adaptation: configuration-retained contact/editor lifetime without saving private media to instance state.
 package com.meshcoreone.android.feature.nodes.ui
 
 import android.content.ContentResolver
@@ -17,7 +18,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -29,6 +29,9 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
@@ -41,14 +44,73 @@ import com.meshcoreone.android.core.ui.CropSize
 import com.meshcoreone.android.core.ui.cropAvatarImage
 import com.meshcoreone.android.feature.nodes.detail.AvatarProcessing
 import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
+import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Configuration-only retention: private image state never enters a Bundle or persistent store. */
+internal class ContactDetailRetainedState : ViewModel() {
+    private var detail: ContactDetailLifetime? = null
+
+    fun bind(contact: ContactDTO, dependencies: NodesFeatureDependencies): ContactDetailLifetime {
+        detail?.takeIf {
+            it.holder.state.value.contact.let { current ->
+                current.id == contact.id && current.radioId == contact.radioId && current.publicKey == contact.publicKey
+            }
+        }?.let { return it }
+        detail?.close()
+        return ContactDetailLifetime(contact, dependencies,
+            CoroutineScope(viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext[Job])))
+            .also { detail = it }
+    }
+
+    fun release(value: ContactDetailLifetime) {
+        if (detail === value) {
+            value.close()
+            detail = null
+        }
+    }
+
+    override fun onCleared() {
+        detail?.close()
+        detail = null
+    }
+}
+
+internal class ContactDetailLifetime(
+    contact: ContactDTO,
+    dependencies: NodesFeatureDependencies,
+    val scope: CoroutineScope,
+) {
+    val holder = ContactDetailStateHolder(contact, dependencies, scope)
+    var active = true
+        private set
+    var choosing by mutableStateOf(false)
+    var picking by mutableStateOf(false)
+    var loading by mutableStateOf(false)
+    var image by mutableStateOf<ImageBitmap?>(null)
+    var geometry by mutableStateOf(AvatarCropGeometry(300.0, CropSize.ZERO))
+
+    fun close() {
+        active = false
+        scope.cancel()
+        holder.onDisappear()
+        image = null
+        choosing = false
+        picking = false
+        loading = false
+    }
+}
 
 /** URI grants are used only for this selection; no path, persistent grant or original image is stored. */
 internal object ContactAvatarMedia {
@@ -100,17 +162,17 @@ internal object ContactAvatarMedia {
 }
 
 @Composable
-internal fun rememberContactAvatarEditor(holder: ContactDetailStateHolder): @Composable () -> Unit {
+internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Composable () -> Unit {
+    val holder = detail.holder
     val state by holder.state.collectAsStateWithLifecycle()
     if (state.contact.type != ContactType.CHAT) return {}
-    val scope = rememberCoroutineScope()
-    val resolver = LocalContext.current.contentResolver
-    var active by remember { mutableStateOf(true) }
-    var choosing by remember { mutableStateOf(false) }
-    var picking by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(false) }
-    var image by remember { mutableStateOf<ImageBitmap?>(null) }
-    var geometry by remember { mutableStateOf(AvatarCropGeometry(300.0, CropSize.ZERO)) }
+    val scope = detail.scope
+    val resolver = LocalContext.current.applicationContext.contentResolver
+    var choosing by detail::choosing
+    var picking by detail::picking
+    var loading by detail::loading
+    var image by detail::image
+    var geometry by detail::geometry
     val cache = remember { AvatarImageCache() }
     var avatar by remember { mutableStateOf<AvatarImageState>(AvatarImageState.Absent) }
     androidx.compose.runtime.LaunchedEffect(state.contact.avatarImageData) {
@@ -118,12 +180,11 @@ internal fun rememberContactAvatarEditor(holder: ContactDetailStateHolder): @Com
     }
     DisposableEffect(holder) {
         onDispose {
-            active = false
             cache.clear()
         }
     }
     val receive: (Uri?) -> Unit = { uri ->
-        if (active && picking) {
+        if (detail.active && picking) {
             picking = false
             if (uri != null) {
                 loading = true

@@ -6,6 +6,7 @@ package com.meshcoreone.android.feature.nodes.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,6 +49,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStoreOwner
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
@@ -67,7 +70,6 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.NodesNavigation
 import com.meshcoreone.android.feature.nodes.RemoteNodeAction
 import com.meshcoreone.android.feature.nodes.detail.ContactDetailPresentation
-import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
 import com.meshcoreone.android.feature.nodes.detail.DetailAction
 import com.meshcoreone.android.feature.nodes.detail.PingResult
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
@@ -86,14 +88,21 @@ internal fun ContactDetailScreen(
     navigation: NodesNavigation,
     modifier: Modifier = Modifier,
 ) {
-    val scope = rememberCoroutineScope()
-    val holder = remember(initialContact.id, initialContact.radioId, initialContact.publicKey, dependencies) {
-        ContactDetailStateHolder(initialContact, dependencies, scope)
+    val activity = checkNotNull(LocalActivity.current)
+    val retained = remember(activity) {
+        ViewModelProvider(checkNotNull(activity as? ViewModelStoreOwner))[ContactDetailRetainedState::class.java]
     }
+    val detail = remember(activity, initialContact.id, initialContact.radioId, initialContact.publicKey) {
+        retained.bind(initialContact, dependencies)
+    }
+    val scope = detail.scope
+    val holder = detail.holder
     val state by holder.state.collectAsStateWithLifecycle()
     val pathState by holder.path.state.collectAsStateWithLifecycle()
     val contact = state.contact
-    val avatarEditor = key(holder) { rememberContactAvatarEditor(holder) }
+    val avatarEditor = key(initialContact.radioId, initialContact.id, initialContact.publicKey) {
+        rememberContactAvatarEditor(detail)
+    }
     var showShare by remember { mutableStateOf(false) }
     var showPathEditor by remember { mutableStateOf(false) }
     var resetPathConfirmation by remember { mutableStateOf(false) }
@@ -104,7 +113,12 @@ internal fun ContactDetailScreen(
     }
 
     LaunchedEffect(holder) { holder.run() }
-    DisposableEffect(holder) { onDispose(holder::onDisappear) }
+    DisposableEffect(detail, activity) {
+        onDispose {
+            holder.onDisappear()
+            if (!activity.isChangingConfigurations) retained.release(detail)
+        }
+    }
 
     LazyColumn(
         modifier.fillMaxSize(),

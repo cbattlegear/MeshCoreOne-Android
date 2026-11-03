@@ -137,3 +137,26 @@ uses only the existing manual native-semantics fixture and dependencies, adding
 stage-specific timeout diagnostics without changing the product, build graph or
 required assertions. The App `assertExists` import error did not recur in the
 reported compilation output; App product execution still is not established.
+
+## Configuration recreation repair
+
+The subsequent source review identified a real lifetime gap: plain `remember`
+lost `picking`, decoded image and crop geometry on Activity recreation, and
+`key(holder)` made the Activity Result saveable registration depend on a new
+holder instance. The repair retains a single active contact-detail lifetime in
+the existing Activity ViewModelStore, bound to radio/UUID/public key. Its child
+scope, holder, pending request and crop survive configuration destruction; normal
+detail disposal, identity replacement and final ViewModel clearing cancel and
+clear them. Decoder work uses the application resolver, not the destroyed Activity.
+Activity Result registration is keyed by stable contact identity. Neither a URI
+nor media bytes are saved to a Bundle, written to disk or given persistent grants.
+This does not claim process-death restoration of private contact/media selection.
+
+New API31/API37 mounted tests recreate the actual ComponentActivity and replace
+the external result registry with a fresh registry restored from its genuine
+saved-state mapping. They exercise both pending picker contracts, cancellation,
+stale identity, crop zoom/pan/image retention and a held save across recreation.
+The App/Room mounted case also recreates before picker return and during crop
+before inspecting the actual selected-contact persistence and foreign-radio sentinel.
+No MainActivity or navigation-owned source is changed. These assertions await
+exact-candidate hosted execution and do not supply device/TalkBack evidence.

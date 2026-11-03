@@ -7,6 +7,7 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Bundle
 import android.view.Display
 import android.view.View
 import androidx.activity.compose.LocalActivityResultRegistryOwner
@@ -17,12 +18,15 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
 import androidx.core.app.ActivityOptionsCompat
+import androidx.lifecycle.ViewModelProvider
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.feature.nodes.NodesNavigation
+import com.meshcoreone.android.feature.nodes.contacts.key
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
 import java.io.ByteArrayInputStream
@@ -30,6 +34,7 @@ import java.io.ByteArrayOutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
@@ -59,14 +64,15 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     private val uri = Uri.parse("content://avatar-fixture/selected.png")
     private var requestCode: Int? = null
     private var launched: Intent? = null
-    private val registry = object : ActivityResultRegistry() {
+    private fun newRegistry() = object : ActivityResultRegistry() {
         override fun <I, O> onLaunch(code: Int, contract: ActivityResultContract<I, O>, input: I, options: ActivityOptionsCompat?) {
             requestCode = code
             launched = contract.createIntent(controller.get(), input)
         }
     }
+    private var registry = newRegistry()
     private val registryOwner = object : ActivityResultRegistryOwner {
-        override val activityResultRegistry = registry
+        override val activityResultRegistry get() = registry
     }
 
     override fun rootView(): View =
@@ -75,6 +81,10 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     private fun start(initial: ContactDTO = contact) {
         selected.value = initial
         harness.store.contacts += initial
+        mountContact()
+    }
+
+    private fun mountContact() {
         mount {
             CompositionLocalProvider(
                 LocalActivityResultRegistryOwner provides registryOwner,
@@ -83,6 +93,18 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
                 ContactDetailScreen(selected.value, harness.dependencies, NodesNavigation.NONE)
             }
         }
+    }
+
+    private fun recreateHost(beforeMount: () -> Unit = {}) {
+        val savedRegistry = Bundle()
+        registry.onSaveInstanceState(savedRegistry)
+        controller.windowFocusChanged(false)
+        controller.recreate().visible()
+        controller.get().actionBar?.hide()
+        controller.windowFocusChanged(true)
+        registry = newRegistry().apply { onRestoreInstanceState(savedRegistry) }
+        beforeMount()
+        mountContact()
     }
 
     private fun action(resource: Int) = click(awaitAction(controller.get().getString(resource)))
@@ -239,6 +261,127 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         awaitText(replacement.displayName)
         assertNull(actionNode(controller.get().getString(C.contactsDetailAvatarCropChoose)))
         assertTrue(harness.contactService.avatars.isEmpty())
+    }
+
+    @Test
+    fun recreationBeforeDocumentPickerReturnKeepsTheOriginalRequestAndContact() {
+        pickerReturnAfterRecreation(file = true)
+    }
+
+    @Test
+    fun recreationBeforePhotoPickerReturnKeepsTheOriginalRequestAndContact() {
+        pickerReturnAfterRecreation(file = false)
+    }
+
+    private fun pickerReturnAfterRecreation(file: Boolean) {
+        start()
+        pick(file)
+        val originalCode = requestCode
+        val originalRegistry = registry
+        recreateHost {
+            if (file) {
+                Shadows.shadowOf(controller.get().contentResolver).registerInputStream(uri, ByteArrayInputStream(png()))
+                assertTrue(registry.dispatchResult(assertNotNull(originalCode), Activity.RESULT_OK, Intent().setData(uri)))
+            }
+        }
+        assertTrue(registry !== originalRegistry)
+        assertEquals(originalCode, requestCode)
+        if (!file) result()
+        awaitAction(controller.get().getString(C.contactsDetailAvatarCropChoose))
+        action(C.contactsDetailAvatarCropChoose)
+        awaitAvatarState("one completed avatar save after recreation") {
+            harness.contactService.avatars.size == 1 && harness.store.contacts.single().avatarImageData != null
+        }
+        assertEquals(contact.key, harness.contactService.avatars.single().first)
+    }
+
+    @Test
+    fun recreationDuringCropRetainsTheImageZoomAndPanAndStillCancelsWithoutMutation() {
+        start()
+        pick(file = true)
+        result()
+        awaitAction(controller.get().getString(C.contactsDetailAvatarCropChoose))
+        val zoom = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetProgress) }
+        controller.get().runOnUiThread { assertTrue(assertNotNull(zoom.config[SemanticsActions.SetProgress].action).invoke(2f)) }
+        advanceFrames()
+        action(C.contactsDetailAvatarCropMoveRight)
+        val detail = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].bind(contact, harness.dependencies)
+        val originalImage = assertNotNull(detail.image)
+        val originalGeometry = detail.geometry
+        assertEquals(2.0, originalGeometry.scale)
+        assertTrue(originalGeometry.offset.x > 0)
+        recreateHost()
+        awaitAction(controller.get().getString(C.contactsDetailAvatarCropChoose))
+        val restored = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].bind(contact, harness.dependencies)
+        assertSame(detail, restored)
+        assertSame(originalImage, restored.image)
+        assertEquals(originalGeometry, restored.geometry)
+        action(C.contactsCommonCancel)
+        assertNull(restored.image)
+        assertTrue(harness.contactService.avatars.isEmpty())
+        assertNull(harness.store.contacts.single().avatarImageData)
+    }
+
+    @Test
+    fun recreationBeforePickerCancellationStillLeavesTheStoreUnchangedAndChooserUsable() {
+        start()
+        pick(file = true)
+        recreateHost()
+        result(cancelled = true)
+        val chooser = awaitAction(controller.get().getString(C.contactsDetailAvatarChooseSource))
+        kotlin.test.assertFalse(chooser.config.contains(SemanticsProperties.Disabled))
+        assertNull(actionNode(controller.get().getString(C.contactsDetailAvatarCropChoose)))
+        assertTrue(harness.contactService.avatars.isEmpty())
+        assertNull(harness.store.contacts.single().avatarImageData)
+    }
+
+    @Test
+    fun recreationDoesNotRestoreAPendingPickerForAReplacementIdentity() {
+        start()
+        pick(file = true)
+        val previous = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].bind(contact, harness.dependencies)
+        val replacement = contact.copy(publicKey = Fixtures.repeated(0xAB))
+        harness.store.contacts[0] = replacement
+        selected.value = replacement
+        recreateHost()
+        result()
+        advanceFrames()
+        assertTrue(!previous.active)
+        assertNull(actionNode(controller.get().getString(C.contactsDetailAvatarCropChoose)))
+        assertTrue(harness.contactService.avatars.isEmpty())
+        assertNull(harness.store.contacts.single().avatarImageData)
+    }
+
+    @Test
+    fun recreationWhileSavingRetainsProgressAndCompletesExactlyOneStoreOperation() {
+        start()
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val persist = harness.contactService.avatarBehavior
+        harness.contactService.avatarBehavior = { key, bytes ->
+            entered.complete(Unit)
+            gate.await()
+            persist(key, bytes)
+        }
+        try {
+            pick(file = true)
+            result()
+            action(C.contactsDetailAvatarCropChoose)
+            awaitHeldSave(entered)
+            recreateHost()
+            awaitHeldSave(entered)
+            assertTrue(assertNotNull(actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource)))
+                .config.contains(SemanticsProperties.Disabled))
+            assertNull(harness.store.contacts.single().avatarImageData)
+            gate.complete(Unit)
+            awaitAvatarState("the original avatar save after Activity recreation") {
+                harness.store.contacts.single().avatarImageData != null
+            }
+            assertEquals(1, harness.contactService.avatars.size)
+            assertEquals(contact.key, harness.contactService.avatars.single().first)
+        } finally {
+            gate.cancel()
+        }
     }
 
     @Test

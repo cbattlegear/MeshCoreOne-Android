@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.compose.setContent
@@ -67,7 +68,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             val targetKey = EntityKey(radio, target.id)
             val foreignKey = EntityKey(foreign.radioId, foreign.id)
             var requestCode: Int? = null
-            val registry = object : ActivityResultRegistry() {
+            fun newRegistry() = object : ActivityResultRegistry() {
                 override fun <I, O> onLaunch(code: Int, contract: ActivityResultContract<I, O>, input: I, options: ActivityOptionsCompat?) {
                     val intent = contract.createIntent(host.get(), input)
                     assertEquals(Intent.ACTION_OPEN_DOCUMENT, intent.action)
@@ -76,16 +77,31 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                     requestCode = code
                 }
             }
+            var registry = newRegistry()
             val owner = object : ActivityResultRegistryOwner {
-                override val activityResultRegistry = registry
+                override val activityResultRegistry get() = registry
             }
-            host.get().setContent {
-                CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
-                    MeshCoreTheme(motionScale = 0f) {
-                        NodesEntry(FeatureRoute(FeatureId.NODES), {}, harness.container.nodesFeature, NodesDestination.Detail(target))
+            fun mount() {
+                host.get().setContent {
+                    CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
+                        MeshCoreTheme(motionScale = 0f) {
+                            NodesEntry(FeatureRoute(FeatureId.NODES), {}, harness.container.nodesFeature, NodesDestination.Detail(target))
+                        }
                     }
                 }
             }
+            fun recreate() {
+                val savedRegistry = Bundle()
+                registry.onSaveInstanceState(savedRegistry)
+                host.windowFocusChanged(false)
+                host.recreate().visible()
+                host.get().actionBar?.hide()
+                host.windowFocusChanged(true)
+                registry = newRegistry().apply { onRestoreInstanceState(savedRegistry) }
+                mount()
+                compose.waitForIdle()
+            }
+            mount()
             val uri = Uri.parse("content://avatar-room-fixture/photo.png")
             val bitmap = Bitmap.createBitmap(900, 600, Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(android.graphics.Color.BLUE)
@@ -97,10 +113,11 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             fun click(resource: Int) {
                 compose.onNodeWithText(host.get().getString(resource)).performScrollTo().performClick()
             }
-            fun pick() {
+            fun pick(recreateBeforeReturn: Boolean = false) {
                 click(C.contactsDetailAvatarChooseSource)
                 // Dialog controls are not in the parent lazy list.
                 compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseFile)).performClick()
+                if (recreateBeforeReturn) recreate()
                 Shadows.shadowOf(host.get().contentResolver).registerInputStream(uri, ByteArrayInputStream(png))
                 compose.runOnUiThread {
                     assertTrue(registry.dispatchResult(assertNotNull(requestCode), Activity.RESULT_OK, Intent().setData(uri)))
@@ -110,12 +127,14 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                         .fetchSemanticsNodes().isNotEmpty()
                 }
             }
-            pick()
+            pick(recreateBeforeReturn = true)
             compose.onNodeWithText(host.get().getString(C.contactsCommonCancel)).performClick()
             compose.waitForIdle()
             assertNull(assertNotNull(store.fetchContact(targetKey)).avatarImageData)
             assertEquals(foreign, store.fetchContact(foreignKey))
             pick()
+            recreate()
+            compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).assertExists()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).performClick()
             compose.waitUntil(5_000) {
                 runBlocking { store.fetchContact(targetKey)?.avatarImageData != null }

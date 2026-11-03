@@ -493,6 +493,69 @@ the typed ConnectionLost assertion, exact original stored synchronous quarantine
 cause and all mutation/send/retire/reconnect controls. It imports no held parent,
 production fence change or expectation weakening; exact execution is pending.
 
+Exact evidence head `e658f0ecb9d2bde78b3d9f253a7c2c0885dbd22a` ran in
+[41613489062](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41613489062):
+**FAILURE**. Data discovered 644 / 642 passed / the same two protected
+MessagingRoomIntegrationTest failures. The seven additional atomic-terminal
+methods executed without a new failure. Services discovered/passed 2,826 tests;
+the separately serialized older fence assertion correction no longer fails.
+Database 50/50 and model 172/172 passed. Available aggregate reports contain
+11,911 discovered / 11,909 passed / two failed / zero errors or skips; mandatory
+App/UI reports remain missing. Controller and Swift codec jobs passed separately.
+This is bounded storage/fixture evidence, not queue adoption, a complete run,
+physical-radio verification or release of any activation hold.
+
+### Exact READY submission accounting prerequisite
+
+The local-unpublished queue owner subsequently found another exact-identity race:
+reading an exact READY row before calling the old message-wide counter can bump
+a replaced or unknown sibling. The pre-wire journal claim still prevents an
+incorrect wire claim, but does not repair that bookkeeping race. The old counter
+is unchanged for its existing consumers; the channel successor must not use it.
+
+Standalone `902276b119f8a957c5f404f80dd95265ddd41de8` adds independent
+`QueuedChannelReadinessPersisting.incrementReadyQueuedChannelAttemptCount(
+pending: EntityKey, messageID: UUID): Long`. Actual trusted `modify` admissions
+passed under `wp-owned`: WP-201 for the new contract, WP-202 for
+`PendingSendRepository.kt`, `RoomPersistenceStore.kt` and
+`QueuedChannelAttemptPersistenceTest.kt`. WP-208 explicitly serialized this
+storage implementation here and retains only consumer wiring. All four storage/
+contract/test paths remain in this producer's custody; historical reservation
+identities and revisions remain unchanged.
+
+In one Room transaction the method validates the exact radio/pending/message IDs,
+channel kind, READY state without an active pointer, original queued/saved
+outgoing proof/text/index and absence of retained unknown/inflight siblings. It
+then checks overflow and increments only the exact pending ID. Missing/wrong/
+unknown/inflight/uncertain/accepted rows reject with existing typed conflicts.
+Other removable READY siblings and foreign-radio rows are not incremented. The
+role is implemented by real RoomStore delegation, not a fake/default, aggregate
+protocol extension, schema change or counter on the physical journal attempt.
+
+One invocation per drain remains the consumer's policy; physical backoff calls
+still need fresh attempt UUIDs. Cancellation can lose the count's committed
+return. Exact-row readback can diagnose the retained value, but cannot prove a
+receipt or authorize automatic same-drain reincrement, remap or wire dispatch.
+Six real-Room methods cover exact/foreign/sibling discrimination, two physical
+backoffs without another drain count, all retained-state exclusions, replacement
+between preflight and increment across contexts, overflow and SQLite rollback,
+changed saved text, disk reopen and cancellation at committed return. The journal
+class now declares 29 methods. These six declarations have no native execution
+credit yet; the e658 diagnostic predates this delta.
+
+The unchanged four-path 902276 diff passes `git apply --cached --check -C2`
+against a temporary index at df6 plus the unchanged 04ab terminal prerequisite.
+Only the RoomStore outer context is reduced; no patch-body rewrite, history
+contract, working-tree edit or parent import is required. The temporary index and
+patch files were removed. This is source composition evidence only.
+
+Source-only commands `C:\Python312\python.exe tools\android-port\portmap.py`,
+`C:\Python312\python.exe tools\android-port\controller\validate.py` and
+`git diff --check` passed for this support delta. Local Gradle was not run:
+retained execution owner `local-check:f516a7e271f444dd9cb2efcc8b995a16` is unchanged
+and cannot be executed through. Exact successor hosted verification remains
+required; no receive/history/restore activation or queue integration is claimed.
+
 ## Shared connection admission support
 
 The runtime lifecycle owner and fence owner agreed the bounded WP-201

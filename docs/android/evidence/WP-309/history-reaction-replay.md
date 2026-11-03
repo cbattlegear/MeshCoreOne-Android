@@ -94,7 +94,21 @@ or inferred child cleanup was attempted.
 
 The test-first candidate `e365c5eb5` was submitted through the existing read-only
 [Android candidate CI run](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41592573799).
-Its Android job refused before Gradle execution; it does not demonstrate a
-failing product regression. Hosted job/logs, not a second result bundle, remain
-the authoritative exact-commit execution record. Candidate verification is still
-pending; authored tests are not passing evidence.
+Its Android job refused before Gradle execution because the new test initially
+had conflicting traceability disposition headers. The header was corrected;
+that run does not demonstrate a failing product regression.
+
+The fixed candidate `8d889d5bb3419acf1119c35c0e190379fa606eee` ran in
+[candidate CI](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41592958434):
+controller/source checks passed, and the App suite discovered 1,856 tests with
+1,855 passes and one failure (zero errors/skips). Both overlap regressions passed.
+The failing direct older-page scenario had a fixture ordering error: its newer
+filler rows used timestamps earlier than the corrected target timestamp, so the
+existing same-sender reorder legitimately retained the target in the first page.
+The successor makes filler timestamps newer than the actual target timestamp
+while retaining the independently hashed original sender timestamp. Assertions
+and production ordering are unchanged.
+
+Hosted job/logs, not a second result bundle, remain the authoritative exact-commit
+execution record. Subsequent candidate results must be read from their own run;
+the failed run is not passing evidence for the corrected fixture.

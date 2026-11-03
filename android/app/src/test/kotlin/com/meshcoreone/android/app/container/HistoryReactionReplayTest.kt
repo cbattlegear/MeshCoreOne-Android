@@ -104,7 +104,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         if (fetch == Fetch.OLDER) {
             repeat(50) { index ->
                 store.saveMessage(target.copy(
-                    id = UUID.randomUUID(), text = "newer $index", timestamp = stamp + index.toUInt() + 1u,
+                    id = UUID.randomUUID(), text = "newer $index", timestamp = target.timestamp + index.toUInt() + 1u,
                     senderTimestamp = null, createdAt = EPOCH.plusSeconds(index + 1L),
                     sortDate = EPOCH.plusSeconds(index + 1L),
                 ))
@@ -195,7 +195,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
         store.saveMessage(target)
         repeat(49) { index ->
             store.saveMessage(target.copy(
-                id = UUID.randomUUID(), text = "newer $index", timestamp = stamp + index.toUInt() + 1u,
+                id = UUID.randomUUID(), text = "newer $index", timestamp = target.timestamp + index.toUInt() + 1u,
                 senderTimestamp = null, createdAt = EPOCH.plusSeconds(index + 1L), sortDate = EPOCH.plusSeconds(index + 1L),
             ))
         }
@@ -213,7 +213,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             queue(fixture, direct)
             // A new stored row shifts the offset without a live timeline event or a refresh.
             val newest = target.copy(
-                id = UUID.randomUUID(), text = "not yet loaded", timestamp = stamp + 51u, senderTimestamp = null,
+                id = UUID.randomUUID(), text = "not yet loaded", timestamp = target.timestamp + 51u, senderTimestamp = null,
                 createdAt = EPOCH.plusSeconds(51), sortDate = EPOCH.plusSeconds(51),
             )
             store.saveMessage(newest)

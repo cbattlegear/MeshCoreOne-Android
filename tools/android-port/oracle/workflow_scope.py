@@ -221,13 +221,19 @@ def classify(paths):
 
 def benchmark_consumer_input(path):
     match = BENCHMARK_CONSUMER_MODULE.fullmatch(path)
-    if match is None:
+    if match is not None:
+        relative = match.group(1)
+        source = re.match(r"^src/([^/]+)/.+", relative)
+        documentation = relative in {"README.md", "LICENSE", "NOTICE"}
+    elif path.startswith("android/build-logic/"):
+        relative = path.removeprefix("android/build-logic/")
+        source = re.search(r"(?:^|/)src/([^/]+)/.+", relative)
+        documentation = relative.rsplit("/", 1)[-1] in {"README.md", "LICENSE", "NOTICE"}
+    else:
         return False
-    relative = match.group(1)
-    source = re.match(r"^src/([^/]+)/.+", relative)
     if source is not None:
         return source.group(1) not in {"debug", "test", "androidTest"}
-    return relative not in {"README.md", "LICENSE", "NOTICE"}
+    return not documentation
 
 
 def requires_benchmark_consumer(paths):

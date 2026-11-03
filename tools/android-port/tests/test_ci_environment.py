@@ -256,22 +256,33 @@ class EnvironmentTests(unittest.TestCase):
         script = (REPO / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_text(
             encoding="utf-8",
         )
+        before_tests, marker, test_tasks = script.partition(
+            "project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->"
+        )
+        self.assertTrue(marker)
+        self.assertEqual(before_tests.count("task.outputs.cacheIf("), 1)
+        self.assertIn(
+            'task.outputs.cacheIf("Benchmark consumer source observation requires task execution") { false }',
+            before_tests,
+        )
         cache_policy = (
             'task.outputs.cacheIf("Only WP-203 test inputs and interop outputs are explicitly declared") {\n'
             '            task.path == ":core:data:testDebugUnitTest"\n'
             "        }"
         )
-        self.assertIn(cache_policy, script)
-        self.assertEqual(script.count("task.outputs.cacheIf("), 1)
-        self.assertLess(script.index(cache_policy), script.index('if (task.path == ":core:data:testDebugUnitTest")'))
-        self.assertIn('task.outputs.dir(interopOutput)', script)
-        self.assertIn("task.inputs.dir(interopInput)", script)
-        self.assertIn("task.doFirst", script)
-        self.assertIn("task.inputs.files.files.any", script)
-        self.assertLess(script.index("task.doFirst {"), script.index("task.inputs.files.files.any"))
-        self.assertLess(script.index("task.inputs.files.files.any"), script.index("gradle.taskGraph.whenReady"))
-        self.assertIn("WP-203 interop artifacts are not declared Gradle task outputs", script)
-        self.assertIn("WP-203 interoperability fixture is not a Gradle task input", script)
+        self.assertIn(cache_policy, test_tasks)
+        self.assertEqual(test_tasks.count("task.outputs.cacheIf("), 1)
+        self.assertLess(
+            test_tasks.index(cache_policy),
+            test_tasks.index('if (task.path == ":core:data:testDebugUnitTest")'),
+        )
+        wp203 = test_tasks[test_tasks.index('if (task.path == ":core:data:testDebugUnitTest")'):]
+        self.assertIn('task.outputs.dir(interopOutput)', wp203)
+        self.assertIn("task.inputs.dir(interopInput)", wp203)
+        self.assertLess(wp203.index("task.doFirst {"), wp203.index("task.inputs.files.files.any"))
+        self.assertLess(wp203.index("task.inputs.files.files.any"), wp203.index("gradle.taskGraph.whenReady"))
+        self.assertIn("WP-203 interop artifacts are not declared Gradle task outputs", wp203)
+        self.assertIn("WP-203 interoperability fixture is not a Gradle task input", wp203)
 
     def test_app_tests_reuse_the_worker_jvm_instead_of_forking_for_each_class(self):
         app_build = (REPO / "android/app/build.gradle.kts").read_text(encoding="utf-8")

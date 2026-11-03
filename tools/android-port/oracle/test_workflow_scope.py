@@ -125,6 +125,10 @@ class WorkflowScopeTests(unittest.TestCase):
             "android/core/testing/src/main/kotlin/TestHelper.kt",
             "android/core/data/src/testFixtures/kotlin/Fixture.kt",
             "android/core/data/src/debuggable/kotlin/Variant.kt",
+            "android/build-logic/convention/src/main/kotlin/com/meshcoreone/buildlogic/BuildConventions.kt",
+            "android/build-logic/convention/build.gradle.kts",
+            "android/build-logic/settings.gradle.kts",
+            "android/build-logic/gradle/verification-metadata.xml",
         ):
             with self.subTest(path=path):
                 self.assertTrue(benchmark_consumer_input(path))
@@ -135,6 +139,8 @@ class WorkflowScopeTests(unittest.TestCase):
             "android/feature/chats/README.md",
             "docs/android/deviations/WP-307.md",
             "android/benchmark/src/test/kotlin/WorkloadTest.kt",
+            "android/build-logic/convention/src/test/kotlin/BuildConventionsTest.kt",
+            "android/build-logic/convention/README.md",
         ):
             with self.subTest(path=path):
                 self.assertFalse(benchmark_consumer_input(path))
@@ -142,6 +148,15 @@ class WorkflowScopeTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(requires_benchmark_consumer([path]))
         self.assertFalse(requires_benchmark_consumer(["android/core/testing/src/test/kotlin/TestHelperTest.kt"]))
+
+    def test_shared_build_logic_selects_consumer_without_changing_full_benchmark_scope(self):
+        path = "android/build-logic/convention/src/main/kotlin/com/meshcoreone/buildlogic/BuildConventions.kt"
+        with patch("oracle.workflow_scope.changed_paths", return_value=[path]):
+            result = evaluate(Path.cwd(), "push", {"before": BASE, "after": HEAD})
+        self.assertTrue(result["benchmark_consumer"])
+        self.assertTrue(result["scopes"]["scaffold"])
+        self.assertTrue(result["scopes"]["benchmark"])
+        self.assertFalse(result["fail_safe"])
 
     def test_test_only_and_documentation_diffs_do_not_compile_benchmark_consumer(self):
         for path in (

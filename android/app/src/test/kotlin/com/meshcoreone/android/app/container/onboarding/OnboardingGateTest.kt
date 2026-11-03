@@ -2,16 +2,27 @@
 // AndroidOnly: WP-305 Verify app-owned flow-session lifetimes across Activity recreation and Settings reruns.
 package com.meshcoreone.android.app.container.onboarding
 
+import android.app.Activity
+import android.content.Intent
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivityResultRegistryOwner
+import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultRegistry
+import androidx.activity.result.ActivityResultRegistryOwner
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.core.app.ActivityOptionsCompat
+import com.meshcoreone.android.app.content.LocationPermissionResultReporting
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -19,11 +30,13 @@ import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.services.simulator.DemoModeDefaults
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
+import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetOutcome
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingStep
 import com.meshcoreone.android.feature.onboarding.OnboardingState
+import com.meshcoreone.android.feature.onboarding.PermissionStatus
 import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
 import com.meshcoreone.android.feature.onboarding.PairSheet
 import kotlinx.coroutines.CompletableDeferred
@@ -77,6 +90,7 @@ class OnboardingGateTest {
         scope: CoroutineScope,
         pairingState: com.meshcoreone.android.app.state.AppState? = null,
         presets: OnboardingPresetPort? = null,
+        locationReporter: LocationPermissionResultReporting? = null,
     ): AppOnboarding {
         val host = FakeConnectionHost()
         val demoStore = HashMap<String, Boolean>()
@@ -91,7 +105,7 @@ class OnboardingGateTest {
             }), scope) { error("Simulator connection was not requested by this test") },
             region = AppOnboardingRegionPort(ServicesRegionCatalog(), MutableStateFlow<RegionSelection?>(null), {}, null),
             presets = presets ?: AppOnboardingPresetPort(FakeRadio(), scope),
-            settingsOpener = {}, locationReporter = null, sdkInt = 34, flowScope = scope, hasCompleted = hasCompleted,
+            settingsOpener = {}, locationReporter = locationReporter, sdkInt = 34, flowScope = scope, hasCompleted = hasCompleted,
             pairingState = pairingState,
         )
     }
@@ -106,6 +120,37 @@ class OnboardingGateTest {
 
     private fun showFlow(dependencies: com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies) =
         host.get().setContent { MeshCoreTheme { OnboardingFlow(dependencies, onCompleted = {}) } }
+
+    private fun showPermissionRequester(
+        dependencies: AppOnboarding,
+        registry: ActivityResultRegistry,
+        onResult: () -> Unit,
+    ) = host.get().setContent {
+        val owner = object : ActivityResultRegistryOwner {
+            override val activityResultRegistry = registry
+        }
+        CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
+            val requestPermission = dependencies.rememberPermissionRequester(onResult)
+            Button(
+                modifier = Modifier.testTag("request-location-permission"),
+                onClick = { requestPermission(OnboardingPermissionKind.LOCATION) },
+            ) { Text("Request location") }
+        }
+    }
+
+    private class DeferredActivityResultRegistry : ActivityResultRegistry() {
+        var launchedRequestCode: Int? = null
+            private set
+
+        override fun <I, O> onLaunch(
+            requestCode: Int,
+            contract: ActivityResultContract<I, O>,
+            input: I,
+            options: ActivityOptionsCompat?,
+        ) {
+            launchedRequestCode = requestCode
+        }
+    }
 
     @Test fun `incomplete onboarding hides the shell and completion reveals it and selects chats`() {
         val flags = flags(completed = false)
@@ -287,6 +332,53 @@ class OnboardingGateTest {
         } finally {
             processScope.cancel()
         }
+    }
+
+    @Test fun `pending denied permission result is restored after Activity recreation`() {
+        val reportedLocationResults = mutableListOf<Boolean>()
+        val flags = flags(completed = false)
+        val dependencies = onboarding(
+            flags,
+            flags.hasCompleted,
+            CoroutineScope(Dispatchers.Unconfined),
+            locationReporter = object : LocationPermissionResultReporting {
+                override fun reportPermissionResult(granted: Boolean) { reportedLocationResults += granted }
+            },
+        )
+        val firstRegistry = DeferredActivityResultRegistry()
+        host.setup().visible()
+        showPermissionRequester(dependencies, firstRegistry) {}
+        compose.onNodeWithTag("request-location-permission").performClick()
+        compose.waitForIdle()
+        val requestCode = checkNotNull(firstRegistry.launchedRequestCode)
+
+        host.recreate()
+        compose.waitForIdle()
+        compose.runOnUiThread {
+            assertTrue(firstRegistry.dispatchResult(
+                requestCode,
+                Activity.RESULT_OK,
+                Intent()
+                    .putExtra(
+                        "androidx.activity.result.contract.extra.PERMISSIONS",
+                        arrayOf(OnboardingPermissionMapping.COARSE_LOCATION),
+                    )
+                    .putExtra(
+                        "androidx.activity.result.contract.extra.PERMISSION_GRANT_RESULTS",
+                        intArrayOf(android.content.pm.PackageManager.PERMISSION_DENIED),
+                    ),
+            ))
+        }
+
+        val registryState = Bundle()
+        compose.runOnUiThread { firstRegistry.onSaveInstanceState(registryState) }
+        val restoredRegistry = DeferredActivityResultRegistry()
+        compose.runOnUiThread { restoredRegistry.onRestoreInstanceState(registryState) }
+        showPermissionRequester(dependencies, restoredRegistry) {}
+        compose.waitForIdle()
+
+        assertEquals(listOf(false), reportedLocationResults)
+        assertEquals(PermissionStatus.DENIED, dependencies.permissions.snapshot.value.location)
     }
 
     @Test fun `consent is mounted above both onboarding and the completed shell`() {

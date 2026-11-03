@@ -7,7 +7,7 @@ import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import java.util.UUID
 
-internal class PendingSendRepository(private val context: RoomRepositoryContext) : PendingSendPersisting {
+internal class PendingSendRepository(private val context: RoomRepositoryContext) : PendingSendPersisting, QueuedChannelTerminalPersisting {
     override suspend fun upsertPendingSend(dto: PendingSendDTO) = context.write("upsertPendingSend") {
         val existing = database.pendingSends().byId(dto.radioId.value, dto.id)
         val candidate = dto.toEntity()
@@ -210,6 +210,41 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
     override suspend fun fetchQueuedChannelAttempt(key: QueuedChannelAttemptKey): QueuedChannelAttempt? =
         context.read("fetchQueuedChannelAttempt") {
             database.queuedChannelAttempts().byId(key.radioId.value, key.attemptID)?.toDTO()?.takeIf { it.key == key }
+        }
+
+    override suspend fun retireDefinitelyUnsentQueuedChannelAttempt(key: QueuedChannelAttemptKey): QueuedChannelRetirement =
+        context.write("retireDefinitelyUnsentQueuedChannelAttempt") {
+            val pending = submission(key)
+            if (pending.channelDispatchStateRawValue == null) reject(pending, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
+            requireRemovable(pending)
+            val attempt = attempt(key).toDTO()
+            val latest = database.queuedChannelAttempts().forPending(key.radioId.value, key.pendingID).lastOrNull()?.toDTO()
+            if (attempt.phase != QueuedChannelAttemptPhase.DEFINITELY_UNSENT || attempt.isCompleted || latest?.key != key) {
+                reject(key, QueuedChannelAttemptConflict.CONFLICTING_SETTLEMENT)
+            }
+            val message = database.messages().byId(key.radioId.value, key.messageID)
+            if (message == null || message.directionRawValue != MessageDirection.OUTGOING.rawValue ||
+                message.contactID != null || pending.contactID != null ||
+                message.channelIndex != attempt.channelIndex.toLong() || pending.channelIndex != message.channelIndex ||
+                message.channelOccupantID != attempt.channelOccupantID || pending.channelOccupantID != attempt.channelOccupantID ||
+                message.text != pending.messageText || pending.isResend != attempt.isResend
+            ) reject(pending, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+            if (database.pendingSends().forMessage(key.radioId.value, key.messageID).any { it.id != key.pendingID }) {
+                reject(pending, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+            }
+            val status = if (message.statusRawValue == MessageStatus.DELIVERED.rawValue) MessageStatus.DELIVERED else MessageStatus.FAILED
+            val changed = message.statusRawValue != status.rawValue
+            if (database.pendingSends().delete(key.radioId.value, key.pendingID) != 1) {
+                reject(key, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
+            }
+            if (changed) {
+                database.messages().upsert(message.copy(
+                    statusRawValue = status.rawValue,
+                    failureSeen = if (status == MessageStatus.FAILED) false else message.failureSeen,
+                ))
+            }
+            save()
+            QueuedChannelRetirement(status, changed)
         }
 
     override suspend fun fetchQueuedChannelAttempts(pending: EntityKey): SnapshotList<QueuedChannelAttempt> =

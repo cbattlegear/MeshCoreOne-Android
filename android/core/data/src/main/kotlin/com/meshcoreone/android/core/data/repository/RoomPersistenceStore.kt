@@ -34,7 +34,8 @@ class RoomPersistenceStore private constructor(
     HeardRepeatPersisting by messages, ReactionPersisting by messages,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
-    RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata {
+    RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
+    QueuedChannelTerminalPersisting by pending {
     constructor(
         database: MeshCoreDatabase,
         scope: CoroutineScope,

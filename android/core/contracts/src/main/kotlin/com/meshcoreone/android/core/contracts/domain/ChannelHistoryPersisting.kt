@@ -2,18 +2,9 @@
 package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.MessageDTO
-import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.SnapshotMap
 import java.time.Instant
-import java.util.UUID
-
-data class ChannelHistoryScope(val radioId: RadioId, val channelIndex: UByte, val expectedOccupantID: UUID) {
-    companion object {
-        fun from(snapshot: ChannelOccupantSnapshot): ChannelHistoryScope =
-            ChannelHistoryScope(snapshot.channel.radioId, snapshot.channel.index, snapshot.occupantID)
-    }
-}
 
 enum class ChannelHistoryConflict {
     UNKNOWN_AUTHORITY, STALE_OCCUPANT, UNKNOWN_MESSAGE_ORIGIN, UNBOUND_HISTORY,

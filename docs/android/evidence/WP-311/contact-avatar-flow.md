@@ -90,5 +90,39 @@ completion cleanup record; a reused PID is not proof of process completion. Curr
 host capacity is reported at approximately 1.6 GiB free, below the documented 8 GiB
 single-execution reservation. No execution lock was cleared or recovered by this WP.
 Do not retry local Android checks until the execution owner completes supported
-invocation-bound recovery and atomic admission succeeds. No Android product tests,
-hosted or local, are claimed as run.
+invocation-bound recovery and atomic admission succeeds.
+
+The original exact-head hosted run
+[41576781773](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41576781773),
+head `284845585dae4c1f94ab07da77741204400a212b`, **failed**. Scope classification,
+controller/workflow policy and the Swift codec oracle succeeded. Android job
+`125722087453` reported an unresolved top-level `assertExists` import in
+`ContactAvatarMountedStoreTest.kt:17`, preventing app test compilation. It also
+reported `IllegalStateException` at the shared mounted fixture's `awaitText`
+timeout (`NodesScreensComposeTest.kt:158`) for the viewport-held-save case on
+API31/API37 and the progress-held-save case on API31. The command timed out after
+3,600 seconds. There were no retained artifacts or XML reports, so complete
+discovery counts, the awaited text and failure semantics trees are unavailable.
+These are actual failures, not passing product evidence; missing app reports
+cannot establish any App/Room test execution.
+
+The repair removes the invalid extension import (the assertion is a member of
+`SemanticsNodeInteraction`). The held-save fixtures now independently await entry
+to the actual fake store before inspecting pending UI, using a bounded Compose
+wait rather than the shared 100-iteration wall-clock loop. They explicitly assert
+the polite live-region semantics, visible disabled chooser, exactly one store
+attempt, unchanged persistence while held and recovery after failure. The
+viewport case scrolls to the danger-zone action and asserts that the avatar
+chooser really left the viewport before releasing the held store; merely finding
+the earlier Edit Path button did not establish eviction. Gates are cancelled in
+`finally` on assertion failure. This does not yet distinguish scheduler latency
+from an actual production visibility issue; exact-candidate execution must do so.
+
+The nine actual paths/operations were re-admitted using installed trusted
+`reserve.py`. The prior advisory claim refusal remains unchanged; no fresh
+persisted lease or historical-owner identity is claimed.
+`C:\Python312\python.exe -B tools\android-port\controller\validate.py`,
+`C:\Python312\python.exe -B tools\android-port\portmap.py`, and `git diff --check`
+passed for the repair before publication. Android re-verification is pending.
+Use the existing PR-event affected-candidate selection for the changed
+App/nodes closure rather than another full-suite `workflow_dispatch`.

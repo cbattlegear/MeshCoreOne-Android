@@ -16,7 +16,11 @@ import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.core.app.ActivityOptionsCompat
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
@@ -32,6 +36,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -52,6 +57,8 @@ class ContactAvatarApi31FlowTest : ContactAvatarFlowTestBase()
 class ContactAvatarApi37FlowTest : ContactAvatarFlowTestBase()
 
 abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
+    @get:Rule val compose = createEmptyComposeRule()
+
     private val harness = Harness().connect()
     private val contact = Fixtures.contact(radioId = checkNotNull(harness.session.radioId), name = "Avatar target")
     private val selected = mutableStateOf(contact)
@@ -85,6 +92,29 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     }
 
     private fun action(resource: Int) = click(awaitAction(controller.get().getString(resource)))
+
+    private fun awaitAvatarText(text: String) {
+        compose.waitUntil(10_000) {
+            advanceFrames()
+            allSemanticsNodes().any { node ->
+                node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text } &&
+                    isDisplayed(node)
+            }
+        }
+    }
+
+    private fun awaitHeldSave(entered: CompletableDeferred<Unit>) {
+        compose.waitUntil(10_000) {
+            advanceFrames()
+            entered.isCompleted
+        }
+        val announcement = controller.get().getString(C.contactsDetailAvatarSavingAnnouncement)
+        awaitAvatarText(announcement)
+        val liveRegion = allSemanticsNodes().single { node ->
+            node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == announcement }
+        }
+        assertEquals(LiveRegionMode.Polite, liveRegion.config[SemanticsProperties.LiveRegion])
+    }
 
     private fun pick(file: Boolean = false) {
         action(C.contactsDetailAvatarChooseSource)
@@ -213,19 +243,32 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     fun savingAnnouncesProgressAndPreventsASecondSelectionUntilTheStoreCompletes() {
         start()
         val gate = CompletableDeferred<Unit>()
-        harness.contactService.avatarBehavior = { _, _ -> gate.await(); throw java.io.IOException("write rejected") }
-        pick(file = true)
-        result()
-        action(C.contactsDetailAvatarCropChoose)
-        awaitText(controller.get().getString(C.contactsDetailAvatarSavingAnnouncement))
-        val chooser = assertNotNull(actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource)))
-        assertTrue(chooser.config.contains(SemanticsProperties.Disabled))
-        gate.complete(Unit)
-        awaitText("failed: write rejected")
-        action(C.contactsCommonOk)
-        val recovered = assertNotNull(actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource)))
-        kotlin.test.assertFalse(recovered.config.contains(SemanticsProperties.Disabled))
-        assertNull(harness.store.contacts.single().avatarImageData)
+        val entered = CompletableDeferred<Unit>()
+        harness.contactService.avatarBehavior = { _, _ ->
+            entered.complete(Unit)
+            gate.await()
+            throw java.io.IOException("write rejected")
+        }
+        try {
+            pick(file = true)
+            result()
+            action(C.contactsDetailAvatarCropChoose)
+            awaitHeldSave(entered)
+            val chooser = assertNotNull(actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource)))
+            assertTrue(isDisplayed(chooser))
+            assertTrue(chooser.config.contains(SemanticsProperties.Disabled))
+            assertEquals(1, harness.contactService.avatars.size)
+            assertNull(harness.store.contacts.single().avatarImageData)
+            gate.complete(Unit)
+            awaitAvatarText("failed: write rejected")
+            action(C.contactsCommonOk)
+            val recovered = assertNotNull(actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource)))
+            kotlin.test.assertFalse(recovered.config.contains(SemanticsProperties.Disabled))
+            assertEquals(1, harness.contactService.avatars.size)
+            assertNull(harness.store.contacts.single().avatarImageData)
+        } finally {
+            gate.cancel()
+        }
     }
 
     @Test
@@ -245,15 +288,29 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     fun saveContinuesWhenTheProfileRowLeavesTheLazyViewport() {
         start()
         val gate = CompletableDeferred<Unit>()
-        harness.contactService.avatarBehavior = { _, _ -> gate.await(); throw java.io.IOException("retained operation") }
-        pick(file = true)
-        result()
-        action(C.contactsDetailAvatarCropChoose)
-        awaitText(controller.get().getString(C.contactsDetailAvatarSavingAnnouncement))
-        scrollToAction(controller.get().getString(C.contactsDetailEditPath))
-        gate.complete(Unit)
-        awaitText("failed: retained operation")
-        assertNull(harness.store.contacts.single().avatarImageData)
+        val entered = CompletableDeferred<Unit>()
+        harness.contactService.avatarBehavior = { _, _ ->
+            entered.complete(Unit)
+            gate.await()
+            throw java.io.IOException("retained operation")
+        }
+        try {
+            pick(file = true)
+            result()
+            action(C.contactsDetailAvatarCropChoose)
+            awaitHeldSave(entered)
+            compose.onNodeWithText(controller.get().getString(C.contactsDetailClearMessages)).performScrollTo()
+            advanceFrames()
+            val chooser = actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource))
+            assertTrue(chooser == null || !isDisplayed(chooser), "The profile row must leave the lazy viewport")
+            assertEquals(1, harness.contactService.avatars.size)
+            gate.complete(Unit)
+            awaitAvatarText("failed: retained operation")
+            assertEquals(1, harness.contactService.avatars.size)
+            assertNull(harness.store.contacts.single().avatarImageData)
+        } finally {
+            gate.cancel()
+        }
     }
 
     @Test

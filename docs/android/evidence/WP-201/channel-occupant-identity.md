@@ -205,6 +205,46 @@ was dispatched, with no passing outcome claimed here. It contains the shared
 admission contract but not the journal/schema-v3 or later producer fence/service/
 runtime candidates.
 
+That exact run completed FAILURE. The database suite passed all 49 discovered
+tests, advancing past the unchanged legacy-upgrade preservation assertions; the
+model suite passed all 172. The data suite discovered 613, passed 606 and failed
+seven. Available mandatory reports totaled 9,053 discovered, 9,046 passed, seven
+failed and zero errors/skips, with App/services/UI reports absent. This is not a
+passing foundation or consumer integration. The independent Swift oracle failed
+at checkout (`curl 56`, early EOF, connect failure and GitHub DNS, git exit 128),
+before any codec assertions; it has no oracle verification credit.
+
+The seven data failures are separately diagnosed:
+
+- Six failing cases in `InitialSchemaMigrationBoundaryTest` (two),
+  `UnsignedPathReopenTest` (two), `NativeRepositoryBoundaryTest` and
+  `BackupTransactionTest` retained a hardcoded native schema version 1 although
+  this candidate registers v2. The console identifies their assertion failures,
+  not a fabricated deeper assertion message. Their preservation/rollback/unsigned/
+  unsupported-schema assertions remain intact; only the declared current-schema
+  comparison changes. `RoomBoundaryTest` still independently asserts the explicit
+  generated schema version and shape.
+- `NativeRadioPolicyTest` exposes a real foundation regression: an added DTO-save
+  secret-change branch deleted ordinary history before its unchanged `single`
+  oracle. Frozen Swift `saveChannel(_ dto)` applies metadata without history
+  deletion, unlike authoritative `ChannelInfo`. The branch is removed while
+  retaining atomic epoch rotation. Existing Room dto/batch assertions now also
+  discriminate retained ordinary/pending DTO history, unchanged original stamps
+  and subsequent authoritative cleanup. The policy assertion is not weakened.
+
+Standalone `c590e7e1cb873018b4b0a316be5723e8b91ae86d` contains only the source
+correction and native fixtures. Standalone
+`d45a6f056e7da20a3d2253cd1107f24ff3a71960` changes only the backup fixture's
+schema assertion. Its ordinary WP-202 `modify` admission was correctly denied;
+the actual producer WP-203/session `68581ff8-206b-49d8-8d03-b1c128ec16b3`
+serialized that exact one-line support change. Own-checkout
+`add-or-update-related-test` then passed the existing `reviewed-support-test`
+capability and its unchanged-case/exact-hosted-discovery invariants. No policy,
+historical lease or producer identity was rewritten. Both commit diffs are
+compatible with the independent e1f4 schema-v2 candidate and contain no journal/
+schema-v3 or held producer bytes; consumers import only those diffs, never parents.
+Their corrected assertions still require fresh exact-candidate execution.
+
 ## Shared connection admission support
 
 The runtime lifecycle owner and fence owner agreed the bounded WP-201
@@ -223,7 +263,8 @@ path was denied; no file was created there. Six regressions instead use WP-201's
 admitted model-module contract test surface, as the existing `DomainContractTest`
 does: value/reference mismatch, revoke before admission, retained admitted count,
 concurrent idempotent completion, acquisition/revocation race and exact count
-overflow. These are authored declarations pending execution, not drain evidence.
+overflow. The exact e1f4 model suite containing these declarations passed all
+172 discovered tests in run 41602293043. That is not runtime-consumer or drain evidence.
 
 ## Separately assigned queued channel-send journal
 

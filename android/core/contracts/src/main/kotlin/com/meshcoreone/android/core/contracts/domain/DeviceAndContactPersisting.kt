@@ -69,6 +69,8 @@ interface ContactPersisting {
 }
 
 interface ChannelPersisting {
+    suspend fun <T> withChannelOperation(block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T): T =
+        throw UnsupportedOperationException("Owned channel operations are not implemented by this store")
     // Unknown/legacy/ambiguous slots have no proof. This read is not an atomic dispatch fence.
     suspend fun fetchChannelOccupantID(radioId: RadioId, index: UByte): UUID? = null
     suspend fun fetchChannelOccupantSnapshot(radioId: RadioId, index: UByte): ChannelOccupantSnapshot? = null

@@ -165,7 +165,7 @@ class ContactWriteRecoveryTests {
             }
             runCurrent()
             old.cancelAndJoin()
-            val replacement = frame(if (sameKey) 1 else 2, "Replacement", modified = 2u)
+            val replacement = frame(if (sameKey) 1 else 2, "Replacement", modified = 200u)
             val next = async {
                 try {
                     producer.addOrUpdateContact(radioA, replacement)
@@ -362,7 +362,7 @@ class ContactWriteRecoveryTests {
             runCurrent()
             assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
             service().syncContacts(radioA, null)
-            val retry = async { service().addOrUpdateContact(radioA, frame(1, "Second", 2u)) }
+            val retry = async { service().addOrUpdateContact(radioA, frame(1, "Second", 200u)) }
             runCurrent()
             assertEquals(2, radio.writes.size)
             radio.accept()

@@ -170,12 +170,12 @@ internal object ContactWriteRecovery {
         dispatch: ContactWriteDispatch? = null,
     ): ContactWriteAdmissionBlockReason? = when {
         state.syncing -> ContactWriteAdmissionBlockReason.SYNC_IN_PROGRESS
+        state.epoch != null || preferences.bool(key(radioId)) ->
+            ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED
         dispatch != null && state.writes.any {
             it !== dispatch && it.outcome != ContactWriteDispatchOutcome.DEFINITELY_UNSENT &&
                 it.outcome != ContactWriteDispatchOutcome.REJECTED
         } -> ContactWriteAdmissionBlockReason.PREVIOUS_WRITE_UNRESOLVED
-        state.epoch != null || preferences.bool(key(radioId)) ->
-            ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED
         else -> null
     }
 

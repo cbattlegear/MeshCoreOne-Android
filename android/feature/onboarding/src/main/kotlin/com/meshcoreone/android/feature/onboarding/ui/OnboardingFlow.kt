@@ -97,7 +97,6 @@ private fun PairStep(
     val action = flow.deviceScan.primaryAction(demoEnabled, state.otherAppDeviceId)
     LaunchedEffect(state.sheet == PairSheet.WIFI) {
         if (state.sheet == PairSheet.WIFI) {
-            flow.wifi.reset()
             if (permissions.localNetwork == PermissionStatus.NOT_DETERMINED) requester(OnboardingPermissionKind.LOCAL_NETWORK)
         }
     }
@@ -113,7 +112,7 @@ private fun PairStep(
                     com.meshcoreone.android.feature.onboarding.PairPrimaryAction.ADD_DEVICE -> flow.addDevice(requester)
                 }
             },
-            onContinue = scan::continueConnected, onOpenSheet = scan::showSheet, onDismissSheet = flow::dismissPairingSheet,
+            onContinue = scan::continueConnected, onOpenSheet = flow::openPairingSheet, onDismissSheet = flow::dismissPairingSheet,
             onDismissFailure = scan::dismissFailure, onDismissDemoAlert = scan::dismissDemoAlert,
             onOpenAppSettings = deps::openAppSettings, canDismissSheet = flow::canDismissPairingSheet,
         ),

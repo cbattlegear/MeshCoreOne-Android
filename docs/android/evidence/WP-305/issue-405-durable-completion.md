@@ -120,6 +120,41 @@ Source-only checks for the local follow-up:
 
 ## Verification
 
+### Unpublished Wi-Fi recreation follow-up based on d81
+
+The source-derived race is the pairing sheet's composition-owned `LaunchedEffect` calling
+`wifi.reset()` again after Activity recreation. A failed process-owned connect delivered while
+no host is mounted leaves `isConnecting == false`, so the next mount clears its address, port
+and error. If failure arrives after the new effect runs while still connecting, that reset
+does not repeat. Neither ordering was executed for this local candidate.
+
+The local fix resets Wi-Fi state at the intentional `openPairingSheet(WIFI)` transition instead
+of at composition attachment. Reattaching the same retained sheet cannot reset it; closing and
+intentionally reopening a settled sheet still resets it, and `WiFiConnectionCoordinator.reset`
+still preserves in-flight operations. The permission-request effect remains in place. No Wi-Fi
+transport, cancellation, shell or process-scope behavior is changed.
+
+`OnboardingWiFiRecreationTest` authors four cases: failure between old-host destruction and new
+attachment; failure after reattachment while connecting; fresh intentional reopen after failure
+versus in-flight reopen; and connection cancellation with retained input and no success. The two
+recreation cases mount real `OnboardingFlow` using the same process-owned `AppOnboarding` and flow,
+assert fields and error displayed, and retry the same address/port through the mounted control.
+These are authored assertions, not executed Kotlin or physical-device evidence.
+
+Trusted default-base admissions passed for `OnboardingFlow.kt` and `OnboardingFlowCoordinator.kt`
+(`modify` -> `wp-owned`), and the new app test (`add-or-update-related-test` ->
+`reviewed-support-test`). `WiFiConnectionCoordinator.kt` was admitted but did not require an edit.
+Read-only named custody checks found broad advisory scopes, not an actual competing Wi-Fi hunk or
+specific edit hold. The coordinator corrected the earlier inference of a named unpublished code
+producer; no global clearance or reservation transfer is claimed, and no paused producer was
+inspected or awakened. Trusted-main isolated assigned/admitted authoring applies.
+
+Python 3.12.4 Windows preflight passed with existing same-host state and a fresh absolute output;
+`validate.py` passed (64 WPs / 1,866 reference files), `test_inventory.py --check` passed
+(468 pinned paths / 5,133 declarations), and `git diff --check` passed. No local Gradle, new hosted
+CI, negative-parent execution or device test occurred. Publication remains held for independent
+exact-source review; PR #532 stays draft and human/device/execution holds remain unchanged.
+
 | Check | Result |
 |---|---|
 | `python tools\android-port\controller\validate.py` | Passed: 64 WPs / 1,866 tracked reference files; manifest SHA-256 `11120a20d04408b3d21fac09180412df0490cabf1dafb8a3c98fe83e0fad31e4`. |

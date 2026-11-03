@@ -93,6 +93,11 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
 
     fun canDismissPairingSheet(): Boolean = !completing
 
+    fun openPairingSheet(sheet: PairSheet) {
+        if (sheet == PairSheet.WIFI && deviceScan.state.value.sheet != PairSheet.WIFI) wifi.reset()
+        deviceScan.showSheet(sheet)
+    }
+
     private fun completeWithoutDevice() {
         if (!canCompleteWithoutDevice()) return
         completing = true

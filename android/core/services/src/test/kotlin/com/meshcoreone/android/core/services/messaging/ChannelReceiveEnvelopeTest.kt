@@ -301,6 +301,79 @@ class ChannelReceiveEnvelopeTest {
             assertEquals(0L, p.pendingHandlerCount)
             assertFalse(p.hasMessageHandlersWired)
         },
+        case("legacy to opt-in to legacy cannot exchange two outstanding reordered echoes") {
+            val h = Harness(this)
+            h.start()
+            val role = ControlledReceiveSession(h.session, reorderFirstPair = true)
+            val eventGate = CompletableDeferred<Unit>()
+            role.eventGate = eventGate
+            val p = h.poller(role)
+            val legacy = mutableListOf<Pair<ChannelMessage, DeliveryContext>>()
+            val typed = mutableListOf<ChannelReceiveEnvelope>()
+            suspend fun legacyConsumer() =
+                p.setChannelMessageHandler { message, _, context -> legacy += message to context }
+            legacyConsumer()
+            p.startMessageEventMonitoring()
+            h.transport.incomingMessages += channelPacket()
+            assertEquals(1L, p.pollAllMessages())
+            p.setChannelReceiveEnvelopeHandler { envelope, _ -> typed += envelope }
+            h.transport.incomingMessages += channelPacket()
+            assertEquals(1L, p.pollAllMessages())
+            legacyConsumer()
+            eventGate.complete(Unit)
+            runCurrent()
+
+            assertEquals(2, role.polled.size)
+            assertEquals(role.polled[0], role.polled[1])
+            assertTrue(role.polled[0] !== role.polled[1])
+            assertEquals(1, legacy.size)
+            assertEquals(1, typed.size)
+            assertSame(role.polled[0], legacy.single().first)
+            assertIs<DeliveryContext.InitialSync>(legacy.single().second)
+            assertSame(role.polled[1], typed.single().message)
+            assertIs<DeliveryContext.InitialSync>(typed.single().context)
+            assertSame(ChannelReceiveOrigin.Unproved, typed.single().origin)
+            assertEquals(0, p.undeliveredCount)
+            assertTrue(p.close().isComplete)
+        },
+        case("legacy to opt-in to legacy selects the exact held poll occurrence before an equal buffered event") {
+            val h = Harness(this)
+            h.start()
+            val role = ControlledReceiveSession(h.session, reorderFirstPair = true)
+            val pollGate = CompletableDeferred<Unit>()
+            role.pollGate = pollGate
+            val p = h.poller(role)
+            val legacy = mutableListOf<Pair<ChannelMessage, DeliveryContext>>()
+            var typedCalls = 0
+            suspend fun legacyConsumer() =
+                p.setChannelMessageHandler { message, _, context -> legacy += message to context }
+            legacyConsumer()
+            role.betweenReorderedEvents = {
+                p.setChannelReceiveEnvelopeHandler { _, _ -> typedCalls++ }
+            }
+            p.startMessageEventMonitoring()
+            h.transport.incomingMessages += channelPacket()
+            val polling = backgroundScope.async { p.pollAllMessages() }
+            runCurrent()
+            assertFalse(polling.isCompleted)
+            h.transport.mock.simulateReceive(channelPacket())
+            runCurrent()
+            assertEquals(2, role.observed.size)
+            assertTrue(legacy.isEmpty())
+            legacyConsumer()
+            pollGate.complete(Unit)
+            assertEquals(1L, polling.await())
+            runCurrent()
+
+            assertEquals(0, typedCalls)
+            assertEquals(2, legacy.size)
+            assertSame(role.observed[1], legacy[0].first)
+            assertEquals(DeliveryContext.Live, legacy[0].second)
+            assertSame(role.polled.single(), legacy[1].first)
+            assertIs<DeliveryContext.InitialSync>(legacy[1].second)
+            assertEquals(0, p.undeliveredCount)
+            assertTrue(p.close().isComplete)
+        },
         case("reserved proved state has no public constructor or copy factory") {
             val proof = ChannelReceiveOrigin.Proved::class.java
             assertTrue(proof.declaredConstructors.all { Modifier.isPrivate(it.modifiers) })
@@ -359,6 +432,7 @@ class ChannelReceiveEnvelopeTest {
     ) : MeshCoreSessionProtocol by actual {
         var pollGate: CompletableDeferred<Unit>? = null
         var eventGate: CompletableDeferred<Unit>? = null
+        var betweenReorderedEvents: (suspend () -> Unit)? = null
         val polled = mutableListOf<ChannelMessage>()
         val observed = mutableListOf<ChannelMessage>()
 
@@ -387,6 +461,7 @@ class ChannelReceiveEnvelopeTest {
                     else {
                         reordered = true
                         emit(event)
+                        betweenReorderedEvents?.invoke()
                         emit(held)
                     }
                 }

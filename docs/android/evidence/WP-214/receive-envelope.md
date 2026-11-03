@@ -70,8 +70,10 @@ Delivery objects retain their envelope while observed/buffered, parked and
 retried. Pairing an event with its poll response preserves the occurrence and
 origin while selecting the existing `InitialSync` context. Expected echoes
 retain the original delivery; typed matching cannot consume a distinct equal
-event. Contact echo counts and legacy structural channel comparison remain
-unchanged. Selecting either channel handler replaces the other, never calls
+event. Both searches prefer the exact parsed message across the complete buffer
+before permitting a legacy structural fallback, including mixed legacy/opt-in
+observations during handler switches. Contact echo counts and the legacy
+structural fallback remain unchanged. Selecting either channel handler replaces the other, never calls
 both, and leaves ownership, lookup, failure, cancellation and close handling in
 the existing dispatch path. Install the opt-in handler before receiving;
 switching later cannot recover observations already coalesced by legacy logic.
@@ -103,7 +105,7 @@ All existing local-execution/user and protected merge holds are preserved.
 
 ## Authored cases and actual validation
 
-`ChannelReceiveEnvelopeTest` authors 13 native dynamic cases, using the existing
+`ChannelReceiveEnvelopeTest` authors 15 native dynamic cases, using the existing
 real session/parser/raw-transport harness with controlled scheduling:
 
 - Equal V1/V3 raw inputs produce separate occurrences, each explicitly Unproved.
@@ -115,6 +117,9 @@ real session/parser/raw-transport harness with controlled scheduling:
 - Legacy/typed replacement, clear-and-retry, outstanding echoes in both switch
   directions, generation retirement/reconnect and consumer-initiated close retain
   the existing ownership/failure behavior.
+- Legacy-to-opt-in-to-legacy switching with two outstanding reordered echoes
+  and with mixed buffered observations prefers the exact occurrence globally,
+  retaining the correct `InitialSync`/`Live` contexts without a duplicate callback.
 - The reserved proof state exposes no public constructor or copy/mint factory.
 
 These supplement, not replace or newly credit, pinned original Swift families.
@@ -141,7 +146,7 @@ and uses the existing `Native adaptation` convention for this slice; the final
 mapping check passed without weakening a validator.
 
 Local Kotlin compilation/Gradle/native execution was not run: the existing
-execution/user holds remain. Thirteen is an authored count, not a discovered or
+execution/user holds remain. Fifteen is an authored count, not a discovered or
 passed count. This is an explicitly **unverified product candidate** pending the
 existing exact-head hosted build/tests and trusted review. Exact-commit hosted
 job results and logs are authoritative; no second CI-result bundle is retained.

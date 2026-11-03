@@ -292,7 +292,7 @@ class MessagePollingService(
                 }
                 synchronized(lock) {
                     var delivery = newDelivery(event, DeliveryContext.InitialSync(anchor))
-                    val seen = observedDuringPoll.indexOfFirst { matchesEcho(it, delivery) }
+                    val seen = matchingIndex(observedDuringPoll, delivery)
                     if (seen >= 0) {
                         repeat(seen) { pending.addLast(observedDuringPoll.removeFirst()) }
                         val observed = observedDuringPoll.removeFirst()
@@ -354,12 +354,27 @@ class MessagePollingService(
     private fun matchesEcho(first: Delivery, second: Delivery): Boolean {
         val left = first.channelEnvelope
         val right = second.channelEnvelope
-        if (left != null && right != null && (first.matchesChannelOccurrence || second.matchesChannelOccurrence)) {
-            // SessionCore fans one parsed message object out to its poll result and event subscribers.
-            // Structural equality alone cannot identify that occurrence, much less its firmware origin.
-            return left.message === right.message && left.origin == right.origin
+        if (left != null && right != null) {
+            if (left.origin != right.origin) return false
+            if (first.matchesChannelOccurrence || second.matchesChannelOccurrence) {
+                return left.message === right.message
+            }
         }
         return first.event == second.event
+    }
+
+    private fun matchingIndex(deliveries: List<Delivery>, incoming: Delivery): Int {
+        val channel = incoming.channelEnvelope
+        if (channel != null) {
+            // SessionCore shares the parsed message object. Prefer it across the whole buffer before
+            // trying legacy equality, which could otherwise consume another outstanding occurrence.
+            val exact = deliveries.indexOfFirst {
+                val observed = it.channelEnvelope
+                observed != null && observed.message === channel.message && observed.origin == channel.origin
+            }
+            if (exact >= 0) return exact
+        }
+        return deliveries.indexOfFirst { matchesEcho(it, incoming) }
     }
 
     private fun expectEcho(delivery: Delivery) {
@@ -375,7 +390,7 @@ class MessagePollingService(
         val envelope = delivery.channelEnvelope
         if (envelope != null) {
             val echoes = expectedChannelEchoes[envelope.message] ?: return false
-            val index = echoes.indexOfFirst { matchesEcho(it, delivery) }
+            val index = matchingIndex(echoes, delivery)
             if (index < 0) return false
             echoes.removeAt(index)
             if (echoes.isEmpty()) expectedChannelEchoes.remove(envelope.message)

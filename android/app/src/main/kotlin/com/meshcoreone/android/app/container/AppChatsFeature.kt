@@ -124,6 +124,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     private val draftLock = Any()
     private val draftRevisions = mutableMapOf<ChatConversationID, Long>()
     private val unresolvedCreations = java.util.concurrent.ConcurrentHashMap<UUID, PendingMessageCreation>()
+    private data class DeferredDraft(
+        val target: ComposerTarget, val text: String, val revision: Long, val slotGeneration: Int,
+    )
+    private val deferredDrafts = java.util.concurrent.ConcurrentHashMap<UUID, DeferredDraft>()
     val drafts = object : ComposerDraftStore {
         override val changes = MutableStateFlow(0L)
         override fun get(conversationId: ChatConversationID) = synchronized(draftLock) {
@@ -147,6 +151,42 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     true
                 }
             }
+    }
+
+    init {
+        scope.launch {
+            merge(changes, app.channelSlotGenerations.map { Unit }).collect {
+                for ((id, recovery) in deferredDrafts) {
+                    val conversation = recovery.target.conversationId
+                    if (drafts.revision(conversation) != recovery.revision ||
+                        (app.channelSlotGenerations.value[conversation] ?: 0) != recovery.slotGeneration
+                    ) {
+                        deferredDrafts.remove(id, recovery)
+                        continue
+                    }
+                    try {
+                        val target = recovery.target
+                        if (target is ComposerTarget.Channel) {
+                            val current = store.fetchChannel(target.channel.radioId, target.channel.index)
+                            if (current == null || current.id != target.channel.id ||
+                                current.secret != target.channel.secret || !current.isEnabled
+                            ) {
+                                deferredDrafts.remove(id, recovery)
+                                continue
+                            }
+                        }
+                        if ((app.channelSlotGenerations.value[conversation] ?: 0) == recovery.slotGeneration) {
+                            drafts.restoreIfUnchanged(conversation, recovery.revision, recovery.text)
+                            deferredDrafts.remove(id, recovery)
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: PersistenceStoreException) {
+                        report("Deferred composer draft recovery could not read its channel", failure)
+                    }
+                }
+            }
+        }
     }
 
     internal fun restoreNotificationDraft(
@@ -668,6 +708,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             captureSendPort = {
                 val initiating = container.sessions.current
                 val receipt = PendingMessageCreation()
+                val operationId = UUID.randomUUID()
                 val slotGeneration = app.channelSlotGenerations.value[target.conversationId] ?: 0
                 fun isSameSlot() = target !is ComposerTarget.Channel ||
                     (app.channelSlotGenerations.value[target.conversationId] ?: 0) == slotGeneration
@@ -693,6 +734,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     initiating.chatSendQueueService
                 }
                 decorateSender(object : ComposerSendPort by pinned {
+                    override fun retainDraftForRecovery(text: String, revision: Long?) {
+                        deferredDrafts[operationId] = DeferredDraft(
+                            target, text, checkNotNull(revision), slotGeneration,
+                        )
+                    }
                     override suspend fun canRestoreDraft(): Boolean {
                         if (!isSameSlot()) return false
                         if (target !is ComposerTarget.Channel) return true
@@ -767,8 +813,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 if (message.status == MessageStatus.PENDING) failPending(message)
             }
             val saved = savedMessage(radio, messageId)
-            if (saved.channelIndex != null) {
-                app.messageEventStream.send(MessageEvent.ChannelMessageReceived(saved, saved.channelIndex))
+            val channelIndex = saved.channelIndex
+            if (channelIndex != null) {
+                app.messageEventStream.send(MessageEvent.ChannelMessageReceived(saved, channelIndex))
             } else {
                 val contact = saved.contactID?.let { store.fetchContact(EntityKey(radio, it)) }
                     ?: throw MessageServiceException(MessageServiceError.ContactNotFound)

@@ -233,6 +233,9 @@ class ComposerStateHolder(
                     try {
                         recoverCreation(text, acceptedPort, pendingId, acceptedRevision, storedRevision, cancelled)
                     } catch (recoveryFailure: Exception) {
+                        if (pendingId == null && acceptedPort.creationOutcome() is ComposerCreationOutcome.NotCommitted) {
+                            acceptedPort.retainDraftForRecovery(text, storedRevision)
+                        }
                         diagnostics.report("sendRecovery", recoveryFailure)
                         mutableState.update { it.copy(sendPhase = ComposerSendPhase.Failed(
                             ComposerSendFailure.OTHER,
@@ -250,6 +253,9 @@ class ComposerStateHolder(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (recoveryFailure: Exception) {
+                if (pendingId == null && acceptedPort.creationOutcome() is ComposerCreationOutcome.NotCommitted) {
+                    acceptedPort.retainDraftForRecovery(text, storedRevision)
+                }
                 diagnostics.report("sendRecovery", recoveryFailure)
                 mutableState.update { it.copy(sendPhase = ComposerSendPhase.Failed(
                     ComposerSendFailure.OTHER,

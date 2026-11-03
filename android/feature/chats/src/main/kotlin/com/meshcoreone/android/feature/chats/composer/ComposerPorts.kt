@@ -38,6 +38,9 @@ sealed interface ComposerTarget {
  */
 interface ComposerSendPort {
     suspend fun canRestoreDraft(): Boolean = true
+    fun retainDraftForRecovery(text: String, revision: Long?) {
+        error("This send adapter does not support deferred draft recovery")
+    }
     /** Creation only, never queue acceptance or wire delivery. Read after a failed/cancelled create. */
     fun creationOutcome(): ComposerCreationOutcome = ComposerCreationOutcome.NotCommitted
 

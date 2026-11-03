@@ -101,12 +101,19 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         exercise(true, Boundary.BEFORE_CREATE, replaceSlot = true, preserveNewer = false)
     @Test fun channelSlotReplacementNeverEnqueuesCommittedOldText() =
         exercise(true, Boundary.AFTER_CREATE, replaceSlot = true, preserveNewer = false)
+    @Test fun channelUnreadableRecoveryRetainsTextUntilOriginalSlotCanBeRead() =
+        exercise(true, Boundary.BEFORE_START, lookupFailure = true, preserveNewer = false)
+    @Test fun channelUnreadableRecoveryDoesNotOverwriteNewerTyping() =
+        exercise(true, Boundary.BEFORE_START, lookupFailure = true)
+    @Test fun channelUnreadableRecoveryDoesNotRestoreIntoReplacementSlot() =
+        exercise(true, Boundary.BEFORE_START, lookupFailure = true, replaceSlot = true, preserveNewer = false)
 
     private fun exercise(
         channel: Boolean, boundary: Boundary, replaceSession: Boolean = false, legacyScreenOwner: Boolean = false,
         preserveNewer: Boolean = true, typeThenClear: Boolean = false,
         creationFailure: Boolean = false, reconciliationFailure: Boolean = false, queueFailure: Boolean = false,
         dispose: Boolean = true, replaceSlot: Boolean = false,
+        lookupFailure: Boolean = false,
     ) = runTest {
         val peerKey = key(4)
         val gate = CompletableDeferred<Unit>()
@@ -120,6 +127,8 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         val newer = "Newer draft"
         var replacement: ComposerStateHolder? = null
         var abortSlotWrite = false
+        var unreadableChannel = false
+        var failedChannelReads = 0
         suspend fun pause(at: Boundary) {
             if (boundary == at) {
                 reached.complete(Unit)
@@ -127,6 +136,13 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             }
         }
         val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? {
+                if (unreadableChannel) {
+                    failedChannelReads++
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
+                return store.fetchChannel(radioId, index)
+            }
             override suspend fun saveMessage(dto: MessageDTO) {
                 if (dto.text != original) return store.saveMessage(dto)
                 pause(Boundary.BEFORE_CREATE)
@@ -227,6 +243,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             // Same UI turn: accepted text clears before the process dispatcher is allowed to start.
             compose.runOnIdle {
                 holder.onDraftChanged(original)
+                unreadableChannel = lookupFailure
                 assertTrue(holder.send())
                 assertFalse(holder.send())
                 assertEquals("", holder.state.value.draft)
@@ -280,14 +297,26 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 h.appState.handleChannelSlotOccupantChanged(radio, setOf(slot.index))
                 abortSlotWrite = boundary == Boundary.BEFORE_CREATE
             }
+            if (lookupFailure) {
+                h.eventually("creation and recovery report unreadable channel without losing custody") {
+                    failedChannelReads >= 2 && holder.state.value.sendPhase is ComposerSendPhase.Failed
+                }
+                assertNull(feature.drafts.get(target.conversationId).takeIf { !preserveNewer })
+                unreadableChannel = false
+                h.appState.refreshConversations()
+            }
             gate.complete(Unit)
             h.eventually("accepted operation settles after disposal") {
                 holder.state.value.sendPhase !is ComposerSendPhase.Sending
             }
             val expectedDraft = when {
                 preserveNewer -> if (typeThenClear) null else newer
+                lookupFailure && !replaceSlot -> original
                 replaceSession && boundary == Boundary.BEFORE_CREATE -> original
                 else -> null
+            }
+            h.eventually("draft recovery respects the current revision and slot") {
+                feature.drafts.get(target.conversationId) == expectedDraft
             }
             assertEquals(expectedDraft, feature.drafts.get(target.conversationId))
             h.eventually("replacement composer observes recovery without overwriting newer typing") {
@@ -295,7 +324,12 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             }
             val rows = if (channel) store.fetchMessages(radio, slot.index, 100, 0)
                 else store.fetchMessages(EntityKey(radio, contact.id), 100, 0)
-            if (replaceSlot) {
+            if (lookupFailure) {
+                assertEquals(0, creations)
+                assertEquals(0, enqueues)
+                assertTrue(rows.isEmpty())
+                assertTrue(h.links.radios.single().sent.none { it[0].toInt() in 2..3 })
+            } else if (replaceSlot) {
                 val committed = boundary == Boundary.AFTER_CREATE
                 assertEquals(if (committed) 1 else 0, creations)
                 assertEquals(0, enqueues)

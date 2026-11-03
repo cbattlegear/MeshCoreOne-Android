@@ -40,6 +40,12 @@ process draft revision remain unchanged. A replacement holder's newer typing,
 including typing then explicitly clearing, wins.
 Observable shared draft changes publish a recovered draft to an already reopened
 empty composer; recovery does not require another reconnect or route recreation.
+If original-slot lookup also fails during definitely-unsaved recovery, the App
+retains the text, original target/generation and draft revision in process memory.
+Subsequent real App invalidations retry only local recovery after storage becomes
+readable. New typing or slot replacement invalidates that recovery; it never
+sends, enqueues or restores the text into a replacement channel. Failed reads are
+reported rather than silently interpreted as an absent channel.
 
 Committed text is not restored or created again; its exact row is retained.
 Recovered committed creation failures explicitly publish the exact saved message
@@ -93,6 +99,9 @@ An additional feature test covers typing then clearing before creation fails.
 Mounted retained-route cases check that committed-before-return failures actually
 appear as retryable rows without reopening. Same-session slot-replacement cases
 check unsaved draft suppression and committed old-text enqueue rejection.
+Unreadable-channel cases exercise failure both before creation and during
+recovery, then restore readability and invalidate the App, checking original-slot
+recovery, newer typing preservation and replacement-slot rejection.
 
 ## Coordination and preservation
 

@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.QueuedChannelAttemptRejected
+import com.meshcoreone.android.core.contracts.domain.QueuedChannelReadinessPersisting
 import com.meshcoreone.android.core.contracts.domain.QueuedChannelRetirement
 import com.meshcoreone.android.core.contracts.domain.QueuedChannelTerminalPersisting
 import com.meshcoreone.android.core.database.MeshCoreDatabase
@@ -47,6 +48,187 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
     ) {
         val failure = assertFailsWith<PersistenceStoreException> { action() }
         assertEquals(reason, assertIs<QueuedChannelAttemptRejected>(failure.cause).reason)
+    }
+
+    @Test fun exactReadyCountChangesOnlyItsSubmissionAndNotPhysicalBackoffAttemptAccounting() = runTest {
+        val row = channelMessage()
+        val first = queued(row)
+        val second = queued(row)
+        seed(row, first)
+        store.insertPendingSendAssigningSequence(second)
+        val foreign = row.copy(radioId = RADIO_B)
+        val foreignPending = queued(foreign)
+        seed(foreign, foreignPending)
+        assertEquals(1L, store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, second.id), row.id))
+        val counts = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).associate { it.id to it.attemptCount }
+        assertEquals(mapOf(first.id to 0L, second.id to 1L), counts)
+        assertEquals(0L, store.fetchPendingSends(RADIO_B).single().attemptCount)
+        val wire1 = attempt(second)
+        store.beginQueuedChannelAttempt(wire1, assertNotNull(row.channelOccupantID), 1u)
+        store.settleQueuedChannelAttempt(wire1, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
+        val wire2 = attempt(second)
+        store.beginQueuedChannelAttempt(wire2, assertNotNull(row.channelOccupantID), 2u)
+        store.settleQueuedChannelAttempt(wire2, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
+        assertEquals(1L, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single { it.id == second.id }.attemptCount)
+        assertEquals(listOf(wire1, wire2), store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, second.id)).map { it.key })
+        assertEquals(2L, store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, second.id), row.id))
+    }
+
+    @Test fun exactReadyCountRejectsMissingWrongUnknownInflightUncertainAndAcceptedWithoutBumpingAnyRow() = runTest {
+        val row = channelMessage()
+        val ready = queued(row)
+        seed(row, ready)
+        rejection(QueuedChannelAttemptConflict.MISSING_SUBMISSION) {
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, UUID.randomUUID()), row.id)
+        }
+        rejection(QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION) {
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, ready.id), UUID.randomUUID())
+        }
+        val legacyRow = channelMessage().copy(channelOccupantID = null)
+        val legacy = queued(legacyRow)
+        store.saveMessage(legacyRow)
+        store.upsertPendingSend(legacy)
+        rejection(QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION) {
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, legacy.id), legacyRow.id)
+        }
+        for (outcome in listOf(null, QueuedChannelAttemptOutcome.UNCERTAIN, QueuedChannelAttemptOutcome.ACCEPTED)) {
+            val saved = channelMessage()
+            val pending = queued(saved)
+            seed(saved, pending)
+            val key = attempt(pending)
+            store.beginQueuedChannelAttempt(key, assertNotNull(saved.channelOccupantID), 3u)
+            if (outcome != null) store.settleQueuedChannelAttempt(key, outcome)
+            val before = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, saved.id))
+            rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+                store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, pending.id), saved.id)
+            }
+            assertEquals(before, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, saved.id)))
+            assertEquals(saved, store.fetchMessage(EntityKey(RADIO_A, saved.id)))
+        }
+        assertEquals(0L, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single().attemptCount)
+        assertEquals(legacy, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, legacyRow.id)).single())
+    }
+
+    @Test fun replacementBetweenPreflightAndExactCountCannotBumpItsSuccessorOrRetainedUnknownSibling() = runTest {
+        val row = channelMessage()
+        val original = queued(row)
+        seed(row, original)
+        assertEquals(QueuedChannelDispatchState.READY, store.fetchPendingSends(RADIO_A).single().channelDispatchState)
+        val other = RoomPersistenceStore(db, owner, clock)
+        try {
+            val replacement = queued(row, resend = true)
+            other.replacePendingSendForRetry(row.id, replacement)
+            rejection(QueuedChannelAttemptConflict.MISSING_SUBMISSION) {
+                store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, original.id), row.id)
+            }
+            assertEquals(0L, store.fetchPendingSends(RADIO_A).single().attemptCount)
+            val unknown = queued(row)
+            other.upsertPendingSend(unknown)
+            val before = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id))
+            rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+                store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, replacement.id), row.id)
+            }
+            assertEquals(before, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)))
+        } finally {
+            other.close()
+        }
+    }
+
+    @Test fun exactReadyCountRollsBackOnOverflowSqlFailureOrChangedSavedIntent() = runTest {
+        val row = channelMessage()
+        val pending = queued(row).copy(attemptCount = Long.MAX_VALUE)
+        seed(row, pending)
+        assertFailsWith<PersistenceStoreException> {
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, pending.id), row.id)
+        }
+        assertEquals(Long.MAX_VALUE, store.fetchPendingSends(RADIO_A).single().attemptCount)
+        val ordinary = channelMessage()
+        val pendingOrdinary = queued(ordinary)
+        seed(ordinary, pendingOrdinary)
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_exact_count BEFORE UPDATE OF attemptCount ON pending_sends " +
+                "BEGIN SELECT RAISE(ABORT, 'controlled exact count failure'); END",
+        )
+        try {
+            assertFailsWith<PersistenceStoreException> {
+                store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, pendingOrdinary.id), ordinary.id)
+            }
+            assertEquals(0L, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, ordinary.id)).single().attemptCount)
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_exact_count")
+        }
+        store.saveMessage(ordinary.copy(text = "changed after preflight"))
+        rejection(QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION) {
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, pendingOrdinary.id), ordinary.id)
+        }
+        assertEquals(0L, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, ordinary.id)).single().attemptCount)
+    }
+
+    @Test fun exactReadyCountAndOriginalIntentSurviveDiskReopenWithoutCreatingAPhysicalAttempt() = runTest {
+        val name = "ready-count-${UUID.randomUUID()}.db"
+        var disk = MeshCoreDatabase.open(context, name)
+        var persisted = RoomPersistenceStore(disk, owner, clock)
+        val row = channelMessage()
+        val pending = queued(row)
+        try {
+            persisted.saveMessage(row)
+            persisted.insertPendingSendAssigningSequence(pending)
+            assertTrue(QueuedChannelReadinessPersisting::class.java.isInstance(persisted))
+            assertEquals(1L, persisted.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, pending.id), row.id))
+            persisted.close()
+            disk.close()
+            disk = MeshCoreDatabase.open(context, name)
+            persisted = RoomPersistenceStore(disk, owner, clock)
+            val retained = persisted.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single()
+            assertEquals(pending.id, retained.id)
+            assertEquals(1L, retained.attemptCount)
+            assertEquals(QueuedChannelDispatchState.READY, retained.channelDispatchState)
+            assertNull(retained.channelAttemptID)
+            assertEquals(row, persisted.fetchMessage(EntityKey(RADIO_A, row.id)))
+            assertTrue(persisted.fetchQueuedChannelAttempts(EntityKey(RADIO_A, pending.id)).isEmpty())
+        } finally {
+            persisted.close()
+            disk.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test fun exactReadyCountLostCommitReturnRetainsTheIncrementWithoutFabricatingAReceiptOrWireAttempt() = runTest {
+        var operationToCancel: Job? = null
+        val immediate = Executor { it.run() }
+        val cancellingExecutor = Executor { command ->
+            command.run()
+            operationToCancel?.cancel(CancellationException("controlled ready-count commit return"))
+        }
+        val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(cancellingExecutor).build()
+        val persisted = RoomPersistenceStore(database, owner, clock)
+        try {
+            val row = channelMessage()
+            val pending = queued(row)
+            persisted.saveMessage(row)
+            persisted.insertPendingSendAssigningSequence(pending)
+            var returned = false
+            val operation = launch(start = CoroutineStart.UNDISPATCHED) {
+                operationToCancel = currentCoroutineContext()[Job]
+                persisted.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, pending.id), row.id)
+                returned = true
+            }
+            operation.join()
+            operationToCancel = null
+            assertTrue(operation.isCancelled)
+            assertFalse(returned)
+            val retained = persisted.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single()
+            assertEquals(1L, retained.attemptCount)
+            assertEquals(QueuedChannelDispatchState.READY, retained.channelDispatchState)
+            assertNull(retained.channelAttemptID)
+            assertTrue(persisted.fetchQueuedChannelAttempts(EntityKey(RADIO_A, pending.id)).isEmpty())
+            assertEquals(row, persisted.fetchMessage(EntityKey(RADIO_A, row.id)))
+        } finally {
+            operationToCancel = null
+            persisted.close()
+            database.close()
+        }
     }
 
     @Test fun terminalRetirementUsesOnlyLatestDefinitelyUnsentAttemptAndCommitsFailureWithExactDeletion() = runTest {

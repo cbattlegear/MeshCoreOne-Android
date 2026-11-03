@@ -7,7 +7,8 @@ import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import java.util.UUID
 
-internal class PendingSendRepository(private val context: RoomRepositoryContext) : PendingSendPersisting, QueuedChannelTerminalPersisting {
+internal class PendingSendRepository(private val context: RoomRepositoryContext) :
+    PendingSendPersisting, QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting {
     override suspend fun upsertPendingSend(dto: PendingSendDTO) = context.write("upsertPendingSend") {
         val existing = database.pendingSends().byId(dto.radioId.value, dto.id)
         val candidate = dto.toEntity()
@@ -99,6 +100,29 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
                 ?: return@write null
             val next = checkedIncrement(row.attemptCount ?: 0)
             database.pendingSends().setAttemptCount(key.radioId.value, row.id, next)
+            save()
+            next
+        }
+
+    override suspend fun incrementReadyQueuedChannelAttemptCount(pending: EntityKey, messageID: UUID): Long =
+        context.write("incrementReadyQueuedChannelAttemptCount") {
+            val row = database.pendingSends().byId(pending.radioId.value, pending.id)
+                ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    QueuedChannelAttemptRejected(pending, QueuedChannelAttemptConflict.MISSING_SUBMISSION))
+            if (!row.isChannel || row.messageID != messageID) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+            if (row.channelDispatchStateRawValue == null) reject(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
+            requireRemovable(row)
+            val message = database.messages().byId(row.radioId, messageID)
+            if (row.channelIndex == null || row.contactID != null || row.channelOccupantID == null ||
+                message == null || message.contactID != null || message.directionRawValue != MessageDirection.OUTGOING.rawValue ||
+                message.channelIndex != row.channelIndex || message.channelOccupantID != row.channelOccupantID ||
+                message.text != row.messageText
+            ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+            database.pendingSends().forMessage(row.radioId, messageID).filterNot { it.id == row.id }.forEach(::requireRemovable)
+            val next = checkedIncrement(row.attemptCount ?: 0)
+            if (database.pendingSends().setAttemptCount(row.radioId, row.id, next) != 1) {
+                reject(row, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
+            }
             save()
             next
         }

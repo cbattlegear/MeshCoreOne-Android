@@ -35,7 +35,7 @@ class RoomPersistenceStore private constructor(
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
     RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
-    QueuedChannelTerminalPersisting by pending {
+    QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending {
     constructor(
         database: MeshCoreDatabase,
         scope: CoroutineScope,

@@ -69,12 +69,15 @@ allocated DTO/text are retained in the process adapter, the existing localized
 failure is surfaced, and no automatic creation, enqueue or wire retry occurs.
 Real App invalidations (including normal reconnect/service changes) now read
 these receipts: WRITING waits; a settled unknown outcome is read by its exact
-initiating radio/UUID. An equal persisted DTO enters local committed-row recovery;
-proven absence permits only version/slot-fenced draft restoration. Failed or
+initiating radio/UUID. Matching immutable creation identity/content enters local
+committed-row recovery; later read/seen/status fields need not equal the original
+allocation snapshot and are preserved.
+Proven absence permits only version/slot-fenced draft restoration. Failed or
 mismatched reads remain retained and explicitly reported, never interpreted as
 absence. Reconciliation uses persistence, not a replacement session's send graph.
 Mounted cases cover an existing row, exact absence, newer drafts and same-radio
-session replacement after an initially unreadable reconciliation.
+session replacement after an initially unreadable reconciliation, including a
+row marked read before storage recovery.
 This is process-memory custody, not a durable operation journal or an automatic
 storage-repair UI. An unreadable database remains a storage failure, not success.
 

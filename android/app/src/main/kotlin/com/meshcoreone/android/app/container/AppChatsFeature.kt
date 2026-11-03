@@ -199,7 +199,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                         if (saved == null) {
                             drafts.restoreIfUnchanged(target.conversationId, recovery.revision, allocated.text)
                         } else {
-                            if (saved != allocated) {
+                            if (saved.id != allocated.id || saved.radioId != allocated.radioId ||
+                                saved.contactID != allocated.contactID || saved.channelIndex != allocated.channelIndex ||
+                                saved.text != allocated.text || saved.timestamp != allocated.timestamp ||
+                                saved.createdAt != allocated.createdAt || saved.direction != allocated.direction ||
+                                saved.textType != allocated.textType || saved.replyToID != allocated.replyToID
+                            ) {
                                 throw PersistenceStoreException(PersistenceStoreError.InvalidData)
                             }
                             deferredCommitted[id] = DeferredCommitted(target, recovery.slotGeneration, id)

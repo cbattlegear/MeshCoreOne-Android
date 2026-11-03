@@ -150,6 +150,12 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
     @Test fun channelUnknownAbsentCreationNeverOverwritesNewerDraft() =
         exercise(true, Boundary.BEFORE_CREATE, creationFailure = true, reconciliationFailure = true,
             reconcileLater = true, failBeforeCommit = true)
+    @Test fun directUnknownCreationReconcilesAfterTheSavedRowWasMarkedRead() =
+        exercise(false, Boundary.AFTER_CREATE, creationFailure = true, reconciliationFailure = true,
+            reconcileLater = true, markSavedReadBeforeReconcile = true, dispose = false)
+    @Test fun channelUnknownCreationReconcilesAfterTheSavedRowWasMarkedRead() =
+        exercise(true, Boundary.AFTER_CREATE, creationFailure = true, reconciliationFailure = true,
+            reconcileLater = true, markSavedReadBeforeReconcile = true, dispose = false)
 
     private fun exercise(
         channel: Boolean, boundary: Boundary, replaceSession: Boolean = false, legacyScreenOwner: Boolean = false,
@@ -159,6 +165,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         lookupFailure: Boolean = false,
         newerLiveText: String? = null, recoveryFailure: RecoveryFailure? = null,
         reconcileLater: Boolean = false, failBeforeCommit: Boolean = false,
+        markSavedReadBeforeReconcile: Boolean = false,
     ) = runTest {
         val peerKey = key(4)
         val gate = CompletableDeferred<Unit>()
@@ -391,6 +398,10 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 assertEquals(if (failBeforeCommit) null else MessageStatus.PENDING,
                     store.fetchMessage(EntityKey(radio, saved.id))?.status)
                 assertEquals(0, enqueues)
+                if (markSavedReadBeforeReconcile) {
+                    store.markMessageAsRead(EntityKey(radio, saved.id))
+                    assertTrue(requireNotNull(store.fetchMessage(EntityKey(radio, saved.id))).isRead)
+                }
                 unreadableCreation = false
                 h.appState.refreshConversations()
                 if (!failBeforeCommit) h.eventually("exact identity reconciliation exposes the committed retry row") {
@@ -449,6 +460,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 assertEquals(1, rows.size)
                 assertEquals(requireNotNull(captured).id, rows.single().id)
                 assertEquals(original, rows.single().text)
+                if (markSavedReadBeforeReconcile) assertTrue(rows.single().isRead)
                 assertEquals(0, enqueues)
                 assertTrue(holder.state.value.sendPhase is ComposerSendPhase.Failed)
                 assertEquals(

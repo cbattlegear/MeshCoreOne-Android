@@ -839,6 +839,11 @@ class SourceDispositionTests(unittest.TestCase):
                 {"scopes": ["module:core/l10n"], "full_scaffold": False},
                 {"full_scaffold": "false", "localization": "true"},
             ),
+            (
+                ["scaffold", "protocol", "backup"],
+                {"scopes": ["scaffold", "protocol", "backup"], "full_scaffold": True},
+                {"full_scaffold": "true", "localization": "true"},
+            ),
         )
         for event_name in ("pull_request", "push", "merge_group"):
             for scopes, plan, expected_outputs in cases:
@@ -859,10 +864,24 @@ class SourceDispositionTests(unittest.TestCase):
                         ci.run_stage("scaffold", state, output, scopes=scopes, affected_candidate=True)
                     self.assertEqual(run.call_args.args[1], plan)
                     self.assertEqual(run.call_args.args[5].count("--stacktrace"), 1)
+                    self.assertIn("--parallel", run.call_args.args[5])
+                    self.assertIn("--max-workers=8", run.call_args.args[5])
+                    build_options = run.call_args.kwargs["build_options"]
+                    self.assertIn("--max-workers=1", build_options)
+                    self.assertNotIn("--max-workers=8", build_options)
+                    self.assertNotIn("--parallel", build_options)
+                    self.assertEqual(
+                        [option for option in run.call_args.args[5]
+                         if option != "--parallel" and option != "--max-workers=8"],
+                        [option for option in build_options if option != "--max-workers=1"],
+                    )
                     self.assertEqual(planner.call_args.kwargs["merge_base_only"], event_name == "pull_request")
                     self.assertEqual(run.call_args.kwargs["merge_base_only"], event_name == "pull_request")
                     self.assertEqual(planner.call_args.args[3] if len(planner.call_args.args) > 3 else None,
-                                     None if scopes == ["scaffold"] else ["protocol", "module:core/protocol"])
+                                     None if scopes == ["scaffold"] else list(dict.fromkeys([
+                                         *plan["scopes"],
+                                         *(scope for scope in scopes if scope in ("protocol", "backup")),
+                                     ])))
                     self.assertEqual(
                         dict(line.split("=", 1) for line in output_file.read_text().splitlines()),
                         expected_outputs,

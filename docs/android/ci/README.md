@@ -36,10 +36,13 @@ full-scaffold `resolveScaffoldDependencies`) run in a parallel Gradle preflight
 before the selected build, test and lint tasks. A preflight failure therefore
 prevents that expensive task graph from starting. The remaining tasks run in a
 separate Gradle invocation. Hosted preflight, dependency-only `prepare` and
-ordinary build/test phases use `--parallel --max-workers=8`. The full benchmark
-build phase instead uses `--max-workers=1` without `--parallel`, avoiding
-concurrent R8 and in-process Kotlin heap pressure while retaining every requested
-task and verification. WP-002 resolves dependencies in project-owned tasks.
+the exclusive compile-only consumer invocation use `--parallel --max-workers=8`.
+Hosted scaffold build/test phases, through both the ordinary and affected-candidate
+routes, and the full benchmark build phase instead use `--max-workers=1` without
+`--parallel`. This bounds build concurrency after observed JVM heap exhaustion,
+while retaining every selected task, test and verification. It is a mitigation,
+not proof that concurrency caused the failures. The Gradle daemon's 2 GiB heap,
+test-process heaps and runner are unchanged. WP-002 resolves dependencies in project-owned tasks.
 Validation still precedes build/test work to limit wasted work on failures.
 Local invocations retain their caller-selected worker and parallelism options.
 Each invocation streams
@@ -121,8 +124,8 @@ device behavior or WP-504 acceptance.
 
 Outside the isolated consumer invocation, hosted Gradle task-output caching is
 enabled. Hosted scaffold invocations request Gradle stack traces so the original
-job log can expose nested task failures when available; this changes neither
-task selection nor worker scheduling. Only `:core:data:testDebugUnitTest` is
+job log can expose nested task failures when available; these diagnostics remain
+enabled independently of the build-phase worker bound. Only `:core:data:testDebugUnitTest` is
 explicitly eligible for test-result caching; all other Gradle `Test` tasks
 are explicitly denied cache eligibility until their external inputs and side
 effects are accounted for. The candidate task-graph init script declares the WP-203

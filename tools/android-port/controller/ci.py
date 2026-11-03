@@ -494,6 +494,13 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
         options.extend(("--no-build-cache", "--no-configuration-cache"))
     if local:
         options.append("-PscaffoldTestJvmArgs=-Xms32m -XX:+UseSerialGC -XX:ActiveProcessorCount=2 -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=32m -XX:MaxMetaspaceSize=256m")
+    build_options = options
+    if not local and (stage == "benchmark" or stage == "scaffold" and not consumer):
+        # Bound build-phase concurrency without changing preflight or selected tasks.
+        build_options = [
+            option for option in options
+            if option != "--parallel" and not option.startswith("--max-workers=")
+        ] + ["--max-workers=1"]
     wrapper = REPO / "android" / ("gradlew.bat" if state["host"] == "windows" else "gradlew")
     if affected_candidate:
         if local or stage != "scaffold" or state["host"] != "linux":
@@ -531,7 +538,7 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
 
         report = run_scaffold(
             REPO, plan, environment, output, execute_affected, options,
-            trusted_base=base, merge_base_only=merge_base_only,
+            trusted_base=base, merge_base_only=merge_base_only, build_options=build_options,
         )
         print(json.dumps({"result": "success", **report}, indent=2))
         return
@@ -572,13 +579,6 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
     preflight_tasks, build_tasks = split_preflight_tasks(tasks)
     split_preflight = bool(preflight_tasks and build_tasks)
     preflight_graph = output / f"gradle-{stage}-preflight-task-graph.json"
-    build_options = options
-    if stage == "benchmark" and not local:
-        # Avoid concurrent R8 and in-process Kotlin heap pressure in the full benchmark build.
-        build_options = [
-            option for option in options
-            if option != "--parallel" and not option.startswith("--max-workers=")
-        ] + ["--max-workers=1"]
     if split_preflight:
         phases = [
             ("preflight", preflight_tasks, preflight_graph, validation_preflight_options(options)),

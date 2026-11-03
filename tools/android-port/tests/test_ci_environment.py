@@ -105,17 +105,18 @@ class EnvironmentTests(unittest.TestCase):
         self.assertIn("--dependency-verification", arguments)
         self.assertEqual("strict", arguments[arguments.index("--dependency-verification") + 1])
         self.assertNotIn("--rerun-tasks", arguments)
-        self.assertIn("--build-cache", arguments)
-        self.assertIn("--max-workers=8", arguments)
-        self.assertIn("--parallel", arguments)
-        self.assertIn("--stacktrace", arguments)
+        self.assertEqual("--build-cache" in arguments, not local)
+        self.assertEqual("--max-workers=1" in arguments, not local)
+        self.assertNotIn("--max-workers=8", arguments)
+        self.assertNotIn("--parallel", arguments)
+        self.assertEqual("--stacktrace" in arguments, not local)
         self.assertNotIn("--no-build-cache", arguments)
         if split_preflight:
-            self.assertIn("--parallel", preflight_arguments)
-            self.assertIn("--stacktrace", preflight_arguments)
-            self.assertIn("--max-workers=8", preflight_arguments)
+            self.assertEqual("--parallel" in preflight_arguments, not local)
+            self.assertEqual("--stacktrace" in preflight_arguments, not local)
+            self.assertEqual("--max-workers=8" in preflight_arguments, not local)
             self.assertNotIn("--max-workers=1", preflight_arguments)
-            self.assertIn("--build-cache", preflight_arguments)
+            self.assertEqual("--build-cache" in preflight_arguments, not local)
         return output, state, arguments, observe_identity.call_count, preflight_arguments
 
     def test_scaffold_selects_android_test_compilation_without_install_or_execution(self):
@@ -146,6 +147,16 @@ class EnvironmentTests(unittest.TestCase):
                         forbidden in task.lower()
                         for task in tasks for forbidden in ("connected", "install", "device")
                     ))
+
+    def test_local_scaffold_keeps_its_existing_execution_options(self):
+        for host in ("linux", "windows"):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as temporary:
+                _, _, arguments, _, preflight = self.captured_stage(
+                    Path(temporary), host, "scaffold", self.forwarding_identity(), local=True,
+                )
+                self.assertIn("-PscaffoldTestHeap=256m", arguments)
+                self.assertIn("-PscaffoldTestHeap=256m", preflight)
+                self.assertTrue(any(argument.startswith("-PscaffoldTestJvmArgs=") for argument in arguments))
 
     def test_scaffold_graph_requires_the_declared_android_test_compiler(self):
         from controller.ci import TASKS, validate_candidate_task_graph
@@ -254,7 +265,7 @@ class EnvironmentTests(unittest.TestCase):
                 "verify_candidate_task_graph.gradle"
             ))
 
-    def test_only_hosted_full_benchmark_build_serializes_gradle_workers(self):
+    def test_benchmark_serializes_but_compile_consumer_keeps_parallel_workers(self):
         from controller import ci
 
         cases = (

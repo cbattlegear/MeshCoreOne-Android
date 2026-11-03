@@ -768,6 +768,106 @@ class LocalScopeBindingTests(unittest.TestCase):
         report = run_scaffold(self.repo, plan, {}, output, capture, [], trusted_base=plan["base"])
         self.assertEqual(report["junit_cases"][0]["factory"], "originalFamily")
 
+    def test_serial_build_preserves_owned_tasks_reports_and_parallel_preflight(self):
+        plan = self.services_plan()
+        original_plan = json.dumps(plan, sort_keys=True)
+        output = self.repo / "output"
+        output.mkdir()
+        calls, execute = self.execute_fixture(plan)
+        options = ["--parallel", "--max-workers=8", "--dependency-verification", "strict",
+                   "--stacktrace", "--build-cache"]
+        build_options = ["--dependency-verification", "strict", "--stacktrace",
+                         "--build-cache", "--max-workers=1"]
+        report = run_scaffold(
+            self.repo, plan, {}, output, execute, options, trusted_base=plan["base"],
+            build_options=build_options,
+        )
+        self.assertEqual(len(calls), 2)
+        preflight_tasks = ["validateModuleGraph", "runtimeDependencyInventory"]
+        self.assertEqual(self.requested_gradle_tasks(calls[0]), preflight_tasks)
+        self.assertEqual(self.requested_gradle_tasks(calls[1]), [
+            task for task in plan["tasks"] if task not in preflight_tasks
+        ])
+        self.assertCountEqual(
+            [*self.requested_gradle_tasks(calls[0]), *self.requested_gradle_tasks(calls[1])],
+            plan["tasks"],
+        )
+        self.assertIn("--parallel", calls[0])
+        self.assertIn("--max-workers=8", calls[0])
+        self.assertNotIn("--max-workers=1", calls[0])
+        self.assertIn("--max-workers=1", calls[1])
+        self.assertNotIn("--parallel", calls[1])
+        self.assertNotIn("--max-workers=8", calls[1])
+        for command in calls:
+            for argument in ("--dependency-verification", "strict", "--stacktrace",
+                             "--build-cache", "--init-script"):
+                self.assertIn(argument, command)
+        self.assertEqual(json.dumps(plan, sort_keys=True), original_plan)
+        self.assertEqual(report["tasks"], plan["tasks"])
+        self.assertEqual(report["scopes"], plan["scopes"])
+        self.assertEqual(report["suites"]["core/services"]["passed"], 1)
+        self.assertEqual(report["junit_cases"][0]["outcome"], "passed")
+        self.assertIn("--parallel", options)
+        self.assertEqual(build_options[-1], "--max-workers=1")
+
+    def test_build_only_options_cannot_bypass_the_continue_guard(self):
+        plan = self.services_plan()
+        output = self.repo / "output"
+        output.mkdir()
+        calls, execute = self.execute_fixture(plan)
+        with self.assertRaisesRegex(PortError, "cannot use Gradle --continue"):
+            run_scaffold(
+                self.repo, plan, {}, output, execute, ["--parallel", "--max-workers=8"],
+                trusted_base=plan["base"], build_options=["--max-workers=1", "--continue"],
+            )
+        self.assertEqual(calls, [])
+
+    def test_serial_affected_full_fallback_keeps_the_complete_selected_task_set(self):
+        from controller.local_scope import SCOPED_TASKS
+
+        self.git("update-ref", "refs/remotes/origin/main", self.head)
+        self.write("android/unclassified/input.bin", "unclassified fixture")
+        plan = candidate_plan(self.repo, self.head, self.commit())
+        self.assertTrue(plan["full_scaffold"])
+        self.assertEqual(plan["tasks"], list(dict.fromkeys(
+            task for tasks in SCOPED_TASKS.values() for task in tasks
+        )))
+        output = self.repo / "output"
+        output.mkdir()
+        calls, delegate = self.execute_fixture(plan, emit=False)
+
+        def capture(command, repo, environment, log):
+            delegate(command, repo, environment, log)
+            if log.name == "gradle-scaffold.log":
+                raise PortError("Captured full-scaffold fixture build")
+
+        text = io.StringIO()
+        with contextlib.redirect_stdout(text), \
+                self.assertRaisesRegex(PortError, "Captured full-scaffold fixture build"):
+            run_scaffold(
+                self.repo, plan, {}, output, capture,
+                ["--parallel", "--max-workers=8", "--stacktrace"],
+                trusted_base=plan["base"], build_options=["--max-workers=1", "--stacktrace"],
+            )
+        self.assertEqual(len(calls), 2)
+        preflight_tasks = [
+            "resolveScaffoldDependencies", "validateModuleGraph", "runtimeDependencyInventory",
+        ]
+        self.assertEqual(self.requested_gradle_tasks(calls[0]), preflight_tasks)
+        self.assertEqual(self.requested_gradle_tasks(calls[1]), [
+            task for task in plan["tasks"] if task not in preflight_tasks
+        ])
+        self.assertIn("--parallel", calls[0])
+        self.assertIn("--max-workers=8", calls[0])
+        self.assertNotIn("--parallel", calls[1])
+        self.assertIn("--max-workers=1", calls[1])
+        self.assertIn("--stacktrace", calls[0])
+        self.assertIn("--stacktrace", calls[1])
+        report = json.loads(text.getvalue())
+        self.assertEqual(report["result"], "failure")
+        self.assertEqual(report["tasks"], plan["tasks"])
+        self.assertEqual(report["scopes"], plan["scopes"])
+
     def test_app_scope_checks_required_cases_and_only_app_parity_families(self):
         from controller import ci_evidence
 

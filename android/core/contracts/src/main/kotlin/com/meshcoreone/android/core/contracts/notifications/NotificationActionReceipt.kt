@@ -34,6 +34,16 @@ class NotificationActionReceipt : AbstractCoroutineContextElement(Key) {
         state = State.READY
     }
 
+    /**
+     * Only the actual protocol dispatch owner may prove this after the cancelled call settles.
+     * A failed persistence row, a missing response or cancellation alone is not proof of no send.
+     */
+    @Synchronized
+    fun wireNotDispatched() {
+        check(state == State.IN_FLIGHT)
+        state = State.READY
+    }
+
     @Synchronized
     fun accepted() {
         check(state == State.READY || state == State.IN_FLIGHT || state == State.ACCEPTED)

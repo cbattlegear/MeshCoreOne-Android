@@ -43,7 +43,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
 
     fun getStarted() = onboarding.append(OnboardingStep.PERMISSIONS)
     fun continueFromPermissions() = onboarding.append(OnboardingStep.PAIR)
-    fun back(): Boolean = !completing && onboarding.pop()
+    fun back(): Boolean = !completing && !preset.state.value.isApplying && onboarding.pop()
 
     /** Just-in-time Bluetooth permission: ask on first "Add device", then resume pairing from the result. */
     fun addDevice(requestPermission: (OnboardingPermissionKind) -> Unit) {

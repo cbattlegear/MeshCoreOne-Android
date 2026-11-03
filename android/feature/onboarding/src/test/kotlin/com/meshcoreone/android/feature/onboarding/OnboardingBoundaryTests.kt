@@ -639,6 +639,75 @@ class OnboardingFlowCoordinatorTest {
         assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
     }
 
+    @Test fun backIsBlockedDuringPresetApplyAndHeldCompletionWrite() = kotlinx.coroutines.runBlocking {
+        val applyStarted = CompletableDeferred<Unit>()
+        val releaseApply = CompletableDeferred<OnboardingPresetOutcome>()
+        val writeStarted = CompletableDeferred<Unit>()
+        val releaseWrite = CompletableDeferred<Unit>()
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = false
+            override fun setBoolean(key: String, value: Boolean) = Unit
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                writeStarted.complete(Unit)
+                releaseWrite.await()
+            }
+        }
+        val presets = object : OnboardingPresetPort {
+            override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
+            override fun currentTarget(): OnboardingPresetTarget? = null
+            override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                applyStarted.complete(Unit)
+                return releaseApply.await()
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags, presets = presets))
+        flow.onboarding.replacePath(listOf(OnboardingStep.REGION, OnboardingStep.PRESET))
+        flow.preset.select("p")
+        flow.preset.apply()
+        applyStarted.await()
+
+        assertFalse(flow.back())
+        assertEquals(OnboardingStep.PRESET, flow.currentStep)
+
+        releaseApply.complete(OnboardingPresetOutcome.Applied)
+        writeStarted.await()
+        assertTrue(flow.preset.state.value.isApplying)
+        assertFalse(flow.back())
+        assertEquals(OnboardingStep.PRESET, flow.currentStep)
+
+        releaseWrite.complete(Unit)
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+        assertEquals(OnboardingStep.PRESET, flow.currentStep)
+    }
+
+    @Test fun backStaysOnPresetWhenHeldCompletionWriteFails() = kotlinx.coroutines.runBlocking {
+        val writeStarted = CompletableDeferred<Unit>()
+        val releaseWrite = CompletableDeferred<Unit>()
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = false
+            override fun setBoolean(key: String, value: Boolean) = Unit
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                writeStarted.complete(Unit)
+                releaseWrite.await()
+                error("preference write failed")
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
+        flow.onboarding.replacePath(listOf(OnboardingStep.REGION, OnboardingStep.PRESET))
+        flow.preset.select("p")
+        flow.preset.apply()
+        writeStarted.await()
+
+        assertFalse(flow.back())
+        assertEquals(OnboardingStep.PRESET, flow.currentStep)
+        releaseWrite.complete(Unit)
+
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNotNull(flow.preset.state.value.error)
+        assertFalse(flow.preset.state.value.isApplying)
+        assertEquals(OnboardingStep.PRESET, flow.currentStep)
+    }
+
     @Test fun wifiConnectNavigatesToRegionAndClosesSheet() {
         val flow = OnboardingFlowCoordinator(scope, Deps())
         flow.getStarted(); flow.continueFromPermissions()

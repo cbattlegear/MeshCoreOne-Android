@@ -41,7 +41,7 @@ fun OnboardingFlow(dependencies: OnboardingFeatureDependencies, onCompleted: () 
     val completionError by flow.hasCompletionError.collectAsState()
     val completingWithoutDevice by flow.isCompletingWithoutDevice.collectAsState()
     LaunchedEffect(completed) { if (completed) onCompleted() }
-    dependencies.InterceptBack(enabled = path.isNotEmpty() && !completingWithoutDevice) { flow.back() }
+    dependencies.InterceptBack(enabled = path.isNotEmpty()) { flow.back() }
 
     SharedUiScaffold(modifier.fillMaxSize()) {
         when (path.lastOrNull() ?: OnboardingStep.WELCOME) {

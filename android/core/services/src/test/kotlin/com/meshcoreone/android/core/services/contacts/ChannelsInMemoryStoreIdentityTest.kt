@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
 import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import kotlin.test.assertEquals
@@ -47,6 +48,10 @@ class ChannelsInMemoryStoreIdentityTest {
             assertFailsWith<IllegalStateException> { store.saveChannel(radio, info.copy(name = "recursive")) }
         }
         assertFailsWith<IllegalStateException> { leaked.saveChannel(radio, info.copy(name = "escaped")) }
+        val row = assertNotNull(store.fetchChannel(radio, 1u))
+        val key = EntityKey(radio, row.id)
+        assertFailsWith<IllegalStateException> { leaked.setChannelFavorite(key, true) }
+        assertFailsWith<IllegalStateException> { leaked.deleteMessagesForChannel(radio, 1u) }
         assertEquals("one", store.fetchChannel(radio, 1u)?.name)
     }
 

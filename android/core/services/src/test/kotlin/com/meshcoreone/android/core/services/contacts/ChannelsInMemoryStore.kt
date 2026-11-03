@@ -68,6 +68,45 @@ internal class ChannelsInMemoryStore(
                     synchronized(lock) { unresolvedOccupants += radioId to index }
                     Unit
                 }
+
+            override suspend fun deleteMessagesForChannel(radioId: RadioId, channelIndex: UByte) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.deleteMessagesForChannel(radioId, channelIndex) }
+
+            override suspend fun updateChannelLastMessage(key: EntityKey, date: Instant?) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.updateChannelLastMessage(key, date) }
+
+            override suspend fun incrementChannelUnreadCount(key: EntityKey) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.incrementChannelUnreadCount(key) }
+
+            override suspend fun clearChannelUnreadCount(key: EntityKey) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.clearChannelUnreadCount(key) }
+
+            override suspend fun clearChannelUnreadCount(radioId: RadioId, index: UByte) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.clearChannelUnreadCount(radioId, index) }
+
+            override suspend fun setChannelMuted(key: EntityKey, isMuted: Boolean) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.setChannelMuted(key, isMuted) }
+
+            override suspend fun setChannelNotificationLevel(key: EntityKey, level: NotificationLevel) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.setChannelNotificationLevel(key, level) }
+
+            override suspend fun setSessionNotificationLevel(key: EntityKey, level: NotificationLevel) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.setSessionNotificationLevel(key, level) }
+
+            override suspend fun setChannelFavorite(key: EntityKey, isFavorite: Boolean) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.setChannelFavorite(key, isFavorite) }
+
+            override suspend fun setChannelFloodScope(key: EntityKey, floodScope: ChannelFloodScope) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.setChannelFloodScope(key, floodScope) }
+
+            override suspend fun incrementChannelUnreadMentionCount(key: EntityKey) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.incrementChannelUnreadMentionCount(key) }
+
+            override suspend fun decrementChannelUnreadMentionCount(key: EntityKey) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.decrementChannelUnreadMentionCount(key) }
+
+            override suspend fun clearChannelUnreadMentionCount(key: EntityKey) =
+                scope.withChannelIdentityMutation { this@ChannelsInMemoryStore.clearChannelUnreadMentionCount(key) }
         }
         block(scoped, scope)
     }
@@ -112,7 +151,7 @@ internal class ChannelsInMemoryStore(
 
     fun replace(dto: ChannelDTO) = synchronized(lock) {
         val prior = channels.firstOrNull { it.radioId == dto.radioId && it.index == dto.index }
-        if (prior == null || prior.secret != dto.secret || (dto.radioId to dto.index) !in occupants) {
+        if (prior == null || prior.secret != dto.secret || (!prior.isEnabled && dto.isEnabled) || (dto.radioId to dto.index) !in occupants) {
             occupants[dto.radioId to dto.index] = UUID.randomUUID()
         }
         channels = channels.filterNot { it.id == dto.id } + dto
@@ -176,7 +215,8 @@ internal class ChannelsInMemoryStore(
             occupants.keys.removeAll { (radio, index) -> radio == radioId && index !in byIndex }
             unresolvedOccupants.removeAll { (radio, index) -> radio == radioId && index !in byIndex }
             for ((index, row) in byIndex) {
-                if (oldRows[index]?.secret != row.secret || (radioId to index) !in occupants) {
+                val old = oldRows[index]
+                if (old?.secret != row.secret || (old != null && !old.isEnabled && row.isEnabled) || (radioId to index) !in occupants) {
                     occupants[radioId to index] = UUID.randomUUID()
                 }
                 configured.forEach { unresolvedOccupants.remove(radioId to it.index) }

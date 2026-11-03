@@ -63,6 +63,21 @@ runtime result is claimed, and no producer/environment/lifecycle implementation
 is imported from that source exploration. Existing admission covers this test;
 no claim mutation, product execution or publication occurred.
 
+The eventual producer composition must also retain WP-302 support commit
+`c8d11bd06e13e74273bcaa7f81ccb6c88f8cc808` (tree
+`5eed1571f4cc01cae9ca0a9362f739d8d99bee2b`), a descendant of the inspected
+`28883bb7995e1179a8b13878309863b7861cb2af` exploration. Its exact
+`android/app/src/test/kotlin/com/meshcoreone/android/app/rooms/RoomAccessibilityComposeTest.kt`
+edit implements the two required typed `ChatLinkEnvironment` methods in the
+existing fixture and adds
+`contactLinkActionInRoomNavigatesToTheCapturedSavedContact`. The support diff was
+inspected directly and preserves existing assertions. Omitting it leaves that
+fixture unable to implement the new interface. It depends on producer types and
+is not imported into this older, still-dependent worktree in isolation.
+Source inspection is not mounted execution evidence; the fixture regression and
+combined Kotlin compilation remain unexecuted here. This prerequisite does not
+waive the local-before-publication gate or transfer the retained channel cohort.
+
 ## Terminal-ID producer seam: source-only follow-up
 
 The existing coordinator assigned the exact-ID restoration support seam

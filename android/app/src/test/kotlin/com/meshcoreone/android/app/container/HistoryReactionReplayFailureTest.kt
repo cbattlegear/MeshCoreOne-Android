@@ -138,6 +138,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             }
         }
         val harness = ContainerHarness(test, store, persistenceOverride = persistence)
+        if (reconnect) harness.links.configureRadio = { it.knownContacts += contactFrame(key(3), "Alice") }
         val jobs = mutableListOf<Job>()
         var mounted: ChatViewModel? = null
         try {
@@ -148,8 +149,10 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             }
             val live = assertNotNull(harness.sessions.current)
             val radio = live.token.radioId
-            val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Alice", lastHeardTimestamp = null)
-            store.saveContact(contact)
+            val contact = if (reconnect) assertNotNull(store.fetchContact(radio, key(3))) else {
+                ContactDTO(radioId = radio, publicKey = key(3), name = "Alice", lastHeardTimestamp = null)
+                    .also { store.saveContact(it) }
+            }
             store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
             val channel = assertNotNull(store.fetchChannel(radio, 3u))
             val target = MessageDTO(
@@ -191,6 +194,9 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 assertEquals(radio, replacement.token.radioId)
                 assertTrue(replacement.token.generation.value > live.token.generation.value)
                 assertNotSame(service, replacement.reactionService)
+                assertEquals(contact.id, assertNotNull(store.fetchContact(radio, contact.publicKey)).id)
+                assertNotNull(store.fetchMessage(key), "Reconnect must retain the target, not prune a local-only contact")
+                assertEquals(listOf(bob), store.fetchReactions(key), "Reconnect must preserve the committed reaction")
                 return SyncReactionAdapter(replacement.reactionService)
             }
             if (historyFirst) {

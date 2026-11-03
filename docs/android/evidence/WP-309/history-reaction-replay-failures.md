@@ -334,3 +334,20 @@ again refused `gradle-execution held`; retained owner
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` is untouched. The successor
 requires fresh exact-head normal PR CI, authenticated scope and independent
 review. No predecessor's passing run is claimed for its new code.
+
+The first reconnect candidate `7649173eae19d042cb520538edc68fa6e82333ff`
+ran normally in
+[41620449043](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41620449043).
+Compilation succeeded and 1,901 App methods executed; exactly the three new DM
+reconnect controls failed, while the original 45 and the new channel controls
+passed. The real full-contact sync correctly pruned the test's local-only Alice
+because the fake replacement radio reported an empty contact list, cascading
+the target's reactions before the contender began persistence. This is not a
+passing successor or evidence that the mutex failed.
+
+The corrected fixture reports Alice through the existing protocol fake on both
+connections and uses the actual synced contact identity. It additionally asserts
+contact, target and committed Bob retention immediately after reconnect, before
+starting the replacement writer. No production pruning behavior, store
+operation, expected count or identity assertion is bypassed or weakened.
+This correction still requires its own normal exact-head execution.

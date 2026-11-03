@@ -7,6 +7,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivityResultRegistryOwner
@@ -63,10 +65,15 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.Rule
 import org.junit.Test
 import org.robolectric.Robolectric
@@ -126,6 +133,59 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         val wrapper = failure.suppressed.single()
         assertTrue(wrapper is InvocationTargetException)
         assertSame(ordinary, wrapper.targetException)
+    }
+
+    @Test
+    fun avatarWaitDrainsPostedMainWorkAndTheRealDefaultReturn() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val release = CompletableDeferred<Unit>()
+        val background = CompletableDeferred<Unit>()
+        val posted = CompletableDeferred<Unit>()
+        val resumed = CompletableDeferred<Unit>()
+        try {
+            val job = compose.runOnUiThread {
+                scope.launch {
+                    withContext(Dispatchers.Default) {
+                        release.await()
+                        assertTrue(Handler(Looper.getMainLooper()).post { posted.complete(Unit) })
+                        background.complete(Unit)
+                    }
+                    resumed.complete(Unit)
+                }
+            }
+            release.complete(Unit)
+            compose.waitUntil(5_000) { background.isCompleted }
+            assertFalse(posted.isCompleted, "Polling alone must not execute the paused Main queue")
+            assertFalse(resumed.isCompleted, "The Default return still requires its Main continuation")
+            awaitAvatarWrite("Default return and posted Main work", System.nanoTime() + 5_000_000_000L, { "host control" }) {
+                posted.isCompleted && resumed.isCompleted && job.isCompleted
+            }
+            assertFalse(job.isCancelled)
+        } finally {
+            scope.cancel()
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+        }
+    }
+
+    @Test
+    fun avatarWaitRejectsExpiredAndLateCompletionWithoutRenewingTheBudget() {
+        var polled = false
+        val expired = assertFailsWith<AssertionError> {
+            awaitAvatarWrite("expired save", 1_000_000L, { "expired control" }, nanoTime = { 1_000_000L }) {
+                polled = true
+                true
+            }
+        }
+        assertEquals("expired save: shared deadline expired", expired.message)
+        assertFalse(polled)
+        var samples = 0
+        val late = assertFailsWith<AssertionError> {
+            awaitAvatarWrite(
+                "late holder completion", 2_000_000_000L, { "late control" },
+                nanoTime = { if (samples++ == 0) 1_000_000_000L else 2_000_000_000L },
+            ) { true }
+        }
+        assertEquals("late holder completion: condition completed after shared deadline", late.message)
     }
 
     @Test
@@ -232,13 +292,14 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             }
             val beforeChoose = compose.runOnUiThread { avatarLifetimeDiagnostic(host.get()) }
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).performClick()
-            try {
-                compose.waitUntil(5_000) { entered.isCompleted }
-            } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
-                failWithDiagnostics("Held service not entered after Choose", timeout) {
-                    "observations=$observations; before=$beforeChoose; " +
-                        compose.runOnUiThread { avatarLifetimeDiagnostic(host.get()) }
-                }
+            fun diagnostic() =
+                "observations=$observations; before=$beforeChoose; " +
+                    compose.runOnUiThread { avatarLifetimeDiagnostic(host.get()) }
+            awaitAvatarWrite(
+                "Held service not entered after Choose", System.nanoTime() + 5_000_000_000L,
+                ::diagnostic, { harness.scheduler.runCurrent() },
+            ) {
+                entered.isCompleted
             }
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarSavingAnnouncement)).assertExists()
             assertEquals(storedTarget, store.fetchContact(targetKey))
@@ -267,10 +328,21 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             assertEquals(1, attempts.size)
             assertEquals(storedTarget, store.fetchContact(targetKey))
             release.complete(Unit)
-            compose.waitUntil(5_000) {
-                harness.scheduler.runCurrent()
+            val completionDeadline = System.nanoTime() + 5_000_000_000L
+            awaitAvatarWrite(
+                "Held write persistence and job completion", completionDeadline,
+                ::diagnostic, { harness.scheduler.runCurrent() },
+            ) {
                 completed.isCompleted &&
                     runBlocking { store.fetchContact(targetKey)?.avatarImageData != null } &&
+                    observations.any { it.stage == AvatarSaveStage.JOB_COMPLETED }
+            }
+            awaitAvatarWrite(
+                "Held write chooser recovery", completionDeadline,
+                ::diagnostic, { harness.scheduler.runCurrent() },
+            ) {
+                !compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseSource))
+                    .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled) &&
                     observations.any { it.stage == AvatarSaveStage.JOB_COMPLETED }
             }
             val saved = assertNotNull(assertNotNull(store.fetchContact(targetKey)).avatarImageData)
@@ -285,11 +357,6 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             assertEquals(512, decoded.height)
             assertTrue(android.graphics.Color.blue(decoded.getPixel(256, 256)) > 240)
             decoded.recycle()
-            compose.waitUntil(5_000) {
-                !compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseSource))
-                    .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled) &&
-                    observations.any { it.stage == AvatarSaveStage.JOB_COMPLETED }
-            }
             assertCompletedAvatarSave(observations)
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseSource)).performClick()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarRemovePhoto)).assertExists()
@@ -431,19 +498,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                         "serviceFailure=${serviceFailure.get()?.javaClass?.simpleName}, lifecycle=${host.get().lifecycle.currentState}; " +
                         "observations=$observations; before=$beforeChoose; " +
                         compose.runOnUiThread { avatarLifetimeDiagnostic(host.get()) }
-                val remainingMillis = (deadline - System.nanoTime()) / 1_000_000L
-                if (remainingMillis <= 0) failWithDiagnostics("$stage: shared deadline expired", null, ::diagnostic)
-                try {
-                    compose.waitUntil(remainingMillis) {
-                        harness.scheduler.runCurrent()
-                        condition()
-                    }
-                } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
-                    failWithDiagnostics("$stage: shared deadline wait timed out", timeout, ::diagnostic)
-                }
-                if (System.nanoTime() >= deadline) {
-                    failWithDiagnostics("$stage: condition completed after shared deadline", null, ::diagnostic)
-                }
+                awaitAvatarWrite(stage, deadline, ::diagnostic, { harness.scheduler.runCurrent() }, condition = condition)
             }
             awaitWrite("Production encoder must reach the actual avatar service", saveDeadline) { writes.isNotEmpty() }
             assertEquals(targetKey, writes.single().first)
@@ -452,6 +507,11 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             }
             awaitWrite("Actual avatar service completion", saveDeadline) { returned.get() == 1 }
             assertNull(serviceFailure.get())
+            awaitWrite("Actual holder completion and chooser recovery", saveDeadline) {
+                !compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseSource))
+                    .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled) &&
+                    observations.any { it.stage == AvatarSaveStage.JOB_COMPLETED }
+            }
             val saved = assertNotNull(assertNotNull(store.fetchContact(targetKey)).avatarImageData).toByteArray()
             assertEquals(saved.toList(), assertNotNull(writes.single().second).toByteArray().toList())
             assertEquals(0xFF, saved[0].toInt() and 0xFF)
@@ -461,11 +521,6 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             assertEquals(512, decoded.height)
             assertTrue(android.graphics.Color.blue(decoded.getPixel(256, 256)) > 240)
             assertEquals(storedForeign, store.fetchContact(foreignKey))
-            compose.waitUntil(5_000) {
-                !compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseSource))
-                    .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled) &&
-                    observations.any { it.stage == AvatarSaveStage.JOB_COMPLETED }
-            }
             assertCompletedAvatarSave(observations)
             click(C.contactsDetailAvatarChooseSource)
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarRemovePhoto)).assertExists().performClick()
@@ -481,6 +536,31 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             host.windowFocusChanged(false)
             host.pause().stop().destroy()
             harness.container.close()
+        }
+    }
+
+    private fun awaitAvatarWrite(
+        stage: String,
+        deadline: Long,
+        diagnostic: () -> String,
+        settle: () -> Unit = {},
+        nanoTime: () -> Long = System::nanoTime,
+        condition: () -> Boolean,
+    ) {
+        val remainingMillis = (deadline - nanoTime()) / 1_000_000L
+        if (remainingMillis <= 0) failWithDiagnostics("$stage: shared deadline expired", null, diagnostic)
+        try {
+            compose.waitUntil(remainingMillis) {
+                // Compose polling and the harness scheduler do not drain a paused Android Main queue.
+                Shadows.shadowOf(Looper.getMainLooper()).idle()
+                settle()
+                condition()
+            }
+        } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
+            failWithDiagnostics("$stage: shared deadline wait timed out", timeout, diagnostic)
+        }
+        if (nanoTime() >= deadline) {
+            failWithDiagnostics("$stage: condition completed after shared deadline", null, diagnostic)
         }
     }
 

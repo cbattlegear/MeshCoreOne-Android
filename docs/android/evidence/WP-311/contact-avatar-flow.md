@@ -432,3 +432,78 @@ suppressed diagnostic failure. Arbitrary cause chains are not unwrapped.
 Additional source-only controls call a real reflected throwing target for all
 three propagated categories and an ordinary target exception; existing direct
 collector/cancellation controls remain. No wait budget or product assertion changed.
+
+## Exact d4 hosted failure and bounded App host follow-up
+
+Normal PR run `41668875550`, head
+`d4df945fd98fd2889098eb9bfa4f549890ae061a`, base
+`99479711bfdb7c621765f09d671068ca8b8318ce`, is terminal FAILURE.
+Original Linux job `126031685885` and `android-ci` failed; controller policy
+passed and Swift jobs were skipped. The App unit-test output reports 1,855
+tests completed with three failures: `productionPickerCropAndRemovePersistOnlyTheSelectedRadioContact`
+and both SDK variants of
+`realNavigationPredictiveBackCancellationPreservesAnInFlightAvatarWrite`.
+The production test fails at its first service-entry wait (d4 lines 442/448);
+both predictive variants fail at their service-entry wait (236/238), before
+Back dispatch. All three original suppressed observations contain exactly
+`LAUNCHED`, `STARTED`, `ENCODE_STARTED` for their respective operation UUID.
+There is no observed encode return/failure/cancellation, dependency lookup,
+service call or job completion. Each retained snapshot reports an active,
+uncancelled Main.immediate child, saving true, no error, and cleared crop image;
+the production test also reports service calls zero, returns zero and no
+service failure while the Activity is RESUMED.
+
+All three failures additionally suppress Robolectric's
+`UnExecutedRunnablesException`, identifying queued unexecuted Main-looper work.
+The production encoder switches to Default and must resume its caller on
+Main; `compose.waitUntil` and `harness.scheduler.runCurrent()` are not a
+substitute for draining the paused Android Main queue. This supports a
+host-continuation hypothesis, but the original observations do not prove
+that crop/JPEG processing completed or identify those queued runnables as
+this operation's return. No product root cause or passing fix is asserted.
+
+The original run also logged the three API31 feature dialog timeouts.
+Their read-only diagnosis is separately coordinated with WP307;
+this App follow-up does not edit or investigate those feature test hunks.
+The original Gradle command timed out after 3,600 seconds. Its available
+failed-command report aggregate is 13,729 discovered, 13,726 passed, three
+failed, zero errors/skips, with `evidence_complete: false` and missing
+mandatory report directories. This aggregate is not a complete-run count
+or acceptance result; the log's separate App failures are retained above.
+The run artifacts endpoint returned no downloadable report artifacts.
+
+The source-only App follow-up explicitly drains ready Main-looper work
+inside the bounded polling helper, then runs the existing harness scheduler
+and original condition. It does not replace encoding or store/service calls,
+inject a diagnostic job into the save, or advance the host clock with
+`idleFor`. The production save's original shared five-second deadline now
+includes holder job completion and chooser recovery before JPEG assertions,
+addressing review comment `4456405037` without a fresh completion budget.
+Predictive Back keeps its original five-second entry bound and five-second
+post-release bound; persistence/job completion and chooser recovery share
+that post-release deadline rather than renewing it. All real Back, selected
+identity, service forwarding, Room, JPEG and exact 22-stage assertions remain.
+Authored controls distinguish polling from posted Main work and a real
+Default-to-Main return, and reject already-expired or late successful
+conditions with deterministic clock samples. These controls have not run.
+
+Review comment `4451597214` describes an older holder-key/recreation defect.
+The actual d4 source uses a saveable entry ID plus radio/UUID/public-key
+launcher key and configuration-retained editor/holder state. Its mounted
+test recreates the Activity before picker result delivery and again with
+crop open; the original d4 failure occurs later, after those crop/cancel
+assertions and Choose. This is narrow host evidence that those paths reached
+the save, not successful persistence, process-death restoration, or native
+picker/device acceptance. No production recreation change is made here.
+
+Admission for the App file is the trusted base's `reviewed-support-test` /
+`add-or-update-related-test`; this evidence uses `wp-owned` / `record-evidence`.
+No local Kotlin/Gradle execution, new CI, publication, receipt, review-thread
+resolution, ledger/lock/hold change or device verification is performed.
+The original f54, 1c, 79 and d4 failures remain failure history.
+Independent exact-successor review is required before any new publication.
+Allowed source checks passed: `python android/parity-tests/semantic.py --check`
+(58 groups, 5,133 families, 1,498 candidate comparisons),
+`python tools/android-port/portmap.py`,
+`python tools/android-port/controller/validate.py`, and `git diff --check`.
+These used pinned Python 3.12.4, not Kotlin compilation or test execution.

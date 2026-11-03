@@ -16,7 +16,7 @@ from controller.verification_config import (
     AMENDMENTS, BOOTSTRAP_POLICY_AMENDMENT, POLICY_AMENDMENT_EVIDENCE,
     apply_overlay, check_configuration, project_content_scope,
 )
-from controller.workflows import parse_yaml, validate_candidate, validate_setup, validate_trusted, validate_workflows
+from controller.workflows import parse_yaml, validate_boundary, validate_candidate, validate_setup, validate_trusted, validate_workflows
 
 
 class WorkflowTests(unittest.TestCase):
@@ -129,6 +129,131 @@ class WorkflowTests(unittest.TestCase):
             upload["with"][key] = value
             with self.subTest(key=key, value=value), self.assertRaises(PortError):
                 validate_candidate(changed, text)
+
+    def test_room_diagnostics_preserve_v1_builds_and_retain_only_literal_original_outputs(self):
+        workflow, text = self.read("android-ci.yml")
+        steps = workflow["jobs"]["build"]["steps"]
+        schema = next(step for step in steps if step.get("name") == "Retain generated Room v2 schema diagnostic")
+        junit = next(step for step in steps if step.get("name") == "Retain original Room foundation JUnit diagnostics")
+        self.assertIn("hashFiles('" + schema["with"]["path"] + "') != ''", schema["if"])
+        self.assertEqual(schema["with"]["path"],
+                         "android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/2.json")
+        paths = junit["with"]["path"].splitlines()
+        self.assertEqual(junit["if"], "${{ success() && hashFiles("
+                         + ", ".join("'" + path + "'" for path in paths) + ") != '' }}")
+        self.assertNotIn("steps.gradle.outputs", schema["if"] + junit["if"])
+        self.assertEqual(len(paths), 6)
+        self.assertEqual(len(set(paths)), 6)
+        self.assertTrue(all("/build/test-results/testDebugUnitTest/TEST-" in path and path.endswith(".xml")
+                            and "*" not in path and "${{" not in path for path in paths))
+        for step in (schema, junit):
+            self.assertEqual(step["continue-on-error"], "true")
+            self.assertIn("${{ github.event.pull_request.head.sha || github.sha }}", step["with"]["name"])
+            self.assertIn("${{ github.run_id }}-${{ github.run_attempt }}", step["with"]["name"])
+            self.assertEqual(step["with"]["if-no-files-found"], "error")
+            self.assertEqual(step["with"]["retention-days"], "7")
+            self.assertNotIn("run", step)
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertNotIn("secrets.", text)
+        validate_candidate(workflow, text)
+
+    def test_room_diagnostics_reject_paths_conditions_missing_duplicate_and_cross_job_steps(self):
+        original, text = self.read("android-ci.yml")
+        for name in ("Retain generated Room v2 schema diagnostic", "Retain original Room foundation JUnit diagnostics"):
+            for mode in ("missing", "duplicate", "cross-job", "before-inspection", "always",
+                         "unconditional", "continue", "directory", "wildcard", "candidate-path",
+                         "missing-fallback", "unbound-head", "unbound-attempt", "extra-output", "long-retention"):
+                changed = copy.deepcopy(original)
+                steps = changed["jobs"]["build"]["steps"]
+                index = next(i for i, step in enumerate(steps) if step.get("name") == name)
+                diagnostic = steps[index]
+                if mode == "missing":
+                    steps.pop(index)
+                elif mode == "duplicate":
+                    steps.append(copy.deepcopy(diagnostic))
+                elif mode == "cross-job":
+                    changed["jobs"]["controller"]["steps"].append(steps.pop(index))
+                elif mode == "before-inspection":
+                    steps.insert(0, steps.pop(index))
+                elif mode == "always":
+                    diagnostic["if"] = "${{ always() }}"
+                elif mode == "unconditional":
+                    diagnostic.pop("if")
+                elif mode == "continue":
+                    diagnostic["continue-on-error"] = "false"
+                else:
+                    key, value = {
+                        "directory": ("path", "android/core/database/"),
+                        "wildcard": ("path", "android/**"),
+                        "candidate-path": ("path", "${{ steps.gradle.outputs.artifact_path }}"),
+                        "missing-fallback": ("if-no-files-found", "warn"),
+                        "unbound-head": ("name", "room-${{ github.run_id }}-${{ github.run_attempt }}"),
+                        "unbound-attempt": ("name", "room-${{ github.sha }}-${{ github.run_id }}"),
+                        "extra-output": ("path", diagnostic["with"]["path"] + "\nci-result.json"),
+                        "long-retention": ("retention-days", "90"),
+                    }[mode]
+                    diagnostic["with"][key] = value
+                with self.subTest(name=name, mode=mode), self.assertRaises(PortError):
+                    validate_candidate(changed, text)
+
+    def test_room_diagnostic_failures_are_independent_and_report_real_outcomes_after_backup(self):
+        original, text = self.read("android-ci.yml")
+        steps = original["jobs"]["build"]["steps"]
+        report = next(step for step in steps if step.get("name") == "Report optional Room diagnostic outcomes")
+        self.assertEqual(report["if"], "${{ always() }}")
+        self.assertEqual(report["continue-on-error"], "true")
+        self.assertEqual(report["env"], {
+            "ROOM_SCHEMA_OUTCOME": "${{ steps.room_schema_diagnostic.outcome }}",
+            "ROOM_JUNIT_OUTCOME": "${{ steps.room_junit_diagnostic.outcome }}",
+        })
+        self.assertIn("'failure'", report["run"])
+        self.assertIn("'skipped'", report["run"])
+        self.assertIn("::warning::", report["run"])
+        self.assertIn("GITHUB_STEP_SUMMARY", report["run"])
+        index = steps.index(report)
+        self.assertEqual(steps[index - 1]["name"], "Transfer actual backup bytes to the platform oracle")
+        self.assertNotIn("continue-on-error", steps[index - 1])
+        for mode in ("missing", "conclusion", "success-only", "blocking", "silent", "before-backup"):
+            changed = copy.deepcopy(original)
+            changed_steps = changed["jobs"]["build"]["steps"]
+            changed_report = changed_steps[index]
+            if mode == "missing":
+                changed_steps.pop(index)
+            elif mode == "conclusion":
+                changed_report["env"]["ROOM_SCHEMA_OUTCOME"] = "${{ steps.room_schema_diagnostic.conclusion }}"
+            elif mode == "success-only":
+                changed_report["if"] = "${{ success() }}"
+            elif mode == "blocking":
+                changed_report.pop("continue-on-error")
+            elif mode == "silent":
+                changed_report["run"] = "echo diagnostics passed"
+            else:
+                changed_steps[index - 1], changed_steps[index] = changed_steps[index], changed_steps[index - 1]
+            with self.subTest(mode=mode), self.assertRaises(PortError):
+                validate_candidate(changed, text)
+
+    def test_optional_diagnostics_do_not_admit_other_ignored_failures(self):
+        original, text = self.read("android-ci.yml")
+        validate_boundary(original, text)
+        for mode in ("gradle", "backup", "controller", "renamed-action", "report-script"):
+            changed = copy.deepcopy(original)
+            steps = changed["jobs"]["build"]["steps"]
+            if mode == "gradle":
+                next(step for step in steps if step.get("id") == "gradle")["continue-on-error"] = "true"
+            elif mode == "backup":
+                next(step for step in steps if step.get("name") == "Transfer actual backup bytes to the platform oracle")["continue-on-error"] = "true"
+            elif mode == "controller":
+                changed["jobs"]["controller"]["steps"].append({
+                    "name": "Report optional Room diagnostic outcomes", "continue-on-error": "true",
+                    "run": "echo success",
+                })
+            elif mode == "renamed-action":
+                next(step for step in steps if step.get("id") == "room_schema_diagnostic")["uses"] = \
+                    "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
+            else:
+                next(step for step in steps if step.get("name") == "Report optional Room diagnostic outcomes")["run"] = "echo passed"
+            with self.subTest(mode=mode), self.assertRaises(PortError):
+                validate_boundary(changed, text)
 
     def test_consolidated_controller_installs_hash_pinned_yaml_runtime_before_tests(self):
         workflow, text = self.read("android-ci.yml")

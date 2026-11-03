@@ -165,6 +165,34 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
+      # Diagnostic bytes only: absence of schema v2 is not acceptance and preserves v1 builds.
+      - name: Retain generated Room v2 schema diagnostic
+        id: room_schema_diagnostic
+        continue-on-error: true
+        if: ${{ success() && hashFiles('android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/2.json') != '' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: room-v2-schema-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/2.json
+          if-no-files-found: error
+          retention-days: 7
+      # Original XML is diagnostic retrieval, not a verdict; each required class must be checked by the reader.
+      - name: Retain original Room foundation JUnit diagnostics
+        id: room_junit_diagnostic
+        continue-on-error: true
+        if: ${{ success() && hashFiles('android/core/database/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.database.ChannelOriginV2MigrationTest.xml', 'android/core/database/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.database.RoomBoundaryTest.xml', 'android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.backup.BackupTransactionTest.xml', 'android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.repository.InitialSchemaMigrationBoundaryTest.xml', 'android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.repository.NativeRepositoryBoundaryTest.xml', 'android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.repository.UnsignedPathReopenTest.xml') != '' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: room-foundation-junit-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            android/core/database/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.database.ChannelOriginV2MigrationTest.xml
+            android/core/database/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.database.RoomBoundaryTest.xml
+            android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.backup.BackupTransactionTest.xml
+            android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.repository.InitialSchemaMigrationBoundaryTest.xml
+            android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.repository.NativeRepositoryBoundaryTest.xml
+            android/core/data/build/test-results/testDebugUnitTest/TEST-com.meshcoreone.android.core.data.repository.UnsignedPathReopenTest.xml
+          if-no-files-found: error
+          retention-days: 7
       - name: Transfer actual backup bytes to the platform oracle
         if: ${{ needs.scope.outputs.backup == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -173,6 +201,26 @@ jobs:
           path: android/core/data/build/reports/wp203/interop/
           if-no-files-found: error
           retention-days: 1
+      - name: Report optional Room diagnostic outcomes
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          ROOM_SCHEMA_OUTCOME: ${{ steps.room_schema_diagnostic.outcome }}
+          ROOM_JUNIT_OUTCOME: ${{ steps.room_junit_diagnostic.outcome }}
+        run: |
+          $messages = @()
+          foreach ($item in @(@('schema', $env:ROOM_SCHEMA_OUTCOME), @('JUnit', $env:ROOM_JUNIT_OUTCOME))) {
+            $label, $outcome = $item
+            switch ($outcome) {
+              'success' { $message = "Room $label diagnostic upload succeeded; retained bytes are not acceptance or complete evidence." }
+              'failure' { $message = "Room $label diagnostic upload FAILED; no usable artifact is established. Existing CI is not blocked by this optional upload." }
+              'skipped' { $message = "Room $label diagnostic upload SKIPPED; output may be missing or the build was not eligible. No artifact is established." }
+              default { $message = "Room $label diagnostic outcome is UNKNOWN ($outcome); no artifact is established." }
+            }
+            if ($outcome -eq 'success') { Write-Output $message } else { Write-Output "::warning::$message" }
+            $messages += $message
+          }
+          $messages | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
   external-oracle:
     name: Swift codec oracle

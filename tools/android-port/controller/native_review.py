@@ -95,6 +95,42 @@ class NativeReview:
                 "repair_scope_sha256": digest(scope), "state": "staged-data-only",
                 "scope_comment_id": scope_comment_id, "authoritative": False}
 
+    def stage_infrastructure(self, wp_id, number, scope):
+        from .repair_acceptance import validate_infrastructure_scope
+
+        positive_integer(number, "Infrastructure review PR")
+        pr = self.get(f"/pulls/{number}")
+        base = self.backend.current_base()
+        if (
+            pr.get("state") != "open" or pr.get("draft") is not False or pr.get("merged") is not False
+            or pr.get("base", {}).get("sha") != base or marker(wp_id) not in (pr.get("body") or "")
+            or pr.get("base", {}).get("repo", {}).get("full_name") != self.policy["repository"]
+            or pr.get("base", {}).get("ref") != self.policy["default_branch"]
+        ):
+            raise PortError("Infrastructure staging requires the canonical ready current-base PR")
+        binding = Binding(
+            self.policy["repository"], wp_id, base, pr.get("head", {}).get("sha"),
+            self.manifest.data["reference"]["commit"], self.manifest.sha256,
+            policy_revision(self.manifest, self.policy),
+        )
+        changed = set()
+        for item in self.backend.pages(f"{self.prefix}/pulls/{number}/files"):
+            path = item.get("filename")
+            if not isinstance(path, str) or not path:
+                raise PortError("Malformed infrastructure PR file inventory")
+            changed.add(path)
+            if item.get("status") == "renamed":
+                previous = item.get("previous_filename")
+                if not isinstance(previous, str) or not previous:
+                    raise PortError("Infrastructure PR rename has no previous path")
+                changed.add(previous)
+        operations = validate_infrastructure_scope(scope, binding, self.manifest, self.policy, sorted(changed))
+        staged = stage_review(self.manifest.repo, wp_id, base, binding.head_sha, path_operations=operations)
+        return {
+            "staging": staged, "staging_sha256": digest(staged),
+            "verification_scope": scope, "state": "staged-data-only", "authoritative": False,
+        }
+
     def stage_whole(self, wp_id, number, scope):
         from .repair_acceptance import scoped_candidate_sources, scoped_retained_sources, validate_scope
         from .verification import require_shared_whole_lane
@@ -220,15 +256,18 @@ class NativeReview:
             raise PortError("Native source receipt must be a complete object")
         repair = receipt.get("schema_version") == 2
         whole = receipt.get("schema_version") == 3
+        infrastructure = receipt.get("schema_version") == 4
         fields(receipt, {"schema_version", "binding", "method", "staging_sha256",
                          "review", "evidence", "approvals"} | ({"scope_comment_id"} if repair else set()),
                label="native source receipt")
         if (
-            type(receipt["schema_version"]) is not int or receipt["schema_version"] not in (1, 2, 3)
+            type(receipt["schema_version"]) is not int or receipt["schema_version"] not in (1, 2, 3, 4)
             or receipt["method"] != "authenticated-coordinator-read-only"
             or Binding.parse(receipt["binding"]) != binding
             or not isinstance(receipt["evidence"], dict)
-            or receipt["evidence"].get("schema_version") != (3 if repair else 4 if whole else 2)
+            or receipt["evidence"].get("schema_version") != (
+                3 if repair else 4 if whole else 5 if infrastructure else 2
+            )
         ):
             raise PortError("Stale binding or unsupported native review method/schema")
         return body, receipt
@@ -270,6 +309,8 @@ class NativeReview:
         body, receipt = self.source_receipt(selected[0], binding)
         repair = receipt.get("schema_version") == 2
         whole = receipt.get("schema_version") == 3
+        infrastructure = receipt.get("schema_version") == 4
+        catalog = None
         scope = None
         if repair:
             from .repair_acceptance import authenticated_scope, scoped_candidate_sources, scoped_retained_sources, validate_scope
@@ -307,6 +348,14 @@ class NativeReview:
                                   additional_original_paths={path for path, _, _ in cases},
                                   additional_candidate_sources=scoped_candidate_sources(scope),
                                   additional_retained_sources=scoped_retained_sources(scope))
+        elif infrastructure:
+            from .repair_acceptance import validate_infrastructure_scope
+
+            scope = receipt["evidence"].get("verification_scope")
+            operations = validate_infrastructure_scope(
+                scope, binding, self.manifest, self.policy, receipt["evidence"].get("changed_paths"),
+            )
+            staged = stage_review(self.manifest.repo, wp_id, base, binding.head_sha, path_operations=operations)
         else:
             staged = stage_review(self.manifest.repo, wp_id, base, binding.head_sha)
         if receipt["staging_sha256"] != digest(staged):
@@ -331,9 +380,10 @@ class NativeReview:
         GitHubGateAuthority(self.backend, self.manifest, self.policy).validate_server_acceptance(
             receipt["approvals"], reviews, binding,
         )
-        if not repair and not whole:
+        if not repair and not whole and not infrastructure:
             catalog = None
-        if not repair and not whole and any(e["kind"] in ("test", "support") and e["exclusion"] is None
+        if not repair and not whole and not infrastructure and any(
+               e["kind"] in ("test", "support") and e["exclusion"] is None
                for e in self.manifest.inputs(wp_id, False)):
             entries = tree(self.manifest.repo, base)
             catalog = decode_json(object_bytes(
@@ -346,10 +396,17 @@ class NativeReview:
             "labels": [item["name"] for item in pr.get("labels", [])], "changed_paths": sorted(paths),
         }
         value = GateBundle(binding, fact, receipt["evidence"], receipt["review"], receipt["approvals"], catalog, True)
+        infrastructure_result = None
         if repair:
             from .repair_acceptance import verify_repair
 
             verify_repair(value, scope, self.manifest, self.policy, catalog)
+        elif infrastructure:
+            from .repair_acceptance import verify_infrastructure_acceptance
+
+            infrastructure_result = verify_infrastructure_acceptance(
+                value, scope, self.manifest, self.policy,
+            )
         else:
             verify_pr_gates(fact, value.evidence, value.review, value.approvals,
                             binding, self.manifest, self.policy, catalog)
@@ -374,6 +431,10 @@ class NativeReview:
         candidate_tree = tree(self.manifest.repo, binding.head_sha)
         if repair or whole:
             self.verify_repair_execution(value, scope, run, candidate_tree, whole=whole)
+        elif infrastructure:
+            from .repair_acceptance import verify_infrastructure_execution
+
+            verify_infrastructure_execution(self, value, scope, run)
         for item in value.evidence["retained_artifacts"]:
             if (
                 item["path"] not in candidate_tree
@@ -384,6 +445,14 @@ class NativeReview:
                   "review_body_sha256": hashlib.sha256(body.encode()).hexdigest()}
         if repair:
             result.update(acceptance_kind="bounded-repair", wp_complete=False, dependency_unlock=False)
+        elif infrastructure:
+            result.update(
+                acceptance_kind="bounded-infrastructure-verification",
+                verification_scope_id=scope["scope_id"],
+                scope_sha256=infrastructure_result["scope_sha256"],
+                ci_run_ids=infrastructure_result["ci_run_ids"],
+                wp_complete=False, dependency_unlock=False,
+            )
         return value, result
 
     def verify_repair_execution(self, value, scope, run, candidate_tree, *, whole=False):
@@ -454,11 +523,28 @@ class NativeReview:
         if any(summary != summaries[0] for summary in summaries) or not summaries[0].startswith(RESULT_MARKER):
             raise PortError("Project checks do not reference one complete native review")
         result = decode_json(summaries[0][len(RESULT_MARKER):])
+        bounded_kinds = ("bounded-repair", "bounded-infrastructure-verification")
+        kind = result.get("acceptance_kind")
+        bounded_fields = {
+            "acceptance_kind", "wp_complete", "dependency_unlock",
+        } | (
+            {"verification_scope_id", "scope_sha256", "ci_run_ids"}
+            if kind == "bounded-infrastructure-verification" else set()
+        )
         fields(result, {"binding", "pr_number", "review_id", "review_body_sha256",
                         "publisher_run_id", "publisher_run_attempt"} | (
-                            {"acceptance_kind", "wp_complete", "dependency_unlock"}
-                            if result.get("acceptance_kind") == "bounded-repair" else set()
+                            bounded_fields if kind in bounded_kinds else set()
                         ), label="native gate result")
+        bounded = kind in bounded_kinds
+        if bounded and (result.get("wp_complete") is not False or result.get("dependency_unlock") is not False):
+            raise PortError("Bounded native review cannot complete a WP or unlock dependencies")
+        if kind == "bounded-infrastructure-verification" and (
+            result["verification_scope_id"] != "wp003-ci-reader-route-v1"
+            or not isinstance(result["scope_sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", result["scope_sha256"]) is None
+            or not isinstance(result["ci_run_ids"], list) or len(result["ci_run_ids"]) != 1
+        ):
+            raise PortError("Infrastructure publisher result has malformed scope or CI provenance")
         value, expected = self.evaluate(wp_id, number, result["review_id"])
         if any(result[key] != item for key, item in expected.items()):
             raise PortError("Native project check has stale review/binding provenance")
@@ -483,7 +569,9 @@ class NativeReview:
                 if check.get("details_url") != f"https://github.com/{binding.repository}/runs/{check_id}":
                     raise PortError("Project check has an unrecognized publisher URL")
                 normalized = True
-        if normalized:
+        result = decode_json(summary[len(RESULT_MARKER):])
+        infrastructure = result.get("acceptance_kind") == "bounded-infrastructure-verification"
+        if normalized or infrastructure:
             from .repair_acceptance import read_job_log
 
             jobs = self.backend.pages(
@@ -554,9 +642,13 @@ class NativeReview:
             self.backend.api.request("PATCH", f"{self.prefix}/check-runs/{check_id}", {
                 "status": "completed", "conclusion": "success",
                 "output": {
-                    "title": ("Authenticated bounded repair - not WP completion"
-                              if result.get("acceptance_kind") == "bounded-repair"
-                              else "Authenticated exact-bound project acceptance"),
+                    "title": (
+                        "Authenticated bounded infrastructure verification - not WP completion"
+                        if result.get("acceptance_kind") == "bounded-infrastructure-verification"
+                        else "Authenticated bounded repair - not WP completion"
+                        if result.get("acceptance_kind") == "bounded-repair"
+                        else "Authenticated exact-bound project acceptance"
+                    ),
                     "summary": summary,
                 },
             })
@@ -569,7 +661,9 @@ class NativeReview:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("inspect", "publish", "stage-repair", "stage-whole"))
+    parser.add_argument(
+        "command", choices=("inspect", "publish", "stage-repair", "stage-whole", "stage-infrastructure"),
+    )
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--trusted-base", required=True)
     parser.add_argument("--wp", required=True)
@@ -590,12 +684,12 @@ def main(argv=None):
         native = NativeReview(backend, manifest, policy)
         if backend.current_base() != args.trusted_base:
             raise PortError("Trusted base advanced; stage and review the current candidate again")
-        if args.command in ("stage-repair", "stage-whole"):
+        if args.command in ("stage-repair", "stage-whole", "stage-infrastructure"):
             if (
                 args.output is None or not args.output.is_absolute()
                 or args.output.resolve().is_relative_to(args.repo.resolve())
                 or args.command == "stage-repair" and args.scope_comment_id is None
-                or args.command == "stage-whole" and (
+                or args.command in ("stage-whole", "stage-infrastructure") and (
                     args.scope is None or not args.scope.is_absolute()
                     or args.scope.resolve().is_relative_to(args.repo.resolve())
                 )
@@ -605,11 +699,16 @@ def main(argv=None):
 
             if args.command == "stage-repair":
                 staged = native.stage_repair(args.wp, args.pr, args.scope_comment_id)
-            else:
+            elif args.command == "stage-whole":
                 if args.scope.stat().st_size > 4 * 1024 * 1024:
                     raise PortError("Whole-WP scope exceeds the bounded input size")
                 scope = decode_json(args.scope.read_text(encoding="utf-8"))
                 staged = native.stage_whole(args.wp, args.pr, scope)
+            else:
+                if args.scope.stat().st_size > 4 * 1024 * 1024:
+                    raise PortError("Infrastructure scope exceeds the bounded input size")
+                scope = decode_json(args.scope.read_text(encoding="utf-8"))
+                staged = native.stage_infrastructure(args.wp, args.pr, scope)
             write_json(args.output, staged)
             result = {"state": "staged-data-only", "staging_sha256": staged["staging_sha256"],
                       "authoritative": False}
@@ -628,9 +727,14 @@ def main(argv=None):
                 raise PortError("Inspection requires the actual source review ID")
             value, result = native.evaluate(args.wp, args.pr, args.review_id)
             repair = value.evidence["schema_version"] == 3
-            result.update(state="bounded-repair-verified" if repair else "project-acceptance-verified",
+            infrastructure = value.evidence["schema_version"] == 5
+            result.update(state=(
+                              "bounded-infrastructure-verification-verified" if infrastructure
+                              else "bounded-repair-verified" if repair
+                              else "project-acceptance-verified"
+                          ),
                           merge_authorized=False, binding=asdict(value.binding))
-            if repair:
+            if repair or infrastructure:
                 result.update(wp_complete=False, dependency_unlock=False)
         print(json.dumps(result, indent=2))
         return 0

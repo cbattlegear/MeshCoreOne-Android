@@ -257,4 +257,20 @@ class NotificationAcceptanceRecoveryTests {
         assertTrue(n.store.writes.isEmpty())
         assertFalse(receipt.preventsReplay)
     }
+
+    @Test fun definitelyUnsentDispositionCanResetOnlyAnInFlightReceipt() {
+        val receipt = NotificationActionReceipt()
+        receipt.wireStarted()
+        receipt.wireNotDispatched()
+        assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+        assertFalse(receipt.preventsReplay)
+        receipt.wireStarted()
+        receipt.uncertain()
+        assertFailsWith<IllegalStateException> { receipt.wireNotDispatched() }
+        assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+        val accepted = NotificationActionReceipt()
+        accepted.accepted()
+        assertFailsWith<IllegalStateException> { accepted.wireNotDispatched() }
+        assertEquals(NotificationActionReceipt.State.ACCEPTED, accepted.state)
+    }
 }

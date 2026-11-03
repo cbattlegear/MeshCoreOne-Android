@@ -37,6 +37,7 @@ sealed interface ComposerTarget {
  * the queue. Implementations validate length again and surface typed creation/enqueue failures.
  */
 interface ComposerSendPort {
+    fun canRestoreDraft(): Boolean = true
     /** Creation only, never queue acceptance or wire delivery. Read after a failed/cancelled create. */
     fun creationOutcome(): ComposerCreationOutcome = ComposerCreationOutcome.NotCommitted
 
@@ -64,6 +65,7 @@ sealed interface ComposerCreationOutcome {
 
 /** Process draft revisions fence recovery against typing (including typing then clearing) in another screen. */
 interface ComposerDraftStore : TimelineDraftStore {
+    val changes: StateFlow<Long>
     fun revision(conversationId: ChatConversationID): Long
     fun restoreIfUnchanged(conversationId: ChatConversationID, revision: Long, text: String): Boolean
 }

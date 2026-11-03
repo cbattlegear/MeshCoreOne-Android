@@ -87,6 +87,17 @@ class ComposerStateHolder(
         observers += scope.launch {
             environment.recentSenderOrder.collect { mutableState.update(::withMentions) }
         }
+        (drafts as? ComposerDraftStore)?.let { shared ->
+            observers += scope.launch {
+                shared.changes.collect {
+                    mutableState.update { current ->
+                        if (current.draft.isEmpty() && !current.isSending) {
+                            withMentions(current.copy(draft = drafts.get(target.conversationId).orEmpty()))
+                        } else current
+                    }
+                }
+            }
+        }
     }
 
     private fun initialState(): ComposerUiState {
@@ -241,7 +252,7 @@ class ComposerStateHolder(
         val outcome = port.creationOutcome()
         val savedId = pendingId ?: (outcome as? ComposerCreationOutcome.Committed)?.message?.id
         val definitelyUnsaved = savedId == null && outcome is ComposerCreationOutcome.NotCommitted
-        if (definitelyUnsaved && draftRevision == acceptedRevision) {
+        if (definitelyUnsaved && port.canRestoreDraft() && draftRevision == acceptedRevision) {
             val versioned = drafts as? ComposerDraftStore
             if (versioned != null && storedRevision != null) {
                 versioned.restoreIfUnchanged(target.conversationId, storedRevision, text)

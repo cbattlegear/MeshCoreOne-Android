@@ -125,6 +125,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     private val draftRevisions = mutableMapOf<ChatConversationID, Long>()
     private val unresolvedCreations = java.util.concurrent.ConcurrentHashMap<UUID, PendingMessageCreation>()
     val drafts = object : ComposerDraftStore {
+        override val changes = MutableStateFlow(0L)
         override fun get(conversationId: ChatConversationID) = synchronized(draftLock) {
             app.draftStore.draft(conversationId)
         }
@@ -132,6 +133,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             draftRevisions[conversationId] = (draftRevisions[conversationId] ?: 0L) + 1
             if (text == null) app.draftStore.clearDraft(conversationId)
             else app.draftStore.setDraft(text, conversationId)
+            changes.value++
+            Unit
         }
         override fun revision(conversationId: ChatConversationID) = synchronized(draftLock) {
             draftRevisions[conversationId] ?: 0L
@@ -665,6 +668,17 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             captureSendPort = {
                 val initiating = container.sessions.current
                 val receipt = PendingMessageCreation()
+                val slotGeneration = app.channelSlotGenerations.value[target.conversationId] ?: 0
+                fun isSameSlot() = target !is ComposerTarget.Channel ||
+                    (app.channelSlotGenerations.value[target.conversationId] ?: 0) == slotGeneration
+                suspend fun checkChannel() {
+                    if (target is ComposerTarget.Channel) {
+                        val current = store.fetchChannel(radio, target.channel.index)
+                        if (!isSameSlot() || current == null || current.id != target.channel.id ||
+                            current.secret != target.channel.secret || !current.isEnabled
+                        ) throw MessageServiceException(MessageServiceError.ChannelNotFound)
+                    }
+                }
                 val captured = {
                     if (initiating == null || initiating.token.radioId != radio || session(radio) !== initiating) {
                         throw MessageServiceException(MessageServiceError.NotConnected)
@@ -679,6 +693,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     initiating.chatSendQueueService
                 }
                 decorateSender(object : ComposerSendPort by pinned {
+                    override fun canRestoreDraft() = isSameSlot()
                     override fun creationOutcome(): ComposerCreationOutcome {
                         val snapshot = receipt.snapshot
                         return when (snapshot.state) {
@@ -701,12 +716,17 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     override suspend fun createPendingChannel(
                         text: String, channelIndex: UByte, radioId: RadioId, textType: TextType,
                     ) = withContext(receipt) {
-                        pinned.createPendingChannel(text, channelIndex, radioId, textType)
+                        checkChannel()
+                        pinned.createPendingChannel(text, channelIndex, radioId, textType).also {
+                            checkChannel()
+                        }
                     }
-                    override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) =
+                    override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) {
+                        checkChannel()
                         pinned.enqueueChannel(envelope.copy(
                             localNodeName = app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName,
                         ))
+                    }
                 })
             },
         )
@@ -737,8 +757,18 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             sendQueue(radio).signalDMEnqueued(envelope)
         override suspend fun recordLocalEnqueueFailure(messageId: UUID) {
             if (store.fetchPendingSendsForMessage(EntityKey(radio, messageId)).isEmpty()) {
-                failPending(savedMessage(radio, messageId))
+                val message = savedMessage(radio, messageId)
+                if (message.status == MessageStatus.PENDING) failPending(message)
             }
+            val saved = savedMessage(radio, messageId)
+            if (saved.channelIndex != null) {
+                app.messageEventStream.send(MessageEvent.ChannelMessageReceived(saved, saved.channelIndex))
+            } else {
+                val contact = saved.contactID?.let { store.fetchContact(EntityKey(radio, it)) }
+                    ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
+                app.messageEventStream.send(MessageEvent.DirectMessageReceived(saved, contact))
+            }
+            app.refreshConversations()
         }
     }
 

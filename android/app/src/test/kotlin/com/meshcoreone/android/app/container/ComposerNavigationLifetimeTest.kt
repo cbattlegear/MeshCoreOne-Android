@@ -93,11 +93,20 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         exercise(false, Boundary.AFTER_QUEUE, queueFailure = true)
     @Test fun channelDurableQueueFailureIsNotResubmitted() =
         exercise(true, Boundary.AFTER_QUEUE, queueFailure = true)
+    @Test fun directMountedTimelineAdmitsCommittedFailureBeforeCreateReturns() =
+        exercise(false, Boundary.AFTER_CREATE, creationFailure = true, dispose = false)
+    @Test fun channelMountedTimelineAdmitsCommittedFailureBeforeCreateReturns() =
+        exercise(true, Boundary.AFTER_CREATE, creationFailure = true, dispose = false)
+    @Test fun channelSlotReplacementNeverRestoresOldUnsavedDraft() =
+        exercise(true, Boundary.BEFORE_CREATE, replaceSlot = true, preserveNewer = false)
+    @Test fun channelSlotReplacementNeverEnqueuesCommittedOldText() =
+        exercise(true, Boundary.AFTER_CREATE, replaceSlot = true, preserveNewer = false)
 
     private fun exercise(
         channel: Boolean, boundary: Boundary, replaceSession: Boolean = false, legacyScreenOwner: Boolean = false,
         preserveNewer: Boolean = true, typeThenClear: Boolean = false,
         creationFailure: Boolean = false, reconciliationFailure: Boolean = false, queueFailure: Boolean = false,
+        dispose: Boolean = true, replaceSlot: Boolean = false,
     ) = runTest {
         val peerKey = key(4)
         val gate = CompletableDeferred<Unit>()
@@ -109,6 +118,8 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         val envelopes = mutableListOf<ChannelMessageEnvelope>()
         val original = "Accepted \u4e2d\uD83D\uDE80 text"
         val newer = "Newer draft"
+        var replacement: ComposerStateHolder? = null
+        var abortSlotWrite = false
         suspend fun pause(at: Boundary) {
             if (boundary == at) {
                 reached.complete(Unit)
@@ -119,6 +130,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             override suspend fun saveMessage(dto: MessageDTO) {
                 if (dto.text != original) return store.saveMessage(dto)
                 pause(Boundary.BEFORE_CREATE)
+                if (abortSlotWrite) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
                 store.saveMessage(dto)
                 creations++
                 captured = dto
@@ -179,6 +191,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 }
             }
             lateinit var holder: ComposerStateHolder
+            lateinit var timeline: ChatViewModel
             compose.runOnUiThread {
                 host.get().setContent {
                     if (mounted.value) {
@@ -190,7 +203,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                                 ComposerTimer { delay(it) },
                             ) else feature.composer(target, environment, scope, decorate)
                         }
-                        val timeline = remember { ChatViewModel(conversation, feature.timeline(conversation), scope) }
+                        timeline = remember { ChatViewModel(conversation, feature.timeline(conversation), scope) }
                         MeshCoreTheme(motionScale = 0f) {
                             AppChatConversationScreen(
                                 timeline, holder, "Message",
@@ -232,7 +245,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                         assertEquals(1, store.fetchPendingSendsForMessage(EntityKey(radio, saved.id)).size)
                     }
                 } else assertEquals(0, creations)
-                compose.runOnIdle { mounted.value = false }
+                if (dispose) compose.runOnIdle { mounted.value = false }
             }
             compose.waitForIdle()
             if (legacyScreenOwner) {
@@ -246,13 +259,12 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 assertEquals(0, enqueues)
                 return@runTest
             }
+            val nextComposer = feature.composer(
+                target, feature.environment(target, backgroundScope, location), backgroundScope,
+            ).also { replacement = it }
             if (preserveNewer) {
-                val replacement = feature.composer(
-                    target, feature.environment(target, backgroundScope, location), backgroundScope,
-                )
-                replacement.onDraftChanged(newer)
-                if (typeThenClear) replacement.onDraftChanged("")
-                replacement.close()
+                nextComposer.onDraftChanged(newer)
+                if (typeThenClear) nextComposer.onDraftChanged("")
             }
             if (replaceSession) {
                 h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
@@ -262,6 +274,11 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                         h.sessions.current != null && h.sessions.current !== initiating
                 }
                 assertEquals(radio, requireNotNull(h.sessions.current).token.radioId)
+            }
+            if (replaceSlot) {
+                store.saveChannel(slot.copy(secret = Bytes(ByteArray(16) { 9 })))
+                h.appState.handleChannelSlotOccupantChanged(radio, setOf(slot.index))
+                abortSlotWrite = boundary == Boundary.BEFORE_CREATE
             }
             gate.complete(Unit)
             h.eventually("accepted operation settles after disposal") {
@@ -273,9 +290,20 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 else -> null
             }
             assertEquals(expectedDraft, feature.drafts.get(target.conversationId))
+            h.eventually("replacement composer observes recovery without overwriting newer typing") {
+                nextComposer.state.value.draft == expectedDraft.orEmpty()
+            }
             val rows = if (channel) store.fetchMessages(radio, slot.index, 100, 0)
                 else store.fetchMessages(EntityKey(radio, contact.id), 100, 0)
-            if (creationFailure) {
+            if (replaceSlot) {
+                val committed = boundary == Boundary.AFTER_CREATE
+                assertEquals(if (committed) 1 else 0, creations)
+                assertEquals(0, enqueues)
+                assertEquals(if (committed) 1 else 0, rows.size)
+                if (committed) assertEquals(MessageStatus.FAILED, rows.single().status)
+                assertTrue(h.links.radios.single().sent.none { it[0].toInt() in 2..3 })
+                assertNull(feature.drafts.get(target.conversationId))
+            } else if (creationFailure) {
                 assertEquals(1, creations)
                 assertEquals(1, rows.size)
                 assertEquals(requireNotNull(captured).id, rows.single().id)
@@ -287,6 +315,13 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                     rows.single().status,
                 )
                 assertTrue(h.links.radios.all { link -> link.sent.none { it[0].toInt() in 2..3 } })
+                if (!dispose) {
+                    h.eventually("mounted timeline admits the exact failed creation for retry") {
+                        timeline.state.value.messages.any {
+                            it.id == rows.single().id && it.status == MessageStatus.FAILED
+                        }
+                    }
+                }
             } else if (queueFailure) {
                 assertEquals(1, creations)
                 assertEquals(1, enqueues)
@@ -337,6 +372,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             }
         } finally {
             gate.complete(Unit)
+            replacement?.close()
             compose.runOnUiThread { host.get().setContent {} }
             compose.waitForIdle()
             h.container.close()

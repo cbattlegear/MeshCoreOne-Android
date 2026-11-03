@@ -38,8 +38,12 @@ creation: never queue acceptance, radio transmission or delivery.
 Definitely-unsaved text is restored only if the local draft version and the
 process draft revision remain unchanged. A replacement holder's newer typing,
 including typing then explicitly clearing, wins.
+Observable shared draft changes publish a recovered draft to an already reopened
+empty composer; recovery does not require another reconnect or route recreation.
 
 Committed text is not restored or created again; its exact row is retained.
+Recovered committed creation failures explicitly publish the exact saved message
+to the mounted timeline, rather than only publishing an unknown-ID status change.
 An uncertain creation is not treated as rollback: the original receipt and
 allocated DTO/text are retained in the process adapter, the existing localized
 failure is surfaced, and no automatic restore, enqueue or retry occurs.
@@ -50,6 +54,13 @@ Creation and queue access are pinned to the initiating session; a replacement
 session for the same radio cannot adopt this accepted send. Channel node-name
 metadata is read from the matching current device at enqueue, retaining the
 source's after-creation timing rather than freezing it at Send.
+The existing AppState channel-slot generation fences old-slot draft recovery.
+Channel creation and App queue entry also check the original slot ID/secret and
+generation; held creation followed by same-session replacement cannot enqueue
+old text. This App guard is not an atomic queue/firmware slot lease: a slot change
+after queue entry while service-owned persistence/drain is suspended still needs
+coordination with the WP-405/channel and queue producer. That lower-level review
+finding is explicitly unresolved, not claimed fixed by a preflight check.
 On creation cancellation, only bounded local recovery completes noncancellably;
 the original cancellation propagates. An interrupted enqueue is not blindly
 failed because the queue may still own durable acceptance. A generic enqueue
@@ -79,6 +90,9 @@ before return (then reconnect to drain the one retained operation).
 Two controls retain the former screen-owned holder wiring to demonstrate the
 original pre-commit loss schedule. APIs31/37 are configured, not yet observed.
 An additional feature test covers typing then clearing before creation fails.
+Mounted retained-route cases check that committed-before-return failures actually
+appear as retryable rows without reopening. Same-session slot-replacement cases
+check unsaved draft suppression and committed old-text enqueue rejection.
 
 ## Coordination and preservation
 

@@ -9,6 +9,8 @@ import com.meshcoreone.android.app.navigation.MapFocusRequest
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationLayout
 import com.meshcoreone.android.app.navigation.NavigationState
+import com.meshcoreone.android.app.navigation.NavigationFailure
+import com.meshcoreone.android.app.navigation.NavigationTarget
 import com.meshcoreone.android.app.navigation.SettingsDetail
 import com.meshcoreone.android.app.navigation.ToolSelection
 import com.meshcoreone.android.core.contracts.AppTab
@@ -48,6 +50,81 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ExternalRouteReplacementTest {
+    @Test
+    fun supersededRevisionDuringRetryReturnsTrueStaleWithoutCompletionPublication() = runTest {
+        val environment = Environment()
+        var fail = true
+        var supersedingState: NavigationState? = null
+        environment.contactLookup = {
+            if (fail) throw IllegalStateException("store unavailable")
+            ContactLinkPublications().use { publications ->
+                environment.navigation.captureContactLinkLookup(
+                    key, radio, null, null, null, true, publications,
+                )
+            }
+            supersedingState = environment.navigation.state.value
+            contact()
+        }
+        val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("stale-retry", contactUri)
+        pending.submit(delivery)
+        val observed = assertNotNull(pending.lookupFailure.value)
+        fail = false
+        val stale = assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(
+            pending.retry(observed.deliveryId, observed.attempt),
+        )
+        assertIs<ContactLookupContextStale>(stale.failure.cause)
+        assertEquals(assertNotNull(supersedingState), environment.navigation.state.value)
+        assertNull(environment.navigation.state.value.failure)
+        assertNull(environment.navigation.state.value.selectedContact)
+        assertNull(environment.navigation.state.value.pendingContactLink)
+        assertEquals(delivery, pending.snapshot())
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
+        assertNotNull(pending.lookupFailure.value)
+    }
+
+    @Test
+    fun wrongTargetRetryAccountsForTheActualPublishedCoordinatorFailure() = runTest {
+        val environment = Environment()
+        var fail = true
+        var reads = 0
+        environment.contactLookup = {
+            reads++
+            if (fail) throw IllegalStateException("store unavailable")
+            contact().copy(publicKey = Bytes(ByteArray(32) { 0x55 }))
+        }
+        environment.navigation.navigateToMap(37.7749, -122.4194)
+        val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("wrong-target-retry", contactUri)
+        assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(pending.submit(delivery))
+        val observed = assertNotNull(pending.lookupFailure.value)
+        val before = environment.navigation.state.value
+        fail = false
+        val rejected = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
+            pending.retry(observed.deliveryId, observed.attempt),
+        )
+        assertEquals(DeepLinkRouteOutcome.ContactLookupRejected, rejected.outcome)
+        assertEquals(
+            before.copy(
+                failure = NavigationFailure.WrongTarget(NavigationTarget.CONTACT),
+                contactLookupRevision = Math.incrementExact(before.contactLookupRevision),
+            ),
+            environment.navigation.state.value,
+        )
+        assertNull(environment.navigation.state.value.selectedContact)
+        assertNull(environment.navigation.state.value.pendingContactLink)
+        assertNull(pending.snapshot())
+        assertNull(pending.lookupFailure.value)
+        assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
+        assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(pending.submit(delivery))
+        assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(
+            pending.retry(observed.deliveryId, observed.attempt),
+        )
+        assertEquals(2, reads)
+    }
+
     @Test
     fun recoveredLookupRetriesUsingTheActualCoordinatorContextPredicate() = runTest {
         val environment = Environment()

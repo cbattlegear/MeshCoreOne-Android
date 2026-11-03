@@ -13,7 +13,7 @@ requires WP-302's synchronous read-only producer seam
 guard before any retry store read. Store I/O still runs outside all guards and
 uses the original captured radio.
 
-Stale validation or stale/wrong-target completion on retry returns visible
+Stale validation or stale-context completion on retry returns visible
 `ContactLookupFailed(ContactLookupContextStale())` without commit/consumption.
 Completion continues through the producer's conditional validation. The same
 delivery cannot silently retarget to another radio or an identical replacement
@@ -41,6 +41,21 @@ completion CAS and preserves first-binding rules. Accepted self-capture also
 allocates and consumes a revision. The isolated commit includes producer
 regression source, not executed evidence. Consumer composition and localized
 host wiring remain coordinated prerequisites; this pin does not lift a hold.
+
+Source review found that `d4fbcb31` had incorrectly grouped retry
+`WrongTarget` with no-write `StaleContext`. The actual producer publishes
+`NavigationFailure.WrongTarget` and advances the lookup revision via CAS.
+The corrected consumer therefore maps `WrongTarget` to terminal
+`ContactLookupRejected` on every attempt, commits the published result and
+consumes only that delivery, while leaving the producer's visible failure
+intact. It never navigates/imports the mismatched contact. Only truly stale
+retry completion remains recoverable and uncommitted. An authored real pure
+coordinator retry control returns a mismatched DTO after transient failure,
+asserts the exact failure/revision-only state change, no contact navigation or
+consent, and once-only delivery accounting. It is uncompiled/unexecuted.
+The complementary actual-coordinator schedule supersedes the lookup revision
+during retry and asserts that stale completion adds no state publication,
+navigation, consent, failure or consumption, retaining the retryable delivery.
 
 The adapter-only successor `1fec5c1c7751fd80989cb5d09a12b5dd7debee09`
 did not close the consumer failure path: the router still used `lookupOrNull`.

@@ -92,7 +92,8 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
                     ContactLinkCompletion.Navigated -> DeepLinkRouteOutcome.Navigated
                     ContactLinkCompletion.ConfirmationStaged -> DeepLinkRouteOutcome.ConfirmationStaged
                     ContactLinkCompletion.IgnoredSelfContact -> DeepLinkRouteOutcome.IgnoredSelfContact
-                    ContactLinkCompletion.StaleContext, ContactLinkCompletion.WrongTarget ->
+                    ContactLinkCompletion.WrongTarget -> DeepLinkRouteOutcome.ContactLookupRejected
+                    ContactLinkCompletion.StaleContext ->
                         if (original != null) DeepLinkRouteOutcome.ContactLookupFailed(ContactLookupContextStale())
                         else DeepLinkRouteOutcome.ContactLookupRejected
                 }

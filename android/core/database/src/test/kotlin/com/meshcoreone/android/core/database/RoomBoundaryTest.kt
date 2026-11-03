@@ -1,4 +1,4 @@
-// AndroidOnly: WP-201 Actual v1 schema/constraints, nanosecond queries, rollback, persistence and radio-isolation evidence.
+// AndroidOnly: WP-201 Actual schema/constraints, nanosecond queries, rollback, persistence and radio-isolation evidence.
 package com.meshcoreone.android.core.database
 
 import android.content.Context
@@ -240,7 +240,7 @@ class RoomBoundaryTest {
             val reopened = fileDatabase(name)
             try {
                 assertEquals(id, assertNotNull(reopened.devices().byId(id)).id)
-                reopened.openHelper.writableDatabase.execSQL("PRAGMA user_version=2")
+                reopened.openHelper.writableDatabase.execSQL("PRAGMA user_version=${MeshCoreDatabase.SCHEMA_VERSION + 1}")
             } finally { reopened.close() }
             val unsupported = fileDatabase(name)
             try { assertFailsWith<IllegalStateException> { unsupported.devices().count() } } finally { unsupported.close() }

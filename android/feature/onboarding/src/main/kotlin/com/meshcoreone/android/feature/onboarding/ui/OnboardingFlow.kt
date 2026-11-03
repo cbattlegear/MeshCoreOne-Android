@@ -39,14 +39,15 @@ fun OnboardingFlow(dependencies: OnboardingFeatureDependencies, onCompleted: () 
     val completed by flow.onboarding.hasCompletedOnboardingFlow.collectAsState()
     val permissionSnapshot by dependencies.permissions.snapshot.collectAsState()
     val completionError by flow.hasCompletionError.collectAsState()
+    val completingWithoutDevice by flow.isCompletingWithoutDevice.collectAsState()
     LaunchedEffect(completed) { if (completed) onCompleted() }
-    dependencies.InterceptBack(enabled = path.isNotEmpty()) { flow.back() }
+    dependencies.InterceptBack(enabled = path.isNotEmpty() && !completingWithoutDevice) { flow.back() }
 
     SharedUiScaffold(modifier.fillMaxSize()) {
         when (path.lastOrNull() ?: OnboardingStep.WELCOME) {
             OnboardingStep.WELCOME -> WelcomeScreen(flow::getStarted)
             OnboardingStep.PERMISSIONS -> PermissionsScreen(permissionSnapshot, requester, dependencies::openAppSettings, flow::continueFromPermissions)
-            OnboardingStep.PAIR -> PairStep(flow, dependencies, permissionSnapshot, requester)
+            OnboardingStep.PAIR -> PairStep(flow, dependencies, permissionSnapshot, requester, completingWithoutDevice)
             OnboardingStep.REGION -> RegionStep(flow, dependencies, permissionSnapshot)
             OnboardingStep.PRESET -> PresetStep(flow, dependencies)
         }
@@ -77,6 +78,7 @@ fun OnboardingFlow(dependencies: OnboardingFeatureDependencies, onCompleted: () 
 private fun PairStep(
     flow: OnboardingFlowCoordinator, deps: OnboardingFeatureDependencies,
     permissions: OnboardingPermissionSnapshot, requester: (OnboardingPermissionKind) -> Unit,
+    completingWithoutDevice: Boolean,
 ) {
     val state by flow.deviceScan.state.collectAsState()
     val connection by deps.pairing.connection.collectAsState()
@@ -103,16 +105,20 @@ private fun PairStep(
                     com.meshcoreone.android.feature.onboarding.PairPrimaryAction.ADD_DEVICE -> flow.addDevice(requester)
                 }
             },
-            onContinue = scan::continueConnected, onOpenSheet = scan::showSheet, onDismissSheet = scan::dismissSheet,
+            onContinue = scan::continueConnected, onOpenSheet = scan::showSheet, onDismissSheet = flow::dismissPairingSheet,
             onDismissFailure = scan::dismissFailure, onDismissDemoAlert = scan::dismissDemoAlert,
-            onOpenAppSettings = deps::openAppSettings,
+            onOpenAppSettings = deps::openAppSettings, canDismissSheet = flow::canDismissPairingSheet,
         ),
     ) { sheet ->
         when (sheet) {
-            PairSheet.NO_DEVICE -> NoDeviceSheetContent(flow::confirmNoDevice, scan::dismissSheet)
-            PairSheet.TROUBLESHOOTING -> TroubleshootingSheetContent(pairedCount, clearing, flow::clearStalePairings, deps::openAppSettings, scan::dismissSheet)
+            PairSheet.NO_DEVICE -> NoDeviceSheetContent(
+                flow::confirmNoDevice, flow::dismissPairingSheet, isCompleting = completingWithoutDevice,
+            )
+            PairSheet.TROUBLESHOOTING -> TroubleshootingSheetContent(
+                pairedCount, clearing, flow::clearStalePairings, deps::openAppSettings, flow::dismissPairingSheet,
+            )
             PairSheet.WIFI -> WiFiConnectionSheetContent(
-                wifiState, flow.wifi::setAddress, flow.wifi::setPort, flow.wifi::connect, scan::dismissSheet,
+                wifiState, flow.wifi::setAddress, flow.wifi::setPort, flow.wifi::connect, flow::dismissPairingSheet,
                 initialFocus = WiFiField.IP_ADDRESS,
             )
             PairSheet.NONE -> Unit

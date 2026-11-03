@@ -25,6 +25,8 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     val isClearingPairings: StateFlow<Boolean> = clearing.asStateFlow()
     private val completionError = MutableStateFlow(false)
     val hasCompletionError: StateFlow<Boolean> = completionError.asStateFlow()
+    private val completingWithoutDevice = MutableStateFlow(false)
+    val isCompletingWithoutDevice: StateFlow<Boolean> = completingWithoutDevice.asStateFlow()
     private var completing = false
     private var pendingPairAfterPermission = false
 
@@ -41,7 +43,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
 
     fun getStarted() = onboarding.append(OnboardingStep.PERMISSIONS)
     fun continueFromPermissions() = onboarding.append(OnboardingStep.PAIR)
-    fun back(): Boolean = onboarding.pop()
+    fun back(): Boolean = !completing && onboarding.pop()
 
     /** Just-in-time Bluetooth permission: ask on first "Add device", then resume pairing from the result. */
     fun addDevice(requestPermission: (OnboardingPermissionKind) -> Unit) {
@@ -71,9 +73,16 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         completionError.value = false
     }
 
+    fun dismissPairingSheet() {
+        if (canDismissPairingSheet()) deviceScan.dismissSheet()
+    }
+
+    fun canDismissPairingSheet(): Boolean = !completing
+
     private fun completeWithoutDevice() {
         if (completing) return
         completing = true
+        completingWithoutDevice.value = true
         scope.launch {
             try {
                 onboarding.completeOnboarding()
@@ -85,6 +94,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
                 completionError.value = true
             } finally {
                 completing = false
+                completingWithoutDevice.value = false
             }
         }
     }

@@ -38,6 +38,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingPairingPort
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionPort
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingRegionPort
 import com.meshcoreone.android.feature.onboarding.OnboardingWiFiPort
 import java.util.UUID
@@ -125,6 +126,10 @@ class AppStateRadioConfigurator(private val container: AppContainer) : Onboardin
     override fun connectionStates(): Flow<DeviceConnectionState> =
         container.connectionManager.snapshot.map { it.state }.distinctUntilChanged()
     override val isDemoRadio: Boolean get() = container.connectionManager.isSimulatorConnection
+    override fun currentTarget(): OnboardingPresetTarget? =
+        container.connectionManager.snapshot.value.token?.let { token ->
+            OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
+        }
 
     override suspend fun applyPreset(preset: RadioPreset) {
         val session = container.appState.services ?: throw SettingsServiceException(SettingsServiceError.NotConnected)

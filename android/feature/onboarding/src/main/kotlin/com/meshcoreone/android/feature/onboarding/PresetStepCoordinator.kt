@@ -39,6 +39,7 @@ class PresetStepCoordinator(
     val state: StateFlow<PresetStepState> = mutable.asStateFlow()
     private var retryCount = 0
     private var appliedPresetId: String? = null
+    private var appliedPresetTarget: OnboardingPresetTarget? = null
     private var completionPersistenceJob: Job? = null
 
     fun visiblePresets(): List<OnboardingPresetOption> = regionPort.catalog.presets(regionPort.selection.value)
@@ -55,11 +56,16 @@ class PresetStepCoordinator(
     fun apply(id: String? = mutable.value.selectedId) {
         if (mutable.value.isApplying) return
         val option = visiblePresets().firstOrNull { it.id == id } ?: return
-        if (appliedPresetId == option.id) {
+        val target = presets.currentTarget()
+        if (appliedPresetId == option.id && appliedPresetTarget == target) {
             beginCompletionPersistence()
             return
         }
-        mutable.update { it.copy(isApplying = true, error = null, retryAlert = null) }
+        appliedPresetId = null
+        appliedPresetTarget = null
+        mutable.update {
+            it.copy(isApplying = true, error = null, retryAlert = null, completionNeedsRetry = false)
+        }
         scope.launch {
             val outcome = try {
                 presets.apply(option.id)
@@ -69,15 +75,16 @@ class PresetStepCoordinator(
             } catch (failure: Exception) {
                 OnboardingPresetOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
             }
-            finish(option.id, outcome)
+            finish(option.id, target, outcome)
         }
     }
 
-    private suspend fun finish(id: String, outcome: OnboardingPresetOutcome) {
+    private suspend fun finish(id: String, target: OnboardingPresetTarget?, outcome: OnboardingPresetOutcome) {
         when (outcome) {
             OnboardingPresetOutcome.Applied, OnboardingPresetOutcome.NoRadioToConfigure -> {
                 retryCount = 0
                 appliedPresetId = id
+                appliedPresetTarget = target
                 beginCompletionPersistence()
             }
             OnboardingPresetOutcome.NotConnected -> mutable.update {
@@ -98,6 +105,7 @@ class PresetStepCoordinator(
             try {
                 onCompleted()
                 appliedPresetId = null
+                appliedPresetTarget = null
                 mutable.update {
                     it.copy(isApplying = false, completionNeedsRetry = false, commitTick = it.commitTick + 1)
                 }
@@ -126,10 +134,7 @@ class PresetStepCoordinator(
             apply(alert.presetId)
             return
         }
-        if (appliedPresetId != null && current.completionNeedsRetry) {
-            if (current.selectedId == appliedPresetId) beginCompletionPersistence()
-            else apply(current.selectedId)
-        }
+        if (appliedPresetId != null && current.completionNeedsRetry) apply(current.selectedId)
     }
 
     /** Cancel or the max-retries acknowledgement; the latter surfaces the generic fallback. */

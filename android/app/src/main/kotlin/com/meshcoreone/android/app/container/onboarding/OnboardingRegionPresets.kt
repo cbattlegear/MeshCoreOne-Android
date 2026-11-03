@@ -18,6 +18,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingCountry
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetOption
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetOutcome
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingRegionCatalog
 import com.meshcoreone.android.feature.onboarding.OnboardingRegionPort
 import com.meshcoreone.android.feature.onboarding.OnboardingSubdivision
@@ -97,6 +98,7 @@ class AppOnboardingRegionPort(
 interface OnboardingRadioConfigurator {
     fun connectionStates(): Flow<DeviceConnectionState>
     val isDemoRadio: Boolean
+    fun currentTarget(): OnboardingPresetTarget? = null
 
     /** Throws [SettingsServiceException] (or a runtime failure) when the radio cannot be configured. */
     suspend fun applyPreset(preset: RadioPreset)
@@ -109,6 +111,7 @@ class AppOnboardingPresetPort(
 ) : OnboardingPresetPort {
     override val canApply: StateFlow<Boolean> =
         radio.connectionStates().map { it.isOperational }.stateIn(scope, SharingStarted.Eagerly, false)
+    override fun currentTarget(): OnboardingPresetTarget? = radio.currentTarget()
 
     override suspend fun apply(presetId: String): OnboardingPresetOutcome {
         if (radio.isDemoRadio) return OnboardingPresetOutcome.NoRadioToConfigure

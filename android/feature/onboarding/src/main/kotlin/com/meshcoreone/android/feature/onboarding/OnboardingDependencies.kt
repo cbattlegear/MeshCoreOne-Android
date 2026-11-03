@@ -95,6 +95,10 @@ enum class AdministrativeAreaKind { PROVINCE, STATE }
 /** Mirror of the `RadioPreset` fields the picker shows; the adapter applies availability filtering and name sort. */
 data class OnboardingPresetOption(val id: String, val name: String, val frequencyMHz: Double)
 
+data class OnboardingPresetTarget(val epoch: UUID, val generation: Long, val radioId: UUID) {
+    init { require(generation >= 0) { "Generation must not be negative" } }
+}
+
 interface OnboardingRegionCatalog {
     fun countries(): List<OnboardingCountry>
     fun showsSubdivisionPicker(countryCode: String?): Boolean
@@ -126,6 +130,7 @@ sealed interface OnboardingPresetOutcome {
 
 interface OnboardingPresetPort {
     val canApply: StateFlow<Boolean>
+    fun currentTarget(): OnboardingPresetTarget? = null
     suspend fun apply(presetId: String): OnboardingPresetOutcome
 }
 

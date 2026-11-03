@@ -165,7 +165,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         exercise(true, Boundary.BEFORE_CREATE, replaceSlot = true, preserveNewer = false,
             successfulReplacedSave = true)
     @Test fun channelOriginalCommittedFailureAllowsExplicitRetry() =
-        exercise(true, Boundary.AFTER_CREATE, creationFailure = true, explicitRetry = true)
+        exercise(true, Boundary.AFTER_CREATE, creationFailure = true, dispose = false, explicitRetry = true)
 
     private fun exercise(
         channel: Boolean, boundary: Boundary, replaceSession: Boolean = false, legacyScreenOwner: Boolean = false,
@@ -178,6 +178,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         markSavedReadBeforeReconcile: Boolean = false,
         successfulReplacedSave: Boolean = false, explicitRetry: Boolean = false,
     ) = runTest {
+        require(!explicitRetry || !dispose) { "Explicit Retry must reach the mounted timeline control" }
         val peerKey = key(4)
         val gate = CompletableDeferred<Unit>()
         val reached = CompletableDeferred<Unit>()

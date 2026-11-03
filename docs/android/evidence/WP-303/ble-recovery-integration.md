@@ -5,15 +5,32 @@ issue-closure recommendation. The maintainer subsequently authorized a normal
 scoped PR for hosted exact-candidate verification; its live job/log is
 authoritative for reproducible results, not this publication-time note.
 
-The subsequent bounded-review preparation consolidates the unchanged GATT shadow
-into `BleRecoveryIntegrationTest.kt`. The deployed verification-only contract
+The earlier bounded-review preparation consolidated the then-unchanged inherited
+GATT shadow into `BleRecoveryIntegrationTest.kt`. The deployed verification-only contract
 requires every changed unit-test source to contain its actual selected JUnit
-methods; a separate helper-only file does not qualify. This is a source-layout
-correction, not a new test or production behavior. The final candidate therefore
-adds one Kotlin regression file and this evidence file. Its fresh exact-head
+methods; a separate helper-only file does not qualify. That source-layout correction
+was followed by the isolated `20505df266c1312bdbdf12704a5840cdcffa294d`
+fixture alternative: paired standalone API31/32 `BluetoothDevice` and `BluetoothGatt`
+shadows replace external-shadow inheritance. They explicitly supply the native
+connect/callback, discovery, MTU, notification, descriptor, firmware-write and
+disconnect/close behavior used by these tests. Added assertions inspect native
+connect arguments and callback looper, setup order, characteristic identity,
+notification/CCCD setup and exact teardown counts/state. This changes controlled
+framework-fixture behavior, not production behavior, and must establish equivalence
+through source review and genuine nonzero execution; static helper recognition
+alone is not compiled or executed acceptance.
+
+The alternative also replaces anonymous system-link and endpoint fixtures with
+the production `AndroidSystemLinkProbe` over Robolectric's controlled connected-device
+registry and `InMemoryKnownEndpointStore`, using the actual address-derived device ID.
+The three method identities, inherited Room setup/teardown, existing assertions and
+fresh-session `SelfInfo` current-GATT positive / retired-GATT negative controls remain.
+The candidate still adds one Kotlin regression file and this evidence file. Its fresh exact-head
 hosted run and independently attributable coordinator source-review receipt are
 still required; neither the author's scope nor the advisory transfer is a verdict
-or a new lease.
+or a new lease. The isolated diagnostic uses manual full verification with
+`base: null`; it is not PR merge-base evidence and does not replace reviewed
+PR #529 head `261b61ef3cfd4993c5cbbd420630f466c99fb7be`.
 
 - Assigned slice: WP-303 production-composed regression for the remaining software
   integration on #383, not a reopening of #443's approved native BLE contract.
@@ -35,11 +52,12 @@ or a new lease.
 production Room persistence adapter. It does not install `HarnessLink` or a fake
 manager-facing `MeshTransport`.
 
-Robolectric API31 framework objects, a controlled `BluetoothGatt` shadow and a
+Robolectric API31 framework objects, paired controlled device/GATT shadows and a
 protocol-speaking firmware peer supply platform callbacks and response bytes.
 The existing `FirmwareRadio` is used only as that wire peer: its responses enter
 the app through native characteristic notifications and the real Android adapter,
-not directly into the manager/session. System-connected facts, pairing registry,
+not directly into the manager/session. The system-link probe reads controlled
+Robolectric manager facts, not a physical Android stack. Pairing registry,
 notification delivery and process preferences remain injected test roles.
 
 The three proposed regressions assert:

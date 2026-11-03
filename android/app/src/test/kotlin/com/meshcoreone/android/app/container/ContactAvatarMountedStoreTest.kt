@@ -16,6 +16,10 @@ import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -106,18 +110,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                     }
                 }
             }
-            val dependencies = NodesFeatureDependencies(
-                session = object : NodesSession by production.session {
-                    override fun contactService() = heldService
-                },
-                uriCodec = production.uriCodec,
-                timeouts = production.timeouts,
-                messages = production.messages,
-                announcer = production.announcer,
-                preferences = production.preferences,
-                clock = production.clock,
-                locale = production.locale,
-            )
+            val dependencies = production.withContactService(heldService)
             val navigation = NavigationCoordinator()
             var requestCode: Int? = null
             val registry = object : ActivityResultRegistry() {
@@ -139,11 +132,17 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                 }
             }
             compose.runOnIdle { navigation.navigateToContactDetail(preview) }
-            compose.onNodeWithText(preview.displayName).assertExists()
             val previewEntry = navigation.state.value.activeStack.last()
+            compose.onNode(
+                hasText(preview.displayName) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading) and
+                    hasAnyAncestor(hasTestTag("entry:${previewEntry.id}")),
+            ).assertExists()
             compose.runOnIdle { navigation.navigateToContactDetail(target) }
-            compose.onNodeWithText(target.displayName).assertExists()
             val targetEntry = navigation.state.value.activeStack.last()
+            compose.onNode(
+                hasText(target.displayName) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading) and
+                    hasAnyAncestor(hasTestTag("entry:${targetEntry.id}")),
+            ).assertExists()
             val uri = Uri.parse("content://avatar-back-fixture/photo.png")
             val bitmap = Bitmap.createBitmap(900, 600, Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(android.graphics.Color.BLUE)
@@ -247,6 +246,23 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             assertEquals(foreign.radioId, storedForeign.radioId)
             assertEquals(foreign.publicKey, storedForeign.publicKey)
             assertNull(storedForeign.avatarImageData)
+            val production = harness.container.nodesFeature
+            val service = assertNotNull(production.session.contactService())
+            val writes = java.util.concurrent.CopyOnWriteArrayList<Pair<EntityKey, Bytes?>>()
+            val returned = java.util.concurrent.atomic.AtomicInteger()
+            val serviceFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+            val dependencies = production.withContactService(object : NodesContactService by service {
+                override suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) {
+                    writes += contact to imageData
+                    try {
+                        service.updateContactAvatar(contact, imageData)
+                        returned.incrementAndGet()
+                    } catch (error: Exception) {
+                        serviceFailure.set(error)
+                        throw error
+                    }
+                }
+            })
             var requestCode: Int? = null
             fun newRegistry() = object : ActivityResultRegistry() {
                 override fun <I, O> onLaunch(code: Int, contract: ActivityResultContract<I, O>, input: I, options: ActivityOptionsCompat?) {
@@ -265,7 +281,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                 host.get().setContent {
                     CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
                         MeshCoreTheme(motionScale = 0f) {
-                            NodesEntry(FeatureRoute(FeatureId.NODES), {}, harness.container.nodesFeature, NodesDestination.Detail(target))
+                            NodesEntry(FeatureRoute(FeatureId.NODES), {}, dependencies, NodesDestination.Detail(target))
                         }
                     }
                 }
@@ -316,18 +332,31 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             recreate()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).assertExists()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).performClick()
-            try {
-                compose.waitUntil(5_000) {
-                    harness.scheduler.runCurrent()
-                    runBlocking { store.fetchContact(targetKey)?.avatarImageData != null }
+            fun awaitWrite(stage: String, condition: () -> Boolean) {
+                try {
+                    compose.waitUntil(5_000) {
+                        harness.scheduler.runCurrent()
+                        condition()
+                    }
+                } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
+                    throw AssertionError(
+                        "$stage; calls=${writes.map { it.first }}, returned=${returned.get()}, " +
+                            "serviceFailure=${serviceFailure.get()}, lifecycle=${host.get().lifecycle.currentState}; " +
+                            compose.onAllNodes(SemanticsMatcher("all mounted nodes") { true },
+                                useUnmergedTree = true).fetchSemanticsNodes().joinToString { it.config.toString() },
+                        timeout,
+                    )
                 }
-            } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
-                System.err.println("Avatar Room save did not complete: " +
-                    compose.onAllNodes(androidx.compose.ui.test.SemanticsMatcher("all mounted nodes") { true },
-                        useUnmergedTree = true).fetchSemanticsNodes().joinToString { it.config.toString() })
-                throw timeout
             }
+            awaitWrite("Production encoder must reach the actual avatar service") { writes.isNotEmpty() }
+            assertEquals(targetKey, writes.single().first)
+            awaitWrite("Actual Room avatar persistence") {
+                runBlocking { store.fetchContact(targetKey)?.avatarImageData != null }
+            }
+            awaitWrite("Actual avatar service completion") { returned.get() == 1 }
+            assertNull(serviceFailure.get())
             val saved = assertNotNull(assertNotNull(store.fetchContact(targetKey)).avatarImageData).toByteArray()
+            assertEquals(saved.toList(), assertNotNull(writes.single().second).toByteArray().toList())
             assertEquals(0xFF, saved[0].toInt() and 0xFF)
             assertEquals(0xD8, saved[1].toInt() and 0xFF)
             val decoded = assertNotNull(BitmapFactory.decodeByteArray(saved, 0, saved.size))
@@ -341,7 +370,12 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             }
             click(C.contactsDetailAvatarChooseSource)
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarRemovePhoto)).assertExists().performClick()
-            compose.waitUntil(5_000) { runBlocking { store.fetchContact(targetKey)?.avatarImageData == null } }
+            awaitWrite("Actual Room avatar removal") {
+                runBlocking { store.fetchContact(targetKey)?.avatarImageData == null }
+            }
+            awaitWrite("Actual avatar removal service completion") { returned.get() == 2 }
+            assertEquals(listOf(targetKey, targetKey), writes.map { it.first })
+            assertNull(writes.last().second)
             assertEquals(storedForeign, store.fetchContact(foreignKey))
         } finally {
             host.windowFocusChanged(false)
@@ -349,4 +383,17 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             harness.container.close()
         }
     }
+
+    private fun NodesFeatureDependencies.withContactService(service: NodesContactService) = NodesFeatureDependencies(
+        session = object : NodesSession by session {
+            override fun contactService() = service
+        },
+        uriCodec = uriCodec,
+        timeouts = timeouts,
+        messages = messages,
+        announcer = announcer,
+        preferences = preferences,
+        clock = clock,
+        locale = locale,
+    )
 }

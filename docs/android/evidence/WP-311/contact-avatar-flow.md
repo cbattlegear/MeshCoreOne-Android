@@ -271,3 +271,37 @@ a showing dialog, and the exact dialog text semantics. Each stage has its own
 failure type so short original job logs can distinguish state propagation,
 dialog presentation, text and bounds visibility without manufacturing a cause.
 No timeout, coverage, store, viewport or accessibility assertion is relaxed.
+
+Run [41615580279](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41615580279),
+attempt 1 on exact `2eea5cb559f41ab394e5ac2433094f7313fdb0f2` / base
+`99479711bfdb7c621765f09d671068ca8b8318ce`, ended **failure**, distinct from
+the prior `8cfd75b0f` run. App executed 1,853 tests with three failures.
+The original expanded stack locates the existing mounted-store timeout at the
+actual Room-persistence predicate, line 320; line 229 is the `runTest` wrapper.
+The two API variants of the real-shell regression failed before gesture dispatch:
+its unscoped contact-name readiness query matched the detail heading, detail
+information text and list-row text (three nodes), not a unique element. The
+follow-up queries the exact heading within the actual navigation entry instead;
+both-entry overlap, held save, full state/selection and single-write assertions
+are unchanged.
+
+API31's two held-failure cases now report `AvatarFailureDialogTimeout`, after
+the exact active-holder error state and completed-saving predicates returned.
+This narrows the observed failure to dialog presentation/discovery; it does not
+prove that a visible dialog exists or that the cause is fixture-only. The fixture
+previously used `ShadowDialog.getLatestDialog()`, which in Robolectric 4.17 is
+the most recently *shown* dialog and is not reset when that dialog is dismissed.
+It now selects the last still-showing dialog from `getShownDialogs()`, retaining
+the showing-dialog, exact error semantics and visible-bounds requirements, and
+adds a distinct started-lifecycle prerequisite to diagnose UI collection.
+This discovery correction does not itself claim to resolve the reported failure.
+
+The mounted-store case now transparently records calls to the real avatar service,
+forwards each unchanged and rethrows any actual exception. Separate bounded stages
+require encoder-to-service entry, matching target key, actual Room bytes and real
+service completion, including removal. Timeout assertion bodies include the
+synthetic fixture's mounted semantics, lifecycle and recorded service stage so the
+existing App failure-stack reporter can expose them in the original job log.
+No fake successful write or replacement store is used. The existing required JPEG,
+foreign-contact, recreation, cancel and remove checks remain. Complete required
+reports were still missing from the failed run; no suite/device acceptance is inferred.

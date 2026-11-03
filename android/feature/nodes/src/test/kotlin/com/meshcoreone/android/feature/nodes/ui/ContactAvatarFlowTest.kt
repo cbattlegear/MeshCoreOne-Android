@@ -24,6 +24,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
 import androidx.core.app.ActivityOptionsCompat
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.Lifecycle
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.feature.nodes.NodesNavigation
@@ -79,8 +80,9 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         override val activityResultRegistry get() = registry
     }
 
-    override fun rootView(): View =
-        ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: super.rootView()
+    private fun showingDialog() = ShadowDialog.getShownDialogs().lastOrNull { it.isShowing }
+
+    override fun rootView(): View = showingDialog()?.window?.decorView ?: super.rootView()
 
     private fun start(initial: ContactDTO = contact) {
         selected.value = initial
@@ -162,8 +164,11 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             detail.active && !detail.holder.state.value.isSavingAvatar &&
                 detail.holder.state.value.errorMessage == NodesMessage.Text(message)
         }
+        awaitAvatarState("the Activity lifecycle required by production UI collection", ::AvatarFailureLifecycleTimeout) {
+            controller.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        }
         awaitAvatarState("a showing error dialog", ::AvatarFailureDialogTimeout) {
-            ShadowDialog.getLatestDialog()?.isShowing == true
+            showingDialog() != null
         }
         awaitAvatarState("the error dialog's exact text semantics", ::AvatarFailureTextTimeout) {
             allSemanticsNodes().any { node ->
@@ -557,6 +562,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     private class AvatarProgressVisibilityTimeout(message: String) : AssertionError(message)
     private class AvatarViewportTimeout(message: String) : AssertionError(message)
     private class AvatarFailureStateTimeout(message: String) : AssertionError(message)
+    private class AvatarFailureLifecycleTimeout(message: String) : AssertionError(message)
     private class AvatarFailureDialogTimeout(message: String) : AssertionError(message)
     private class AvatarFailureTextTimeout(message: String) : AssertionError(message)
     private class AvatarFailureVisibilityTimeout(message: String) : AssertionError(message)

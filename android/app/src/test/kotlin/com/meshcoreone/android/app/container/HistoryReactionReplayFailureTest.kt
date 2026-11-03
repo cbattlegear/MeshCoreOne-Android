@@ -114,6 +114,129 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
     @Test fun directLockedExistenceCancellationRetainsTheUnfinishedBatch() = runTest { recover(this, true, Fault.EXISTS_LOCKED, true) }
     @Test fun channelLockedExistenceCancellationRetainsTheUnfinishedBatch() = runTest { recover(this, false, Fault.EXISTS_LOCKED, true) }
 
+    @Test fun directFailedOldestReplayDoesNotEvictANewerKey() = runTest { restoreOrder(this, true, false, false) }
+    @Test fun channelFailedOldestReplayDoesNotEvictANewerKey() = runTest { restoreOrder(this, false, false, false) }
+    @Test fun directCancelledOldestReplayDoesNotEvictANewerKey() = runTest { restoreOrder(this, true, true, false) }
+    @Test fun channelCancelledOldestReplayDoesNotEvictANewerKey() = runTest { restoreOrder(this, false, true, false) }
+    @Test fun directFailedReplayPrecedesANewArrivalUnderItsDrainedKey() = runTest { restoreOrder(this, true, false, true) }
+    @Test fun channelFailedReplayPrecedesANewArrivalUnderItsDrainedKey() = runTest { restoreOrder(this, false, false, true) }
+    @Test fun directCancelledReplayPrecedesANewArrivalUnderItsDrainedKey() = runTest { restoreOrder(this, true, true, true) }
+    @Test fun channelCancelledReplayPrecedesANewArrivalUnderItsDrainedKey() = runTest { restoreOrder(this, false, true, true) }
+
+    private suspend fun restoreOrder(test: TestScope, direct: Boolean, cancel: Boolean, sameKeyArrival: Boolean) {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var fail = false
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
+                if (fail) {
+                    fail = false
+                    entered.complete(Unit)
+                    release.await()
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("Injected oldest-key failure"))
+                }
+                return store.reactionExists(message, senderName, emoji)
+            }
+        }
+        val harness = ContainerHarness(test, store, persistenceOverride = persistence)
+        var mounted: ChatViewModel? = null
+        var attempt: Job? = null
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("queue-order session ready") { harness.manager.connectionState == DeviceConnectionState.READY }
+            val live = assertNotNull(harness.sessions.current)
+            val radio = live.token.radioId
+            val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Alice", lastHeardTimestamp = null)
+            store.saveContact(contact)
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val channel = assertNotNull(store.fetchChannel(radio, 3u))
+            val target = MessageDTO(
+                radioId = radio, contactID = if (direct) contact.id else null,
+                channelIndex = if (direct) null else channel.index, text = "Hello", timestamp = stamp,
+                createdAt = EPOCH, sortDate = EPOCH, senderNodeName = if (direct) null else "Alice",
+                direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED,
+            )
+            store.saveMessage(target)
+            val conversation = if (direct) TimelineConversation.Direct(contact) else TimelineConversation.Channel(channel)
+            val viewModel = ChatViewModel(
+                conversation, harness.container.chatsFeature.timeline(conversation), CoroutineScope(currentCoroutineContext()),
+            )
+            mounted = viewModel
+            viewModel.open()
+            assertNull(viewModel.state.value.loadError)
+            val service = live.reactionService
+            fun queue(text: String, sender: String) {
+                val wire = if (direct) service.buildDMReactionText(emoji, text, stamp)
+                    else service.buildReactionText(emoji, "Alice", text, stamp)
+                if (direct) service.queuePendingDMReaction(
+                    assertNotNull(ReactionParser.parseDM(wire)), contact.id, sender, wire, radio,
+                ) else service.queuePendingReaction(
+                    assertNotNull(ReactionParser.parse(wire)), channel.index, sender, wire, radio,
+                )
+            }
+            fun drain(text: String): List<Any> = if (direct) {
+                service.indexDMMessage(UUID.randomUUID(), contact.id, text, stamp)
+            } else service.indexMessage(UUID.randomUUID(), channel.index, "Alice", text, stamp)
+            queue("Hello", "First")
+            queue("Hello", "Second")
+            repeat(98) { queue("foreign $it", "Foreign $it") }
+            val original = drain("Hello")
+            assertEquals(2, original.size)
+            original.forEach {
+                if (direct) service.requeuePendingDMReaction(assertIs<PendingDMReaction>(it))
+                else service.requeuePendingReaction(assertIs<PendingReaction>(it))
+            }
+            fail = true
+            val replay = test.launch { viewModel.refresh() }
+            attempt = replay
+            entered.await()
+            if (sameKeyArrival) queue("Hello", "Late")
+            if (cancel) {
+                replay.cancelAndJoin()
+                assertTrue(replay.isCancelled)
+                assertNull(viewModel.state.value.passiveError)
+            } else {
+                release.complete(Unit)
+                replay.join()
+                assertIs<PersistenceStoreException>(viewModel.state.value.passiveError)
+            }
+            assertTrue(store.fetchReactions(EntityKey(radio, target.id)).isEmpty())
+            queue("newest", "Newest")
+            val restored = drain("Hello")
+            if (sameKeyArrival) {
+                assertEquals(1, restored.size, "Both earlier entries, not a foreign key or Late, must be evicted")
+                val sender = if (direct) assertIs<PendingDMReaction>(restored.single()).senderName
+                    else assertIs<PendingReaction>(restored.single()).senderNodeName
+                assertEquals("Late", sender)
+            } else {
+                assertEquals(original.drop(1), restored, "Evict First, preserve Second's complete original metadata")
+            }
+            repeat(98) { index ->
+                val foreign = drain("foreign $index")
+                assertEquals(1, foreign.size, "Newer foreign key $index must survive failed oldest-key replay")
+                val pending = foreign.single()
+                if (direct) {
+                    val value = assertIs<PendingDMReaction>(pending)
+                    assertEquals("Foreign $index", value.senderName)
+                    assertEquals(contact.id, value.contactID)
+                    assertEquals(radio, value.radioId)
+                } else {
+                    val value = assertIs<PendingReaction>(pending)
+                    assertEquals("Foreign $index", value.senderNodeName)
+                    assertEquals(channel.index, value.channelIndex)
+                    assertEquals(radio, value.radioId)
+                }
+            }
+            assertEquals(1, drain("newest").size)
+            assertTrue(drain("Hello").isEmpty())
+        } finally {
+            release.complete(Unit)
+            attempt?.cancelAndJoin()
+            mounted?.close()
+            harness.container.close()
+        }
+    }
+
     private suspend fun sameReaction(
         test: TestScope,
         direct: Boolean,
@@ -459,7 +582,8 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
         val raw = "@[Cafe\u0301]$emoji\nb45pc4ek"
         val parsed = assertNotNull(ReactionParser.parse(raw))
         val pending = (0..100).map {
-            PendingReaction(parsed, 3u, "sender $it", raw, radio, EPOCH.minusSeconds(it.toLong()))
+            PendingReaction(parsed, 3u, "sender $it", raw, radio, EPOCH.minusSeconds(it.toLong()),
+                queueKeyOrder = 0, queueEntryOrder = it.toLong())
         }
         pending.forEach(service::requeuePendingReaction)
         assertTrue(service.indexMessage(UUID.randomUUID(), 4u, "Caf\u00e9", "Hello", stamp).isEmpty())
@@ -473,7 +597,8 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
         val raw = "$emoji\nb45pc4ek"
         val parsed = assertNotNull(ReactionParser.parseDM(raw))
         val pending = (0..100).map {
-            PendingDMReaction(parsed, contact, "sender $it", raw, radio, EPOCH.minusSeconds(it.toLong()))
+            PendingDMReaction(parsed, contact, "sender $it", raw, radio, EPOCH.minusSeconds(it.toLong()),
+                queueKeyOrder = 0, queueEntryOrder = it.toLong())
         }
         pending.forEach(service::requeuePendingDMReaction)
         assertTrue(service.indexDMMessage(UUID.randomUUID(), UUID.randomUUID(), "Hello", stamp).isEmpty())

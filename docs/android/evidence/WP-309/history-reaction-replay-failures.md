@@ -1,5 +1,44 @@
 # WP-309 history replay failure and cancellation successor
 
+## Oldest-key restoration correction after current-main composition
+
+Review thread `4459950100` on exact `559c2a76e8624b04f3def383119dc1a946ac5950`
+identifies a real queue-order defect in both restoration entry points. With two
+pending entries at oldest key A followed by 98 later keys, draining A removes its
+key-order slot. A failed/cancelled replay then appends A as newest. One subsequent
+arrival wrongly evicts a foreign key rather than A's first entry. Original
+`receivedAt` preservation does not reconstruct first-key order, and wall-clock
+sorting would change the frozen queue policy.
+
+The queue uses monotonic key/entry ordinals, carried as internal immutable
+metadata on returned pending values. Requeue restores their original key priority
+and within-key entry order. A newly queued value under the drained key also sorts
+after its restored predecessors. Capacity remains 100 with oldest-entry-of-oldest-key
+eviction; drained keys have no retained tombstones or unbounded restoration map.
+Clearing releases all queue values/key records, retaining only the monotonic
+counter. Timestamp, hash, canonical sender, contact/channel/radio and persistence
+semantics are unchanged.
+
+Eight added `HistoryReactionReplayFailureTest` methods use the mounted actual
+history consumer and Room with an explicit suspended existence check: failure
+and actual child cancellation, both DM/channel, with/without an arrival under
+the drained key. They require all 98 foreign keys and the newest key to survive,
+the earlier A entries to be evicted in order, and no reaction row to be saved
+by the failed operation. The retained same-key metadata controls now specify the
+new ordinal metadata too; their full-value equality and 100-entry bound remain.
+All prior 56 failure/concurrency and nine history method IDs remain; the new
+total is 64 plus nine. These new schedules have not been executed pre-fix under
+the retained local hold; exact successor CI evidence belongs in the PR, not a
+second retained CI-result bundle.
+
+Fresh custody disposition from actual persistence producer b5 confirms no
+current/frozen/dirty/intended pending queue/order seam edits, only disjoint
+storage attribution/schema work. No transfer or hold release is inferred.
+Trusted existing service/test/evidence capabilities admit this correction;
+App producer, Room/schema, factory and sync production hunks are unchanged.
+The prior exact559 normal run41714879854 passed all65 former controls, but does
+not resolve this finding or verify the eight new controls.
+
 Repository: `cbattlegear/MeshCoreOne-Android`. Bounded concern:
 `NM-HISTORY-REACTION-REPLAY` in #406. Base:
 `fd3efe2be3f1837d39636433cc82fae80f4294ae`. Trusted main at investigation:

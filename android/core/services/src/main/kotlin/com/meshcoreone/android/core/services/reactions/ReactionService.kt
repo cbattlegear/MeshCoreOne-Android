@@ -26,6 +26,8 @@ data class PendingReaction(
     val rawText: String,
     val radioId: RadioId,
     val receivedAt: Instant,
+    internal val queueKeyOrder: Long? = null,
+    internal val queueEntryOrder: Long? = null,
 )
 
 /** A DM reaction waiting for its target message to be indexed. */
@@ -36,6 +38,8 @@ data class PendingDMReaction(
     val rawText: String,
     val radioId: RadioId,
     val receivedAt: Instant,
+    internal val queueKeyOrder: Long? = null,
+    internal val queueEntryOrder: Long? = null,
 )
 
 /** Result of persisting a reaction. */
@@ -83,7 +87,9 @@ class ReactionService internal constructor(
         // Check pending queue for matching reactions.
         val key = PendingReactionKey.of(channelIndex, senderName, ReactionParser.generateMessageHash(text, timestamp))
         val matched = synchronized(lock) {
-            val (remaining, taken) = pendingReactions.take(key)
+            val (remaining, taken) = pendingReactions.take(key) { value, keyOrder, entryOrder ->
+                value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+            }
             pendingReactions = remaining
             taken
         } ?: return emptyList()
@@ -124,15 +130,19 @@ class ReactionService internal constructor(
     /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
     fun requeuePendingReaction(pending: PendingReaction) {
         val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
-        synchronized(lock) { pendingReactions = pendingReactions.enqueue(key, pending, MAX_PENDING_REACTIONS) }
+        synchronized(lock) {
+            pendingReactions = pendingReactions.enqueue(
+                key, pending, MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
+            )
+        }
     }
 
     /** Clears all pending reactions (call on disconnect). */
     internal fun clearPendingReactions() {
         val cleared = synchronized(lock) {
             val count = pendingReactions.count + pendingDMReactions.count
-            pendingReactions = PendingQueue.empty()
-            pendingDMReactions = PendingQueue.empty()
+            pendingReactions = pendingReactions.cleared()
+            pendingDMReactions = pendingDMReactions.cleared()
             count
         }
         if (cleared > 0) logger.fine { "Cleared $cleared pending reaction(s)" }
@@ -202,7 +212,9 @@ class ReactionService internal constructor(
         messageCache.indexDM(messageID = id, contactID = contactID, text = text, timestamp = timestamp)
         val key = PendingDMReactionKey(contactID, ReactionParser.generateMessageHash(text, timestamp))
         val matched = synchronized(lock) {
-            val (remaining, taken) = pendingDMReactions.take(key)
+            val (remaining, taken) = pendingDMReactions.take(key) { value, keyOrder, entryOrder ->
+                value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+            }
             pendingDMReactions = remaining
             taken
         } ?: return emptyList()
@@ -231,7 +243,11 @@ class ReactionService internal constructor(
     /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
     fun requeuePendingDMReaction(pending: PendingDMReaction) {
         val key = PendingDMReactionKey(pending.contactID, pending.parsed.messageHash)
-        synchronized(lock) { pendingDMReactions = pendingDMReactions.enqueue(key, pending, MAX_PENDING_REACTIONS) }
+        synchronized(lock) {
+            pendingDMReactions = pendingDMReactions.enqueue(
+                key, pending, MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
+            )
+        }
     }
 
     /** Test-visible total of queued reactions (channel, DM). */
@@ -250,29 +266,40 @@ class ReactionService internal constructor(
 
 /**
  * Immutable pending-reaction queue: entries grouped by key plus first-queued key order. Swift keeps the two
- * dictionaries/arrays inline and duplicates the eviction loop for channel and DM; the semantics here are the same.
+ * dictionaries/arrays inline and duplicates the eviction loop for channel and DM. Ordinals additionally let a
+ * failed history drain restore its original key and entry priority, independently of wall-clock timestamps.
  */
 internal class PendingQueue<K, V> private constructor(
-    private val entries: Map<K, List<V>>,
-    private val order: List<K>,
+    private val entries: Map<K, List<Entry<V>>>,
+    private val keyOrders: Map<K, Long>,
+    private val nextOrder: Long,
 ) {
+    private data class Entry<V>(val value: V, val order: Long)
     val count: Int get() = entries.values.sumOf { it.size }
 
+    fun cleared(): PendingQueue<K, V> = PendingQueue(emptyMap(), emptyMap(), nextOrder)
+
     /** Appends [value] under [key] (a new key joins the end of the order), then evicts down to [maxCount]. */
-    fun enqueue(key: K, value: V, maxCount: Int): PendingQueue<K, V> {
-        val existing = entries[key]
-        val queued = if (existing != null) {
-            PendingQueue(entries + (key to existing + value), order)
-        } else {
-            PendingQueue(entries + (key to listOf(value)), order + key)
-        }
+    fun enqueue(
+        key: K, value: V, maxCount: Int, restoredKeyOrder: Long? = null, restoredEntryOrder: Long? = null,
+    ): PendingQueue<K, V> {
+        require((restoredKeyOrder == null) == (restoredEntryOrder == null))
+        val entryOrder = restoredEntryOrder ?: nextOrder
+        val keyOrder = minOf(keyOrders[key] ?: Long.MAX_VALUE, restoredKeyOrder ?: nextOrder)
+        val values = (entries[key].orEmpty() + Entry(value, entryOrder)).sortedBy { it.order }
+        val queued = PendingQueue(
+            entries + (key to values), keyOrders + (key to keyOrder),
+            maxOf(nextOrder, Math.incrementExact(entryOrder)),
+        )
         return queued.evicted(maxCount)
     }
 
     /** Removes every value queued under [key]; returns the remaining queue and the values (null when none). */
-    fun take(key: K): Pair<PendingQueue<K, V>, List<V>?> {
+    fun take(key: K, withOrder: (V, Long, Long) -> V): Pair<PendingQueue<K, V>, List<V>?> {
         val matched = entries[key] ?: return this to null
-        return PendingQueue(entries - key, order.filter { it != key }) to matched
+        val keyOrder = keyOrders.getValue(key)
+        return PendingQueue(entries - key, keyOrders - key, nextOrder) to
+            matched.map { withOrder(it.value, keyOrder, it.order) }
     }
 
     /**
@@ -283,27 +310,27 @@ internal class PendingQueue<K, V> private constructor(
         var total = count
         if (total <= maxCount) return this
         var nextEntries = entries
-        var nextOrder = order
-        while (total > maxCount && nextOrder.isNotEmpty()) {
-            val oldestKey = nextOrder.first()
+        var nextKeyOrders = keyOrders
+        while (total > maxCount && nextKeyOrders.isNotEmpty()) {
+            val oldestKey = nextKeyOrders.minBy { it.value }.key
             val values = nextEntries[oldestKey]
             if (!values.isNullOrEmpty()) {
                 val remaining = values.drop(1)
                 total -= 1
                 if (remaining.isEmpty()) {
                     nextEntries = nextEntries - oldestKey
-                    nextOrder = nextOrder.drop(1)
+                    nextKeyOrders = nextKeyOrders - oldestKey
                 } else {
                     nextEntries = nextEntries + (oldestKey to remaining)
                 }
             } else {
-                nextOrder = nextOrder.drop(1)
+                nextKeyOrders = nextKeyOrders - oldestKey
             }
         }
-        return PendingQueue(nextEntries, nextOrder)
+        return PendingQueue(nextEntries, nextKeyOrders, nextOrder)
     }
 
     companion object {
-        fun <K, V> empty(): PendingQueue<K, V> = PendingQueue(emptyMap(), emptyList())
+        fun <K, V> empty(): PendingQueue<K, V> = PendingQueue(emptyMap(), emptyMap(), 0)
     }
 }

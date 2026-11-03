@@ -20,6 +20,7 @@ import com.meshcoreone.android.feature.nodes.support.settle
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -233,6 +234,7 @@ class ContactDetailNativeTest {
     fun `avatar cancellation during encoding or persistence resets saving and propagates`() = scenario {
         val harness = Harness(clock).connect()
         val alice = contact(radioId = checkNotNull(harness.session.radioId))
+        harness.store.contacts += alice
         val detail = ContactDetailStateHolder(alice, harness.dependencies, scope)
         val encodeGate = CompletableDeferred<Bytes?>()
         val encoding = scope.launch { detail.saveAvatar { encodeGate.await() } }
@@ -266,6 +268,20 @@ class ContactDetailNativeTest {
         })
         assertTrue(harness.contactService.avatars.isEmpty())
         assertEquals(alice, detail.state.value.contact)
+        assertFalse(detail.state.value.isSavingAvatar)
+    }
+
+    @Test
+    fun `a replaced public key at the same entity key is rejected before avatar mutation`() = scenario {
+        val harness = Harness(clock).connect()
+        val alice = contact(radioId = checkNotNull(harness.session.radioId))
+        val replacement = alice.copy(publicKey = Fixtures.repeated(0xCD))
+        harness.store.contacts += replacement
+        val detail = ContactDetailStateHolder(alice, harness.dependencies, scope)
+        assertFalse(detail.saveAvatar(Bytes.of(1)))
+        assertTrue(harness.contactService.avatars.isEmpty())
+        assertEquals(replacement, harness.store.contacts.single())
+        assertNotNull(detail.state.value.errorMessage)
         assertFalse(detail.state.value.isSavingAvatar)
     }
 

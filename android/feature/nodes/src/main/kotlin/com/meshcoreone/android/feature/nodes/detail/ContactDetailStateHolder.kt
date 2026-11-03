@@ -247,6 +247,13 @@ class ContactDetailStateHolder(
                 mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable)) }
                 false
             } else {
+                val stored = store.fetchContact(target.key) ?: throw NodesContactFailure.ContactNotFound()
+                if (stored.key != target.key || stored.publicKey != target.publicKey) throw NodesContactFailure.ContactNotFound()
+                if (session.currentRadioId() != target.radioId) {
+                    mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable)) }
+                    return false
+                }
+                currentCoroutineContext().ensureActive()
                 service.updateContactAvatar(target.key, imageData)
                 val updated = store.fetchContact(target.key) ?: throw NodesContactFailure.ContactNotFound()
                 check(updated.key == target.key && updated.publicKey == target.publicKey)

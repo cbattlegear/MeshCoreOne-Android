@@ -74,5 +74,21 @@ It was refused before Android execution:
 The separate runtime owner subsequently reported a trusted, interlocked installation.
 No runtime, execution locks or shared storage were changed by this repair session.
 Hosted run [41543533335](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41543533335)
-was started on that initial candidate, then cancelled as superseded before using its
-results as acceptance. Latest-candidate focused verification is still pending.
+was superseded and cancelled. A later exact `workflow_dispatch` on
+`f87b3037be8ce6e39d06e9e36230aed8822cef22`, run
+[41544214214](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41544214214),
+passed scope classification, controller/workflow policy tests and the pinned Swift codec
+oracle. Its Android job was cancelled during Gradle project/dependency snapshot startup;
+the log contains no Kotlin compilation, test execution or discovery. These successes do
+not verify the avatar flow.
+
+A fresh supported local check for that exact head was refused before launch because
+the canonical `gradle-execution` lock is still held by
+`local-check:f516a7e271f444dd9cb2efcc8b995a16`, bound to the unrelated exact commit
+`3c5297acdc083df21ec08afd7654aeaaa103ee59`. Its interrupted owner reports no genuine
+completion cleanup record; a reused PID is not proof of process completion. Current
+host capacity is reported at approximately 1.6 GiB free, below the documented 8 GiB
+single-execution reservation. No execution lock was cleared or recovered by this WP.
+Do not retry local Android checks until the execution owner completes supported
+invocation-bound recovery and atomic admission succeeds. No Android product tests,
+hosted or local, are claimed as run.

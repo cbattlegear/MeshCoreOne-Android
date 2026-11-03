@@ -257,13 +257,15 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         it.push(AppTab.TOOLS, NavigationDestination.Tool(tool)).copy(selectedTool = tool)
     }
 
-    fun stageContactLink(link: ContactLinkRequest?, targetRadioId: RadioId? = mutableState.value.radioId) =
-        mutableState.update {
-            if (link == null) it.copy(pendingContactLink = null) else {
-                it.copy(contactLookupRevision = Math.incrementExact(it.contactLookupRevision))
-                    .stageContactLink(link, targetRadioId)
-            }
+    fun stageContactLink(
+        link: ContactLinkRequest?, targetRadioId: RadioId? = mutableState.value.radioId, selectChats: Boolean = false,
+    ) = mutableState.update {
+        if (link == null) it.copy(pendingContactLink = null) else {
+            (if (selectChats) it.select(AppTab.CHATS) else it)
+                .copy(contactLookupRevision = Math.incrementExact(it.contactLookupRevision))
+                .stageContactLink(link, targetRadioId)
         }
+    }
 
     private fun NavigationState.stageContactLink(link: ContactLinkRequest, radioId: RadioId?) = copy(
         pendingContactLink = link.copy(targetRadioId = radioId, generation = generation, deliveryId = nextEntryId),
@@ -434,8 +436,12 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             }
         }
     }
-    fun stageChannelLink(link: ChannelLinkRequest?) = mutableState.update { it.copy(pendingChannelLink = link) }
-    fun stageHashtag(link: HashtagJoinRequest?) = mutableState.update { it.copy(pendingHashtag = link) }
+    fun stageChannelLink(link: ChannelLinkRequest?, selectChats: Boolean = false) = mutableState.update {
+        (if (selectChats && link != null) it.select(AppTab.CHATS) else it).copy(pendingChannelLink = link)
+    }
+    fun stageHashtag(link: HashtagJoinRequest?, selectChats: Boolean = false) = mutableState.update {
+        (if (selectChats && link != null) it.select(AppTab.CHATS) else it).copy(pendingHashtag = link)
+    }
     fun setPendingDeviceMenuTipDonation(pending: Boolean) =
         mutableState.update { it.copy(pendingDeviceMenuTipDonation = pending) }
 

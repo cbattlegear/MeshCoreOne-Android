@@ -552,7 +552,7 @@ class OnboardingFlowCoordinatorTest {
         override val demo: FakeDemo = FakeDemo(),
         override val region: FakeRegion = FakeRegion(RegionSelection("US", RegionSelection.Source.LOCATION),
             mapOf(null to listOf(OnboardingPresetOption("p", "P", 915.0)))),
-        override val presets: FakePresets = FakePresets(),
+        override val presets: OnboardingPresetPort = FakePresets(),
     ) : OnboardingFeatureDependencies {
         override fun openAppSettings() = Unit
         @androidx.compose.runtime.Composable

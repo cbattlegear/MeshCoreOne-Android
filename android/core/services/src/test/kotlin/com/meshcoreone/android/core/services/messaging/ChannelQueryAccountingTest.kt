@@ -751,6 +751,7 @@ class ChannelQueryAccountingTest {
             runCurrent()
             assertTrue(timerCancelled.isCompleted, "The readiness wake must win before shutdown starts")
             val stopping = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { queue.shutdown() }
+            runCurrent()
             assertTrue(subscriptionCancelled.isCompleted, "Shutdown must invalidate ownership before releasing the sender")
             assertFalse(stopping.isCompleted)
             releaseTimer.complete(Unit)

@@ -229,6 +229,10 @@ class AppOnboarding(
         }
 
         @Synchronized
+        override fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator): Boolean =
+            flowCoordinator === coordinator
+
+        @Synchronized
         override fun onFlowCompletionHandled(coordinator: OnboardingFlowCoordinator) {
             if (flowCoordinator === coordinator) {
                 flowCoordinator = null

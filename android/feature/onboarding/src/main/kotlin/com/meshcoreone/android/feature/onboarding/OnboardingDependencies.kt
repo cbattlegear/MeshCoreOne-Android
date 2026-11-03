@@ -148,6 +148,9 @@ interface OnboardingFeatureDependencies {
     /** A process owner may return its retained flow coordinator across Activity recreation. */
     fun retainedFlowCoordinator(): OnboardingFlowCoordinator? = null
 
+    /** Whether a completion callback still belongs to the currently retained flow. */
+    fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator): Boolean = true
+
     /** Called after the active flow has delivered its durable completion to its host. */
     fun onFlowCompletionHandled(coordinator: OnboardingFlowCoordinator) = Unit
 

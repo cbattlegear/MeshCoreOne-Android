@@ -26,6 +26,8 @@ import com.meshcoreone.android.app.container.onboarding.FakePermissionFacts
 import com.meshcoreone.android.app.container.onboarding.RequestedPermissions
 import com.meshcoreone.android.app.container.onboarding.ServicesRegionCatalog
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.FeatureId
+import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
@@ -42,6 +44,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingPresetOutcome
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
 import com.meshcoreone.android.feature.onboarding.OnboardingStep
 import com.meshcoreone.android.feature.onboarding.OnboardingState
+import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +56,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -377,6 +381,130 @@ class SettingsRerunNavigationTest {
         }
     }
 
+    @Test fun `rapid rerun replacement rebinds busy guards to the current flow`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val applyStarted = CompletableDeferred<Unit>()
+            val releaseApply = CompletableDeferred<Unit>()
+            var applies = 0
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    applies += 1
+                    applyStarted.complete(Unit)
+                    releaseApply.await()
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            val dependencies = appOnboarding(processScope, presets).forRerun()
+            val flowA = checkNotNull(dependencies.retainedFlowCoordinator())
+            flowA.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+            val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
+            mountShell(navigation, dependencies)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            compose.waitForIdle()
+            val firstEntryId = navigation.state.value.activeStack.last().id
+            assertEquals(
+                NavigationDestination.Auxiliary(FeatureId.ONBOARDING),
+                navigation.state.value.activeStack.last().destination,
+            )
+
+            compose.runOnUiThread {
+                dependencies.onFlowCompletionHandled(flowA)
+                check(navigation.back())
+                navigation.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            }
+            val secondEntry = navigation.state.value.activeStack.last()
+            assertEquals(NavigationDestination.Auxiliary(FeatureId.ONBOARDING), secondEntry.destination)
+            assertFalse(firstEntryId == secondEntry.id)
+            val flowB = checkNotNull(dependencies.retainedFlowCoordinator())
+            assertNotSame(flowA, flowB)
+            assertFalse(dependencies.ownsFlowCoordinator(flowA))
+            flowB.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+            val option = flowB.preset.visiblePresets().first()
+            compose.waitForIdle()
+
+            compose.onNodeWithText(option.name).performClick()
+            val applyLabel = O.presetUse(
+                ApplicationProvider.getApplicationContext<Context>().resources,
+                option.name,
+            )
+            compose.onNodeWithText(applyLabel).performClick()
+            applyStarted.await()
+
+            compose.onNodeWithTag("tab:MAP").assertIsNotEnabled()
+            compose.onNodeWithTag("navigation-back").assertIsNotEnabled()
+            compose.onNodeWithTag("open-radio-setup").assertIsNotEnabled()
+            compose.runOnUiThread { host.get().onBackPressedDispatcher.onBackPressed() }
+            assertEquals(secondEntry.id, navigation.state.value.activeStack.last().id)
+            assertEquals(AppTab.SETTINGS, navigation.state.value.selectedTab)
+            assertTrue(dependencies.ownsFlowCoordinator(flowB))
+
+            releaseApply.complete(Unit)
+            compose.waitUntil { navigation.state.value.selectedTab == AppTab.CHATS }
+            assertEquals(1, applies)
+            compose.onNodeWithTag("tab:MAP").assertIsEnabled().performClick()
+            assertEquals(AppTab.MAP, navigation.state.value.selectedTab)
+        } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `stale completed flow cannot deliver completion after rerun replacement`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val dependencies = appOnboarding(
+                processScope,
+                object : OnboardingPresetPort {
+                    override val canApply = MutableStateFlow(true)
+                    override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+                },
+            ).forRerun()
+            val flowA = checkNotNull(dependencies.retainedFlowCoordinator())
+            var completionCallbacks = 0
+            host.get().setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    OnboardingFlow(dependencies, onCompleted = { completionCallbacks += 1 })
+                }
+            }
+            compose.waitForIdle()
+
+            var flowB: OnboardingFlowCoordinator? = null
+            compose.runOnUiThread {
+                runBlocking { flowA.onboarding.completeOnboarding() }
+                dependencies.onFlowCompletionHandled(flowA)
+                flowB = checkNotNull(dependencies.retainedFlowCoordinator())
+            }
+            compose.waitForIdle()
+
+            assertNotSame(flowA, flowB)
+            assertFalse(dependencies.ownsFlowCoordinator(flowA))
+            assertEquals(0, completionCallbacks)
+            assertTrue(dependencies.ownsFlowCoordinator(checkNotNull(flowB)))
+        } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `off-tab onboarding completion cannot pop the selected tab entry`() {
+        val navigation = NavigationCoordinator().also {
+            it.navigateToDiscovery()
+            it.selectTab(AppTab.SETTINGS)
+            it.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            it.selectTab(AppTab.NODES)
+        }
+        val selectedStack = navigation.state.value.activeStack
+
+        completeOnboardingNavigationIfCurrent(
+            navigation,
+            FeatureRoute(FeatureId.CHATS),
+            navigation::navigate,
+        )
+
+        assertEquals(AppTab.NODES, navigation.state.value.selectedTab)
+        assertEquals(selectedStack, navigation.state.value.activeStack)
+    }
+
     private class TestRerunDependencies(
         private val delegate: OnboardingFeatureDependencies,
         override val flags: OnboardingFlagStore,
@@ -384,5 +512,6 @@ class SettingsRerunNavigationTest {
     ) : OnboardingFeatureDependencies by delegate {
         private val flow = OnboardingFlowCoordinator(scope, this).also { it.restoreStartingPath() }
         override fun retainedFlowCoordinator(): OnboardingFlowCoordinator = flow
+        override fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator): Boolean = flow === coordinator
     }
 }

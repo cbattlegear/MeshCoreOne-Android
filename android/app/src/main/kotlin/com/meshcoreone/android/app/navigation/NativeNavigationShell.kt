@@ -151,17 +151,18 @@ fun NativeNavigationShell(
     val state by coordinator.state.collectAsStateWithLifecycle()
     val onboardingRouteActive = state.activeStack.lastOrNull()?.destination ==
         NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
-    val onboardingFlow = remember(onboarding, onboardingRouteActive) {
-        if (onboardingRouteActive) onboarding?.retainedFlowCoordinator() else null
-    }
+    val onboardingFlow = if (onboardingRouteActive) onboarding?.retainedFlowCoordinator() else null
     val presetState = onboardingFlow?.preset?.state?.collectAsStateWithLifecycle()?.value
     val completingWithoutDevice = onboardingFlow?.isCompletingWithoutDevice
         ?.collectAsStateWithLifecycle()?.value ?: false
     val canNavigateFromCurrentRoute = !onboardingRouteActive ||
         (!completingWithoutDevice && presetState?.isApplying != true &&
             onboardingFlow?.canLeaveCurrentFlow() != false)
-    val canNavigateFromCurrentRouteNow = {
-        !onboardingRouteActive || onboardingFlow?.canLeaveCurrentFlow() != false
+    val canNavigateFromCurrentRouteNow by rememberUpdatedState {
+        val activeRouteIsOnboarding = coordinator.state.value.activeStack.lastOrNull()?.destination ==
+            NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+        !activeRouteIsOnboarding ||
+            onboarding?.retainedFlowCoordinator()?.canLeaveCurrentFlow() != false
     }
     val holders = AppTab.entries.associateWith { rememberSaveableStateHolder() }
     val owners = state.stacks.flatMap { (tab, stack) -> stack.map { it.id to tab } }.toMap()
@@ -528,8 +529,7 @@ private fun ExistingFeatureContent(
             else SettingsEntry(route, navigate)
         FeatureId.ONBOARDING -> OnboardingEntry(
             route,
-            // Leaving the auxiliary setup route pops it before moving on (completion targets the Chats root).
-            { target -> coordinator.back(); navigate(target) },
+            { target -> completeOnboardingNavigationIfCurrent(coordinator, target, navigate) },
             onboarding,
         )
         FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate, remoteNodes, cliContent = { session, send, enabled ->
@@ -548,5 +548,18 @@ private fun ExistingFeatureContent(
             coordinator.back()
             coordinator.navigateToRoom(it)
         })
+    }
+}
+
+internal fun completeOnboardingNavigationIfCurrent(
+    coordinator: NavigationCoordinator,
+    target: FeatureRoute,
+    navigate: (FeatureRoute) -> Unit,
+) {
+    val activeRouteIsOnboarding = coordinator.state.value.activeStack.lastOrNull()?.destination ==
+        NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+    if (activeRouteIsOnboarding) {
+        coordinator.back()
+        navigate(target)
     }
 }

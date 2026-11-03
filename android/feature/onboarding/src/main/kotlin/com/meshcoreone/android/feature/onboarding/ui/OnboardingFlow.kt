@@ -45,7 +45,7 @@ fun OnboardingFlow(dependencies: OnboardingFeatureDependencies, onCompleted: () 
     val completingWithoutDevice by flow.isCompletingWithoutDevice.collectAsState()
     LaunchedEffect(completed) {
         if (completed) {
-            onCompleted()
+            if (dependencies.ownsFlowCoordinator(flow)) onCompleted()
             dependencies.onFlowCompletionHandled(flow)
         }
     }

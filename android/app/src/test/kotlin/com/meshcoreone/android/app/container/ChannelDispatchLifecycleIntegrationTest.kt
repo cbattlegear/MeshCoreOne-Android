@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.runtime.ConnectionError
@@ -116,8 +117,10 @@ class ChannelDispatchLifecycleIntegrationTest : RoomProcessTest() {
             val old = assertNotNull(h.sessions.current)
             val callbacks = assertNotNull(h.links.links.single().callbacks)
             h.manager.disconnect()
-            h.manager.connect(ConnectionTarget.WiFi("127.0.0.2", 5001))
-            h.eventually("successor ready") { h.sessions.current?.token != old.token && h.manager.connectionState.isOperational }
+            h.manager.connect(ConnectionTarget.WiFi("127.0.0.2", 5001u))
+            h.eventually("successor ready") {
+                h.sessions.current?.token != old.token && h.manager.connectionState == DeviceConnectionState.READY
+            }
             val fresh = assertNotNull(h.sessions.current)
             callbacks.onDisconnected(IllegalStateException("old same-device callback"))
             callbacks.onAutoReconnecting("old callback")
@@ -134,8 +137,10 @@ class ChannelDispatchLifecycleIntegrationTest : RoomProcessTest() {
     private suspend fun TestScope.withHarness(assertions: suspend TestScope.(ContainerHarness) -> Unit) {
         val h = ContainerHarness(this, store)
         try {
-            h.manager.connect(ConnectionTarget.WiFi("127.0.0.1", 5000))
-            h.eventually("initial graph ready") { h.manager.connectionState.isOperational && h.sessions.current != null }
+            h.manager.connect(ConnectionTarget.WiFi("127.0.0.1", 5000u))
+            h.eventually("initial graph ready") {
+                h.manager.connectionState == DeviceConnectionState.READY && h.sessions.current != null
+            }
             assertions(h)
         } finally {
             h.container.close()

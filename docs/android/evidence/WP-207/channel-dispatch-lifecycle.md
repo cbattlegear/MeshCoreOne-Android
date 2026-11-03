@@ -100,6 +100,15 @@ isolated `b8303ba7c` and `e1f4c05ce` fixture-only corrections, composed unchange
 New runtime test scheduling/expected-failure setup was corrected separately;
 no test was removed and no assertion was weakened.
 
+Second hosted run [41602795069](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41602795069)
+at exact `41c4b20b6dc7b7cb071f415f07f3105411ab0dae` passed all 5,985 available
+discovered tests, but failed the new runtime test's WiFi fixture port literal:
+`Int` was supplied where the actual target requires `UShort`. Runtime, App and
+other mandatory reports were absent; evidence was incomplete. The new fixtures
+were corrected to unsigned typed port literals, without widening the API or
+casting away type safety. App scheduling assertions now require actual READY,
+not the earlier SYNCING-or-READY operational state.
+
 Full production ChannelService wiring is blocked by its owner's frozen WP-405
 dispatch/UUID-receipt/uncertainty cohort; MessageService wiring remains its current
 producer's work. No interface-only or fake-only result completes that integration.

@@ -160,7 +160,7 @@ class ChannelDispatchLifecycleTest {
                     }
                 }
                 assertFailsWith<ConnectionError.FactoryOwnershipViolation> {
-                    manager.connect(ConnectionTarget.WiFi("127.0.0.1", 5000))
+                    manager.connect(ConnectionTarget.WiFi("127.0.0.1", 5000u))
                 }
                 runCurrent()
                 assertTrue(services.single().inputs.dispatchAdmission.isRevoked)

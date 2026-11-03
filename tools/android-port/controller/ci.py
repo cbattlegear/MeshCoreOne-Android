@@ -755,7 +755,12 @@ def main(argv=None):
             python_checks(output_directory(args.output))
         else:
             state, output = inputs(args.state), output_directory(args.output)
-            output.mkdir(parents=True, exist_ok=True)
+            hosted_consumer = (
+                args.command == "run" and not args.local and args.scope is not None
+                and BENCHMARK_CONSUMER_SCOPE in args.scope
+            )
+            if not hosted_consumer:
+                output.mkdir(parents=True, exist_ok=True)
             if args.command == "preflight":
                 preflight(state, output, local=args.local)
             elif args.command == "run":

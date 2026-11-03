@@ -7,6 +7,8 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -191,6 +193,141 @@ class BenchmarkConsumerTests(unittest.TestCase):
                 ci.prepare_benchmark_consumer_state(project, project / "output")
             with self.assertRaisesRegex(PortError, "must be absolute"):
                 ci.prepare_benchmark_consumer_state(project, Path("relative-output"))
+
+    def test_hosted_consumer_cli_rejects_linked_output_before_creating_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            target.mkdir()
+            linked = root / "linked"
+            if os.name == "nt":
+                subprocess.run(
+                    [os.environ["ComSpec"], "/c", "mklink", "/J", str(linked), str(target)],
+                    check=True, capture_output=True,
+                )
+            else:
+                linked.symlink_to(target, target_is_directory=True)
+            try:
+                state = root / "state.json"
+                state.write_text(json.dumps({
+                    "schema_version": 1, "host": ci.host_name(), "java_home": str(root / "jdk"),
+                    "android_home": str(root / "sdk"), "private_root": str(root / "private"),
+                    "provenance": {},
+                }), encoding="utf-8")
+                environment = dict(os.environ, GRADLE_USER_HOME=str(root / "unused-gradle-home"))
+                completed = subprocess.run(
+                    [
+                        sys.executable, "-B", str(ci.REPO / "tools" / "android-port" / "controller" / "ci.py"),
+                        "run", "--stage", "scaffold", "--scope", ci.BENCHMARK_CONSUMER_SCOPE,
+                        "--state", str(state), "--output", str(linked / "output"),
+                    ],
+                    cwd=ci.REPO, env=environment, capture_output=True, text=True, timeout=120,
+                )
+                self.assertEqual(completed.returncode, 2, completed.stderr)
+                self.assertIn("BLOCKED: Linked benchmark consumer output directory", completed.stderr)
+                self.assertEqual(list(target.iterdir()), [])
+            finally:
+                if os.name == "nt":
+                    linked.rmdir()
+                else:
+                    linked.unlink()
+
+    def test_hosted_consumer_cli_rejects_invalid_selection_before_creating_output(self):
+        for stage, scopes, affected in (
+            ("scaffold", [ci.BENCHMARK_CONSUMER_SCOPE, "protocol"], False),
+            ("scaffold", [ci.BENCHMARK_CONSUMER_SCOPE, ci.BENCHMARK_CONSUMER_SCOPE], False),
+            ("benchmark", [ci.BENCHMARK_CONSUMER_SCOPE], False),
+            ("scaffold", [ci.BENCHMARK_CONSUMER_SCOPE], True),
+            (None, [ci.BENCHMARK_CONSUMER_SCOPE], False),
+        ):
+            with self.subTest(stage=stage, scopes=scopes, affected=affected), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                output = root / "new-parent" / "output"
+                arguments = ["run", "--state", str(root / "state.json"), "--output", str(output)]
+                if stage is not None:
+                    arguments.extend(("--stage", stage))
+                for scope in scopes:
+                    arguments.extend(("--scope", scope))
+                if affected:
+                    arguments.append("--affected-candidate")
+                with (
+                    patch.object(ci, "REPO", root),
+                    patch.object(ci, "inputs", return_value={}),
+                    patch.object(ci, "load_manifest", return_value=object()),
+                    patch.object(ci, "port_map", return_value=[]),
+                    patch.object(ci.platform, "python_version", return_value="3.12.4"),
+                    patch.object(ci, "toolchain_lock", return_value={"python": "3.12.4"}),
+                    patch.object(ci, "verify_wrapper") as verify_wrapper,
+                    patch.object(ci, "execute") as execute,
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()) as errors,
+                ):
+                    result = ci.main(arguments)
+                self.assertEqual(result, 2)
+                self.assertIn("BLOCKED:", errors.getvalue())
+                self.assertFalse(output.parent.exists())
+                verify_wrapper.assert_not_called()
+                execute.assert_not_called()
+
+    def test_hosted_consumer_cli_creates_valid_output_after_inspection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "android").mkdir()
+            output = root / "output"
+            state = {"host": "linux", "private_root": str(root / "private")}
+
+            def stop_before_subprocess(command, environment, log, **kwargs):
+                self.assertTrue(output.is_dir())
+                self.assertTrue((output / "gradle-user-home").is_dir())
+                self.assertTrue((output / "gradle-project-cache").is_dir())
+                self.assertEqual(environment["GRADLE_USER_HOME"], str(output / "gradle-user-home"))
+                raise PortError("test stopped before subprocess execution")
+
+            with (
+                patch.object(ci, "REPO", root),
+                patch.object(ci, "inputs", return_value=state),
+                patch.object(ci, "load_manifest", return_value=object()),
+                patch.object(ci, "port_map", return_value=[]),
+                patch.object(ci.platform, "python_version", return_value="3.12.4"),
+                patch.object(ci, "toolchain_lock", return_value={"python": "3.12.4"}),
+                patch.object(ci, "candidate_environment", return_value={}),
+                patch.object(ci, "verify_wrapper") as verify_wrapper,
+                patch.object(ci, "execute", side_effect=stop_before_subprocess) as execute,
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                result = ci.main([
+                    "run", "--stage", "scaffold", "--scope", ci.BENCHMARK_CONSUMER_SCOPE,
+                    "--state", str(root / "state.json"), "--output", str(output),
+                ])
+            self.assertEqual(result, 2)
+            self.assertIn("BLOCKED: test stopped before subprocess execution", errors.getvalue())
+            verify_wrapper.assert_called_once()
+            execute.assert_called_once()
+
+    def test_cli_defers_output_only_for_hosted_consumer_selections(self):
+        for local, scopes, initially_created in (
+            (False, [ci.BENCHMARK_CONSUMER_SCOPE], False),
+            (True, [ci.BENCHMARK_CONSUMER_SCOPE], True),
+            (False, ["protocol"], True),
+        ):
+            with self.subTest(local=local, scopes=scopes), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                output = root / "output"
+                arguments = ["run", "--stage", "scaffold", "--state", str(root / "state.json"),
+                             "--output", str(output)]
+                for scope in scopes:
+                    arguments.extend(("--scope", scope))
+                if local:
+                    arguments.append("--local")
+
+                def observe_stage(*args, **kwargs):
+                    self.assertEqual(output.exists(), initially_created)
+
+                with patch.object(ci, "inputs", return_value={}), \
+                        patch.object(ci, "run_stage", side_effect=observe_stage) as run_stage:
+                    self.assertEqual(ci.main(arguments), 0)
+                run_stage.assert_called_once()
 
     def test_consumer_execution_isolates_hosted_home_and_disables_caches_for_both_phases(self):
         cases = (

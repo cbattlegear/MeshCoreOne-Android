@@ -118,7 +118,7 @@ class NavigationStateTest {
                 replaceAtBoundary = false
                 assertTrue(n.bindNotificationSession(radio, null, tokenB))
                 n.stageContactLink(
-                    ContactLinkRequest("Replacement", Bytes(byteArrayOf(1)), ContactType.CONTACT),
+                    ContactLinkRequest("Replacement", Bytes(byteArrayOf(1)), ContactType.CHAT),
                     radio,
                 )
                 n.stageChannelLink(ChannelLinkRequest("Replacement", Bytes(byteArrayOf(2))))

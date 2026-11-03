@@ -174,6 +174,17 @@ class RepairContractTests(unittest.TestCase):
             INFRASTRUCTURE_PATH_OPERATIONS["tools/android-port/oracle/test_ci.py"],
             ("add-regression-fixture-or-test", "traceability-validation"),
         )
+        for path in (
+            "tools/android-port/controller/workflows.py",
+            "tools/android-port/tests/test_workflows.py",
+        ):
+            manifest, rules, value, scope = infrastructure_fixture()
+            scope["paths"].append(path)
+            scope["paths"].sort()
+            self.assertEqual(
+                validate_infrastructure_scope(scope, value.binding, manifest, rules, scope["paths"]),
+                tuple(scope["paths"]),
+            )
 
     def test_infrastructure_scope_rejects_unknown_stale_or_untested_contracts(self):
         for mutation in ("scope-id", "scope-kind", "unknown-path", "missing-test", "stale-head", "unknown-verification"):

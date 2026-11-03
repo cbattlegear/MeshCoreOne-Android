@@ -12,6 +12,10 @@ capabilities, and oracle validators/tests to `traceability-validation`. Unknown
 paths and operations fail closed. The declaration fixes the Android CI workflow,
 the controller-and-policy job, its controller test step, and all four test roots:
 controller tests, local tests, Android parity tests, and oracle tests.
+The workflow validator admits this exact four-root command in addition to its
+existing commands. It still rejects duplicate or unknown roots, missing event
+bindings, ignored failures and multiple controller invocations. Its validator
+and regression-test paths are explicitly included in the finite path map.
 
 The publisher independently stages the exact candidate diff, requires the
 authenticated exact-head read-only source review and WP-003's existing human

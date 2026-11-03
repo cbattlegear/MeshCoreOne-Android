@@ -58,12 +58,14 @@ INFRASTRUCTURE_PATH_OPERATIONS = {
     "tools/android-port/controller/repair_acceptance.py": ("modify", "wp-owned"),
     "tools/android-port/controller/runtime_inputs.py": ("modify", "wp-owned"),
     "tools/android-port/controller/test_runner.py": ("modify", "wp-owned"),
+    "tools/android-port/controller/workflows.py": ("modify", "wp-owned"),
     "tools/android-port/oracle/test_ci.py": ("add-regression-fixture-or-test", "traceability-validation"),
     "tools/android-port/oracle/test_workflow_scope.py": ("add-regression-fixture-or-test", "traceability-validation"),
     "tools/android-port/oracle/workflow_scope.py": ("add-or-update-validator-rule", "traceability-validation"),
     "tools/android-port/tests/test_merged_acceptance.py": ("test", "wp-owned"),
     "tools/android-port/tests/test_native_review.py": ("test", "wp-owned"),
     "tools/android-port/tests/test_repair_acceptance.py": ("test", "wp-owned"),
+    "tools/android-port/tests/test_workflows.py": ("test", "wp-owned"),
 }
 INFRASTRUCTURE_READER_PATHS = frozenset({
     path for path in INFRASTRUCTURE_PATH_OPERATIONS

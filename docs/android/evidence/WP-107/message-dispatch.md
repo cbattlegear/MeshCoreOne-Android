@@ -78,7 +78,7 @@ messaging tests and the #525 monitor-contention/negative controls remain intact.
 | 2 real-mutex-queued | Actual resetPath owns the real serializer; cancelling queued direct/channel send proves unsent; releasing prior OK produces no old message and one fresh retry works. |
 | 2 dispatched cancellation | Original caller exception preserved; old response drains before successor writes, never completes the successor. |
 | 2 cooperative transport entry | Even when no frame commits, cancellation after crossing send fence stays possibly-written and same-generation retry is quarantined. |
-| 2 noncooperative transport | Deliberate resumed transport effect after cancellation remains possibly-written, never a false unsent proof. |
+| 2 noncooperative transport | Actual transport send history grows after cancellation returns, with an independently expected direct/channel packet; disposition remains possibly-written. |
 | 2 missing response | Timeout plus later old response does not release unresolved correlation. |
 | 2 retirement | Old queued task cannot dispatch after actual stop/start; a sent cancellation never upgrades to unsent. |
 | 2 unsupported role | Original cancellation preserved, unknown default, fresh-handle requirement enforced. |
@@ -89,6 +89,13 @@ messaging tests and the #525 monitor-contention/negative controls remain intact.
 These tests use the real session/parser/generation serializer, not a service
 mutex or an unrelated serializer. Existing #525 JVM monitor ownership proves
 cancel-versus-send linearization independently of these real-transport controls.
+Independent source review requested strengthening the original noncooperative
+callback-local observation. That case now uses an actual deliberately
+noncooperative `MeshTransport.send` implementation with its own send history.
+Unlike the shared mock's cooperative activity check, it can record the exact
+packet after the suspended send resumes despite cancellation. The test asserts
+one handshake packet before resume and two actual packets afterward, without
+using `NonCancellable` or changing the production fence.
 
 ## Verification
 

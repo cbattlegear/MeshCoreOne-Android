@@ -3,8 +3,10 @@ package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
+import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.model.SelfInfo
+import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import java.time.Instant
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
@@ -131,26 +133,41 @@ class MessageWriteDispatchTest {
             f.session.stop()
         },
         nativeCase("$kind noncooperative late transport effect cannot be described as definitely unsent") {
-            val f = fixture(); start(f)
+            val radio = SessionRadioTransport()
             var continuation: Continuation<Unit>? = null
-            val effects = mutableListOf<Bytes>()
-            f.transport.beforeSend = { frame ->
-                if (frame[0].toInt() == kind.command) {
-                    suspendCoroutine<Unit> { continuation = it }
-                    effects += frame
+            val transport = object : MeshTransport by radio {
+                val sent = mutableListOf<Bytes>()
+                override suspend fun send(data: Bytes) {
+                    if (data[0].toInt() == kind.command) {
+                        suspendCoroutine<Unit> { continuation = it }
+                    }
+                    check(radio.isConnected())
+                    sent += data
                 }
             }
+            val session = MeshCoreSession(
+                transport, SessionConfiguration(defaultTimeout = 1.0, clientIdentifier = "MCore"),
+                SchedulerClock(testScheduler), backgroundScope.coroutineContext,
+            )
+            val starting = checkedRequest { session.start() }; runCurrent()
+            radio.receive(selfPacket()); runCurrent(); starting.await()
+            assertEquals(1, transport.sent.size)
             val dispatch = MessageWriteDispatch()
-            val caller = checkedRequest { send(f.session, kind, dispatch) }; runCurrent()
+            val caller = checkedRequest { send(session, kind, dispatch) }; runCurrent()
             assertNotNull(continuation)
             caller.cancel(); runCurrent()
             assertFailsWith<CancellationException> { caller.await() }
             assertEquals(ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN, dispatch.cancellationDisposition)
-            assertTrue(effects.isEmpty())
+            assertEquals(1, transport.sent.size)
             continuation!!.resume(Unit); runCurrent()
-            assertEquals(kind.command, effects.single()[0].toInt())
+            assertEquals(2, transport.sent.size, "The actual transport records a write after cancellation returns")
+            val expected = when (kind) {
+                Kind.DIRECT -> hex("02008080009265") + filled(0x44, 6) + hex("68656c6c6f")
+                Kind.CHANNEL -> hex("0300078000926568656c6c6f")
+            }
+            assertEquals(expected, transport.sent.last())
             assertEquals(ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN, dispatch.cancellationDisposition)
-            f.session.stop()
+            session.stop()
         },
         nativeCase("$kind sent cancellation without response retains unresolved-family quarantine") {
             val f = fixture(); start(f)

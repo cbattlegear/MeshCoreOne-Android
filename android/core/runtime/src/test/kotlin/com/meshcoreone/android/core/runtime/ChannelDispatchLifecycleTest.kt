@@ -113,7 +113,11 @@ class ChannelDispatchLifecycleTest {
                 assertFalse(fresh.dispatchAdmission.isRevoked)
                 assertEquals(DeviceConnectionState.READY, manager.connectionState)
                 manager.setConnectionState(DeviceConnectionState.DISCONNECTED)
-                manager.setConnectionState(DeviceConnectionState.READY)
+                assertFailsWith<IllegalArgumentException> {
+                    manager.setConnectionState(DeviceConnectionState.READY)
+                }
+                assertEquals(DeviceConnectionState.DISCONNECTED, manager.connectionState)
+                assertNull(manager.snapshot.value.token)
                 assertTrue(fresh.dispatchAdmission.isRevoked, "display recovery cannot reopen an existing handle")
                 assertNull(fresh.dispatchAdmission.tryAcquire(fresh.connection.token, fresh.connection.session))
             }

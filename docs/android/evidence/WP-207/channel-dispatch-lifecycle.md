@@ -131,6 +131,17 @@ unpersisted first attempt retires. Runtime failure logging follows the existing
 services/App pattern so exact failed assertions are visible under hosted quiet
 Gradle execution, without collecting a second CI-result bundle.
 
+Fourth hosted run [41606240675](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41606240675)
+at exact `17668c40bc2c935955f9b6832664484ed8f855c1` executed 309 runtime
+tests: 308 passed, including both prior failures, and the newly added
+display-only disconnect case failed at its final attempt to set READY without
+a token. The production snapshot correctly rejected this invalid state with
+`IllegalArgumentException`; the fixture now asserts that rejection, unchanged
+DISCONNECTED/null-token state and continued revoked-handle refusal. No production
+guard was relaxed. Available reports: 6,358 discovered, 6,357 passed, one failed,
+zero errors/skips; mandatory App, data, services and other reports were absent.
+The composed `df6e14a25` identity successor has no data execution credit here.
+
 Full production ChannelService wiring is blocked by its owner's frozen WP-405
 dispatch/UUID-receipt/uncertainty cohort; MessageService wiring remains its current
 producer's work. No interface-only or fake-only result completes that integration.

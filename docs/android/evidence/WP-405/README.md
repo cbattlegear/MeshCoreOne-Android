@@ -43,10 +43,23 @@ Authored controls, not executed results:
 
 WP-302 owns the original saved-nonself first-graph control with no last-device
 preference and its preference write held, the producer implementation, and
-localized host wiring. Its exact isolated snapshot-producer successor is
-pending; the agreed signatures are not imported producer source or a build
-result. All new Kotlin source remains uncompiled/unexecuted. Execution custody,
+localized host wiring. Exact isolated snapshot-producer successor
+`69e7a82eb37f740674b3c2ed155b1750a41c410c`, parent
+`b4e1ce63d90e1d48547f37ddf5ff1c01a74ba814`, was inspected through immutable
+Git objects. Its five attributable files supply the agreed API, shared
+effective-target matcher, origin identity and radio/self completion checks.
+Consumer `d11ba48402eaafe9c891c7f4886b76a27f5325ac` and
+`47c66355b72a740c08e2d3fca7da2466c5d05ddf` match those signatures and outcome
+meanings. The pure fixture uses its current bound token and captured
+initial-binding allowance consistently for resolution and completion.
+The producer's direct null-to-first-binding Room and pure self/foreign-snapshot
+controls are authored source, not executed results; legacy chat conservatively
+maps target change to stale without an automatic retry. No producer files
+were imported and no combined build was performed.
+All new Kotlin source remains uncompiled/unexecuted. Execution custody,
 source composition, local-before-single-push and merge holds remain unchanged.
+The user explicitly retained execution/publication holds instead of authorizing
+the proposed operator-confirmed abandonment recovery after a Windows Restart.
 
 Source-only checks for this consumer correction (Python 3.12.4):
 `python tools\android-port\controller\validate.py` PASS (1,866 tracked reference

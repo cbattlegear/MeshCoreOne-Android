@@ -754,7 +754,7 @@ class ExternalRouteReplacementTest {
             beforeContactCommit()
             val result = navigation.completeResolvedCapturedContactLookup(
                 lookup, target, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
-                null, true, null, selectChats, publications,
+                navigation.state.value.boundSessionToken, lookup.allowsInitialBinding, null, selectChats, publications,
             )
             afterContactCommit()
             return result

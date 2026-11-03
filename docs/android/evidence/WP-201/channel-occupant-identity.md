@@ -393,6 +393,25 @@ avoid spending the full build on the source collision. It provides no positive
 history/df6/rendering execution credit. A new exact successor may be dispatched
 only after that same-ref run is terminal; no other producer's run is cancelled.
 
+Corrected exact head `6fd2f90411c140b62f2de8c4c20a0a78a9c32ee1` ran in
+[41609314427](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41609314427):
+**FAILURE**, with data 637 discovered / 635 passed / the same two protected
+MessagingRoomIntegrationTest failures at lines 519 and 490. The eight additional
+data declarations are the seven history methods and df6's nineteenth occupant
+case; there are no new history/occupant/journal failures in the executed data
+suite. Database 50/50 and model 172/172 passed. Available totals are 9,078
+discovered / 9,076 passed / two failed / zero errors or skips; App/services/UI
+mandatory reports are missing. Controller and Swift codec jobs passed separately.
+This is bounded storage evidence, not actual producer/receipt/wire integration.
+
+The rendering fixture now implements the abstract journal methods, but the new
+rejection test used `org.junit.Test` in the Jupiter services module.
+`:core:services:compileTestKotlin` fails at that unresolved import/annotation,
+so no rendering execution credit is claimed. Its isolated successor changes
+only that import to the existing `org.junit.jupiter.api.Test`; exact successor
+execution is still required. No dependency, expectation or production behavior
+is changed to fix this test-framework mismatch.
+
 ## Shared connection admission support
 
 The runtime lifecycle owner and fence owner agreed the bounded WP-201

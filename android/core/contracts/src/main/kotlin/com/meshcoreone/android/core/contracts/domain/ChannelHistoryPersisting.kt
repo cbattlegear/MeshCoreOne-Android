@@ -23,7 +23,7 @@ enum class ChannelHistoryConflict {
 class ChannelHistoryRejected(
     val reason: ChannelHistoryConflict,
     val scope: ChannelHistoryScope? = null,
-    val message: EntityKey? = null,
+    val messageKey: EntityKey? = null,
 ) : Exception(reason.name)
 
 /**

@@ -31,10 +31,13 @@ class ChannelHistoryPersistenceTest : RepositoryTest() {
             createdAt = AT.plusSeconds(order), status = status,
         ).copy(channelOccupantID = scope.expectedOccupantID)
 
-    private suspend fun rejected(reason: ChannelHistoryConflict, operation: suspend () -> Any?) {
+    private suspend fun rejected(reason: ChannelHistoryConflict, operation: suspend () -> Any?): ChannelHistoryRejected {
         val failure = assertFailsWith<PersistenceStoreException> { operation() }
         assertEquals(PersistenceStoreError.InvalidData, failure.error)
-        assertEquals(reason, assertIs<ChannelHistoryRejected>(failure.cause).reason)
+        val cause = assertIs<ChannelHistoryRejected>(failure.cause)
+        assertEquals(reason, cause.reason)
+        assertEquals(reason.name, cause.message)
+        return cause
     }
 
     @Test fun heldOldSaveCommitsAfterReplacementThenReopenKeepsRecoveryButExcludesReplacementHistory() = runTest {
@@ -136,8 +139,9 @@ class ChannelHistoryPersistenceTest : RepositoryTest() {
         assertEquals(listOf(same, incoming), store.fetchChannelHistory(current).toList())
         assertEquals(2L, store.countChannelHistory(current))
         assertEquals(current, store.validateChannelMessageOrigin(EntityKey(RADIO_A, same.id)))
-        assertTrue(store is ChannelHistoryPersisting)
+        assertTrue(ChannelHistoryPersisting::class.java.isInstance(store))
         assertFalse(MessagePersisting::class.java.isAssignableFrom(ChannelHistoryPersisting::class.java))
+        assertFalse(ChannelHistoryPersisting::class.java.isAssignableFrom(PersistenceStoreProtocol::class.java))
     }
 
     @Test fun unboundRowsOfEitherDirectionRejectEveryScopedReadWithoutPartialHistoryOrPromotion() = runTest {
@@ -172,9 +176,10 @@ class ChannelHistoryPersistenceTest : RepositoryTest() {
             }
             for (row in unbound) {
                 assertEquals(row, persisted.fetchMessage(EntityKey(RADIO_A, row.id)))
-                rejected(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN) {
+                val failure = rejected(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN) {
                     persisted.validateChannelMessageOrigin(EntityKey(RADIO_A, row.id))
                 }
+                assertEquals(EntityKey(RADIO_A, row.id), failure.messageKey)
                 rejected(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN) {
                     persisted.saveChannelMessage(row.copy(channelOccupantID = current.expectedOccupantID), current)
                 }

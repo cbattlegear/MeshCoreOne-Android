@@ -2,6 +2,7 @@
 package com.meshcoreone.android.app.state
 
 import com.meshcoreone.android.core.contracts.domain.MessageStatusEvent
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.services.remote.RemoteNodeEvent
 import com.meshcoreone.android.core.services.remote.RoomServerEvent
@@ -14,6 +15,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
@@ -39,49 +42,68 @@ class MessageEventDispatcher(
 ) {
     private val logger: Logger = Logger.getLogger("com.mc1.MessageEventDispatcher")
     private val lock = Any()
-    private var statusSubscription: AutoCloseable? = null
+    private data class Wiring(
+        val token: SessionToken,
+        val group: Job,
+        val statusSubscription: AutoCloseable,
+    )
 
-    // Every consumer is a child of one group job, so the count below sees any collector that outlived a re-wire.
+    private var wiring: Wiring? = null
+
+    // Each wiring has its own child group so retiring one session cannot cancel a replacement's consumers.
     private val group = SupervisorJob(scope.coroutineContext[Job])
-    private val consumers = CoroutineScope(scope.coroutineContext + group)
 
     /** Live consumer jobs, including any that a re-wire failed to cancel (test visibility for duplicate collectors). */
-    val activeJobCount: Int get() = group.children.count { it.isActive }
+    val activeJobCount: Int get() = group.children.sumOf { owner -> owner.children.count { it.isActive } }
 
-    fun wire(sources: MessageEventSources) {
-        cancelAll()
-        consume("syncData", sources.dataEvents, ::handleDataEvent)
-        consume("heardRepeats", sources.heardRepeats) { event ->
+    fun wire(token: SessionToken, sources: MessageEventSources) {
+        val next = Wiring(token, SupervisorJob(group), sources.messageStatus)
+        val previous = synchronized(lock) { wiring.also { wiring = next } }
+        previous?.let(::cancel)
+        consume(next, "syncData", sources.dataEvents, ::handleDataEvent)
+        consume(next, "heardRepeats", sources.heardRepeats) { event ->
             stream.send(MessageEvent.HeardRepeatRecorded(event.messageID, event.count))
         }
-        consume("regionUpdates", sources.regionUpdates) { ids ->
+        consume(next, "regionUpdates", sources.regionUpdates) { ids ->
             if (ids.isNotEmpty()) stream.send(MessageEvent.MessagesRegionUpdated(ids.toList()))
         }
-        consume("remoteNode", sources.remoteNode) { event ->
+        consume(next, "remoteNode", sources.remoteNode) { event ->
             when (event) {
                 is RemoteNodeEvent.SessionStateChanged -> host.handleSessionStateChange()
             }
         }
-        consume("roomServer", sources.roomServer, ::handleRoomServerEvent)
-        consume("messageStatus", sources.messageStatus.events) { event -> handleStatusEvent(event.event) }
-        synchronized(lock) { statusSubscription = sources.messageStatus }
+        consume(next, "roomServer", sources.roomServer, ::handleRoomServerEvent)
+        consume(next, "messageStatus", sources.messageStatus.events) { event -> handleStatusEvent(event.event) }
     }
 
     /** Cancels every stream-consuming job; called before re-wiring and from the disconnect teardown. */
     fun cancelAll() {
-        val subscription = synchronized(lock) { statusSubscription.also { statusSubscription = null } }
-        group.children.forEach(Job::cancel)
+        val previous = synchronized(lock) { wiring.also { wiring = null } }
+        previous?.let(::cancel)
+    }
+
+    internal fun cancelForSession(token: SessionToken?) {
+        val previous = synchronized(lock) {
+            wiring?.takeIf { it.token == token }?.also { wiring = null }
+        }
+        previous?.let(::cancel)
+    }
+
+    private fun cancel(wiring: Wiring) {
+        wiring.group.cancel()
         try {
-            subscription?.close()
+            wiring.statusSubscription.close()
         } catch (failure: Exception) {
             logger.log(Level.WARNING, "message status subscription close failed: ${failure.message}")
         }
     }
 
-    private fun <T> consume(label: String, source: Flow<T>, handle: suspend (T) -> Unit) {
+    private fun <T> consume(wiring: Wiring, label: String, source: Flow<T>, handle: suspend (T) -> Unit) {
+        val consumers = CoroutineScope(scope.coroutineContext + wiring.group)
         consumers.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 source.collect { value ->
+                    currentCoroutineContext().ensureActive()
                     try {
                         handle(value)
                     } catch (cancelled: CancellationException) {

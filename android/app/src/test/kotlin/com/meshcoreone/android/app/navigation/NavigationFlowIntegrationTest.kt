@@ -25,6 +25,7 @@ import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
 import com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome
 import com.meshcoreone.android.app.deeplinks.PendingExternalRoute
 import com.meshcoreone.android.app.navigation.*
+import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
@@ -40,6 +41,7 @@ import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.runtime.LastConnectionStore
 import com.meshcoreone.android.core.runtime.SystemRuntimeClock
+import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ChatLinkEnvironment
 import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
@@ -51,12 +53,15 @@ import com.meshcoreone.android.feature.nodes.deps.NodesSession
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
@@ -73,9 +78,11 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowDialog
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 
@@ -1251,6 +1258,138 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertTrue(n.back())
             assertEquals(channel, assertIs<ChatSelection.Channel>(n.state.value.chatsSelectedRoute).channel)
         } finally { navigationSubscription?.cancelAndJoin(); unmount(); h.container.close() }
+    }
+
+    @Test fun retiredDisconnectCannotCancelCollectorsWiredAfterItsNavigationCommit() = runTest {
+        val secret = Bytes(ByteArray(16) { (it + 1).toByte() })
+        val h = ContainerHarness(this, store)
+        val committed = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val paused = AtomicBoolean(false)
+        val events = CopyOnWriteArrayList<MessageEvent>()
+        val eventCollector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            h.appState.messageEventStream.events().collect { events += it }
+        }
+        h.links.configureRadio = { radio ->
+            radio.knownContacts += contactFrame(key(20), "Replacement peer")
+            radio.respond = { command ->
+                if (command.size > 1 && command[0] == 0x1f.toUByte() && command[1] == 0.toUByte()) {
+                    listOf(Bytes.of(0x12, 0) + Bytes.utf8("Test").paddedOrTruncated(32) + secret)
+                } else null
+            }
+        }
+        try {
+            connect(h)
+            val retired = assertNotNull(h.sessions.current)
+            val deviceId = assertNotNull(h.appState.connectedDevice).id
+            val n = h.container.navigation
+            n.installCommitBoundary { action ->
+                val before = n.currentState
+                h.manager.withNavigationCommitBoundary {
+                    h.sessions.withNavigationCommitBoundary { current ->
+                        if (current == null) action() else current.withNavigationCommitBoundary(action)
+                    }
+                }
+                val after = n.currentState
+                if (before.boundSessionToken == retired.token && after.boundSessionToken == null &&
+                    after.generation == before.generation + 1 && paused.compareAndSet(false, true)
+                ) {
+                    committed.countDown()
+                    check(release.await(30, TimeUnit.SECONDS)) { "Retiring cleanup was not released" }
+                }
+            }
+
+            val disconnect = async(Dispatchers.IO) { h.appState.disconnect() }
+            h.eventually("retiring navigation cleanup commits before job cancellation") { committed.count == 0L }
+            assertFalse(disconnect.isCompleted)
+            val reconnect = async { h.manager.connect(h.target(deviceId)) }
+            h.eventually("replacement graph wires before retiring cleanup resumes") {
+                val current = h.sessions.current
+                reconnect.isCompleted && current != null && current !== retired &&
+                    h.manager.connectionState == DeviceConnectionState.READY &&
+                    n.currentState.boundSessionToken == current.token && n.currentState.navigationReady
+            }
+            reconnect.await()
+            val replacement = assertNotNull(h.sessions.current)
+            assertEquals(retired.token.radioId, replacement.token.radioId)
+            assertNotEquals(retired.token, replacement.token)
+            replacement.channelService.syncChannels(replacement.token.radioId, 1u, usePipelinedRead = false)
+            h.eventually("replacement sync and message collectors are subscribed") {
+                replacement.syncCoordinator.dataEventBroadcaster.subscriberCount >= 2 &&
+                    h.appState.activeSessionJobCount > 0 && h.appState.messageEventDispatcher.activeJobCount > 0
+            }
+            val sessionJobs = h.appState.activeSessionJobCount
+            val messageJobs = h.appState.messageEventDispatcher.activeJobCount
+
+            release.countDown()
+            h.eventually("retiring disconnect completes") { disconnect.isCompleted }
+            disconnect.await()
+            h.settle()
+            assertEquals(replacement.token, n.currentState.boundSessionToken)
+            assertEquals(sessionJobs, h.appState.activeSessionJobCount)
+            assertEquals(messageJobs, h.appState.messageEventDispatcher.activeJobCount)
+            val contactsVersion = h.appState.contactsVersion.value
+            replacement.syncCoordinator.dataEventBroadcaster.yield(SyncDataEvent.ContactsChanged)
+            h.eventually("replacement contact collector still receives events") {
+                h.appState.contactsVersion.value > contactsVersion
+            }
+
+            val radio = h.links.radios.last()
+            val previousResponse = radio.respond
+            val frames = ConcurrentLinkedQueue(listOf(
+                Bytes.of(0x11, 20, 0, 0, 0, 1, 0) +
+                    le32(EPOCH.epochSecond) + Bytes.utf8("Alice: collector-after-replacement"),
+            ))
+            radio.respond = { command ->
+                if (command[0] == 0x0a.toUByte()) listOf(frames.poll() ?: Bytes.of(0x0a))
+                else previousResponse(command)
+            }
+            try {
+                assertEquals(1L, replacement.messagePollingService.pollAllMessages())
+            } finally {
+                radio.respond = previousResponse
+            }
+            h.eventually("replacement radio message reaches the app event stream") {
+                events.filterIsInstance<MessageEvent.ChannelMessageReceived>().any {
+                    it.message.radioId == replacement.token.radioId &&
+                        it.message.text == "collector-after-replacement"
+                }
+            }
+
+            val contact = assertNotNull(store.fetchContact(replacement.token.radioId, key(20)))
+            assertTrue(h.container.handleNotificationResponse(NotificationResponse(
+                NotificationPayload.DirectMessage(EntityKey(replacement.token.radioId, contact.id), UUID.randomUUID()),
+                null, null,
+            )))
+            mount(h)
+            await(h) { (n.state.value.chatsSelectedRoute as? ChatSelection.Direct)?.contact?.id == contact.id }
+            compose.onNodeWithTag("entry:${n.state.value.activeStack.last().id}").assertIsDisplayed()
+        } finally {
+            release.countDown()
+            eventCollector.cancelAndJoin()
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun unboundNavigationDisconnectStillRetiresCurrentSessionCollectors() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val current = assertNotNull(h.sessions.current)
+            assertTrue(h.appState.activeSessionJobCount > 0)
+            assertTrue(h.appState.messageEventDispatcher.activeJobCount > 0)
+            h.container.navigation.manuallyDisconnect()
+            assertNull(h.container.navigation.currentState.boundSessionToken)
+            assertEquals(current.token, h.sessions.current?.token)
+
+            h.appState.disconnect()
+            h.eventually("unbound navigation disconnect retires the captured session collectors") {
+                h.appState.activeSessionJobCount == 0 && h.appState.messageEventDispatcher.activeJobCount == 0
+            }
+        } finally {
+            h.container.close()
+        }
     }
 
     @Test fun sameRadioSessionReplacementRetiresCapturedAndInFlightCallbacksWithoutLosingSelection() = runTest {

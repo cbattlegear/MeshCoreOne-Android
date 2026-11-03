@@ -28,6 +28,9 @@ import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.runtime.LinkFailure
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -37,6 +40,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -44,6 +48,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -295,6 +300,93 @@ class AppStateBehaviorTest {
         assertNotNull(state.navigation.state.value.pendingHashtag)
         assertTrue(state.hasSettingsEventsJob)
         assertEquals(DeviceConnectionState.CONNECTED, port.connectionState)
+    }
+
+    @Test fun initialDisconnectStillClearsUnboundJobsAndPendingLinks() = runTest {
+        val state = appStateOf(backgroundScope)
+        val job = backgroundScope.launch { delay(60_000) }
+        state.installSettingsEventsJobForTesting(job)
+        state.navigation.stageChannelLink(ChannelLinkRequest("Initial", Bytes(byteArrayOf(1))))
+        state.navigation.stageHashtag(HashtagJoinRequest("initial"))
+        assertNull(state.navigation.currentState.boundSessionToken)
+
+        state.disconnect()
+
+        assertTrue(job.isCancelled)
+        assertFalse(state.hasSettingsEventsJob)
+        assertNull(state.navigation.state.value.pendingChannelLink)
+        assertNull(state.navigation.state.value.pendingHashtag)
+    }
+
+    @Test fun initialCleanupCannotCancelFirstSessionWiredAfterItsCommit() = runTest {
+        val state = appStateOf(backgroundScope)
+        val retiredJob = backgroundScope.launch { delay(60_000) }
+        state.installSettingsEventsJobForTesting(retiredJob)
+        val navigation = state.navigation
+        val committed = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val paused = AtomicBoolean(false)
+        val boundary = Any()
+        navigation.installCommitBoundary { action ->
+            val before = navigation.currentState
+            synchronized(boundary, action)
+            val after = navigation.currentState
+            if (before.boundSessionToken == null && after.boundSessionToken == null &&
+                after.generation == before.generation + 1 && paused.compareAndSet(false, true)
+            ) {
+                committed.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Initial cleanup was not released" }
+            }
+        }
+        val retiring = async(Dispatchers.IO) { state.disconnect() }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { committed.await(10, TimeUnit.SECONDS) })
+            val token = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), RadioId(UUID.randomUUID()))
+            assertTrue(navigation.bindNotificationSession(token.radioId, null, token))
+            navigation.stageChannelLink(ChannelLinkRequest("Replacement", Bytes(byteArrayOf(2))))
+            navigation.stageHashtag(HashtagJoinRequest("replacement"))
+            navigation.setNavigationReady(true)
+            val replacementNavigation = navigation.currentState
+            val replacementJob = backgroundScope.launch { delay(60_000) }
+            state.installSettingsEventsJobForTesting(replacementJob)
+            assertTrue(retiredJob.isCancelled)
+            release.countDown()
+            retiring.await()
+
+            assertEquals(token, navigation.currentState.boundSessionToken)
+            assertEquals(replacementNavigation, navigation.currentState)
+            assertNotNull(navigation.currentState.pendingChannelLink)
+            assertNotNull(navigation.currentState.pendingHashtag)
+            assertTrue(state.hasSettingsEventsJob)
+            assertTrue(replacementJob.isActive)
+        } finally {
+            release.countDown()
+            retiring.await()
+            retiredJob.cancel()
+        }
+    }
+
+    @Test fun cancellingDisconnectDoesNotRetireTheCurrentCollectorsOrNavigation() = runTest {
+        val port = FakeConnectionPort()
+        val gate = CompletableDeferred<Unit>()
+        port.disconnectAction = { gate.await() }
+        val state = appStateOf(backgroundScope, port = port)
+        val token = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), RadioId(UUID.randomUUID()))
+        assertTrue(state.navigation.bindNotificationSession(token.radioId, null, token))
+        val job = backgroundScope.launch { delay(60_000) }
+        state.installSettingsEventsJobForTesting(job)
+        state.navigation.stageHashtag(HashtagJoinRequest("retained"))
+        val before = state.navigation.state.value
+
+        val disconnect = async { state.disconnect() }
+        runCurrent()
+        disconnect.cancel()
+        disconnect.join()
+
+        assertTrue(disconnect.isCancelled)
+        assertTrue(job.isActive)
+        assertTrue(state.hasSettingsEventsJob)
+        assertEquals(before, state.navigation.state.value)
     }
 
     @OriginalCase("LifecycleTransitionTests::rapid background-active bounces keep BLE transitions ordered()")

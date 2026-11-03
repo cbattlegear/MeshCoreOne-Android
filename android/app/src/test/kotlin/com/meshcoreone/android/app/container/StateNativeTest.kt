@@ -31,10 +31,13 @@ import com.meshcoreone.android.core.services.reactions.HeardRepeatEvent
 import com.meshcoreone.android.core.services.remote.RemoteNodeEvent
 import com.meshcoreone.android.core.services.remote.RoomServerEvent
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
+import com.meshcoreone.android.core.services.sync.SyncDataEventBroadcaster
 import com.meshcoreone.android.core.ui.isBatteryPresent
 import com.meshcoreone.android.core.ui.percentage
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -43,12 +46,17 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -184,7 +192,9 @@ class StateNativeTest {
         override fun handleSessionStateChange() { sessionChanges += 1 }
     }
 
-    private class Sources {
+    private class Sources(
+        val token: SessionToken = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), RadioId(UUID.randomUUID())),
+    ) {
         val data = MutableSharedFlow<SyncDataEvent>(extraBufferCapacity = 16)
         val heard = MutableSharedFlow<HeardRepeatEvent>(extraBufferCapacity = 16)
         val region = MutableSharedFlow<com.meshcoreone.android.core.model.SnapshotList<UUID>>(extraBufferCapacity = 16)
@@ -192,13 +202,20 @@ class StateNativeTest {
         val room = MutableSharedFlow<RoomServerEvent>(extraBufferCapacity = 16)
         val status = Channel<SessionEvent<MessageStatusEvent>>(Channel.UNLIMITED)
         var statusClosed = 0
-        private val token = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), RadioId(UUID.randomUUID()))
+        var onStatusClose: () -> Unit = {}
         fun send(event: MessageStatusEvent) { status.trySend(SessionEvent(token, event)) }
-        fun build() = MessageEventSources(
-            data, heard, region, remote, room,
+        fun build(dataEvents: Flow<SyncDataEvent> = data, heardEvents: Flow<HeardRepeatEvent> = heard) = MessageEventSources(
+            dataEvents, heardEvents, region, remote, room,
             object : SessionEventSubscription<MessageStatusEvent> {
                 override val events: Flow<SessionEvent<MessageStatusEvent>> = status.receiveAsFlow()
-                override fun close() { statusClosed += 1; status.close() }
+                override fun close() {
+                    statusClosed += 1
+                    try {
+                        onStatusClose()
+                    } finally {
+                        status.close()
+                    }
+                }
             },
         )
     }
@@ -208,7 +225,7 @@ class StateNativeTest {
         val dispatcher = MessageEventDispatcher(host, stream, backgroundScope)
         val received = mutableListOf<MessageEvent>()
         backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
-        dispatcher.wire(sources.build())
+        dispatcher.wire(sources.token, sources.build())
         val radio = RadioId(UUID.randomUUID())
         val contact = ContactDTO(radioId = radio, publicKey = key(2), name = "Peer", lastHeardTimestamp = null)
         val dm = MessageDTO(radioId = radio, contactID = contact.id, text = "hi", timestamp = 1u, createdAt = EPOCH)
@@ -257,15 +274,134 @@ class StateNativeTest {
         val host = Host(); val stream = MessageEventStream()
         val dispatcher = MessageEventDispatcher(host, stream, backgroundScope)
         val first = Sources(); val second = Sources()
-        dispatcher.wire(first.build())
+        dispatcher.wire(first.token, first.build())
         val firstJobs = dispatcher.activeJobCount
-        dispatcher.wire(second.build())
+        dispatcher.wire(second.token, second.build())
         testScheduler.runCurrent()
         assertEquals(firstJobs, dispatcher.activeJobCount, "a re-wire replaces, not adds")
         assertEquals(1, first.statusClosed, "the previous status subscription was closed")
         dispatcher.cancelAll()
         testScheduler.runCurrent()
         assertEquals(0, dispatcher.activeJobCount)
+        assertEquals(1, second.statusClosed)
+    }
+
+    @Test fun retiringAnOldSameRadioSessionLeavesTheReplacementDispatcherActive() = runTest {
+        val radio = RadioId(UUID.randomUUID())
+        val epoch = ProcessEpoch(UUID.randomUUID())
+        val first = Sources(SessionToken(epoch, Generation(1), radio))
+        val second = Sources(SessionToken(epoch, Generation(2), radio))
+        val stream = MessageEventStream()
+        val dispatcher = MessageEventDispatcher(Host(), stream, backgroundScope)
+        val received = mutableListOf<MessageEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
+
+        dispatcher.wire(first.token, first.build())
+        dispatcher.wire(second.token, second.build())
+        val replacementJobs = dispatcher.activeJobCount
+        assertTrue(replacementJobs > 0)
+        dispatcher.cancelForSession(first.token)
+        testScheduler.runCurrent()
+
+        assertEquals(replacementJobs, dispatcher.activeJobCount)
+        assertEquals(1, first.statusClosed)
+        assertEquals(0, second.statusClosed)
+        val messageId = UUID.randomUUID()
+        second.send(MessageStatusEvent.Failed(messageId))
+        testScheduler.runCurrent()
+        assertTrue(received.contains(MessageEvent.MessageFailed(messageId)))
+
+        dispatcher.cancelForSession(second.token)
+        dispatcher.cancelForSession(second.token)
+        testScheduler.runCurrent()
+        assertEquals(0, dispatcher.activeJobCount)
+        assertEquals(1, second.statusClosed)
+    }
+
+    @Test fun closingRetiredStatusSubscriptionCannotCancelAConcurrentlyWiredReplacement() = runTest {
+        val radio = RadioId(UUID.randomUUID())
+        val epoch = ProcessEpoch(UUID.randomUUID())
+        val first = Sources(SessionToken(epoch, Generation(1), radio))
+        val second = Sources(SessionToken(epoch, Generation(2), radio))
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        first.onStatusClose = {
+            entered.countDown()
+            check(release.await(10, TimeUnit.SECONDS)) { "Retired subscription was not released" }
+        }
+        val stream = MessageEventStream()
+        val dispatcher = MessageEventDispatcher(Host(), stream, backgroundScope)
+        val received = mutableListOf<MessageEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
+        dispatcher.wire(first.token, first.build())
+        val retiring = async(Dispatchers.IO) { dispatcher.cancelForSession(first.token) }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { entered.await(10, TimeUnit.SECONDS) })
+            dispatcher.wire(second.token, second.build())
+            val replacementJobs = dispatcher.activeJobCount
+            assertTrue(replacementJobs > 0)
+            val messageId = UUID.randomUUID()
+            second.send(MessageStatusEvent.Failed(messageId))
+            testScheduler.runCurrent()
+            assertTrue(received.contains(MessageEvent.MessageFailed(messageId)))
+            assertEquals(0, second.statusClosed)
+            assertEquals(replacementJobs, dispatcher.activeJobCount)
+        } finally {
+            release.countDown()
+            retiring.await()
+            dispatcher.cancelAll()
+        }
+        assertEquals(1, first.statusClosed)
+        assertEquals(1, second.statusClosed)
+        assertEquals(0, dispatcher.activeJobCount)
+    }
+
+    @Test fun reentrantRewireClosesRetiredSubscriptionsAndKeepsReplacementCollectors() = runTest {
+        val radio = RadioId(UUID.randomUUID())
+        val epoch = ProcessEpoch(UUID.randomUUID())
+        val first = Sources(SessionToken(epoch, Generation(1), radio))
+        val second = Sources(SessionToken(epoch, Generation(2), radio))
+        val registered = SyncDataEventBroadcaster()
+        val firstData = registered.subscribe()
+        val contact = ContactDTO(radioId = radio, publicKey = key(2), name = "Peer", lastHeardTimestamp = null)
+        val message = MessageDTO(radioId = radio, contactID = contact.id, text = "hi", timestamp = 1u, createdAt = EPOCH)
+        registered.yield(SyncDataEvent.DirectMessageReceived(message, contact))
+        var lateStarted = false
+        var lateClosed = false
+        val lateHeard = flow<HeardRepeatEvent> {
+            try {
+                lateStarted = true
+                awaitCancellation()
+            } finally {
+                lateClosed = true
+            }
+        }
+        val stream = MessageEventStream()
+        lateinit var dispatcher: MessageEventDispatcher
+        val host = object : MessageEventHost {
+            override fun noteDirectMessageForPrewarm(contact: ContactDTO) = dispatcher.wire(second.token, second.build())
+            override fun noteChannelMessageForPrewarm(radioId: RadioId, channelIndex: UByte) = Unit
+            override suspend fun handleReactionNotification(messageId: UUID) = Unit
+            override fun handleSessionStateChange() = Unit
+        }
+        dispatcher = MessageEventDispatcher(host, stream, backgroundScope)
+        val received = mutableListOf<MessageEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
+
+        dispatcher.wire(first.token, first.build(firstData, lateHeard))
+        testScheduler.runCurrent()
+
+        assertEquals(0, registered.subscriberCount)
+        assertTrue(lateStarted)
+        assertTrue(lateClosed)
+        assertEquals(1, first.statusClosed)
+        assertEquals(0, second.statusClosed)
+        assertEquals(6, dispatcher.activeJobCount)
+        val messageId = UUID.randomUUID()
+        second.send(MessageStatusEvent.Failed(messageId))
+        testScheduler.runCurrent()
+        assertTrue(received.contains(MessageEvent.MessageFailed(messageId)))
+        dispatcher.cancelAll()
         assertEquals(1, second.statusClosed)
     }
 
@@ -280,7 +416,7 @@ class StateNativeTest {
         val dispatcher = MessageEventDispatcher(host, stream, backgroundScope)
         val received = mutableListOf<MessageEvent>()
         backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
-        dispatcher.wire(sources.build())
+        dispatcher.wire(sources.token, sources.build())
         val radio = RadioId(UUID.randomUUID())
         val contact = ContactDTO(radioId = radio, publicKey = key(2), name = "Peer", lastHeardTimestamp = null)
         val dm = MessageDTO(radioId = radio, contactID = contact.id, text = "hi", timestamp = 1u, createdAt = EPOCH)

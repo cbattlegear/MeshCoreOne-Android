@@ -18,6 +18,24 @@ Owner: `services-porter`, directly assigned Project child
   is an ancestor of the base. Prior WP-209 producer PR #481 is merged at
   `f581d82d64ee64577ccdfeb6120c0e5d607f11a7`.
 
+## Current-main integration
+
+- Current trusted main: `796a872a3565a66c74f782b738a9ecb3c273fb25`.
+- Non-rewriting integration commit: `1816a3f47`; its parents are the previously
+  diagnosed candidate `a58b015fbde677b1db20fe61b2fba304ce4191a2` and current main.
+- The overlapping protocol edits are additive. Current main adds the separate
+  `MessageWriteDispatch` messaging overloads to `MessagingSessionOps` and
+  `MeshCoreSession`; the WP-209 contact overload remains on
+  `ContactSessionOps` and continues to own contact persistence inside the same
+  serialized response exchange. Both use the existing serializer and
+  `ChannelWriteDispatch` fence. The messaging additions do not change contact
+  request bytes, ACK correlation, the non-cancellable contact persistence tail,
+  or caller cancellation behavior. The merge had no conflict markers or
+  discarded edits.
+- All 15 WP-209 changed paths below were re-admitted against current main with
+  their actual operation and trusted capability. The inherited WP-107 additions
+  are base content, not new WP-209 changed paths.
+
 The supported `reserve.py admit --wp WP-209 --path <path> --operation <operation>`
 matched each actual edit before authoring:
 
@@ -91,7 +109,9 @@ authoritative reproducible execution record; no duplicate result bundle belongs
 in this directory. A manually dispatched feature-branch diagnostic is not
 PR-bound protected-check, local-device, repair-acceptance or merge evidence.
 Positive discovery and passing actual Kotlin/Room methods are required before
-claiming their behavior verified.
+claiming their behavior verified. The run for `a58b015fbde677b1db20fe61b2fba304ce4191a2`
+remains historical diagnostic evidence only; it does not verify the current-main
+integration commit or its eventual successor candidate.
 
 WP-302 owns mounted confirmation cancellation/re-entry evidence. No physical
 radio, Android device, signing, iOS or hardware execution is claimed here.

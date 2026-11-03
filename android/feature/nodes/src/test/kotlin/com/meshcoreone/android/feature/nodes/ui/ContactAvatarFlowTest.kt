@@ -18,9 +18,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.core.app.ActivityOptionsCompat
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
@@ -36,7 +33,6 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
-import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -57,8 +53,6 @@ class ContactAvatarApi31FlowTest : ContactAvatarFlowTestBase()
 class ContactAvatarApi37FlowTest : ContactAvatarFlowTestBase()
 
 abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
-    @get:Rule val compose = createEmptyComposeRule()
-
     private val harness = Harness().connect()
     private val contact = Fixtures.contact(radioId = checkNotNull(harness.session.radioId), name = "Avatar target")
     private val selected = mutableStateOf(contact)
@@ -93,9 +87,20 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
 
     private fun action(resource: Int) = click(awaitAction(controller.get().getString(resource)))
 
-    private fun awaitAvatarText(text: String) {
-        compose.waitUntil(10_000) {
+    private fun awaitAvatarState(description: String, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + 10_000_000_000L
+        do {
             advanceFrames()
+            if (condition()) return
+            Thread.sleep(10)
+        } while (System.nanoTime() < deadline)
+        error("Timed out waiting for $description: " + allSemanticsNodes().joinToString { node ->
+            "${node.config.getOrElse(SemanticsProperties.Text) { emptyList() }}@${node.boundsInRoot}"
+        })
+    }
+
+    private fun awaitAvatarText(text: String) {
+        awaitAvatarState("visible text '$text'") {
             allSemanticsNodes().any { node ->
                 node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text } &&
                     isDisplayed(node)
@@ -104,10 +109,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     }
 
     private fun awaitHeldSave(entered: CompletableDeferred<Unit>) {
-        compose.waitUntil(10_000) {
-            advanceFrames()
-            entered.isCompleted
-        }
+        awaitAvatarState("held avatar store entry") { entered.isCompleted }
         val announcement = controller.get().getString(C.contactsDetailAvatarSavingAnnouncement)
         awaitAvatarText(announcement)
         val liveRegion = allSemanticsNodes().single { node ->
@@ -299,7 +301,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             result()
             action(C.contactsDetailAvatarCropChoose)
             awaitHeldSave(entered)
-            compose.onNodeWithText(controller.get().getString(C.contactsDetailClearMessages)).performScrollTo()
+            scrollToAction(controller.get().getString(C.contactsDetailClearMessages))
             advanceFrames()
             val chooser = actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource))
             assertTrue(chooser == null || !isDisplayed(chooser), "The profile row must leave the lazy viewport")

@@ -108,8 +108,9 @@ cannot establish any App/Room test execution.
 
 The repair removes the invalid extension import (the assertion is a member of
 `SemanticsNodeInteraction`). The held-save fixtures now independently await entry
-to the actual fake store before inspecting pending UI, using a bounded Compose
-wait rather than the shared 100-iteration wall-clock loop. They explicitly assert
+to the actual fake store before inspecting pending UI, using a bounded monotonic
+deadline with the existing native semantics fixture rather than the shared
+100-iteration loop. They explicitly assert
 the polite live-region semantics, visible disabled chooser, exactly one store
 attempt, unchanged persistence while held and recovery after failure. The
 viewport case scrolls to the danger-zone action and asserts that the avatar
@@ -126,3 +127,13 @@ persisted lease or historical-owner identity is claimed.
 passed for the repair before publication. Android re-verification is pending.
 Use the existing PR-event affected-candidate selection for the changed
 App/nodes closure rather than another full-suite `workflow_dispatch`.
+
+The first PR-event run
+[41590130225](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41590130225),
+head `c8fedba8324584ffadeb53884f8f9bd344563cd5`, failed at nodes test compilation:
+that module does not declare the Compose test-rule library used by the initial
+fixture repair. No avatar product assertions ran on this head. The follow-up
+uses only the existing manual native-semantics fixture and dependencies, adding
+stage-specific timeout diagnostics without changing the product, build graph or
+required assertions. The App `assertExists` import error did not recur in the
+reported compilation output; App product execution still is not established.

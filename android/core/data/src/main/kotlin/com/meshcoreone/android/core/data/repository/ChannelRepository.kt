@@ -12,7 +12,13 @@ import java.util.UUID
 internal class ChannelRepository(
     private val context: RoomRepositoryContext,
     private val rooms: RoomRepository,
+    private val identityScope: ChannelIdentityWriteScope? = null,
 ) : ChannelPersisting {
+    override suspend fun <T> withChannelOperation(block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T): T {
+        check(identityScope == null) { "A scoped channel repository cannot start another channel operation" }
+        return context.channelOperation { scope -> block(ChannelRepository(context, rooms, scope), scope) }
+    }
+
     override suspend fun fetchChannelOccupantID(radioId: RadioId, index: UByte): UUID? =
         fetchChannelOccupantSnapshot(radioId, index)?.occupantID
 
@@ -25,7 +31,7 @@ internal class ChannelRepository(
         }
 
     override suspend fun invalidateChannelOccupant(radioId: RadioId, index: UByte) =
-        context.channelWrite("invalidateChannelOccupant") {
+        context.channelWrite("invalidateChannelOccupant", identityScope = identityScope) {
             if (database.channelOccupants().invalidate(radioId.value, index.toLong()) > 0) save()
         }
 
@@ -42,7 +48,7 @@ internal class ChannelRepository(
     }
 
     override suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): UUID =
-        context.channelWrite("saveChannelInfo", flushBeforeRollback = true) {
+        context.channelWrite("saveChannelInfo", flushBeforeRollback = true, identityScope = identityScope) {
             val existing = database.channels().forIndex(radioId.value, info.index.toLong()).firstOrNull()
             val row = if (existing != null) applyingRadioInfo(existing, info) else ChannelDTO.fromInfo(radioId, info).toEntity()
             database.channels().upsert(row)
@@ -51,7 +57,7 @@ internal class ChannelRepository(
             row.id
         }
 
-    override suspend fun saveChannel(dto: ChannelDTO) = context.channelWrite("saveChannel") {
+    override suspend fun saveChannel(dto: ChannelDTO) = context.channelWrite("saveChannel", identityScope = identityScope) {
         val existing = database.channels().byId(dto.radioId.value, dto.id)
         val row = existing?.applying(dto) ?: dto.toEntity()
         if (existing != null && existing.secret != row.secret) {
@@ -67,7 +73,9 @@ internal class ChannelRepository(
         configured: SnapshotList<ChannelInfo>,
         unconfiguredIndices: SnapshotList<UByte>,
         pruneBeyond: UByte?,
-    ): SnapshotList<ChannelDTO> = context.channelWrite("batchSaveChannels", flushBeforeRollback = true) {
+    ): SnapshotList<ChannelDTO> = context.channelWrite(
+        "batchSaveChannels", flushBeforeRollback = true, identityScope = identityScope,
+    ) {
         val byIndex = LinkedHashMap<Long, ChannelEntity>()
         for (row in database.channels().forRadio(radioId.value)) byIndex.putIfAbsent(row.index, row)
         for (info in configured) {
@@ -102,7 +110,9 @@ internal class ChannelRepository(
         return row.copy(name = info.name, secret = info.secret, lastMessageDate = null, unreadCount = 0, unreadMentionCount = 0)
     }
 
-    override suspend fun deleteChannel(key: EntityKey) = context.channelWrite("deleteChannel", flushBeforeRollback = true) {
+    override suspend fun deleteChannel(key: EntityKey) = context.channelWrite(
+        "deleteChannel", flushBeforeRollback = true, identityScope = identityScope,
+    ) {
         val row = database.channels().byId(key.radioId.value, key.id) ?: return@channelWrite
         deleteChannelMessages(key.radioId, row.toDTO().index, preserveUnresolved = true)
         database.channelOccupants().invalidate(key.radioId.value, row.index)

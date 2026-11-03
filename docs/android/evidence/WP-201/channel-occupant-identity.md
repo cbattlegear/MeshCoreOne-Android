@@ -15,6 +15,89 @@ or completion of the independent queue/fence/consumer/restore producers.
 
 #### Standalone v2 preparation stopped at actual support-path denial
 
+**Resolved by the correct operation and current exact-hunk serialization; see the
+standalone candidate below. The historical refusal remains recorded.**
+
+##### Frozen standalone nullable-origin candidate
+
+The coordinator relayed WP-203 owner685's current disposition: no current, frozen
+or planned competing edit or semantic hold on **only the reopened schema-version
+assertion**, with that exact hunk serialized to this producer. This is not wider
+backup custody or ledger transfer. A fresh fetch still resolved main to
+`4d54fc56593377638b57edd0335005eb30894f6e`; the backup-test base blob is
+`b366dbadb9a66dcd5c12248a6d206635b30b41a2`.
+
+The correct current WP-202 `add-or-update-related-test` operation passed
+`reviewed-support-test` for that exact backup path. The invariants are directly
+necessary tests only; no removal/disabling/weakening; no production/build/resource/
+release changes through this support capability; real overlap serialization;
+trusted-base admission and exact-candidate review before merge. Required hosted
+positive test discovery remains **not executed**. The earlier general `modify`
+refusal is not erased or relabeled.
+
+Local candidate identities:
+
+| Identity | Exact value |
+| --- | --- |
+| Parent | `4d54fc56593377638b57edd0335005eb30894f6e` |
+| Head | `3f829bc3b28b5d37bf1a9de4b33a6edf6ea967ae` |
+| Tree | `e1ba69d0dc86f587cf02be33979308129bb39be1` |
+| Local retention ref | `refs/copilot-candidates/channel-origin-v2` |
+
+This commit was made from an isolated Git index over the exact parent, not by
+rebasing/importing this branch. The managed branch/worktree remains separate.
+The candidate patch is retained in session `files/standalone-origin-v2-candidate.patch`.
+It has exactly eleven changed paths:
+
+| Owner / operation | Path |
+| --- | --- |
+| WP-201 / modify | `android/core/model/src/main/kotlin/com/meshcoreone/android/core/model/MessageDTO.kt` |
+| WP-201 / modify | `android/core/model/src/main/kotlin/com/meshcoreone/android/core/model/SendEnvelopes.kt` |
+| WP-201 / modify | `android/core/database/src/main/kotlin/com/meshcoreone/android/core/database/MessageEntities.kt` |
+| WP-201 / modify | `android/core/database/src/main/kotlin/com/meshcoreone/android/core/database/MessageMappings.kt` |
+| WP-201 / modify | `android/core/database/src/main/kotlin/com/meshcoreone/android/core/database/MeshCoreDatabase.kt` |
+| WP-201 / modify | `android/core/database/src/test/kotlin/com/meshcoreone/android/core/database/RoomBoundaryTest.kt` |
+| WP-201 / modify | `android/core/database/src/test/kotlin/com/meshcoreone/android/core/database/ChannelOriginV2MigrationTest.kt` |
+| WP-202 / modify | `android/core/data/src/test/kotlin/com/meshcoreone/android/core/data/repository/InitialSchemaMigrationBoundaryTest.kt` |
+| WP-202 / modify | `android/core/data/src/test/kotlin/com/meshcoreone/android/core/data/repository/NativeRepositoryBoundaryTest.kt` |
+| WP-202 / modify | `android/core/data/src/test/kotlin/com/meshcoreone/android/core/data/repository/UnsignedPathReopenTest.kt` |
+| WP-202 / add-or-update-related-test | `android/core/data/src/test/kotlin/com/meshcoreone/android/core/data/backup/BackupTransactionTest.kt` |
+
+All eleven exact operations were rechecked successfully before freezing. The four
+data tests change only current schema-version expectations to
+`MeshCoreDatabase.SCHEMA_VERSION`; rollback, emptiness, reopen, unsigned paths,
+unsupported-version rejection and OriginalCase annotations are unchanged.
+
+Production delta: nullable `channelOccupantID` on message/envelope/pending and both
+Room entities, included in exact DTO equality and projections; registered v1-to-v2
+migration adds only two nullable TEXT columns. Existing callers retain default
+NULL. No current occupant sampling, new UUID generation, authority table, raw
+secret copying, journal/state, persistence service policy, wire/send/retry change,
+history presentation, aggregate contract or fake adaptation is added.
+
+Three focused methods are **authored but unexecuted**: real exported-v1 creation,
+upgrade and reopen preserving every old column (including blobs) with legacy NULL
+origins; explicitly supplied attribution through projections/reopen after direct
+replacement metadata changes; old constructor/channel/DM default compatibility.
+The existing schema boundary now requires the actual generated v2 export, retaining
+all 17 entities and its original structural assertions. No test skips missing
+`2.json`, and no handcrafted export is supplied.
+
+This standalone v2 is **not the earlier ancestry's authority-table v2**. Its entity
+count remains 17 and it adds only the two nullable columns. Any future journal/
+authority candidate must be adapted to this exact tree and generated schema identity,
+not reuse old `2.json`/`3.json`, old migration numbering or the broad f969 composition.
+It supplies attribution storage, not durable occupant authority or an atomic wire
+fence, and cannot by itself close #530.
+
+Source-only inspection verified the explicit-parent eleven-path diff, unchanged
+backup predicates, imports, migration SQL/entity nullable declarations and
+`git diff --cached <parent> --check`. No Kotlin/Room assertion, Gradle, tests,
+CI dispatch, publish, PR, merge receipt or execution-lock change occurred.
+**Genuine KSP generation of this exact candidate's v2 export and authorized
+positive-discovery Room migration/reopen/identity execution remain prerequisites.**
+The immutable candidate is unverified, not accepted schema compatibility.
+
 Assignment `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_cnfVUEu8OKDfjRbwwQ3AYv4l`
 rechecked actual main `4d54fc56593377638b57edd0335005eb30894f6e`.
 An isolated seven-path draft, based on that exact tree rather than this branch's

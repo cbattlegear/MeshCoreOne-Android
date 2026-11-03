@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.LifecycleStage
+import com.meshcoreone.android.core.contracts.domain.ChannelDispatchAdmission
 import com.meshcoreone.android.core.contracts.domain.MonitoringOptions
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.TeardownIssue
@@ -20,7 +21,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
 
-class FactoryOwnership(val token: SessionToken) {
+class FactoryOwnership(val token: SessionToken, val dispatchAdmission: ChannelDispatchAdmission) {
+    init { require(dispatchAdmission.token == token) { "Factory admission must belong to its token" } }
     private data class Child(val stage: LifecycleStage, val close: suspend () -> Unit)
     private val lock = Any()
     private val children = mutableListOf<Child>()
@@ -29,14 +31,14 @@ class FactoryOwnership(val token: SessionToken) {
 
     fun own(stage: LifecycleStage, close: suspend () -> Unit) {
         synchronized(lock) {
-            check(closing == null) { "Cannot allocate after factory ownership closed" }
+            check(closing == null && !dispatchAdmission.isRevoked) { "Cannot allocate after factory ownership closed" }
             children += Child(stage, close)
         }
     }
 
     fun register(services: RuntimeServices) {
         synchronized(lock) {
-            if (services.token != token || registered != null || closing != null) {
+            if (services.token != token || registered != null || closing != null || dispatchAdmission.isRevoked) {
                 throw ConnectionError.FactoryOwnershipViolation()
             }
             registered = services
@@ -45,13 +47,14 @@ class FactoryOwnership(val token: SessionToken) {
 
     internal fun verifyReturned(services: RuntimeServices) {
         synchronized(lock) {
-            if (registered !== services || services.token != token || closing != null) {
+            if (registered !== services || services.token != token || closing != null || dispatchAdmission.isRevoked) {
                 throw ConnectionError.FactoryOwnershipViolation()
             }
         }
     }
 
     internal suspend fun close(): TeardownReport {
+        dispatchAdmission.revoke()
         val (receipt, claimed) = synchronized(lock) {
             closing?.let { it to false } ?: CompletableDeferred<TeardownReport>().also { closing = it }.let { it to true }
         }

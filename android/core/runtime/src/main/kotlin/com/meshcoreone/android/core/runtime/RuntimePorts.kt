@@ -3,6 +3,7 @@
 package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.ChannelDispatchAdmission
 import com.meshcoreone.android.core.contracts.domain.SessionInputs
 import com.meshcoreone.android.core.contracts.domain.SessionServices
 import com.meshcoreone.android.core.contracts.domain.SessionToken
@@ -81,6 +82,8 @@ data class RuntimeServiceCallbacks(
     val beginIdentityImport: suspend (kotlinx.coroutines.Deferred<Unit>) -> Unit,
     val reconcileIdentity: suspend (kotlinx.coroutines.Deferred<Unit>) -> RadioId?,
     val recoverIdentity: suspend (kotlinx.coroutines.Deferred<Unit>) -> Unit,
+    /** The commit only updates registry/graph state, in that order; no observers, I/O or teardown. */
+    val publishServices: (RuntimeServices, () -> Unit) -> Unit,
 )
 
 data class RuntimeServiceInputs(
@@ -88,6 +91,7 @@ data class RuntimeServiceInputs(
     val device: DeviceDTO,
     val callbacks: RuntimeServiceCallbacks,
     val transportType: TransportType,
+    val dispatchAdmission: ChannelDispatchAdmission,
 )
 
 /** Implemented by real WPs 208-218 at WP-303; no concrete or no-op graph is constructed here. */

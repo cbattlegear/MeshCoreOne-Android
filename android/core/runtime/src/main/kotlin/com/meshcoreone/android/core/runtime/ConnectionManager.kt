@@ -74,6 +74,8 @@ class ConnectionManager(
         var callbacks: AutoCloseable? = null
         var session: MeshCoreSession? = null
         var token: SessionToken? = null
+        var dispatchRevoked = false
+        var dispatchAdmission: ChannelDispatchAdmission? = null
         var device: DeviceDTO? = null
         var deviceEditSequence = 0L
         var ownership: FactoryOwnership? = null
@@ -476,6 +478,7 @@ class ConnectionManager(
                 is SessionDiagnostic.BackgroundFailure ->
                     reporter.report(RuntimeDiagnostic.Failure(diagnostic.operation, diagnostic.cause))
                 is SessionDiagnostic.CorrelationUncertain -> {
+                    revokeDispatchAdmission(owner)
                     // The producer holds its protocol lock. Always enqueue recovery off that stack.
                     dispatch(owner, "session.correlationUncertain", recoveryDispatcher) {
                         recoverCorrelation(owner, MeshCoreException.ConnectionLost(
@@ -497,8 +500,14 @@ class ConnectionManager(
         }
         synchronized(lock) { requireCurrent(owner); owner.session = session }
         val registration = try { link.register(LinkCallbacks(
-            onDisconnected = { failure -> dispatch(owner, "link.disconnected") { handleConnectionLoss(owner, failure) } },
-            onAutoReconnecting = { details -> dispatch(owner, "link.autoReconnect") { autoReconnectEntered(owner, details) } },
+            onDisconnected = { failure ->
+                revokeDispatchAdmission(owner)
+                dispatch(owner, "link.disconnected") { handleConnectionLoss(owner, failure) }
+            },
+            onAutoReconnecting = { details ->
+                revokeDispatchAdmission(owner)
+                dispatch(owner, "link.autoReconnect") { autoReconnectEntered(owner, details) }
+            },
             onReconnected = { dispatch(owner, "link.reconnected") {
                 val id = owner.device?.id ?: (owner.target as? ConnectionTarget.Bluetooth)?.deviceId
                     ?: throw ConnectionError.InvalidIdentity()
@@ -529,6 +538,7 @@ class ConnectionManager(
                     owner.sawConnected = true
                     publishFor(owner, DeviceConnectionState.CONNECTED, transport = state)
                 } else if (owner.sawConnected && (state == ConnectionState.Disconnected || state is ConnectionState.Failed)) {
+                    revokeDispatchAdmission(owner)
                     dispatch(owner, "session.terminal") {
                         if (isCurrent(owner)) handleConnectionLoss(owner, (state as? ConnectionState.Failed)?.error)
                     }
@@ -590,7 +600,8 @@ class ConnectionManager(
             ConnectionTarget.Simulator -> error("Simulator uses its own connection lifecycle")
         }
         val device = DeviceDTO.fromConnection(deviceId, radioId, info, capabilities, autoAdd, prior, methods, clock.instant)
-        val ownership = FactoryOwnership(token)
+        val admission = bindDispatchAdmission(owner, token, session)
+        val ownership = FactoryOwnership(token, admission)
         // Publish the ownership under the same lock closeGeneration takes: either teardown already ended this
         // generation (requireCurrent throws before the factory allocates anything) or it sees and closes it.
         synchronized(lock) { requireCurrent(owner); owner.device = device; owner.ownership = ownership }
@@ -598,6 +609,7 @@ class ConnectionManager(
             SessionInputs(token, session, this, owner.scope), device,
             serviceCallbacks(owner, token),
             transportType = link.type,
+            dispatchAdmission = admission,
         ), ownership)
         ownership.verifyReturned(services)
         synchronized(lock) {
@@ -686,7 +698,8 @@ class ConnectionManager(
         }
         if (device.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) throw ConnectionError.InvalidIdentity()
         val token = SessionToken(processEpoch, Generation(owner.number), device.radioId)
-        val ownership = FactoryOwnership(token)
+        val admission = bindDispatchAdmission(owner, token, session)
+        val ownership = FactoryOwnership(token, admission)
         synchronized(lock) {
             requireCurrent(owner)
             owner.token = token
@@ -697,6 +710,7 @@ class ConnectionManager(
             RuntimeServiceInputs(
                 SessionInputs(token, session, this, owner.scope), device, serviceCallbacks(owner, token),
                 transportType = link.type,
+                dispatchAdmission = admission,
             ),
             ownership,
         )
@@ -732,6 +746,18 @@ class ConnectionManager(
     }
 
     private fun serviceCallbacks(owner: RadioGeneration, token: SessionToken) = RuntimeServiceCallbacks(
+        publishServices = { services, commit ->
+            val ownership = checkNotNull(owner.ownership)
+            ownership.verifyReturned(services)
+            synchronized(lock) {
+                requireCurrent(owner)
+                if (owner.token != token || owner.dispatchAdmission !== ownership.dispatchAdmission ||
+                    ownership.dispatchAdmission.connectionIdentity !== owner.session ||
+                    ownership.dispatchAdmission.isRevoked
+                ) throw ConnectionError.FactoryOwnershipViolation()
+                commit()
+            }
+        },
         cleanChannelSync = { synchronized(lock) { if (isCurrent(owner)) cleanSync = token.radioId to clock.instant } },
         channelSyncAttempted = { synchronized(lock) { if (isCurrent(owner)) attemptedSync = token.radioId to clock.instant } },
         beginIdentityImport = { handoff ->
@@ -846,7 +872,13 @@ class ConnectionManager(
     }
 
     override fun setConnectionState(state: DeviceConnectionState) {
-        publish { copy(state = state, token = if (state == DeviceConnectionState.DISCONNECTED) null else token) }
+        synchronized(lock) {
+            if (state == DeviceConnectionState.DISCONNECTED) {
+                active?.let(::revokeDispatchAdmissionLocked)
+                retained?.let(::revokeDispatchAdmissionLocked)
+            }
+            publish { copy(state = state, token = if (state == DeviceConnectionState.DISCONNECTED) null else token) }
+        }
     }
     override fun clearConnectedDevice() { synchronized(lock) { deviceValue = null; repeatRanges = SnapshotList.empty() } }
     override suspend fun notifyAutoReconnectStarted() = observer.onAutoReconnectStarted()
@@ -863,6 +895,7 @@ class ConnectionManager(
     override suspend fun teardownSessionForReconnect() {
         val old = synchronized(lock) {
             active?.also {
+                revokeDispatchAdmissionLocked(it)
                 active = null
                 retained = it
                 deviceValue = null
@@ -967,6 +1000,7 @@ class ConnectionManager(
         val owner = synchronized(lock) {
             if (connectionIntent.wantsConnection) rebuildFailures++
             (active ?: retained).also {
+                it?.let(::revokeDispatchAdmissionLocked)
                 active = null
                 retained = it
                 deviceValue = null
@@ -1214,7 +1248,6 @@ class ConnectionManager(
 
     private fun startShutdown(cause: Throwable?, except: Job? = null): Deferred<TeardownReport> = synchronized(lock) {
         shutdown ?: cleanupScope.async(start = CoroutineStart.LAZY) {
-            synchronized(lock) { closed = true; revision++ }
             reconnectionCoordinator.close()
             stopReconnectionWatchdog()
             stopWiFiReconnection()
@@ -1232,6 +1265,10 @@ class ConnectionManager(
             report
         }.also { work ->
             shutdown = work
+            closed = true
+            revision = Math.incrementExact(revision)
+            active?.let(::revokeDispatchAdmissionLocked)
+            retained?.let(::revokeDispatchAdmissionLocked)
             work.invokeOnCompletion { cleanupJob.cancel() }
             work.start()
         }
@@ -1241,6 +1278,7 @@ class ConnectionManager(
         requireRevision(claimedRevision)
         nextGeneration = Math.incrementExact(nextGeneration)
         RadioGeneration(nextGeneration, target, claimedRevision, context, processJob).also {
+            active?.let(::revokeDispatchAdmissionLocked)
             active = it
             it.operation = pending
         }
@@ -1254,6 +1292,7 @@ class ConnectionManager(
         publishDisconnected: Boolean = true,
     ): TeardownReport {
         synchronized(lock) {
+            revokeDispatchAdmissionLocked(owner)
             owner.correlationAccounting?.cancel()
             if (primary != null && provenForeignAdmission(primary, owner)) {
                 owner.link?.let { PhysicalOwnership.release(it.transport, owner.physicalOwner) }
@@ -1341,7 +1380,7 @@ class ConnectionManager(
 
     private fun detachOwnersLocked(state: DeviceConnectionState, intent: ConnectionIntent = values.value.intent): List<RadioGeneration> {
         val owners = listOfNotNull(active, retained).distinct()
-        owners.forEach { it.correlationAccounting?.cancel() }
+        owners.forEach { revokeDispatchAdmissionLocked(it); it.correlationAccounting?.cancel() }
         active = null
         retained = null
         deviceValue = null
@@ -1368,7 +1407,10 @@ class ConnectionManager(
             else owner.scope.async(start = CoroutineStart.LAZY) {
                 owner.services?.services?.awaitChannelQueryAccounting(failure)
                 Unit
-            }.also { owner.correlationAccounting = it }
+            }.also {
+                revokeDispatchAdmissionLocked(owner)
+                owner.correlationAccounting = it
+            }
         } ?: return
         accounting.start()
         try { accounting.await() }
@@ -1398,6 +1440,7 @@ class ConnectionManager(
             if (!isRelevant(owner) || owner.lossHandled || disconnectPhysical && !isCurrent(owner)) null
             else {
                 val before = values.value
+                revokeDispatchAdmissionLocked(owner)
                 owner.lossHandled = true
                 owner.correlationAccounting?.cancel()
                 if (disconnectPhysical) owner.physicalEnding = true
@@ -1638,6 +1681,25 @@ class ConnectionManager(
     }
     private fun isCurrent(owner: RadioGeneration): Boolean = synchronized(lock) {
         !closed && !owner.logicalEnded && revision == owner.revision && active === owner && connectionIntent.wantsConnection
+    }
+
+    private fun bindDispatchAdmission(
+        owner: RadioGeneration, token: SessionToken, session: MeshCoreSession,
+    ): ChannelDispatchAdmission = synchronized(lock) {
+        requireCurrent(owner)
+        if (owner.dispatchRevoked || owner.session !== session || owner.dispatchAdmission != null) {
+            throw ConnectionError.FactoryOwnershipViolation()
+        }
+        ChannelDispatchAdmission(token, session).also { owner.dispatchAdmission = it }
+    }
+
+    private fun revokeDispatchAdmission(owner: RadioGeneration) = synchronized(lock) {
+        if (isRelevant(owner)) revokeDispatchAdmissionLocked(owner)
+    }
+
+    private fun revokeDispatchAdmissionLocked(owner: RadioGeneration) {
+        owner.dispatchRevoked = true
+        owner.dispatchAdmission?.revoke()
     }
     private fun isRelevant(owner: RadioGeneration): Boolean = synchronized(lock) {
         !closed && !owner.physicalEnding && revision == owner.revision && (active === owner || retained === owner)

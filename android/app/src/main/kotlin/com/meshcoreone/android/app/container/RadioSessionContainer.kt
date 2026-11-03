@@ -112,8 +112,15 @@ class RadioSessionContainer private constructor(
     private var closed = false
     internal val chatSendQueueProgress: ChatSendQueueProgress = env.chatSendQueueProgress
     private val session: MeshCoreSession = inputs.connection.session
+    internal val dispatchAdmission = inputs.dispatchAdmission
     private val radioId: RadioId = token.radioId
     private val gaps = GapReporter { message -> logger.info(message) }
+
+    /** Called only for a registry state commit, under manager -> registry -> graph ordering. */
+    internal fun withFactoryPublication(commit: () -> Unit) = synchronized(lock) {
+        if (closed || dispatchAdmission.isRevoked) throw ConnectionError.FactoryOwnershipViolation()
+        commit()
+    }
 
     internal suspend fun sendToolTrace(tag: UInt, authCode: UInt, flags: UByte, path: Bytes): MessageSentInfo =
         session.sendTrace(tag, authCode, flags, path)
@@ -477,6 +484,7 @@ class RadioSessionContainer private constructor(
     override suspend fun tearDown(): TeardownReport {
         val (receipt, claimed) = synchronized(lock) {
             teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
+                dispatchAdmission.revoke()
                 teardown = it
                 closed = true
             }.let { it to true }
@@ -541,6 +549,12 @@ class RadioSessionContainer private constructor(
          * failure partway through construction (or a teardown racing the factory) still releases the scope.
          */
         fun create(inputs: RuntimeServiceInputs, ownership: FactoryOwnership, env: SessionEnvironment): RadioSessionContainer {
+            if (ownership.token != inputs.connection.token ||
+                ownership.dispatchAdmission !== inputs.dispatchAdmission ||
+                inputs.dispatchAdmission.token != inputs.connection.token ||
+                inputs.dispatchAdmission.connectionIdentity !== inputs.connection.session ||
+                inputs.dispatchAdmission.isRevoked
+            ) throw ConnectionError.FactoryOwnershipViolation()
             val parent = inputs.connection.scope.coroutineContext[Job]
             val job = SupervisorJob(parent)
             val scope = CoroutineScope(inputs.connection.scope.coroutineContext + job)

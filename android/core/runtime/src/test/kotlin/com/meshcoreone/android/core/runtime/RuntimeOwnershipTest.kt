@@ -308,7 +308,7 @@ class RuntimeOwnershipTest {
             try {
                 fixture.connect()
                 val inputs = fixture.services.single().inputs
-                val handle = TestServices(inputs); val ownership = FactoryOwnership(handle.token)
+                val handle = TestServices(inputs); val ownership = FactoryOwnership(handle.token, inputs.dispatchAdmission)
                 ownership.register(handle)
                 val owned = OwnedRadioServices(handle, ownership, backgroundScope.coroutineContext)
                 val gate = CompletableDeferred<Unit>(); handle.beforeStart = { gate.await() }

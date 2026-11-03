@@ -17,11 +17,15 @@ class RadioSessionContainerFactory(
     private val registry: SessionRegistry,
 ) : RuntimeServiceFactory {
     override suspend fun create(inputs: RuntimeServiceInputs, ownership: FactoryOwnership): RuntimeServices {
+        if (ownership.token != inputs.connection.token ||
+            ownership.dispatchAdmission !== inputs.dispatchAdmission ||
+            inputs.dispatchAdmission.connectionIdentity !== inputs.connection.session
+        ) throw com.meshcoreone.android.core.runtime.ConnectionError.FactoryOwnershipViolation()
         val container = RadioSessionContainer.create(
             inputs, ownership,
             environment.withLifecycle(registry),
         )
-        registry.publish(container)
+        inputs.callbacks.publishServices(container) { registry.publish(container) }
         return container
     }
 
@@ -31,7 +35,10 @@ class RadioSessionContainerFactory(
             store, processScope, notificationDelivery, notificationPreferences, notificationStrings, appState, passwords,
             contactPreferences, runtimeState, resyncFailure, chatSendQueueProgress, syncClock, sessionClock, logSink, messagingReporter,
             object : SessionLifecycleListener {
-                override fun created(container: RadioSessionContainer) = downstream.created(container)
+                override fun created(container: RadioSessionContainer) {
+                    registry.track(container)
+                    downstream.created(container)
+                }
                 override fun tornDown(container: RadioSessionContainer) {
                     registry.withdraw(container)
                     downstream.tornDown(container)
@@ -52,6 +59,9 @@ class RadioSessionContainerFactory(
  */
 class SessionRegistry {
     private val lock = Any()
+    private val allocated = java.util.Collections.newSetFromMap(
+        java.util.IdentityHashMap<RadioSessionContainer, Boolean>(),
+    )
     private var live: RadioSessionContainer? = null
     private var createdCount = 0
     private var tornDownCount = 0
@@ -65,13 +75,22 @@ class SessionRegistry {
     /** Containers created and not yet torn down. */
     val outstanding: Int get() = synchronized(lock) { createdCount - tornDownCount }
 
+    internal fun track(container: RadioSessionContainer) = synchronized(lock) {
+        container.withFactoryPublication {
+            check(allocated.add(container)) { "Session graph was already tracked" }
+            createdCount += 1
+        }
+    }
+
     fun publish(container: RadioSessionContainer) = synchronized(lock) {
-        createdCount += 1
-        live = container
+        container.withFactoryPublication {
+            check(container in allocated) { "Session graph has no factory ownership" }
+            live = container
+        }
     }
 
     fun withdraw(container: RadioSessionContainer) = synchronized(lock) {
-        tornDownCount += 1
+        if (allocated.remove(container)) tornDownCount += 1
         if (live === container) live = null
     }
 }

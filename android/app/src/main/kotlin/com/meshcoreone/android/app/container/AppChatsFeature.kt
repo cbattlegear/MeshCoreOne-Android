@@ -272,11 +272,13 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     private suspend fun recoverCommittedCreation(recovery: DeferredCommitted) = committedRecoveryMutex.withLock {
         if (deferredCommitted[recovery.messageId] != recovery) return@withLock
+        requireOriginalChannel(recovery.target, recovery.slotGeneration)
         val radio = recovery.target.conversationId.radioId
         val committed = savedMessage(radio, recovery.messageId)
         committed.contactID?.let { store.recomputeContactLastMessageDate(EntityKey(radio, it)) }
         sender(radio).recordLocalEnqueueFailure(recovery.messageId)
         val saved = savedMessage(radio, recovery.messageId)
+        requireOriginalChannel(recovery.target, recovery.slotGeneration)
         val channelIndex = saved.channelIndex
         if (channelIndex != null) {
             app.messageEventStream.send(MessageEvent.ChannelMessageReceived(saved, channelIndex))
@@ -288,6 +290,15 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         app.refreshConversations()
         deferredCommitted.remove(recovery.messageId, recovery)
         Unit
+    }
+
+    private suspend fun requireOriginalChannel(target: ComposerTarget, generation: Int) {
+        if (target !is ComposerTarget.Channel) return
+        val current = store.fetchChannel(target.channel.radioId, target.channel.index)
+        if ((app.channelSlotGenerations.value[target.conversationId] ?: 0) != generation ||
+            current == null || current.id != target.channel.id || current.secret != target.channel.secret ||
+            !current.isEnabled
+        ) throw MessageServiceException(MessageServiceError.ChannelNotFound)
     }
 
     internal fun restoreNotificationDraft(
@@ -827,7 +838,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     }
                     initiating
                 }
-                val pinned = sender(radio, captured) {
+                val pinned = sender(radio, captured, beforeChannelPublication = { checkChannel() }) {
                     if (initiating == null || initiating.token.radioId != radio ||
                         container.sessions.current !== initiating ||
                         app.connectionState != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
@@ -895,11 +906,13 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         )
     }
 
-    fun sender(radio: RadioId): ComposerSendPort = sender(radio, { session(radio) }, { sendQueue(radio) })
+    fun sender(radio: RadioId): ComposerSendPort =
+        sender(radio, { session(radio) }, acceptedQueue = { sendQueue(radio) })
 
     private fun sender(
         radio: RadioId,
         acceptedSession: () -> RadioSessionContainer,
+        beforeChannelPublication: suspend () -> Unit = {},
         acceptedQueue: () -> ChatSendQueueService,
     ): ComposerSendPort = object : ComposerSendPort {
         override suspend fun createPendingDirect(text: String, contact: ContactDTO, textType: TextType, replyToId: UUID?) =
@@ -909,6 +922,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             }
         override suspend fun createPendingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType) =
             acceptedSession().messageService.createPendingChannelMessage(text, channelIndex, radioId, textType).also {
+                beforeChannelPublication()
                 app.messageEventStream.send(MessageEvent.ChannelMessageReceived(it, channelIndex))
                 app.refreshConversations()
             }
@@ -934,6 +948,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         val queue = sendQueue(radio)
         val localName = app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName
         val message = savedMessage(radio, id)
+        deferredCommitted[id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
+        unresolvedCreations[id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
         val index = message.channelIndex
             ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
         queue.enqueueChannel(

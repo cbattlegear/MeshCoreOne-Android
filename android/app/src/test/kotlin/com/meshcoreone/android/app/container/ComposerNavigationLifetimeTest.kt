@@ -13,6 +13,8 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -21,9 +23,12 @@ import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.composer.ui.ConversationLinkActions
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
+import com.meshcoreone.android.feature.chats.timeline.TimelineEvent
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -156,6 +161,11 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
     @Test fun channelUnknownCreationReconcilesAfterTheSavedRowWasMarkedRead() =
         exercise(true, Boundary.AFTER_CREATE, creationFailure = true, reconciliationFailure = true,
             reconcileLater = true, markSavedReadBeforeReconcile = true, dispose = false)
+    @Test fun channelSuccessfulHeldSaveUnderReplacementRejectsActualRetry() =
+        exercise(true, Boundary.BEFORE_CREATE, replaceSlot = true, preserveNewer = false,
+            successfulReplacedSave = true)
+    @Test fun channelOriginalCommittedFailureAllowsExplicitRetry() =
+        exercise(true, Boundary.AFTER_CREATE, creationFailure = true, explicitRetry = true)
 
     private fun exercise(
         channel: Boolean, boundary: Boundary, replaceSession: Boolean = false, legacyScreenOwner: Boolean = false,
@@ -166,6 +176,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         newerLiveText: String? = null, recoveryFailure: RecoveryFailure? = null,
         reconcileLater: Boolean = false, failBeforeCommit: Boolean = false,
         markSavedReadBeforeReconcile: Boolean = false,
+        successfulReplacedSave: Boolean = false, explicitRetry: Boolean = false,
     ) = runTest {
         val peerKey = key(4)
         val gate = CompletableDeferred<Unit>()
@@ -184,6 +195,8 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         var recoveryUnavailable = false
         var failedRecoveryOperations = 0
         var unreadableCreation = reconciliationFailure
+        val replacementEvents = mutableListOf<TimelineEvent>()
+        var replacementConversation: TimelineConversation.Channel? = null
         suspend fun pause(at: Boundary) {
             if (boundary == at) {
                 reached.complete(Unit)
@@ -377,9 +390,20 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 assertEquals(radio, requireNotNull(h.sessions.current).token.radioId)
             }
             if (replaceSlot) {
-                store.saveChannel(slot.copy(secret = Bytes(ByteArray(16) { 9 })))
-                h.appState.handleChannelSlotOccupantChanged(radio, setOf(slot.index))
-                abortSlotWrite = boundary == Boundary.BEFORE_CREATE
+                val secret = Bytes(ByteArray(16) { 9 })
+                if (successfulReplacedSave) {
+                    initiating.channelService.setChannelWithSecret(radio, slot.index, slot.name, secret)
+                } else {
+                    store.saveChannel(slot.copy(secret = secret))
+                    h.appState.handleChannelSlotOccupantChanged(radio, setOf(slot.index))
+                }
+                abortSlotWrite = boundary == Boundary.BEFORE_CREATE && !successfulReplacedSave
+                val replacementSlot = requireNotNull(store.fetchChannel(radio, slot.index))
+                replacementConversation = TimelineConversation.Channel(replacementSlot)
+                val replacementFeed = feature.timeline(requireNotNull(replacementConversation))
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    replacementFeed.events.collect { replacementEvents += it }
+                }
             }
             if (lookupFailure) {
                 h.eventually("creation and recovery report unreadable channel without losing custody") {
@@ -443,11 +467,26 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 assertTrue(rows.isEmpty())
                 assertTrue(h.links.radios.single().sent.none { it[0].toInt() in 2..3 })
             } else if (replaceSlot) {
-                val committed = boundary == Boundary.AFTER_CREATE
+                val committed = boundary == Boundary.AFTER_CREATE || successfulReplacedSave
                 assertEquals(if (committed) 1 else 0, creations)
                 assertEquals(0, enqueues)
                 assertEquals(if (committed) 1 else 0, rows.size)
-                if (committed) assertEquals(MessageStatus.FAILED, rows.single().status)
+                if (committed) {
+                    assertEquals(MessageStatus.PENDING, rows.single().status)
+                    val replacementTarget = requireNotNull(replacementConversation)
+                    try {
+                        feature.timeline(replacementTarget).retryService.retry(rows.single(), replacementTarget)
+                        fail("The replacement occupant must not retry the old committed intent")
+                    } catch (failure: MessageServiceException) {
+                        assertEquals(MessageServiceError.ChannelNotFound, failure.error)
+                    }
+                    h.settle()
+                    assertTrue("No old-intent event is admitted to the replacement timeline",
+                        replacementEvents.none { event ->
+                            event is TimelineEvent.MessageReceived && event.message.id == rows.single().id
+                        })
+                    assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, rows.single().id)).isEmpty())
+                }
                 assertTrue(h.links.radios.single().sent.none { it[0].toInt() in 2..3 })
                 assertNull(feature.drafts.get(target.conversationId))
             } else if (failBeforeCommit) {
@@ -479,6 +518,17 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                             store.fetchConversations(radio).any { it.id == contact.id })
                         assertEquals(rows.single().date,
                             requireNotNull(store.fetchContact(EntityKey(radio, contact.id))).lastMessageDate)
+                    }
+                    if (explicitRetry) {
+                        feature.timeline(conversation).retryService.retry(rows.single(), conversation)
+                        h.eventually("explicit Retry on the original occupant sends exactly once") {
+                            runBlocking {
+                                store.fetchPendingSendsForMessage(EntityKey(radio, rows.single().id)).isEmpty() &&
+                                    h.links.radios.single().sent.count { it[0].toInt() == 3 } == 1
+                            }
+                        }
+                        assertEquals(1, creations)
+                        assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == 3 })
                     }
                 }
             } else if (queueFailure) {

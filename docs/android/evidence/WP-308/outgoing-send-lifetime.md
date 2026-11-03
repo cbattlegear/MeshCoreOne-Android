@@ -94,10 +94,21 @@ coordination with the WP-405/channel and queue producer. That lower-level review
 finding is explicitly unresolved, not claimed fixed by a preflight check.
 The same prerequisite includes a held pre-commit save that succeeds after slot
 replacement: its old text must not become an ordinary retryable row under the
-replacement key. The existing pre-commit slot test forces the old save to fail;
-neither it nor the post-commit no-enqueue test proves safe successful-write
-reconciliation or subsequent Retry. The producer must supply a settled slot
-identity/creation boundary; no App preflight or green aggregate claims it.
+replacement key. The captured App send port now checks before its actual
+ChannelMessageReceived/list publication, not only after that event. Immediate
+committed recovery checks the captured slot before failing or publishing a row.
+An invalidated committed row stays PENDING, with its exact ID/text and original
+target/generation retained; same-process explicit Retry rejects that known
+invalidated intent instead of making it ordinarily retryable.
+
+The additional mounted schedule holds save before commit, replaces the slot
+through the actual ChannelService, lets the save succeed, and invokes the real
+timeline Retry adapter. A positive control retries a committed failure under the
+unchanged original occupant. These consumer regressions do not prove persistent
+origin or wire authority: raw index-only timeline/history queries can still find
+the row independently of publication, and process-local custody does not survive
+restart. Durable origin-aware query/retry disposition and the actual queue/slot
+fence remain required; no App preflight or green aggregate claims them.
 On creation cancellation, only bounded local recovery completes noncancellably;
 the original cancellation propagates. An interrupted enqueue is not blindly
 failed because the queue may still own durable acceptance. A generic enqueue

@@ -125,8 +125,11 @@ class SettingsRerunNavigationTest {
         )
     }
 
-    private fun assertRerunStillMounted(navigation: NavigationCoordinator) {
-        assertEquals(AppTab.SETTINGS, navigation.state.value.selectedTab)
+    private fun assertRerunStillMounted(
+        navigation: NavigationCoordinator,
+        tab: AppTab = AppTab.SETTINGS,
+    ) {
+        assertEquals(tab, navigation.state.value.selectedTab)
         assertEquals(
             NavigationDestination.Auxiliary(com.meshcoreone.android.core.contracts.FeatureId.ONBOARDING),
             navigation.state.value.activeStack.last().destination,
@@ -267,6 +270,67 @@ class SettingsRerunNavigationTest {
             releaseApply.complete(Unit)
             flow.preset.state.first { it.error != null }
             compose.onNodeWithText("held back apply failure").assertIsDisplayed()
+            Unit
+        } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `Nodes toolbar actions cannot cover a busy rerun and work after it settles`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val applyStarted = CompletableDeferred<Unit>()
+            val releaseApply = CompletableDeferred<Unit>()
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    applyStarted.complete(Unit)
+                    releaseApply.await()
+                    return OnboardingPresetOutcome.Failed(
+                        com.meshcoreone.android.core.ui.UiText.Verbatim("held nodes apply failure"),
+                    )
+                }
+            }
+            val dependencies = appOnboarding(processScope, presets).forRerun()
+            val flow = checkNotNull(dependencies.retainedFlowCoordinator())
+            val option = flow.preset.visiblePresets().first()
+            val navigation = NavigationCoordinator().also { it.selectTab(AppTab.NODES) }
+            flow.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+            mountShell(navigation, dependencies)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            compose.onNodeWithText(option.name).performClick()
+            compose.onNodeWithText(
+                O.presetUse(
+                    ApplicationProvider.getApplicationContext<Context>().resources,
+                    option.name,
+                ),
+            ).performClick()
+            applyStarted.await()
+
+            val stackSize = navigation.state.value.activeStack.size
+            compose.onNodeWithTag("open-remote-nodes").performClick()
+            assertRerunStillMounted(navigation, AppTab.NODES)
+            assertEquals(stackSize, navigation.state.value.activeStack.size)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            assertRerunStillMounted(navigation, AppTab.NODES)
+            assertEquals(stackSize, navigation.state.value.activeStack.size)
+
+            releaseApply.complete(Unit)
+            flow.preset.state.first { it.error != null }
+            compose.onNodeWithText("held nodes apply failure").assertIsDisplayed()
+            compose.onNodeWithText(ApplicationProvider.getApplicationContext<Context>().getString(L.commonOk))
+                .performClick()
+
+            compose.onNodeWithTag("open-remote-nodes").performClick()
+            assertEquals(
+                NavigationDestination.Auxiliary(com.meshcoreone.android.core.contracts.FeatureId.REMOTE_NODES),
+                navigation.state.value.activeStack.last().destination,
+            )
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            assertEquals(
+                NavigationDestination.Auxiliary(com.meshcoreone.android.core.contracts.FeatureId.ONBOARDING),
+                navigation.state.value.activeStack.last().destination,
+            )
             Unit
         } finally {
             processScope.cancel()

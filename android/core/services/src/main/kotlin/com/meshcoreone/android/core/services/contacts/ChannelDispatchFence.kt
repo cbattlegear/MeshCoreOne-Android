@@ -135,6 +135,16 @@ class ChannelDispatchFence(
 
     internal fun requireActive(lease: Lease) = requireCurrent(lease)
 
+    suspend fun forgetReconciled(
+        lease: Lease, scope: ChannelIdentityWriteScope, indices: Collection<UByte>,
+    ) {
+        identity.requireChannelOperationScope(scope)
+        synchronized(stateLock) {
+            requireCurrent(lease)
+            lease.reconciledSlots.removeAll(indices.toSet())
+        }
+    }
+
     /**
      * [currentOccupantID] is a plain authoritative read, not a mint/reconciliation operation.
      * [operation] must use this lease's connection and [index], await the actual protocol call,

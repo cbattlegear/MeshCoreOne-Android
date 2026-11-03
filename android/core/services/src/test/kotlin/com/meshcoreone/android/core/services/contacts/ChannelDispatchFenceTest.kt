@@ -60,6 +60,18 @@ class ChannelDispatchFenceTest {
     }
 
     @Test
+    fun withdrawingObservedSlotsRequiresActiveScopeAndDoesNotAffectOtherSlots() = runTest {
+        val f = preparedFixture()
+        f.gate.withChannelOperationScope { scope ->
+            f.fence.recordReconciled(f.lease, scope, listOf(8u))
+            f.fence.forgetReconciled(f.lease, scope, listOf(7u))
+        }
+        assertFailsWith<ChannelDispatchFailure.UnreconciledSession> { f.send() }
+        f.fence.dispatch(f.lease, 8u, f.intended, { _, _ -> f.occupant }) { f.effects += "other slot" }
+        assertEquals(listOf("other slot"), f.effects)
+    }
+
+    @Test
     fun cachedEpochCannotAdmitFreshConnectionOrAnUnreadSlot() = runTest {
         val f = Fixture()
         var reads = 0

@@ -430,7 +430,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                     "$stage; serviceCalls=${writes.size}, returned=${returned.get()}, " +
                         "serviceFailure=${serviceFailure.get()?.javaClass?.simpleName}, lifecycle=${host.get().lifecycle.currentState}; " +
                         "observations=$observations; before=$beforeChoose; " +
-                        compose.runOnUiThread { avatarLifetimeDiagnostic(host.get()) }"
+                        compose.runOnUiThread { avatarLifetimeDiagnostic(host.get()) }
                 val remainingMillis = (deadline - System.nanoTime()) / 1_000_000L
                 if (remainingMillis <= 0) failWithDiagnostics("$stage: shared deadline expired", null, ::diagnostic)
                 try {

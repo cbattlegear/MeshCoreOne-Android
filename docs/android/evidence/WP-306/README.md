@@ -178,3 +178,23 @@ execution with `BLOCKED: Hard-lock collision for external resource
 gradle-execution: gradle-execution held`. Read-only recovery status showed a
 different live local-check owner and refused recovery. No product tests ran;
 the owner was not interrupted or changed, and direct Gradle was not used.
+
+### Capital sharp-S Foundation vector follow-up
+
+The captured WP-311 `localizedStandardContains` output records U+1E9E capital
+sharp-S (`ẞ`) searched for `ss` as true (`wp311_more.output.txt`). The matcher
+previously folded U+1E9E through `Locale.ROOT` upper/lower conversion to `ß`,
+so it did not match the two-character query. WP-306 now explicitly folds this
+scalar to `ss`, with a direct helper assertion and a `Conversation.filtered`
+assertion across every filter. Existing partial-expansion negatives, full
+expansion positives, width, dotless-i, Hangul, ZWJ and ordinary search vectors
+remain in both suites.
+
+The exact current-main predecessor candidate
+`d0b6ba6ffd81d6b6cb55f239c47a3f6d1bccb4ec` (base
+`99479711bfdb7c621765f09d671068ca8b8318ce`) failed hosted candidate run
+`41607197452` in `:app:mergeDebugResources` with `Java heap space`; this was
+before the capital sharp-S test addition and is not attributed to WP-306
+behavior. Its Swift codec oracle was skipped. The new source candidate's
+exact-head hosted checks are required before claiming that vector's test
+execution. No Android API31/37 runtime evidence is established by host CI.

@@ -111,6 +111,7 @@ class ConversationFilteringTest {
             Triple("strasse", "straß", true),
             Triple("１２", "12", true),
             Triple("👨‍👩‍👧", "👨", true),
+            Triple("\u1e9e", "ss", true),
             Triple("Alpha Repeater", "alpha", true),
         )
         for ((name, query, matches) in cases) {

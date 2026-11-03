@@ -24,7 +24,13 @@ object ChatTextMatching {
         while (index < text.length) {
             val codePoint = text.codePointAt(index)
             val scalar = String(Character.toChars(codePoint))
-            append(if (codePoint == DOTLESS_I.code) scalar else caseFold(scalar).replace('\u03C2', '\u03C3'))
+            append(
+                when (codePoint) {
+                    DOTLESS_I.code -> scalar
+                    0x1E9E -> "ss"
+                    else -> caseFold(scalar).replace('\u03C2', '\u03C3')
+                },
+            )
             index += Character.charCount(codePoint)
         }
     }

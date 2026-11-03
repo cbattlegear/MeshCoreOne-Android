@@ -29,6 +29,7 @@ class ChatTextMatchingTest {
             Triple("strasse", "straß", true), Triple("ﬁle", "fi", true),
             Triple("Σίσυφος", "σισυφοσ", true), Triple("１２", "12", true),
             Triple("👨‍👩‍👧", "👨", true), Triple("ıstanbul", "istanbul", false),
+            Triple("\u1e9e", "ss", true),
         )
         for ((haystack, needle, expected) in cases) assertEquals(expected, ChatTextMatching.standardContains(haystack, needle), "$haystack contains $needle")
     }

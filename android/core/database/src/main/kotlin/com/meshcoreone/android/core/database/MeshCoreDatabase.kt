@@ -7,6 +7,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [
@@ -14,9 +16,9 @@ import androidx.room.TypeConverters
         MessageRepeatEntity::class, ReactionEntity::class, RemoteNodeSessionEntity::class, RoomMessageEntity::class,
         SavedTracePathEntity::class, TracePathRunEntity::class, RxLogEntryEntity::class, DebugLogEntryEntity::class,
         LinkPreviewEntity::class, DiscoveredNodeEntity::class, NodeStatusSnapshotEntity::class,
-        BlockedChannelSenderEntity::class, PendingSendEntity::class,
+        BlockedChannelSenderEntity::class, PendingSendEntity::class, ChannelOccupantEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -38,10 +40,19 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun discoveredNodes(): DiscoveredNodeDao
     abstract fun nodeSnapshots(): NodeSnapshotDao
     abstract fun blockedSenders(): BlockedChannelSenderDao
+    abstract fun channelOccupants(): ChannelOccupantDao
 
     companion object {
-        const val SCHEMA_VERSION = 1
+        const val SCHEMA_VERSION = 2
+        val MIGRATION_1_2: Migration = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN channelOccupantID TEXT")
+                db.execSQL("ALTER TABLE pending_sends ADD COLUMN channelOccupantID TEXT")
+                db.execSQL("CREATE TABLE IF NOT EXISTS channel_occupants (radioId TEXT NOT NULL, `index` INTEGER NOT NULL, occupantID TEXT NOT NULL, PRIMARY KEY(radioId, `index`))")
+            }
+        }
         fun open(context: Context, name: String = "meshcoreone.db"): MeshCoreDatabase =
-            Room.databaseBuilder(context.applicationContext, MeshCoreDatabase::class.java, name).build()
+            Room.databaseBuilder(context.applicationContext, MeshCoreDatabase::class.java, name)
+                .addMigrations(MIGRATION_1_2).build()
     }
 }

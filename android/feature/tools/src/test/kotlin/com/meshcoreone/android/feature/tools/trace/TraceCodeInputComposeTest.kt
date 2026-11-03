@@ -1,6 +1,7 @@
 // AndroidOnly: WP-314 TS-09 Mounted code/paste actions use the production parser and width policy.
 package com.meshcoreone.android.feature.tools.trace
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -8,7 +9,6 @@ import android.os.Bundle
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
-import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
@@ -26,8 +26,12 @@ import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Duration
@@ -444,7 +448,11 @@ class TraceCodeInputComposeTest {
     }
 }
 
-class TraceCodeInputTestActivity : ComponentActivity() {
+class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
+    private val registry = LifecycleRegistry(this)
+    private val savedState = SavedStateRegistryController.create(this).apply { performAttach() }
+    override val lifecycle: Lifecycle get() = registry
+    override val savedStateRegistry get() = savedState.savedStateRegistry
     val frames = BroadcastFrameClock()
     lateinit var content: ComposeView
         private set
@@ -462,6 +470,8 @@ class TraceCodeInputTestActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        savedState.performRestore(savedInstanceState)
+        registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         savedInstanceState?.getString("firmware")?.let(::setFirmware)
         content = ComposeView(this).apply {
             id = android.R.id.custom
@@ -494,10 +504,32 @@ class TraceCodeInputTestActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("traceScreenMounted", traceScreenMounted)
         outState.putString("firmware", firmware)
+        savedState.performSave(outState)
         super.onSaveInstanceState(outState)
     }
 
+    override fun onStart() {
+        super.onStart()
+        registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+    }
+
+    override fun onPause() {
+        registry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+        super.onPause()
+    }
+
+    override fun onStop() {
+        registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        super.onStop()
+    }
+
     override fun onDestroy() {
+        registry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         content.disposeComposition()
         frames.cancel()
         super.onDestroy()

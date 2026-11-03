@@ -458,6 +458,8 @@ class ChatSendQueueService(
     suspend fun awaitDrainCompletion() { dmQueue.awaitDrainCompletion(); channelQueue.awaitDrainCompletion() }
 
     suspend fun shutdown(): TeardownReport {
+        dmQueue.stopAfterCurrent()
+        channelQueue.stopAfterCurrent()
         val (receipt, claimed) = synchronized(lock) {
             teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
                 teardown = it

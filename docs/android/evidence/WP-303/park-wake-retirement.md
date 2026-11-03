@@ -39,7 +39,13 @@ terminal ownership checking fails and retains an additional
 
 The fix keeps the existing cancellation/requeue disposition after a park wake,
 including retirement that wins after wake selection. It removes only the
-post-wake lifetime check before the already-unconditional cancellation. It does
+post-wake lifetime check before the already-unconditional cancellation and seals
+both drains at shutdown entry before invalidating ownership. Without that early
+seal, direct shutdown can let `SendQueue` requeue the cancelled park and normally
+complete, respawning a drain before shutdown reaches its later queue cancellation.
+That retry can fail lifetime checking and invoke terminal handling. The
+deterministic regression deliberately exercises direct shutdown without the
+separate recovery-accounting seal. It does
 not catch, suppress or filter teardown failures, change send admission, accept
 a stale generation, or alter journal/fence handling. The pinned Swift
 `ChatSendQueueService.swift` lines 537-556 likewise unconditionally throws
@@ -65,7 +71,7 @@ Pinned read-only Swift: `db14559b39d32322b06477c6ae676112f583db50`.
 
 The queue owner session `13a03908-afb8-42bd-9c96-57a27920076e` explicitly serialized
 the park/shutdown diagnosis and repair here. Successor journal owner
-`befda86a-836d-4dd6-9229-12f061e9c136` excludes this park-tail hunk.
+`befda86a-836d-4dd6-9229-12f061e9c136` excludes this park-tail and shutdown-entry hunk.
 Runtime owner `5b3965ae-e65d-43e7-a171-e8b67d7b9ba7` changes manager/factory dispatch
 revocation, not this queue/test hunk. No manager, graph, notification candidate,
 journal, shared harness, build or dependency changes are included.

@@ -62,6 +62,12 @@ class GitHubGateAuthority:
             result = verify_repair(
                 value, value.evidence["repair_scope"], self.manifest, self.policy, value.catalog,
             )
+        elif value.evidence.get("schema_version") == 5:
+            from .repair_acceptance import verify_infrastructure_acceptance
+
+            result = verify_infrastructure_acceptance(
+                value, value.evidence["verification_scope"], self.manifest, self.policy,
+            )
         else:
             result = verify_pr_gates(
                 value.pr, value.evidence, value.review, value.approvals,

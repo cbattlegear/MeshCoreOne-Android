@@ -30,8 +30,207 @@ VERIFICATION = {
         "job": "One Linux Android build",
     },
 }
+INFRASTRUCTURE_SCOPE_KIND = "bounded-infrastructure-verification"
+INFRASTRUCTURE_SCOPE_ID = "wp003-ci-reader-route-v1"
+INFRASTRUCTURE_EVIDENCE_SCHEMA = 5
+INFRASTRUCTURE_RECEIPT_SCHEMA = 4
+INFRASTRUCTURE_VERIFICATION = {
+    "workflow_path": ".github/workflows/android-ci.yml",
+    "job_name": "Controller and workflow policy",
+    "step_name": "Run controller tests once",
+    "test_roots": [
+        "tools/android-port/tests", "tools/android-port/local",
+        "android/parity-tests", "tools/android-port/oracle",
+    ],
+}
+INFRASTRUCTURE_ACCEPTANCE = (
+    {"id": "WP-003-infrastructure-source", "description": "Independent exact-head review of the finite infrastructure diff."},
+    {"id": "WP-003-infrastructure-tests", "description": "Actual controller and oracle test discovery and passing outcomes."},
+    {"id": "WP-003-infrastructure-provenance", "description": "Exact CI, source-review and trusted-publisher provenance; no completion or unlock."},
+)
+INFRASTRUCTURE_PATH_OPERATIONS = {
+    ".github/workflows/android-ci.yml": ("update-directly-required-job-or-input", "trusted-workflows"),
+    "docs/android/ci/bounded-infrastructure-review.md": ("modify", "wp-owned"),
+    "tools/android-port/controller/authority.py": ("modify", "wp-owned"),
+    "tools/android-port/controller/gates.py": ("modify", "wp-owned"),
+    "tools/android-port/controller/merged_acceptance.py": ("modify", "wp-owned"),
+    "tools/android-port/controller/native_review.py": ("modify", "wp-owned"),
+    "tools/android-port/controller/repair_acceptance.py": ("modify", "wp-owned"),
+    "tools/android-port/controller/runtime_inputs.py": ("modify", "wp-owned"),
+    "tools/android-port/controller/test_runner.py": ("modify", "wp-owned"),
+    "tools/android-port/controller/workflows.py": ("modify", "wp-owned"),
+    "tools/android-port/oracle/test_ci.py": ("add-regression-fixture-or-test", "traceability-validation"),
+    "tools/android-port/oracle/test_workflow_scope.py": ("add-regression-fixture-or-test", "traceability-validation"),
+    "tools/android-port/oracle/workflow_scope.py": ("add-or-update-validator-rule", "traceability-validation"),
+    "tools/android-port/tests/test_merged_acceptance.py": ("test", "wp-owned"),
+    "tools/android-port/tests/test_native_review.py": ("test", "wp-owned"),
+    "tools/android-port/tests/test_repair_acceptance.py": ("test", "wp-owned"),
+    "tools/android-port/tests/test_runner.py": ("test", "wp-owned"),
+    "tools/android-port/tests/test_workflows.py": ("test", "wp-owned"),
+}
+INFRASTRUCTURE_READER_PATHS = frozenset({
+    path for path, (operation, _) in INFRASTRUCTURE_PATH_OPERATIONS.items()
+    if path.startswith((".github/workflows/", "tools/android-port/controller/", "tools/android-port/oracle/"))
+    and operation not in ("test", "add-regression-fixture-or-test")
+})
+INFRASTRUCTURE_TEST_PATHS = frozenset({
+    path for path, (operation, _) in INFRASTRUCTURE_PATH_OPERATIONS.items()
+    if operation in ("test", "add-regression-fixture-or-test")
+})
 MAX_LOG_BYTES = 64 * 1024 * 1024
 ANDROID_MODULE = r"android/((?:core|feature|platform)/[a-z0-9-]+|app)/"
+
+
+def validate_infrastructure_scope(scope, binding, manifest, policy, changed_paths):
+    fields(scope, {"schema_version", "kind", "scope_id", "binding", "paths", "verification"},
+           label="bounded infrastructure scope")
+    if (
+        type(scope["schema_version"]) is not int or scope["schema_version"] != 1
+        or scope["kind"] != INFRASTRUCTURE_SCOPE_KIND
+        or scope["scope_id"] != INFRASTRUCTURE_SCOPE_ID
+        or Binding.parse(scope["binding"]) != binding
+        or binding.work_package != "WP-003"
+        or binding.repository != policy["repository"]
+        or binding.source_sha != manifest.data["reference"]["commit"]
+        or binding.manifest_sha256 != manifest.sha256
+        or binding.policy_revision != policy_revision(manifest, policy)
+    ):
+        raise PortError("Infrastructure scope has stale or unauthorized repository/WP/source/policy binding")
+    if scope["verification"] != INFRASTRUCTURE_VERIFICATION:
+        raise PortError("Infrastructure scope declares an unknown controller/oracle verification")
+    paths = scope["paths"]
+    if (
+        not isinstance(paths, list) or not paths or len(paths) > len(INFRASTRUCTURE_PATH_OPERATIONS)
+        or any(not isinstance(path, str) for path in paths)
+        or paths != sorted(set(paths))
+        or not isinstance(changed_paths, list)
+        or any(not isinstance(path, str) for path in changed_paths)
+        or len(changed_paths) != len(set(changed_paths))
+        or set(paths) != set(changed_paths)
+        or not set(paths) <= INFRASTRUCTURE_PATH_OPERATIONS.keys()
+        or not set(paths) & INFRASTRUCTURE_READER_PATHS
+        or not set(paths) & INFRASTRUCTURE_TEST_PATHS
+    ):
+        raise PortError("Infrastructure scope has unknown, missing, duplicate or untested paths")
+    engine = CapabilityEngine(policy)
+    assigned = manifest.wp("WP-003")["write_paths"]
+    for path in paths:
+        operation, expected_capability = INFRASTRUCTURE_PATH_OPERATIONS[path]
+        admission = engine.admit("WP-003", assigned, path, operation)
+        if admission.capability_id != expected_capability:
+            raise PortError("Infrastructure path admission disagrees with its trusted capability mapping: " + path)
+        if expected_capability == "traceability-validation" and (
+            not {"fail-closed", "positive-test-discovery", "pinned-provenance", "no-fake-success"}
+            <= set(admission.invariants)
+            or not {"affected validator tests", "manifest and ownership validation"}
+            <= set(admission.validation)
+        ):
+            raise PortError("Infrastructure validator path lacks its required capability invariants")
+    return {path: INFRASTRUCTURE_PATH_OPERATIONS[path][0] for path in paths}
+
+
+def verify_infrastructure_acceptance(value, scope, manifest, policy):
+    binding, pr, evidence = value.binding, value.pr, value.evidence
+    fields(evidence, set(asdict(binding)) | {
+        "schema_version", "changed_paths", "runs", "retained_artifacts",
+        "acceptance", "verification_scope",
+    }, label="bounded infrastructure evidence")
+    if (
+        type(evidence["schema_version"]) is not int
+        or evidence["schema_version"] != INFRASTRUCTURE_EVIDENCE_SCHEMA
+        or evidence["verification_scope"] != scope
+        or any(evidence[key] != expected for key, expected in asdict(binding).items())
+        or not isinstance(evidence["changed_paths"], list)
+        or any(not isinstance(path, str) for path in evidence["changed_paths"])
+        or set(evidence["changed_paths"]) != set(pr["changed_paths"])
+    ):
+        raise PortError("Infrastructure evidence has a stale schema, scope or changed-path set")
+    validate_infrastructure_scope(scope, binding, manifest, policy, evidence["changed_paths"])
+    if not isinstance(evidence["runs"], list) or len(evidence["runs"]) != 1:
+        raise PortError("Infrastructure evidence requires exactly one actual controller/oracle CI run")
+    run = evidence["runs"][0]
+    fields(run, {"check", "run_id", "run_attempt"}, label="infrastructure CI run")
+    if run["check"] != "android-ci":
+        raise PortError("Infrastructure verification requires the actual android-ci run")
+    positive_integer(run["run_id"], "Infrastructure CI run ID")
+    positive_integer(run["run_attempt"], "Infrastructure CI attempt")
+    if evidence["retained_artifacts"] != []:
+        raise PortError("Infrastructure verification must retain original hosted logs only by provenance")
+    artifacts = {
+        f"https://github.com/{binding.repository}/actions/runs/{run['run_id']}/attempts/{run['run_attempt']}"
+    }
+    scoped_wp = {**manifest.wp("WP-003"), "acceptance": list(INFRASTRUCTURE_ACCEPTANCE)}
+    _acceptance(evidence["acceptance"], scoped_wp, artifacts, "bounded infrastructure acceptance")
+    validate_review(value.review, binding, scoped_wp, artifacts, True)
+    required = manifest.wp("WP-003")["human_gate"] or human_acceptance_required(
+        scoped_wp, policy, pr["changed_paths"], pr["labels"],
+    )
+    approval = validate_approval(value.approvals, binding, policy, pr["author"]) if required else None
+    return {
+        "kind": INFRASTRUCTURE_SCOPE_KIND,
+        "binding": asdict(binding),
+        "scope_sha256": digest(scope),
+        "pr_number": pr["number"],
+        "ci_run_ids": [run["run_id"]],
+        "approval_id": approval,
+        "wp_complete": False,
+        "dependency_unlock": False,
+    }
+
+
+def verify_infrastructure_execution(native, value, scope, run):
+    validate_infrastructure_scope(
+        scope, value.binding, native.manifest, native.policy, value.evidence["changed_paths"],
+    )
+    jobs = native.backend.pages(
+        f"{native.prefix}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs", "jobs",
+    )
+    selected = [
+        job for job in jobs
+        if job.get("name") == INFRASTRUCTURE_VERIFICATION["job_name"]
+    ]
+    if len(selected) != 1 or (
+        selected[0].get("run_id") != run["id"]
+        or selected[0].get("head_sha") != value.binding.head_sha
+        or selected[0].get("status") != "completed"
+        or selected[0].get("conclusion") != "success"
+    ):
+        raise PortError("Declared controller/oracle verification job was missing, skipped or failed")
+    from .merged_acceptance import log_objects
+
+    reports = log_objects(
+        read_job_log(native, positive_integer(selected[0].get("id"), "Controller/oracle job ID")),
+        INFRASTRUCTURE_VERIFICATION["step_name"],
+    )
+    counts = [
+        item for item in reports
+        if item.get("scope") == "controller fixtures only; not Android/iOS/hardware parity"
+    ]
+    if len(counts) != 1:
+        raise PortError("Missing or ambiguous original controller/oracle test-discovery log")
+    result = counts[0]
+    discovered = result.get("discovered")
+    root_counts = result.get("discovered_by_root")
+    roots = set(INFRASTRUCTURE_VERIFICATION["test_roots"])
+    from .test_runner import NATIVE_SUITE, immutable_candidate_suite
+
+    committed, selected = immutable_candidate_suite(
+        native.manifest.repo, value.binding.base_sha, value.binding.head_sha,
+    )
+    if selected:
+        if not committed:
+            raise PortError("Selected native suite is missing from the immutable candidate")
+        roots.add(NATIVE_SUITE)
+    if (
+        type(discovered) is not int or discovered <= 0
+        or result.get("run") != discovered or result.get("passed") != discovered
+        or not isinstance(root_counts, dict) or set(root_counts) != roots
+        or any(type(count) is not int or count <= 0 for count in root_counts.values())
+        or sum(root_counts.values()) != discovered
+        or any(type(result.get(key)) is not int or result[key] != 0
+               for key in ("failed", "errors", "skipped"))
+    ):
+        raise PortError("Controller/oracle hosted evidence is zero, malformed, failed or skipped")
 
 
 def verification_only(scope):

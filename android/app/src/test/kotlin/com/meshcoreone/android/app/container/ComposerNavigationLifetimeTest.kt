@@ -1,12 +1,15 @@
 // AndroidOnly: WP-308 Real Room/queue acceptance must outlive the mounted conversation, not its radio.
 package com.meshcoreone.android.app.container
 
+import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.navigation.AppChatConversationScreen
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
@@ -16,6 +19,8 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
@@ -26,11 +31,17 @@ import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.feature.chats.timeline.TimelineEvent
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -166,6 +177,30 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             successfulReplacedSave = true)
     @Test fun channelOriginalCommittedFailureAllowsExplicitRetry() =
         exercise(true, Boundary.AFTER_CREATE, creationFailure = true, dispose = false, explicitRetry = true)
+    @Test fun channelSuccessfulHeldSaveUnderReplacementRejectsSendAgainAfterRoomReopen() =
+        exercise(true, Boundary.BEFORE_CREATE, replaceSlot = true, preserveNewer = false,
+            successfulReplacedSave = true, restartSendAgain = true)
+
+    private class DiskHistoryStore(context: Context, name: String) {
+        private val ownerJob = SupervisorJob()
+        private val owner = CoroutineScope(ownerJob + Dispatchers.Default)
+        private val immediate = java.util.concurrent.Executor { it.run() }
+        val database = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
+        val store = RoomPersistenceStore(database, owner)
+
+        suspend fun close() = withContext(NonCancellable) {
+            try {
+                store.close()
+            } finally {
+                try {
+                    ownerJob.cancelAndJoin()
+                } finally {
+                    database.close()
+                }
+            }
+        }
+    }
 
     private fun exercise(
         channel: Boolean, boundary: Boundary, replaceSession: Boolean = false, legacyScreenOwner: Boolean = false,
@@ -177,8 +212,17 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         reconcileLater: Boolean = false, failBeforeCommit: Boolean = false,
         markSavedReadBeforeReconcile: Boolean = false,
         successfulReplacedSave: Boolean = false, explicitRetry: Boolean = false,
+        restartSendAgain: Boolean = false,
     ) = runTest {
         require(!explicitRetry || !dispose) { "Explicit Retry must reach the mounted timeline control" }
+        require(!restartSendAgain || (channel && successfulReplacedSave && replaceSlot && dispose)) {
+            "Restart Send Again requires the held successful channel replacement"
+        }
+        val diskContext = if (restartSendAgain) ApplicationProvider.getApplicationContext<Context>() else null
+        val diskName = "wp308-send-again-${UUID.randomUUID()}.db"
+        var disk = diskContext?.let { DiskHistoryStore(it, diskName) }
+        val store = disk?.store ?: this@ComposerNavigationLifetimeTest.store
+        var initialContainerClosed = false
         val peerKey = key(4)
         val gate = CompletableDeferred<Unit>()
         val reached = CompletableDeferred<Unit>()
@@ -280,8 +324,14 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             val radio = requireNotNull(h.appState.currentRadioId)
             val contact = requireNotNull(store.fetchContact(radio, peerKey))
             if (!channel && creationFailure) assertNull("First outgoing message has no list metadata", contact.lastMessageDate)
-            val slot = ChannelDTO(radioId = radio, index = 0u, name = "Lifetime channel")
-            store.saveChannel(slot)
+            val slot = if (restartSendAgain) {
+                initiating.channelService.setChannelWithSecret(
+                    radio, 0u, "Lifetime channel", Bytes(ByteArray(16) { 5 }),
+                )
+                requireNotNull(store.fetchChannel(radio, 0u))
+            } else {
+                ChannelDTO(radioId = radio, index = 0u, name = "Lifetime channel").also { store.saveChannel(it) }
+            }
             val target = if (channel) ComposerTarget.Channel(slot) else ComposerTarget.Direct(contact)
             val conversation = if (channel) TimelineConversation.Channel(slot) else TimelineConversation.Direct(contact)
             val feature = h.container.chatsFeature
@@ -498,6 +548,70 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 }
                 assertTrue(h.links.radios.single().sent.none { it[0].toInt() in 2..3 })
                 assertNull(feature.drafts.get(target.conversationId))
+                if (restartSendAgain) {
+                    val saved = rows.single()
+                    val key = EntityKey(radio, saved.id)
+                    val replacementSlot = requireNotNull(replacementConversation).channel
+                    replacement?.close()
+                    replacement = null
+                    h.container.close()
+                    initialContainerClosed = true
+                    requireNotNull(disk).close()
+                    disk = null
+                    val reopenedDisk = DiskHistoryStore(requireNotNull(diskContext), diskName)
+                    disk = reopenedDisk
+                    val reopenedStore = reopenedDisk.store
+                    assertEquals("Closing and reopening Room preserves the exact old row",
+                        saved, reopenedStore.fetchMessage(key))
+                    val restarted = ContainerHarness(this, reopenedStore)
+                    restarted.links.configureRadio = { firmware ->
+                        firmware.respond = { frame ->
+                            when (frame[0].toInt()) {
+                                3 -> listOf(Bytes.of(1, 6))
+                                0x1f -> listOf(
+                                    if (frame[1] == replacementSlot.index) {
+                                        Bytes.of(0x12, replacementSlot.index.toInt()) +
+                                            Bytes.utf8(replacementSlot.name).paddedOrTruncated(32) +
+                                            replacementSlot.secret
+                                    } else Bytes.of(0x12, frame[1].toInt()) + Bytes(ByteArray(48)),
+                                )
+                                else -> null
+                            }
+                        }
+                    }
+                    try {
+                        restarted.manager.connect(connectionTarget)
+                        restarted.eventually("recreated process reaches READY with replacement B") {
+                            restarted.manager.connectionState == DeviceConnectionState.READY
+                        }
+                        assertEquals(radio, restarted.appState.currentRadioId)
+                        assertNotSame(h.container.chatsFeature, restarted.container.chatsFeature)
+                        val currentSlot = requireNotNull(reopenedStore.fetchChannel(radio, slot.index))
+                        assertEquals(replacementSlot.secret, currentSlot.secret)
+                        val retained = requireNotNull(reopenedStore.fetchMessage(key))
+                        assertEquals(saved.id, retained.id)
+                        assertEquals(original, retained.text)
+                        var refusal: MessageServiceException? = null
+                        try {
+                            restarted.container.chatsFeature.sendAgain(
+                                retained, TimelineConversation.Channel(currentSlot),
+                            )
+                        } catch (failure: MessageServiceException) {
+                            refusal = failure
+                        }
+                        restarted.eventually("Send Again either refuses or exposes its unexpected wire send") {
+                            refusal != null || restarted.links.radios.single().sent.any { it[0].toInt() == 3 }
+                        }
+                        assertTrue("Recreated process must never send old A text under replacement B",
+                            restarted.links.radios.single().sent.none { it[0].toInt() in 2..3 })
+                        assertNotNull("Unproved Send Again must return an explicit typed refusal", refusal)
+                        assertEquals(MessageServiceError.ChannelNotFound, requireNotNull(refusal).error)
+                        assertTrue(reopenedStore.fetchPendingSendsForMessage(key).isEmpty())
+                        assertEquals(original, requireNotNull(reopenedStore.fetchMessage(key)).text)
+                    } finally {
+                        restarted.container.close()
+                    }
+                }
             } else if (failBeforeCommit) {
                 assertEquals(0, creations)
                 assertEquals(0, enqueues)
@@ -593,7 +707,17 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             replacement?.close()
             compose.runOnUiThread { host.get().setContent {} }
             compose.waitForIdle()
-            h.container.close()
+            try {
+                if (!initialContainerClosed) h.container.close()
+            } finally {
+                try {
+                    disk?.close()
+                } finally {
+                    if (diskContext != null) {
+                        assertTrue("Only the named fixture database is removed", diskContext.deleteDatabase(diskName))
+                    }
+                }
+            }
         }
     }
 }

@@ -109,6 +109,17 @@ origin or wire authority: raw index-only timeline/history queries can still find
 the row independently of publication, and process-local custody does not survive
 restart. Durable origin-aware query/retry disposition and the actual queue/slot
 fence remain required; no App preflight or green aggregate claims them.
+The restart regression extends that held successful-save schedule with a named
+on-disk Room database. It closes the original App container, store, database and
+store owner, reopens the same database with fresh owners, and reconnects a new
+process container whose firmware reports replacement B. Exact-key recovery must
+preserve the old DTO/text. The actual App Send Again adapter must then return the
+existing typed refusal without a message wire call or pending submission. This
+is a required safety assertion, not an expected-failure/skip annotation: the
+current index-only/process-local implementation is expected to expose the known
+restart defect until the producer and consumer integration is implemented.
+No replacement-history filtering, unbound-history presentation or new UI policy
+is selected by this regression. Exact hosted execution remains authoritative.
 On creation cancellation, only bounded local recovery completes noncancellably;
 the original cancellation propagates. An interrupted enqueue is not blindly
 failed because the queue may still own durable acceptance. A generic enqueue

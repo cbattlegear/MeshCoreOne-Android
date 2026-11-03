@@ -376,6 +376,23 @@ do not manufacture legacy codec/restore evidence. These methods have no native
 execution credit yet. Existing #535/#537, journal/wire and local execution holds
 remain unchanged.
 
+Standalone `bc1726693b24ca2c879d3ca0765ca056ac3135d7` contains only the five
+history implementation/test files, without journal/schema-v3 or held producer
+diffs. It **requires** successor
+`5a999379ae6a5346eb475562a24eaf921cb0e890`: WP-208's source review caught
+`ChannelHistoryRejected.message: EntityKey?` hiding inherited `Exception.message:
+String?`. The successor renames the typed field to `messageKey`, preserves the
+inherited reason string and asserts both exact-key metadata and error reason.
+This is a source-level finding and repair, not an executed Kotlin failure/pass.
+Do not import bc172 alone.
+
+Run [41608771576](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41608771576)
+binds pre-repair evidence head `2584154ab37b88192ca10a7dfbd9922149740304`.
+Cancellation was requested only for this producer's known-invalid diagnostic to
+avoid spending the full build on the source collision. It provides no positive
+history/df6/rendering execution credit. A new exact successor may be dispatched
+only after that same-ref run is terminal; no other producer's run is cancelled.
+
 ## Shared connection admission support
 
 The runtime lifecycle owner and fence owner agreed the bounded WP-201

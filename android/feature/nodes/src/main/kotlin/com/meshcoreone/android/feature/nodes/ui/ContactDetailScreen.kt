@@ -40,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -89,18 +90,19 @@ internal fun ContactDetailScreen(
     modifier: Modifier = Modifier,
 ) {
     val activity = checkNotNull(LocalActivity.current)
+    val entryId = rememberSaveable { UUID.randomUUID().toString() }
     val retained = remember(activity) {
         ViewModelProvider(checkNotNull(activity as? ViewModelStoreOwner))[ContactDetailRetainedState::class.java]
     }
-    val detail = remember(activity, initialContact.id, initialContact.radioId, initialContact.publicKey) {
-        retained.bind(initialContact, dependencies)
+    val detail = remember(activity, entryId, initialContact.id, initialContact.radioId, initialContact.publicKey) {
+        retained.bind(entryId, initialContact, dependencies)
     }
     val scope = detail.scope
     val holder = detail.holder
     val state by holder.state.collectAsStateWithLifecycle()
     val pathState by holder.path.state.collectAsStateWithLifecycle()
     val contact = state.contact
-    val avatarEditor = key(initialContact.radioId, initialContact.id, initialContact.publicKey) {
+    val avatarEditor = key(entryId, initialContact.radioId, initialContact.id, initialContact.publicKey) {
         rememberContactAvatarEditor(detail)
     }
     var showShare by remember { mutableStateOf(false) }
@@ -113,10 +115,10 @@ internal fun ContactDetailScreen(
     }
 
     LaunchedEffect(holder) { holder.run() }
-    DisposableEffect(detail, activity) {
+    DisposableEffect(entryId, detail, activity) {
         onDispose {
             holder.onDisappear()
-            if (!activity.isChangingConfigurations) retained.release(detail)
+            if (!activity.isChangingConfigurations) retained.release(entryId, detail)
         }
     }
 

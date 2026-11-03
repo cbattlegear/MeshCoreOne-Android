@@ -141,8 +141,16 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             recreate()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).assertExists()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).performClick()
-            compose.waitUntil(5_000) {
-                runBlocking { store.fetchContact(targetKey)?.avatarImageData != null }
+            try {
+                compose.waitUntil(5_000) {
+                    harness.scheduler.runCurrent()
+                    runBlocking { store.fetchContact(targetKey)?.avatarImageData != null }
+                }
+            } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
+                System.err.println("Avatar Room save did not complete: " +
+                    compose.onAllNodes(androidx.compose.ui.test.SemanticsMatcher("all mounted nodes") { true },
+                        useUnmergedTree = true).fetchSemanticsNodes().joinToString { it.config.toString() })
+                throw timeout
             }
             val saved = assertNotNull(assertNotNull(store.fetchContact(targetKey)).avatarImageData).toByteArray()
             assertEquals(0xFF, saved[0].toInt() and 0xFF)

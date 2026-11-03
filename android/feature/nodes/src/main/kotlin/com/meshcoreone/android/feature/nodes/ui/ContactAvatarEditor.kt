@@ -60,30 +60,31 @@ import kotlinx.coroutines.withContext
 
 /** Configuration-only retention: private image state never enters a Bundle or persistent store. */
 internal class ContactDetailRetainedState : ViewModel() {
-    private var detail: ContactDetailLifetime? = null
+    private val details = mutableMapOf<String, ContactDetailLifetime>()
+    val lifetimes: List<ContactDetailLifetime> get() = details.values.toList()
 
-    fun bind(contact: ContactDTO, dependencies: NodesFeatureDependencies): ContactDetailLifetime {
-        detail?.takeIf {
+    fun bind(entryId: String, contact: ContactDTO, dependencies: NodesFeatureDependencies): ContactDetailLifetime {
+        details[entryId]?.takeIf {
             it.holder.state.value.contact.let { current ->
                 current.id == contact.id && current.radioId == contact.radioId && current.publicKey == contact.publicKey
             }
         }?.let { return it }
-        detail?.close()
+        details[entryId]?.close()
         return ContactDetailLifetime(contact, dependencies,
             CoroutineScope(viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext[Job])))
-            .also { detail = it }
+            .also { details[entryId] = it }
     }
 
-    fun release(value: ContactDetailLifetime) {
-        if (detail === value) {
+    fun release(entryId: String, value: ContactDetailLifetime) {
+        if (details[entryId] === value) {
             value.close()
-            detail = null
+            details.remove(entryId)
         }
     }
 
     override fun onCleared() {
-        detail?.close()
-        detail = null
+        details.values.forEach(ContactDetailLifetime::close)
+        details.clear()
     }
 }
 

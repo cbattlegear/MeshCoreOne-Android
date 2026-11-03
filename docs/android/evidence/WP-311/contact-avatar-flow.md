@@ -175,3 +175,27 @@ action for the final card of the no-location fixture, then independently require
 the danger-zone action to be visible and the avatar chooser to be outside the
 viewport before releasing the held store. It no longer relies on fixed 600-pixel
 scroll increments. The earlier `2848455` timeout cause remains unproven.
+
+Run [41596055853](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41596055853)
+on `074cd9aeee0e37417318bcb27317c60f4047ef39` failed. The App log's expanded
+stack locates its 5-second timeout at the actual avatar-persistence predicate
+(`ContactAvatarMountedStoreTest.kt:144`), not picker or crop restoration.
+Feature API31 progress/viewport cases and the API37 viewport case exhausted
+`awaitAvatarState` at line119; the retained log omits the predicate description
+and semantics. The command subsequently timed out after 3,600 seconds.
+The available App report printed 1,848 tests with one failure, not a complete
+passing closure. No avatar assertion pass or complete feature count is inferred.
+The next candidate prints the specific failed stage and mounted semantics and
+services the App fixture's actual test scheduler while polling persistence;
+this is discriminating evidence, not an attribution of the timeout's cause.
+
+Review thread `4451891787` also identified a real Activity-singleton collision
+between overlapping navigation entries. The retained owner now maps independent
+saveable entry tokens to separate contact-bound lifetimes. Releasing an outgoing
+same-identity entry cannot cancel the incoming one; binding a different speculative
+entry cannot close the visible entry. Mounted API31/API37 keyed-overlap tests
+exercise preview removal/cancellation with an existing picker and reopening an
+updated same-identity contact while the outgoing entry is disposed, then require
+the surviving entry's actual picker/crop/save and correct stored target. This
+models the entry composition overlap, not physical predictive-Back gesture evidence.
+All previous recreation, stale-identity and cancellation cases remain.

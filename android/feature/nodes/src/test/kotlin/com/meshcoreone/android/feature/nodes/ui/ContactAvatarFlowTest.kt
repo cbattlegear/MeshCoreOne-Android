@@ -15,6 +15,7 @@ import androidx.activity.result.ActivityResultRegistry
 import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -61,6 +62,8 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     private val harness = Harness().connect()
     private val contact = Fixtures.contact(radioId = checkNotNull(harness.session.radioId), name = "Avatar target")
     private val selected = mutableStateOf(contact)
+    private val showSelected = mutableStateOf(true)
+    private val incoming = mutableStateOf<ContactDTO?>(null)
     private val uri = Uri.parse("content://avatar-fixture/selected.png")
     private var requestCode: Int? = null
     private var launched: Intent? = null
@@ -90,7 +93,12 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
                 LocalActivityResultRegistryOwner provides registryOwner,
                 LocalDensity provides Density(1f, 1f),
             ) {
-                ContactDetailScreen(selected.value, harness.dependencies, NodesNavigation.NONE)
+                if (showSelected.value) {
+                    key("outgoing-entry") { ContactDetailScreen(selected.value, harness.dependencies, NodesNavigation.NONE) }
+                }
+                incoming.value?.let { target ->
+                    key("incoming-entry") { ContactDetailScreen(target, harness.dependencies, NodesNavigation.NONE) }
+                }
             }
         }
     }
@@ -116,9 +124,11 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             if (condition()) return
             Thread.sleep(10)
         } while (System.nanoTime() < deadline)
-        error("Timed out waiting for $description: " + allSemanticsNodes().joinToString { node ->
+        val diagnostic = "Timed out waiting for $description: " + allSemanticsNodes().joinToString { node ->
             "${node.config.getOrElse(SemanticsProperties.Text) { emptyList() }}@${node.boundsInRoot}"
-        })
+        }
+        System.err.println(diagnostic)
+        error(diagnostic)
     }
 
     private fun awaitAvatarText(text: String) {
@@ -305,14 +315,14 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         controller.get().runOnUiThread { assertTrue(assertNotNull(zoom.config[SemanticsActions.SetProgress].action).invoke(2f)) }
         advanceFrames()
         action(C.contactsDetailAvatarCropMoveRight)
-        val detail = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].bind(contact, harness.dependencies)
+        val detail = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].lifetimes.single()
         val originalImage = assertNotNull(detail.image)
         val originalGeometry = detail.geometry
         assertEquals(2.0, originalGeometry.scale)
         assertTrue(originalGeometry.offset.x > 0)
         recreateHost()
         awaitAction(controller.get().getString(C.contactsDetailAvatarCropChoose))
-        val restored = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].bind(contact, harness.dependencies)
+        val restored = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].lifetimes.single()
         assertSame(detail, restored)
         assertSame(originalImage, restored.image)
         assertEquals(originalGeometry, restored.geometry)
@@ -339,7 +349,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     fun recreationDoesNotRestoreAPendingPickerForAReplacementIdentity() {
         start()
         pick(file = true)
-        val previous = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].bind(contact, harness.dependencies)
+        val previous = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].lifetimes.single()
         val replacement = contact.copy(publicKey = Fixtures.repeated(0xAB))
         harness.store.contacts[0] = replacement
         selected.value = replacement
@@ -382,6 +392,60 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         } finally {
             gate.cancel()
         }
+    }
+
+    @Test
+    fun cancelledOverlappingBackPreviewLeavesTheVisibleContactsPendingPickerUsable() {
+        start()
+        pick(file = true)
+        val retained = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java]
+        val original = retained.lifetimes.single()
+        val preview = Fixtures.contact(radioId = contact.radioId, name = "Back preview")
+        harness.store.contacts += preview
+        controller.get().runOnUiThread { incoming.value = preview }
+        advanceFrames()
+        assertEquals(2, retained.lifetimes.size)
+        assertTrue(original.active)
+        assertTrue(original.picking)
+        controller.get().runOnUiThread { incoming.value = null }
+        advanceFrames()
+        assertSame(original, retained.lifetimes.single())
+        assertTrue(original.active)
+        result()
+        action(C.contactsDetailAvatarCropChoose)
+        awaitAvatarState("the original visible entry's save after preview cancellation") {
+            harness.store.contacts.first { it.id == contact.id }.avatarImageData != null
+        }
+        assertEquals(listOf(contact.key), harness.contactService.avatars.map { it.first })
+        assertNull(harness.store.contacts.first { it.id == preview.id }.avatarImageData)
+    }
+
+    @Test
+    fun outgoingSameIdentityEntryCannotCancelTheReopenedUpdatedContactsPickerAndSave() {
+        start()
+        val retained = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java]
+        val outgoing = retained.lifetimes.single()
+        val updated = contact.copy(nickname = "Updated contact")
+        harness.store.contacts[0] = updated
+        controller.get().runOnUiThread { incoming.value = updated }
+        advanceFrames()
+        assertEquals(2, retained.lifetimes.size)
+        val reopened = retained.lifetimes.single { it !== outgoing }
+        assertTrue(outgoing.active)
+        assertTrue(reopened.active)
+        controller.get().runOnUiThread { showSelected.value = false }
+        advanceFrames()
+        kotlin.test.assertFalse(outgoing.active)
+        assertSame(reopened, retained.lifetimes.single())
+        assertEquals("Updated contact", reopened.holder.state.value.contact.nickname)
+        pick(file = true)
+        result()
+        action(C.contactsDetailAvatarCropChoose)
+        awaitAvatarState("the reopened entry's independent save") {
+            harness.store.contacts.single().avatarImageData != null
+        }
+        assertEquals(listOf(contact.key), harness.contactService.avatars.map { it.first })
+        assertEquals("Updated contact", harness.store.contacts.single().nickname)
     }
 
     @Test

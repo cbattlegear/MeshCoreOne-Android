@@ -123,7 +123,9 @@ class ContactService(
                     if (!fullSnapshotApplied || devicePublicKeys.size.toLong() != fetchResult.reportedTotal) {
                         throw ContactServiceError.SyncInterrupted()
                     }
-                    ContactWriteRecovery.reconciled(preferences, radioId, recoveryEpoch)
+                    if (!ContactWriteRecovery.reconciled(preferences, radioId, recoveryEpoch)) {
+                        throw ContactServiceError.SyncInterrupted()
+                    }
                 }
                 ContactSyncResult(
                     contactsReceived = receivedCount,

@@ -65,7 +65,10 @@ preserving the existing repository contract invariant and its unrelated tests.
 The production process container passes the same `ContactPreferenceFlags` instance
 through each `SessionEnvironment` and replacement radio graph, so the in-process
 epoch and sync fence are shared. Its SharedPreferences adapter uses checked
-synchronous `commit()`; this is not device or abrupt-process-death evidence.
+synchronous `commit()`. If a persisted recovery marker is loaded without its
+in-memory dispatch provenance, sync now fails closed before snapshot capture;
+there is no automatic drain-proof/recovery path for that state today. This is
+not device or abrupt-process-death execution evidence.
 
 The initial supported `claim` attempt was refused with
 `Existing WP lease is bound to different source/base/manifest/backend`.
@@ -78,21 +81,27 @@ ContactService/service-test overlap; its UI stays with its existing owner.
 
 ## Behavioral evidence to execute
 
-`ContactWriteRecoveryTests` contains 18 deterministic methods using an actual
+`ContactWriteRecoveryTests` contains 20 deterministic methods using an actual
 `MeshCoreSession` and controlled raw frames, not a fake contact session:
 queued-before-send cancellation; retired caller plus late successful ACK;
 identical/different replacement delivery correlation; active and late rejection;
-unanswered radio acceptance followed by a fresh-session full sync; active and
-orphaned local-save failure; accepted persistence-tail serialization; greater and
+an unanswered possibly-written command that blocks a replacement sync before
+snapshot capture and remains blocked after a simulated late radio-side application;
+active and orphaned local-save failure; accepted persistence-tail serialization; greater and
 equal-timestamp newer metadata, including a live superseded completion that must
 not return import success; failed durable recovery recording with explicit
 failure and process-retained uncertainty; teardown/different-radio replacement;
 queued-write exclusion after cancellation, ordinary subsequent-write admission,
-partial-snapshot rejection, an already-queued write rejected at the sync
-dispatch boundary, and blocked write admission while a full-snapshot batch save
-is held. The service fence also remains active through pruning and marker
-clearing. Service persistence here is an explicit in-memory role, not claimed
-Room evidence.
+partial-snapshot rejection, pre-snapshot refusal while a prior exchange can still
+write, invalidation of a queued cross-session write released after an omitted
+snapshot is captured but before local application, fail-closed persisted markers
+without dispatch provenance, and blocked write admission while a full-snapshot
+batch save is held. The fence atomically checks for potentially writable exchanges
+before snapshot capture, remains active through pruning and marker clearing, and
+refuses stale snapshot application when the old exchange could have completed
+during that interval. No full sync, teardown, reconnect or READY state is treated
+as physical drain proof. Service persistence here is an explicit in-memory role,
+not claimed Room evidence.
 
 `ContactWriteCompletionRoomTest` has three real-Room methods for transactional
 radio isolation, complete local metadata preservation, stale/equal-time CAS

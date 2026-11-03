@@ -874,8 +874,9 @@ class ConnectionManager(
     override fun setConnectionState(state: DeviceConnectionState) {
         synchronized(lock) {
             if (state == DeviceConnectionState.DISCONNECTED) {
-                active?.let(::revokeDispatchAdmissionLocked)
-                retained?.let(::revokeDispatchAdmissionLocked)
+                // A UI timeout may leave a session rebuild in progress; it cannot retire an unbound owner.
+                active?.takeIf { it.dispatchAdmission != null }?.let(::revokeDispatchAdmissionLocked)
+                retained?.takeIf { it.dispatchAdmission != null }?.let(::revokeDispatchAdmissionLocked)
             }
             publish { copy(state = state, token = if (state == DeviceConnectionState.DISCONNECTED) null else token) }
         }

@@ -65,11 +65,12 @@ early teardown revokes its same handle before later publication can succeed.
 
 ## Authored discriminators
 
-Eight runtime dynamic cases use the actual ConnectionManager and MeshCoreSession:
+Nine runtime dynamic cases use the actual ConnectionManager and MeshCoreSession:
 exact binding; noncooperative detached-before-factory-publication; retained
 rebuild/admitted accounting; stale owner callbacks; synchronous link-loss
 revocation; paused correlation recovery with retained accounting; early factory
-close; reconnection failure plus shutdown while service teardown is held.
+close; reconnection failure plus shutdown while service teardown is held; and
+display-only disconnect during an unbound rebuild without old-handle revival.
 
 Four App tests compose the real process graph and Room store. They exercise a
 fresh actual GET_CHANNEL plus scoped save/reconciliation followed by an actual
@@ -115,6 +116,20 @@ DTO saves retain existing and pending history while occupant epochs still rotate
 authoritative replacement remains separately discriminated. Existing reopen
 assertions use the actual schema version. This is not a schema-3/journal import
 and has no Kotlin execution credit until a fresh exact-candidate run.
+
+Third hosted run [41604592496](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41604592496)
+at exact `8531735ee8420bb23198af6ae4d0f0dee427272e` compiled and executed
+308 runtime tests: 306 passed, two failed (startup best-effort recovery assertion
+and native force-reconnect during rebuild timeout). Available reports discovered
+6,908 tests, 6,906 passed and two failed, zero errors/skips. Mandatory App,
+services and other reports were absent; this is not lifecycle acceptance.
+The rebuild timeout exposed display-only DISCONNECTED poisoning an unbound
+handshake without scheduling retirement. Only existing admission is revoked at
+that display setter; all actual ownership boundaries retain early revocation.
+The startup schedule now explicitly requests fresh connection after the
+unpersisted first attempt retires. Runtime failure logging follows the existing
+services/App pattern so exact failed assertions are visible under hosted quiet
+Gradle execution, without collecting a second CI-result bundle.
 
 Full production ChannelService wiring is blocked by its owner's frozen WP-405
 dispatch/UUID-receipt/uncertainty cohort; MessageService wiring remains its current

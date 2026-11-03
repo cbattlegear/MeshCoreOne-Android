@@ -89,6 +89,35 @@ class ChannelDispatchLifecycleTest {
                 assertTrue(old.dispatchAdmission.isRevoked, "zero accounting is not drain or reactivation")
             }
         },
+        nativeCase("display-only disconnect during rebuild does not retire its unbound owner or reactivate an old admission") {
+            withFixture {
+                connect()
+                val old = services.single().inputs
+                manager.teardownSessionForReconnect()
+                val resumeHandshake = CompletableDeferred<Unit>()
+                createRadio = { TestRadio().also { radio ->
+                    radio.beforeSend = { frame -> if (frame[0].toInt() == 1) resumeHandshake.await() }
+                } }
+                val rebuild = backgroundScope.async { manager.rebuildSession(platform.target.deviceId) }
+                runCurrent()
+                assertEquals(2, radios.size)
+                assertFalse(rebuild.isCompleted)
+                manager.setConnectionState(DeviceConnectionState.DISCONNECTED)
+                assertTrue(old.dispatchAdmission.isRevoked)
+                assertNull(old.dispatchAdmission.tryAcquire(old.connection.token, old.connection.session))
+                resumeHandshake.complete(Unit)
+                runCurrent()
+                rebuild.await()
+                val fresh = services.last().inputs
+                assertNotSame(old.dispatchAdmission, fresh.dispatchAdmission)
+                assertFalse(fresh.dispatchAdmission.isRevoked)
+                assertEquals(DeviceConnectionState.READY, manager.connectionState)
+                manager.setConnectionState(DeviceConnectionState.DISCONNECTED)
+                manager.setConnectionState(DeviceConnectionState.READY)
+                assertTrue(fresh.dispatchAdmission.isRevoked, "display recovery cannot reopen an existing handle")
+                assertNull(fresh.dispatchAdmission.tryAcquire(fresh.connection.token, fresh.connection.session))
+            }
+        },
         nativeCase("stale callbacks from a retired owner cannot revoke its successor") {
             withFixture {
                 connect()

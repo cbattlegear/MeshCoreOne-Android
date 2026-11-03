@@ -139,6 +139,15 @@ passing SwiftData restore/export oracle is not an iOS-device run.
 
 ### Exact current-base candidate diagnostics
 
+- Candidate `ce21ba5185d46c036949e0ceb078090cbe37beac`, run
+  [41608021764, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41608021764),
+  completed successfully with every selected workflow job passing, including
+  the controller/policy suite, Linux Android build, Swift codec oracle and
+  SwiftData restore/export oracle. The Android logs positively discovered all
+  20 `ContactWriteRecoveryTests` invocations; the service test task and build
+  job passed. The SwiftData oracle is hosted codec/restore evidence, not an
+  iOS-device run. This feature-branch diagnostic is not PR-bound protected
+  merge evidence.
 - Candidate `87d045629c208c3d38e4af92a8f301db3f7d0636`, run
   [41603718675, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41603718675),
   completed with the scope classifier, Swift codec oracle and controller/policy

@@ -217,7 +217,7 @@ class ChatSendQueueService(
         reportQueryAccounting(id, ChannelQueryAccountingOutcome.PARKED)
         finishQueryAccounting(id)
         clock.messagingDeadline(config.transportWaitTimeout) { triggers.wait() }
-        ownership.checkLifetime("park.woke")
+        // Retirement racing a selected wake must not send this persisted envelope to terminal handling.
         throw CancellationException("Parked send envelope")
     }
     private suspend fun remapPending(id: UUID) = withContext(NonCancellable) {

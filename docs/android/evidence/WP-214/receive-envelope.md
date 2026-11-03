@@ -15,7 +15,7 @@
 
 This is an explicitly assigned WP-214 prerequisite, not a second implementation
 of the completed timestamp-range repair (#392 / #488). Its producer edits only
-the new contracts carrier, actual message poller, new poller test and these
+the additive carrier in the existing contracts file, actual message poller, new poller test and these
 WP-owned evidence/deviation records. The existing sync registration, handler,
 ordinary save, timestamp recovery and downstream effects remain unchanged.
 No application consumer installs the new opt-in handler.
@@ -26,7 +26,7 @@ Trusted `tools/android-port/local/reserve.py admit --wp WP-214` returned:
 
 | Path | Operation | Capability |
 | --- | --- | --- |
-| `android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/ChannelReceiveEnvelope.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
+| `android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/ServiceContracts.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
 | `android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/messaging/MessagePollingService.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
 | `android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/messaging/ChannelReceiveEnvelopeTest.kt` | `add-or-update-related-test` | `reviewed-support-test` |
 | `docs/android/evidence/WP-214/receive-envelope.md` | `modify` | `wp-owned` |
@@ -42,12 +42,22 @@ write and permits isolated, assigned, capability-admitted authoring.
 The coordinator supplied the bounded WP-307 poller-custody reconciliation and
 13a/bef/b5 disjoint dispositions. b5 retains DTO/history/storage; bef retains
 queue support. Neither history snapshots nor a public UUID confer receive proof.
-No custody transfer is inferred. A subsequent complete check of all 18 open
-published PR file lists (#495 through #540, not a numerical range of ownership)
-found no overlap with these five exact paths; neither PR-list nor file-list
-pagination was truncated. This check is a point-in-time published-source
-observation, not global clearance for unpublished work. Real new overlap blocks
-integration.
+No custody transfer is inferred. A complete initial check of all 18 open
+published PR file lists found no overlap with the original five-path proposal.
+Full data-only review staging subsequently rejected the added carrier file:
+`Related consumer support may modify existing files only`. A standalone path
+admission had not established that diff invariant. No staged receipt or trusted
+verdict was produced. The final candidate instead adds the carrier and separate
+opt-in interface beside the unchanged polling protocol in the existing
+`ServiceContracts.kt`, a genuinely related existing contract surface.
+
+Before that additional path was edited, its named trusted admission passed,
+all 20 then-open published PR file lists showed no `ServiceContracts.kt`
+overlap, and b5 confirmed no dirty, unpublished or current intended edit there.
+Neither published-list check was truncated. These are point-in-time bounded
+dispositions, not global clearance, a custody transfer or activation approval.
+Full trusted staging of the final diff remains independently required. Real new
+overlap blocks integration.
 
 ## Carrier and occurrence behavior
 
@@ -70,10 +80,13 @@ Delivery objects retain their envelope while observed/buffered, parked and
 retried. Pairing an event with its poll response preserves the occurrence and
 origin while selecting the existing `InitialSync` context. Expected echoes
 retain the original delivery; typed matching cannot consume a distinct equal
-event. Both searches prefer the exact parsed message across the complete buffer
-before permitting a legacy structural fallback, including mixed legacy/opt-in
-observations during handler switches. Contact echo counts and the legacy
-structural fallback remain unchanged. Selecting either channel handler replaces the other, never calls
+event. For a matching family involving opt-in observations, both searches prefer
+the exact parsed message across the complete buffer before a legacy structural
+fallback, including mixed observations during handler switches. Entirely legacy
+families retain the trusted base's structural-first selection, polled-message
+argument and callback/context order. They do not inherit an intentional
+deduplication behavior change. Contact echo counts remain unchanged. Selecting
+either channel handler replaces the other, never calls
 both, and leaves ownership, lookup, failure, cancellation and close handling in
 the existing dispatch path. Install the opt-in handler before receiving;
 switching later cannot recover observations already coalesced by legacy logic.
@@ -105,7 +118,7 @@ All existing local-execution/user and protected merge holds are preserved.
 
 ## Authored cases and actual validation
 
-`ChannelReceiveEnvelopeTest` authors 15 native dynamic cases, using the existing
+`ChannelReceiveEnvelopeTest` authors 16 native dynamic cases, using the existing
 real session/parser/raw-transport harness with controlled scheduling:
 
 - Equal V1/V3 raw inputs produce separate occurrences, each explicitly Unproved.
@@ -120,6 +133,9 @@ real session/parser/raw-transport harness with controlled scheduling:
 - Legacy-to-opt-in-to-legacy switching with two outstanding reordered echoes
   and with mixed buffered observations prefers the exact occurrence globally,
   retaining the correct `InitialSync`/`Live` contexts without a duplicate callback.
+- A separate pure-legacy held/reordered control retains the actual trusted-base
+  callback objects and `InitialSync`-then-`Live` context order. It does not
+  silently approve the opt-in ordering as the legacy behavior.
 - The reserved proof state exposes no public constructor or copy/mint factory.
 
 These supplement, not replace or newly credit, pinned original Swift families.
@@ -146,7 +162,7 @@ and uses the existing `Native adaptation` convention for this slice; the final
 mapping check passed without weakening a validator.
 
 Local Kotlin compilation/Gradle/native execution was not run: the existing
-execution/user holds remain. Fifteen is an authored count, not a discovered or
+execution/user holds remain. Sixteen is an authored count, not a discovered or
 passed count. This is an explicitly **unverified product candidate** pending the
 existing exact-head hosted build/tests and trusted review. Exact-commit hosted
 job results and logs are authoritative; no second CI-result bundle is retained.

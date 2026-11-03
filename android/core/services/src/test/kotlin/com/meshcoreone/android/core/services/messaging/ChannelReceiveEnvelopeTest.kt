@@ -374,6 +374,37 @@ class ChannelReceiveEnvelopeTest {
             assertEquals(0, p.undeliveredCount)
             assertTrue(p.close().isComplete)
         },
+        case("pure legacy retains structural-first polled-object callbacks and InitialSync then Live order") {
+            val h = Harness(this)
+            h.start()
+            val role = ControlledReceiveSession(h.session, reorderFirstPair = true)
+            val pollGate = CompletableDeferred<Unit>()
+            role.pollGate = pollGate
+            val p = h.poller(role)
+            val received = mutableListOf<Pair<ChannelMessage, DeliveryContext>>()
+            p.setChannelMessageHandler { message, _, context -> received += message to context }
+            p.startMessageEventMonitoring()
+            h.transport.incomingMessages += channelPacket()
+            val polling = backgroundScope.async { p.pollAllMessages() }
+            runCurrent()
+            assertFalse(polling.isCompleted)
+            h.transport.mock.simulateReceive(channelPacket())
+            runCurrent()
+            assertEquals(2, role.observed.size)
+            assertEquals(role.observed[0], role.observed[1])
+            assertTrue(role.observed[0] !== role.observed[1])
+            pollGate.complete(Unit)
+            assertEquals(1L, polling.await())
+            runCurrent()
+
+            assertEquals(2, received.size)
+            assertSame(role.polled.single(), received[0].first)
+            assertIs<DeliveryContext.InitialSync>(received[0].second)
+            assertSame(role.polled.single(), received[1].first)
+            assertEquals(DeliveryContext.Live, received[1].second)
+            assertEquals(0, p.undeliveredCount)
+            assertTrue(p.close().isComplete)
+        },
         case("reserved proved state has no public constructor or copy factory") {
             val proof = ChannelReceiveOrigin.Proved::class.java
             assertTrue(proof.declaredConstructors.all { Modifier.isPrivate(it.modifiers) })

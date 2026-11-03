@@ -296,9 +296,11 @@ class MessagePollingService(
                     if (seen >= 0) {
                         repeat(seen) { pending.addLast(observedDuringPoll.removeFirst()) }
                         val observed = observedDuringPoll.removeFirst()
-                        delivery = observed.inContext(delivery.context).copy(
-                            matchesChannelOccurrence = observed.matchesChannelOccurrence || delivery.matchesChannelOccurrence,
-                        )
+                        if (sameChannelOccurrence(observed, delivery)) {
+                            delivery = observed.inContext(delivery.context).copy(
+                                matchesChannelOccurrence = observed.matchesChannelOccurrence || delivery.matchesChannelOccurrence,
+                            )
+                        }
                     } else {
                         transferObserved()
                         if (monitorActive) expectEcho(delivery)
@@ -364,17 +366,21 @@ class MessagePollingService(
     }
 
     private fun matchingIndex(deliveries: List<Delivery>, incoming: Delivery): Int {
-        val channel = incoming.channelEnvelope
-        if (channel != null) {
-            // SessionCore shares the parsed message object. Prefer it across the whole buffer before
-            // trying legacy equality, which could otherwise consume another outstanding occurrence.
-            val exact = deliveries.indexOfFirst {
-                val observed = it.channelEnvelope
-                observed != null && observed.message === channel.message && observed.origin == channel.origin
-            }
+        val occurrenceAware = incoming.matchesChannelOccurrence ||
+            deliveries.any { it.matchesChannelOccurrence && it.event == incoming.event }
+        if (incoming.channelEnvelope != null && occurrenceAware) {
+            // Mixed/opt-in families prefer the shared parsed object before legacy equality.
+            // Entirely legacy families retain structural-first callback/context behavior.
+            val exact = deliveries.indexOfFirst { sameChannelOccurrence(it, incoming) }
             if (exact >= 0) return exact
         }
         return deliveries.indexOfFirst { matchesEcho(it, incoming) }
+    }
+
+    private fun sameChannelOccurrence(first: Delivery, second: Delivery): Boolean {
+        val left = first.channelEnvelope ?: return false
+        val right = second.channelEnvelope ?: return false
+        return left.message === right.message && left.origin == right.origin
     }
 
     private fun expectEcho(delivery: Delivery) {

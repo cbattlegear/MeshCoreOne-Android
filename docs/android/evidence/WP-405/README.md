@@ -75,6 +75,19 @@ invocation was started. Available Linux disk space was approximately 1.6 GiB;
 this is not proof that disk exhaustion caused the interruption.
 The candidate remains unverified and unpublished.
 
+The execution owner independently confirmed the exact receipt/admission and
+missing cleanup proof. Trusted `execution_recovery.py` conservatively treats
+any existing process at the recorded PID as potentially live; the receipt
+does not retain launcher birth identity. Both ordinary recovery and the
+invocation-owned cancellation route therefore refuse this reused PID.
+PID exit alone would still not supply the missing supervisor cleanup proof.
+The owner escalated this supported-recovery gap to the coordinator without
+signalling the unrelated process, modifying the ledger or releasing the lane.
+The existing emergency route requires a verified full Windows restart after
+the invocation plus explicit original-host/preboot abandonment attribution;
+neither is established here. Product execution remains blocked on supported
+execution-owner recovery, not an administrative pause or an App test failure.
+
 ## Form-instance follow-up: historical source-only held candidate
 
 This follow-up builds on local unpublished

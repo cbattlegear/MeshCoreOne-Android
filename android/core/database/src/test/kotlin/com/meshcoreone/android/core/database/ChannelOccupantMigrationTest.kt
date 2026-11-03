@@ -38,7 +38,7 @@ class ChannelOccupantMigrationTest {
                     val entity = entities.getJSONObject(i)
                     val table = entity.getString("tableName")
                     legacy.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
-                    val indices = entity.getJSONArray("indices")
+                    val indices = if (entity.has("indices")) entity.getJSONArray("indices") else org.json.JSONArray()
                     for (j in 0 until indices.length()) {
                         legacy.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
                     }

@@ -8,6 +8,7 @@
 // PortedFrom: MeshCore/Sources/MeshCore/Protocols/MessagingSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MeshCore/Sources/MeshCore/Protocols/RemoteAccessSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MeshCore/Sources/MeshCore/Protocols/SessionEventStreaming.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-209 Accepted-contact completion and cancellation accounting within the existing exchange owner.
 package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -38,6 +39,15 @@ interface ContactSessionOps {
     /** Only NOT_FOUND returns null; other device errors propagate with their raw code. */
     suspend fun getContact(publicKey: Bytes): MeshContact?
     suspend fun addContact(contact: MeshContact)
+    /**
+     * Completes an accepted write before releasing its response owner. The completion must not
+     * issue another session request. Legacy implementations cannot prove cancellation was unsent.
+     */
+    suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+        dispatch.exchangeDispatch.claim()
+        addContact(contact)
+        onCommitted()
+    }
     suspend fun removeContact(publicKey: Bytes)
     suspend fun resetPath(publicKey: Bytes)
     suspend fun sendPathDiscovery(destination: Bytes): MessageSentInfo
@@ -46,6 +56,15 @@ interface ContactSessionOps {
     suspend fun exportContact(publicKey: Bytes? = null): String
     suspend fun importContact(cardData: Bytes)
     suspend fun changeContactFlags(contact: MeshContact, flags: ContactFlags)
+}
+
+/** Android-only cancellation fence for a contact write, using the existing serialized-write accounting. */
+class ContactWriteDispatch {
+    internal val exchangeDispatch = ChannelWriteDispatch()
+
+    /** Read after cancellation; false means unknown or potentially written, never rolled back. */
+    val definitelyUnsent: Boolean
+        get() = exchangeDispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT
 }
 
 interface ChannelSessionOps {

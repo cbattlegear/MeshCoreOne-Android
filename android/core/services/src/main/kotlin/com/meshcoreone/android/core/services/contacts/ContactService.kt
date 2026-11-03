@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.protocol.model.ErrorCode
 import com.meshcoreone.android.core.protocol.model.MeshContact
 import com.meshcoreone.android.core.protocol.session.ContactSessionOps
+import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import java.time.Clock
 import java.time.Instant
 import kotlin.coroutines.cancellation.CancellationException
@@ -91,7 +92,9 @@ class ContactService(
      *   `null` is a full sync that may prune local contacts the device no longer has.
      */
     override suspend fun syncContacts(radioId: RadioId, since: Instant?): ContactSyncResult = mapSession {
-        val fetchResult = session.getContactsReportingTotal(since)
+        val recoveryEpoch = ContactWriteRecovery.snapshot(preferences, radioId)
+        val effectiveSince = if (recoveryEpoch != null) null else since
+        val fetchResult = session.getContactsReportingTotal(effectiveSince)
         val meshContacts = fetchResult.contacts
         val total = meshContacts.size.toLong()
 
@@ -109,14 +112,20 @@ class ContactService(
         eventBroadcaster.yield(ContactServiceEvent.SyncProgress(received = receivedCount, total = total))
 
         // On full sync, remove local contacts that no longer exist on device.
-        if (since == null) {
+        val fullSnapshotApplied = if (effectiveSince == null) {
             pruneOrphans(radioId, devicePublicKeys, fetchResult.reportedTotal)
-        }
+        } else false
 
+        if (recoveryEpoch != null) {
+            if (!fullSnapshotApplied || devicePublicKeys.size.toLong() != fetchResult.reportedTotal) {
+                throw ContactServiceError.SyncInterrupted()
+            }
+            ContactWriteRecovery.reconciled(preferences, radioId, recoveryEpoch)
+        }
         ContactSyncResult(
             contactsReceived = receivedCount,
             lastSyncTimestamp = lastTimestamp,
-            isIncremental = since != null,
+            isIncremental = effectiveSince != null,
         )
     }
 
@@ -127,20 +136,20 @@ class ContactService(
      * total. A `null` [reportedTotal] means no header, so completeness is unprovable and the prune
      * skips. Without a usable self public key the V-contact cannot be identified, so it skips too.
      */
-    private suspend fun pruneOrphans(radioId: RadioId, devicePublicKeys: Set<Bytes>, reportedTotal: Long?) {
+    private suspend fun pruneOrphans(radioId: RadioId, devicePublicKeys: Set<Bytes>, reportedTotal: Long?): Boolean {
         if (reportedTotal == null) {
             logger.log(
                 ContactLogLevel.NOTICE,
                 "Full sync prune skipped: device sent no contact total (missing contactsStart header)",
             )
-            return
+            return false
         }
         if (devicePublicKeys.size < reportedTotal) {
             logger.log(
                 ContactLogLevel.NOTICE,
                 "Full sync prune skipped: received ${devicePublicKeys.size} of $reportedTotal reported device contacts (incomplete snapshot)",
             )
-            return
+            return false
         }
         val selfPublicKey = contactTryOptional { devices.fetchDevice(radioId) }?.publicKey
         if (selfPublicKey == null || selfPublicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) {
@@ -148,7 +157,7 @@ class ContactService(
                 ContactLogLevel.NOTICE,
                 "Full sync prune skipped: self public key unavailable or invalid, cannot exclude the V-contact",
             )
-            return
+            return false
         }
 
         val localContacts = contacts.fetchContacts(radioId)
@@ -172,6 +181,7 @@ class ContactService(
             contacts.deleteContact(key)
             cleanupCoordinator?.handleCleanup(key, ContactCleanupReason.DELETED, localContact.publicKey)
         }
+        return true
     }
 
     /**
@@ -209,20 +219,58 @@ class ContactService(
     suspend fun getContact(radioId: RadioId, publicKey: Bytes): ContactDTO? =
         contacts.fetchContact(radioId, publicKey)
 
-    /** Add or update a contact on the device, then persist it locally. */
+    /**
+     * The sent exchange owns accepted-write persistence even if this caller retires. Cancellation
+     * still propagates to the UI; a potentially written or incompletely accounted write requires
+     * a full sync of this radio, never a claimed rollback.
+     */
     suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
+        val previousFrame = contacts.fetchContact(radioId, contact.publicKey)?.toContactFrame()
+        val dispatch = ContactWriteDispatch()
         try {
-            session.addContact(contact.toMeshContact())
-
-            // Save to local database
-            contacts.saveContact(radioId, contact)
-
-            // Notify UI to refresh contacts list
-            syncCoordinator?.notifyContactsChanged()
+            session.addContact(contact.toMeshContact(), dispatch) {
+                withContext(NonCancellable) {
+                    try {
+                        contacts.saveContactPreservingNewer(radioId, contact, previousFrame)
+                        syncCoordinator?.notifyContactsChanged()
+                    } catch (cancelled: CancellationException) {
+                        requireContactWriteReconciliation(radioId, cancelled)
+                        throw cancelled
+                    } catch (error: Exception) {
+                        requireContactWriteReconciliation(radioId, error)
+                        throw ContactWriteCompletionFailed(radioId, contact.publicKey, error)
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            if (!dispatch.definitelyUnsent) requireContactWriteReconciliation(radioId, cancelled)
+            throw cancelled
         } catch (error: MeshCoreException) {
+            if (error !is MeshCoreException.DeviceError && error !is MeshCoreException.InvalidInput) {
+                requireContactWriteReconciliation(radioId, error)
+            }
             if (error.isDeviceError(ErrorCode.TABLE_FULL)) throw ContactServiceError.ContactTableFull()
             throw ContactServiceError.SessionError(error)
+        } catch (error: ContactWriteCompletionFailed) {
+            throw error
+        } catch (error: Exception) {
+            requireContactWriteReconciliation(radioId, error)
+            throw error
         }
+    }
+
+    /** Survives replacement of this service through the injected process-persistent preferences. */
+    fun needsContactWriteReconciliation(radioId: RadioId): Boolean =
+        ContactWriteRecovery.snapshot(preferences, radioId) != null
+
+    private fun requireContactWriteReconciliation(radioId: RadioId, failure: Exception) {
+        try {
+            ContactWriteRecovery.require(preferences, radioId)
+        } catch (recordingFailure: Exception) {
+            failure.addSuppressed(recordingFailure)
+            logger.log(ContactLogLevel.WARNING, "Contact write recovery marker could not be persisted")
+        }
+        logger.log(ContactLogLevel.WARNING, "Contact write requires a complete radio contact sync")
     }
 
     /**

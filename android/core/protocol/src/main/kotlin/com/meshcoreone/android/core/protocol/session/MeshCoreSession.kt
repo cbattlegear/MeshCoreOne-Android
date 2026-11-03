@@ -20,7 +20,9 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 
 class MeshCoreSession private constructor(
     transport: MeshTransport,
@@ -206,10 +208,17 @@ class MeshCoreSession private constructor(
             }
         }
     }
-    override suspend fun addContact(contact: MeshContact) {
+    override suspend fun addContact(contact: MeshContact) = addContact(contact, ContactWriteDispatch()) {}
+
+    override suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+        dispatch.exchangeDispatch.claim()
         requireFullPublicKey(contact.publicKey, "addContact")
         validateContactPath(contact.outPathLength, contact.outPath)
-        simple(PacketBuilder.updateContact(contact))
+        core.exchange(dispatch.exchangeDispatch) {
+            simple(PacketBuilder.updateContact(contact))
+            // The radio has committed. Caller cancellation or teardown cannot undo this local tail.
+            withContext(NonCancellable) { onCommitted() }
+        }
     }
     override suspend fun removeContact(publicKey: Bytes) { requireFullPublicKey(publicKey, "removeContact"); simple(PacketBuilder.removeContact(publicKey)) }
     override suspend fun resetPath(publicKey: Bytes) { requireFullPublicKey(publicKey, "resetPath"); simple(PacketBuilder.resetPath(publicKey)) }

@@ -132,10 +132,11 @@ internal fun RemoteNodeMapContent(
     mapHeight: Dp = 320.dp,
     preferenceHost: MapFilterHost = MapFilterHost.MAIN_MAP,
     preserveCameraOnContentChange: Boolean = false,
+    saveCameraState: Boolean = true,
 ) = RemoteMapPreferencesContent(preferenceHost) { preferences, save ->
     RemoteNodeMapContentWithPreferences(
         title, points, lines, region, onSelect, surface, onCameraChanged, mapHeight,
-        preferences, preserveCameraOnContentChange, { enabled -> save { setLabels(enabled) } },
+        preferences, preserveCameraOnContentChange, saveCameraState, { enabled -> save { setLabels(enabled) } },
         { enabled -> save { setClustering(enabled) } },
     )
 }
@@ -152,6 +153,7 @@ private fun RemoteNodeMapContentWithPreferences(
     mapHeight: Dp,
     preferences: MapPreferences,
     preserveCameraOnContentChange: Boolean,
+    saveCameraState: Boolean,
     onLabelsChanged: (Boolean) -> Unit,
     onClusteringChanged: (Boolean) -> Unit,
 ) {
@@ -159,9 +161,12 @@ private fun RemoteNodeMapContentWithPreferences(
     val system = MeasurementSystem.of(locale)
     val unit = stringResource(SnrBadge.UNIT_TEXT_RESOURCE)
     val presentation = remember(points, lines, region, locale, system, unit) { remoteMapPresentation(points, lines, region, locale, system, unit) }
-    var encodedCamera by rememberSaveable(if (preserveCameraOnContentChange) null else region) {
-        mutableStateOf<String?>(null)
+    val encodedCameraState = if (saveCameraState) {
+        rememberSaveable(if (preserveCameraOnContentChange) null else region) { mutableStateOf<String?>(null) }
+    } else {
+        remember(region) { mutableStateOf<String?>(null) }
     }
+    var encodedCamera by encodedCameraState
     var style by rememberSaveable { mutableStateOf(MapStyle.STANDARD) }
     val uri = LocalUriHandler.current
     val isDark = resolvedMapIsDark(preferences.appearance, isSystemInDarkTheme())

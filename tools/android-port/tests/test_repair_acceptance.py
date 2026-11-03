@@ -724,6 +724,137 @@ class RepairExecutionTests(unittest.TestCase):
                         with self.assertRaises(PortError):
                             validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
 
+    def test_anonymous_collaborators_preserve_complete_named_hosted_coverage(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        sources = {
+            TEST: b"package sample\nimport org.junit.Before\nclass MapTest : Parent() { "
+                  b"val renderer = object : Renderer<Bitmap> { override fun render() = bitmap() }; "
+                  b"@Before fun setup() {} @Test fun keepsListReachable() { "
+                  b"val http = object : HttpFetching { override fun fetch() = response() } }; "
+                  b"@Test fun collaboratorsKeepTheirLexicalScope() { "
+                  b"use(object : Renderer<Bitmap> { override fun render() = bitmap() }) } }",
+            base: b"package sample\nopen class Parent {}",
+        }
+        names = (METHOD["id"], "collaboratorsKeepTheirLexicalScope")
+        for whole in (False, True):
+            manifest, scope, blobs, contents, _, compiled = self.lineage_inputs(sources, whole=whole)
+            scope["coverage"][0]["hosted_methods"] = [
+                {**METHOD, "blob_sha": blobs[TEST], "id": name} for name in names
+            ]
+            executed = {"core/maps": [
+                {"class": "sample.MapTest", "method": name + "[" + sdk + "]"}
+                for name in names for sdk in ("31", "37")
+            ]}
+            with self.subTest(whole=whole), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                for mutation in ("wrong-class", "unexecuted", "uncompiled", "stale-compiled",
+                                 "omitted", "collaborator-method"):
+                    changed_scope, records, inventory = map(copy.deepcopy, (scope, executed, compiled))
+                    if mutation == "wrong-class":
+                        for record in records["core/maps"]:
+                            record["class"] = "sample.OtherTest"
+                    elif mutation == "unexecuted":
+                        records["core/maps"] = records["core/maps"][:2]
+                    elif mutation == "uncompiled":
+                        del inventory["core/maps"][TEST]
+                    elif mutation == "stale-compiled":
+                        inventory["core/maps"][TEST] = "7" * 40
+                    elif mutation == "omitted":
+                        if not whole:
+                            continue
+                        changed_scope["coverage"][0]["hosted_methods"].pop()
+                    else:
+                        changed_scope["coverage"][0]["hosted_methods"].append(
+                            {**METHOD, "blob_sha": blobs[TEST], "id": "render"},
+                        )
+                    with self.subTest(mutation=mutation), self.assertRaises(PortError):
+                        validate_compiled_hosted_methods(
+                            changed_scope, blobs, manifest.repo, records, inventory,
+                        )
+
+    def test_anonymous_objects_are_not_suites_but_annotations_keep_lexical_inheritance(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        collaborator = "val fake = object : Collaborator { override fun call() {} }; "
+        for placement in ("top-level", "member", "method"):
+            source = "class MapTest { @Test fun keepsListReachable() {} }"
+            if placement == "top-level":
+                source = collaborator + source
+            elif placement == "member":
+                source = "class MapTest { " + collaborator + "@Test fun keepsListReachable() {} }"
+            else:
+                source = "class MapTest { @Test fun keepsListReachable() { " + collaborator + "} }"
+            for resolver in (None, lambda record, complete: self.fail("Anonymous suite resolved")):
+                classes = {}
+                with self.subTest(placement=placement, resolver=resolver):
+                    self.assertEqual(_kotlin_junit_methods(
+                        source, classes, reject_inherited=True, inheritance=resolver,
+                    ), {METHOD["id"]: "test"})
+                    self.assertEqual(classes, {METHOD["id"]: "MapTest"})
+        for body in (
+            "@Test fun hidden() {}",
+            "@Before fun hidden() {}",
+            "@get:Rule val rule = example",
+            "@Other fun hidden() {}",
+            "@[Test] fun hidden() {}",
+        ):
+            for reject_inherited in (False, True):
+                source = (
+                    "import org.junit.Before\nimport org.junit.Rule\n"
+                    "class MapTest { val fake = object : Collaborator { " + body + " }; "
+                    "@Test fun keepsListReachable() {} }"
+                )
+                with self.subTest(body=body, reject_inherited=reject_inherited), self.assertRaises(PortError):
+                    _kotlin_junit_methods(
+                        source, {}, reject_inherited=reject_inherited,
+                        inheritance=lambda record, complete: set(),
+                    )
+
+    def test_collaborators_do_not_hide_named_or_ambiguous_inherited_suites(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        collaborator = "val fake = object : Collaborator { override fun call() {} }; "
+        for declaration in (
+            "class Hidden : Parent() {}",
+            "class Hidden : Parent()",
+            "class Hidden : Missing() {}",
+            "class Hidden : Parent(), Marker by object : Marker {} {}",
+            "object Hidden : Parent() {}",
+            "class Hidden { companion object : Parent() {} }",
+            "class Hidden { companion object : Parent() }",
+            "class Hidden { class Nested : Parent() {} }",
+            "val broken = object : Parent()",
+        ):
+            sources = {
+                TEST: (
+                    "package sample\nclass MapTest { " + collaborator
+                    + "@Test fun keepsListReachable() {} }\n" + declaration
+                ).encode(),
+                base: b"package sample\nopen class Parent { @Test fun inheritedCase() {} }",
+            }
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=True)
+            with self.subTest(declaration=declaration), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ), self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_collaborators_do_not_clear_inherited_annotation_shadowing(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        for member in ("annotation class Before", "companion object { annotation class Before }"):
+            sources = {
+                TEST: b"package sample\nimport org.junit.Before\nclass MapTest : Parent() { "
+                      b"val fake = object : Collaborator { override fun call() {} }; "
+                      b"@Before fun setup() {} @Test fun keepsListReachable() {} }",
+                base: ("package sample\nopen class Parent { " + member + " }").encode(),
+            }
+            for whole in (False, True):
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                with self.subTest(member=member, whole=whole), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaisesRegex(PortError, "Ambiguous Kotlin function annotation"):
+                    validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
     def test_known_superclass_cannot_hide_inherited_tests_from_complete_coverage(self):
         base = TEST.replace("MapTest.kt", "Parent.kt")
         sources = {

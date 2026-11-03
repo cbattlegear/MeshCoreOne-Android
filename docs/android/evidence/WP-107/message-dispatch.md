@@ -95,14 +95,16 @@ cancel-versus-send linearization independently of these real-transport controls.
 - `git diff --check` - passed during authoring.
 - `python tools\android-port\controller\validate.py` - passed, 1,866 frozen
   paths / 64 WPs / 178 dependency edges; source pin unchanged.
-- `python tools\android-port\portmap.py` - actual producer command completed;
-  final command status is recorded with the candidate publication.
+- `python tools\android-port\portmap.py` - passed; 2,004 mapping entries.
 - `python android\scaffold\check_environment.py` - blocked by inherited
   non-allowlisted variables, not passing Android readiness.
 - The supported reservation status reports `gradle-execution` held by
   `local-check:f516a7e271f444dd9cb2efcc8b995a16`. That owner is not cleared or
-  bypassed. The exact-commit affected launcher is attempted only through its
-  ordinary supported interlock after commit.
+  bypassed.
+- `python tools\android-port\local\check.py --commit 7faafe88f3201c304957551fc088292c93bca5df --affected-base 1e1ff70345f203b41f9a8b04836c2cc4640500c9`
+  - refused with exit 1: `BLOCKED: Hard-lock collision for external resource
+  gradle-execution: gradle-execution held`. No Gradle test executed and no lock
+  was released. This candidate is explicitly locally unverified.
 
 Hosted result and complete executed-method inventory are pending. Do not infer
 passing JVM tests from source validators or historical #525 CI. Exact-head

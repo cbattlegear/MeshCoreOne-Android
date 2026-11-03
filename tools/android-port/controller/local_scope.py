@@ -465,6 +465,7 @@ def validation_preflight_options(options):
 
 def run_scaffold(
     repo, plan, environment, output, execute, options, *, trusted_base, merge_base_only=False,
+    build_options=None,
 ):
     """Execute fixed affected tasks through the already-owned local supervisor."""
     started = False
@@ -477,7 +478,7 @@ def run_scaffold(
     try:
         return _run_scaffold(
             repo, plan, environment, output, owned_execute, options,
-            trusted_base=trusted_base, merge_base_only=merge_base_only,
+            trusted_base=trusted_base, merge_base_only=merge_base_only, build_options=build_options,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, PortError, OSError, KeyboardInterrupt) as failure:
         if started:
@@ -527,6 +528,7 @@ def run_scaffold(
 
 def _run_scaffold(
     repo, plan, environment, output, execute, options, *, trusted_base, merge_base_only=False,
+    build_options=None,
 ):
     from . import ci
     from .ci_evidence import (
@@ -542,6 +544,7 @@ def _run_scaffold(
     if not preflight_tasks or not build_tasks:
         raise PortError("Affected scaffold requires validation and build/test tasks")
     preflight_options = validation_preflight_options(options)
+    build_options = validation_preflight_options(options if build_options is None else build_options)
     directories, lint = report_inputs(repo, plan)
     preflight_graph = output / "gradle-affected-preflight-task-graph.json"
     build_graph = output / "gradle-affected-task-graph.json"
@@ -570,7 +573,7 @@ def _run_scaffold(
     graph_summaries = {}
     for phase, tasks, graph, log, gradle_options in (
         ("preflight", preflight_tasks, preflight_graph, "gradle-affected-preflight.log", preflight_options),
-        ("build", build_tasks, build_graph, "gradle-scaffold.log", options),
+        ("build", build_tasks, build_graph, "gradle-scaffold.log", build_options),
     ):
         phase_environment = {**environment, "ANDROID_CI_TASK_GRAPH": str(graph),
                              "ANDROID_CI_TEST_LINEAGE": str(lineage_path),

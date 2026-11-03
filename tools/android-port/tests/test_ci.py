@@ -2,10 +2,13 @@
 
 import contextlib
 from dataclasses import replace
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -27,6 +30,438 @@ MIXED = PORTED + (
     "// AndroidOnly: WP-109 Public localhost transport/parser/dispatcher regressions "
     "with source two-second phase deadlines.\n"
 )
+
+
+class BenchmarkConsumerTests(unittest.TestCase):
+    def test_compile_scope_is_exclusive_and_does_not_change_existing_task_plans(self):
+        selected = [ci.BENCHMARK_CONSUMER_SCOPE]
+        self.assertEqual(ci.stage_tasks("scaffold", selected), list(ci.BENCHMARK_CONSUMER_TASKS))
+        self.assertNotIn(ci.BENCHMARK_CONSUMER_SCOPE, ci.SCOPED_TASKS)
+        self.assertNotEqual(list(ci.BENCHMARK_CONSUMER_TASKS), ci.TASKS["benchmark"])
+        self.assertEqual(
+            ci.stage_tasks("scaffold", ["scaffold"]),
+            list(dict.fromkeys(ci.SCOPED_TASKS["scaffold"])),
+        )
+        for stage, scopes, affected in (
+            ("benchmark", selected, False),
+            ("protocol", selected, False),
+            ("scaffold", selected + ["scaffold"], False),
+            ("scaffold", selected + selected, False),
+            ("scaffold", selected, True),
+        ):
+            with self.subTest(stage=stage, scopes=scopes, affected=affected), self.assertRaises(PortError):
+                ci.stage_tasks(stage, scopes, affected_candidate=affected)
+
+    def test_gradle_guard_requires_executed_compilers_and_committed_fixture_sources(self):
+        guard = ci.TASK_GRAPH_GUARD.read_text(encoding="utf-8")
+        for required in (
+            "ANDROID_CI_BENCHMARK_CONSUMER",
+            *ci.BENCHMARK_CONSUMER_KOTLIN_TASKS,
+            "task.outputs.upToDateWhen { false }",
+            'task.outputs.cacheIf("Benchmark consumer source observation requires task execution") { false }',
+            "task.sources.files",
+            "gradle.taskGraph.beforeTask { task ->",
+            "consumerInputs[task.path] = identify()",
+            "gradle.taskGraph.afterTask { task, state ->",
+            "state.failure != null",
+            "!state.executed",
+            "!state.didWork",
+            "state.skipped",
+            "state.upToDate",
+            "state.noSource",
+            "state.skipMessage != null",
+            "identify() != observed",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, guard)
+        compiler_configuration = guard.split("gradle.beforeProject", 1)[1].split(
+            "project.tasks.withType(org.gradle.api.tasks.testing.Test)", 1,
+        )[0]
+        self.assertNotIn("task.doFirst", compiler_configuration)
+        self.assertNotIn("task.doLast", compiler_configuration)
+        observation = guard.split("gradle.taskGraph.afterTask { task, state ->", 1)[1]
+        self.assertLess(observation.index("state.skipMessage != null"),
+                        observation.index("new File(consumerFile).append"))
+        for path in ci.BENCHMARK_CONSUMER_SOURCES:
+            self.assertIn(path.removeprefix("android/"), guard)
+
+    def test_hosted_consumer_requires_fresh_project_and_private_gradle_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "android"
+            module = project / "app"
+            module.mkdir(parents=True)
+            (project / "settings.gradle.kts").write_text("", encoding="utf-8")
+            (module / "build.gradle.kts").write_text("", encoding="utf-8")
+            output = root / "output"
+            home, cache = ci.prepare_benchmark_consumer_state(project, output)
+            self.assertEqual(home, output / "gradle-user-home")
+            self.assertEqual(cache, output / "gradle-project-cache")
+            self.assertEqual(list(home.iterdir()), [])
+            self.assertEqual(list(cache.iterdir()), [])
+            with self.assertRaisesRegex(PortError, "must use new directories"):
+                ci.prepare_benchmark_consumer_state(project, output)
+
+        for relative in ("build", ".gradle", "app/build", "app/.gradle", "build-logic/build"):
+            with self.subTest(previous=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = root / "android"
+                for script in ("settings.gradle.kts", "app/build.gradle.kts",
+                               "build-logic/settings.gradle.kts"):
+                    path = project / script
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("", encoding="utf-8")
+                previous = project / relative
+                previous.mkdir()
+                marker = previous / "retained"
+                marker.write_text("unchanged", encoding="utf-8")
+                with self.assertRaisesRegex(PortError, "project state is not fresh"):
+                    ci.prepare_benchmark_consumer_state(project, root / "output")
+                self.assertEqual(marker.read_text(encoding="utf-8"), "unchanged")
+                self.assertFalse((root / "output").exists())
+
+        for name in ("gradle-user-home", "gradle-project-cache"):
+            with self.subTest(existing=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = root / "android"
+                project.mkdir()
+                output = root / "output"
+                (output / name).mkdir(parents=True)
+                marker = output / name / "retained"
+                marker.write_text("unchanged", encoding="utf-8")
+                with self.assertRaisesRegex(PortError, "must use new directories"):
+                    ci.prepare_benchmark_consumer_state(project, output)
+                self.assertEqual(marker.read_text(encoding="utf-8"), "unchanged")
+
+    def test_hosted_consumer_rejects_dangling_junctions_as_existing_state(self):
+        for relative in ("android/build", "android/.gradle",
+                         "output/gradle-user-home", "output/gradle-project-cache"):
+            with self.subTest(previous=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = root / "android"
+                project.mkdir()
+                (project / "settings.gradle.kts").write_text("", encoding="utf-8")
+                junction = root / relative
+                original = Path.is_junction
+
+                def simulated_junction(path):
+                    return path == junction or original(path)
+
+                message = (
+                    "project state is not fresh" if relative.startswith("android/")
+                    else "must use new directories"
+                )
+                with patch.object(Path, "is_junction", simulated_junction):
+                    with self.assertRaisesRegex(PortError, message):
+                        ci.prepare_benchmark_consumer_state(project, root / "output")
+                self.assertFalse(junction.exists())
+                self.assertFalse((root / "output" / "gradle-user-home").exists())
+
+    def test_hosted_consumer_refuses_linked_or_unreadable_project_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "android"
+            linked = project / "linked"
+            linked.mkdir(parents=True)
+            original = Path.is_symlink
+
+            def simulated_link(path):
+                return path == linked or original(path)
+
+            with patch.object(Path, "is_symlink", simulated_link):
+                with self.assertRaisesRegex(PortError, "Linked benchmark consumer project"):
+                    ci.prepare_benchmark_consumer_state(project, root / "output")
+
+            def inaccessible(*args, onerror, **kwargs):
+                onerror(PermissionError("fixture"))
+                yield from ()
+
+            with patch.object(ci.os, "walk", inaccessible):
+                with self.assertRaisesRegex(PortError, "Cannot inspect benchmark consumer project"):
+                    ci.prepare_benchmark_consumer_state(project, root / "output")
+
+            linked_output = root / "linked-output"
+            linked_output.mkdir()
+
+            def simulated_output_link(path):
+                return path == linked_output or original(path)
+
+            with patch.object(Path, "is_symlink", simulated_output_link):
+                with self.assertRaisesRegex(PortError, "Linked benchmark consumer output"):
+                    ci.prepare_benchmark_consumer_state(project, linked_output / "output")
+            with self.assertRaisesRegex(PortError, "must be separate"):
+                ci.prepare_benchmark_consumer_state(project, project / "output")
+            with self.assertRaisesRegex(PortError, "must be absolute"):
+                ci.prepare_benchmark_consumer_state(project, Path("relative-output"))
+
+    def test_hosted_consumer_cli_rejects_linked_output_before_creating_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            target.mkdir()
+            linked = root / "linked"
+            if os.name == "nt":
+                subprocess.run(
+                    [os.environ["ComSpec"], "/c", "mklink", "/J", str(linked), str(target)],
+                    check=True, capture_output=True,
+                )
+            else:
+                linked.symlink_to(target, target_is_directory=True)
+            try:
+                state = root / "state.json"
+                state.write_text(json.dumps({
+                    "schema_version": 1, "host": ci.host_name(), "java_home": str(root / "jdk"),
+                    "android_home": str(root / "sdk"), "private_root": str(root / "private"),
+                    "provenance": {},
+                }), encoding="utf-8")
+                environment = dict(os.environ, GRADLE_USER_HOME=str(root / "unused-gradle-home"))
+                completed = subprocess.run(
+                    [
+                        sys.executable, "-B", str(ci.REPO / "tools" / "android-port" / "controller" / "ci.py"),
+                        "run", "--stage", "scaffold", "--scope", ci.BENCHMARK_CONSUMER_SCOPE,
+                        "--state", str(state), "--output", str(linked / "output"),
+                    ],
+                    cwd=ci.REPO, env=environment, capture_output=True, text=True, timeout=120,
+                )
+                self.assertEqual(completed.returncode, 2, completed.stderr)
+                self.assertIn("BLOCKED: Linked benchmark consumer output directory", completed.stderr)
+                self.assertEqual(list(target.iterdir()), [])
+            finally:
+                if os.name == "nt":
+                    linked.rmdir()
+                else:
+                    linked.unlink()
+
+    def test_hosted_consumer_cli_rejects_invalid_selection_before_creating_output(self):
+        for stage, scopes, affected in (
+            ("scaffold", [ci.BENCHMARK_CONSUMER_SCOPE, "protocol"], False),
+            ("scaffold", [ci.BENCHMARK_CONSUMER_SCOPE, ci.BENCHMARK_CONSUMER_SCOPE], False),
+            ("benchmark", [ci.BENCHMARK_CONSUMER_SCOPE], False),
+            ("scaffold", [ci.BENCHMARK_CONSUMER_SCOPE], True),
+            (None, [ci.BENCHMARK_CONSUMER_SCOPE], False),
+        ):
+            with self.subTest(stage=stage, scopes=scopes, affected=affected), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                output = root / "new-parent" / "output"
+                arguments = ["run", "--state", str(root / "state.json"), "--output", str(output)]
+                if stage is not None:
+                    arguments.extend(("--stage", stage))
+                for scope in scopes:
+                    arguments.extend(("--scope", scope))
+                if affected:
+                    arguments.append("--affected-candidate")
+                with (
+                    patch.object(ci, "REPO", root),
+                    patch.object(ci, "inputs", return_value={}),
+                    patch.object(ci, "load_manifest", return_value=object()),
+                    patch.object(ci, "port_map", return_value=[]),
+                    patch.object(ci.platform, "python_version", return_value="3.12.4"),
+                    patch.object(ci, "toolchain_lock", return_value={"python": "3.12.4"}),
+                    patch.object(ci, "verify_wrapper") as verify_wrapper,
+                    patch.object(ci, "execute") as execute,
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()) as errors,
+                ):
+                    result = ci.main(arguments)
+                self.assertEqual(result, 2)
+                self.assertIn("BLOCKED:", errors.getvalue())
+                self.assertFalse(output.parent.exists())
+                verify_wrapper.assert_not_called()
+                execute.assert_not_called()
+
+    def test_hosted_consumer_cli_creates_valid_output_after_inspection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "android").mkdir()
+            output = root / "output"
+            state = {"host": "linux", "private_root": str(root / "private")}
+
+            def stop_before_subprocess(command, environment, log, **kwargs):
+                self.assertTrue(output.is_dir())
+                self.assertTrue((output / "gradle-user-home").is_dir())
+                self.assertTrue((output / "gradle-project-cache").is_dir())
+                self.assertEqual(environment["GRADLE_USER_HOME"], str(output / "gradle-user-home"))
+                raise PortError("test stopped before subprocess execution")
+
+            with (
+                patch.object(ci, "REPO", root),
+                patch.object(ci, "inputs", return_value=state),
+                patch.object(ci, "load_manifest", return_value=object()),
+                patch.object(ci, "port_map", return_value=[]),
+                patch.object(ci.platform, "python_version", return_value="3.12.4"),
+                patch.object(ci, "toolchain_lock", return_value={"python": "3.12.4"}),
+                patch.object(ci, "candidate_environment", return_value={}),
+                patch.object(ci, "verify_wrapper") as verify_wrapper,
+                patch.object(ci, "execute", side_effect=stop_before_subprocess) as execute,
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                result = ci.main([
+                    "run", "--stage", "scaffold", "--scope", ci.BENCHMARK_CONSUMER_SCOPE,
+                    "--state", str(root / "state.json"), "--output", str(output),
+                ])
+            self.assertEqual(result, 2)
+            self.assertIn("BLOCKED: test stopped before subprocess execution", errors.getvalue())
+            verify_wrapper.assert_called_once()
+            execute.assert_called_once()
+
+    def test_cli_defers_output_only_for_hosted_consumer_selections(self):
+        for local, scopes, initially_created in (
+            (False, [ci.BENCHMARK_CONSUMER_SCOPE], False),
+            (True, [ci.BENCHMARK_CONSUMER_SCOPE], True),
+            (False, ["protocol"], True),
+        ):
+            with self.subTest(local=local, scopes=scopes), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                output = root / "output"
+                arguments = ["run", "--stage", "scaffold", "--state", str(root / "state.json"),
+                             "--output", str(output)]
+                for scope in scopes:
+                    arguments.extend(("--scope", scope))
+                if local:
+                    arguments.append("--local")
+
+                def observe_stage(*args, **kwargs):
+                    self.assertEqual(output.exists(), initially_created)
+
+                with patch.object(ci, "inputs", return_value={}), \
+                        patch.object(ci, "run_stage", side_effect=observe_stage) as run_stage:
+                    self.assertEqual(ci.main(arguments), 0)
+                run_stage.assert_called_once()
+
+    def test_consumer_execution_isolates_hosted_home_and_disables_caches_for_both_phases(self):
+        cases = (
+            ("linux", False, [ci.BENCHMARK_CONSUMER_SCOPE]),
+            ("windows", False, [ci.BENCHMARK_CONSUMER_SCOPE]),
+            ("linux", True, [ci.BENCHMARK_CONSUMER_SCOPE]),
+            ("linux", False, ["protocol"]),
+        )
+        for host, local, scopes in cases:
+            with self.subTest(host=host, local=local, scopes=scopes), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = root / "android"
+                project.mkdir()
+                (project / "settings.gradle.kts").write_text("", encoding="utf-8")
+                output = root / "output"
+                calls = []
+
+                def capture(command, environment, log, **kwargs):
+                    calls.append((list(command), dict(environment), log))
+                    if log.name == "gradle-scaffold.log":
+                        raise PortError("captured build")
+
+                with (
+                    patch.object(ci, "REPO", root),
+                    patch.object(ci, "load_manifest", return_value=object()),
+                    patch.object(ci, "port_map", return_value=[]),
+                    patch.object(ci.platform, "python_version", return_value="3.12.4"),
+                    patch.object(ci, "toolchain_lock", return_value={"python": "3.12.4"}),
+                    patch.object(ci, "candidate_environment", return_value={
+                        "GRADLE_USER_HOME": str(root / "restored-home"), "PATH": "fixture",
+                    }),
+                    patch.object(ci, "verify_wrapper"),
+                    patch.object(ci, "execute", side_effect=capture),
+                    patch.object(ci, "validate_candidate_task_graph", return_value={"tasks": 1}),
+                    patch.object(ci, "write_github_outputs"),
+                    patch.object(ci.shutil, "which", return_value="fixture-pwsh"),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    self.assertRaisesRegex(PortError, "captured build"),
+                ):
+                    ci.run_stage("scaffold", {"host": host, "private_root": str(root / "private")},
+                                 output, local=local, scopes=scopes)
+
+                consumer = scopes == [ci.BENCHMARK_CONSUMER_SCOPE]
+                expected_home = output / "gradle-user-home" if consumer and not local else root / "restored-home"
+                self.assertTrue(calls)
+                for _, environment, _ in calls:
+                    self.assertEqual(environment["GRADLE_USER_HOME"], str(expected_home))
+                gradle = [call for call in calls if call[2].name.startswith("gradle-")]
+                self.assertEqual(len(gradle), 2 if consumer else 1)
+                for command, _, log in gradle:
+                    if host == "windows":
+                        suffix = "-preflight" if "preflight" in log.name else ""
+                        invocation = json.loads((output / f"gradle-scaffold{suffix}-invocation.json")
+                                                .read_text(encoding="utf-8"))
+                        arguments = invocation["arguments"]
+                    else:
+                        arguments = command
+                    self.assertEqual("--no-build-cache" in arguments, consumer)
+                    self.assertEqual("--no-configuration-cache" in arguments, consumer)
+                    self.assertEqual("--build-cache" in arguments, not consumer and not local)
+                    self.assertEqual("--stacktrace" in arguments, not local)
+                    cache = output / "gradle-project-cache" if consumer and not local else root / "private" / "project-root"
+                    self.assertEqual(arguments[arguments.index("--project-cache-dir") + 1], str(cache))
+
+    def test_stale_hosted_consumer_project_stops_before_any_subprocess(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "android"
+            (project / "build").mkdir(parents=True)
+            (project / "settings.gradle.kts").write_text("", encoding="utf-8")
+            with (
+                patch.object(ci, "REPO", root),
+                patch.object(ci, "load_manifest", return_value=object()),
+                patch.object(ci, "port_map", return_value=[]),
+                patch.object(ci.platform, "python_version", return_value="3.12.4"),
+                patch.object(ci, "toolchain_lock", return_value={"python": "3.12.4"}),
+                patch.object(ci, "candidate_environment", return_value={}),
+                patch.object(ci, "execute") as execute,
+                contextlib.redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(PortError, "project state is not fresh"),
+            ):
+                ci.run_stage("scaffold", {"host": "linux", "private_root": str(root / "private")},
+                             root / "output", scopes=[ci.BENCHMARK_CONSUMER_SCOPE])
+            execute.assert_not_called()
+            self.assertTrue((project / "build").is_dir())
+
+    def test_source_evidence_requires_each_exact_task_and_committed_blob(self):
+        snapshot = {path: str(index + 1) * 40 for index, path in enumerate(ci.BENCHMARK_CONSUMER_SOURCES)}
+        sources = ci.benchmark_consumer_sources(snapshot)
+        valid = [{"task": task, "sources": sources.copy()} for task in ci.BENCHMARK_CONSUMER_KOTLIN_TASKS]
+        self.assertEqual(ci.validate_benchmark_consumer_compilation(valid[::-1], snapshot), valid)
+        invalid = (
+            [],
+            valid[:1],
+            valid + valid[:1],
+            [valid[0], valid[0]],
+            [{"task": ":app:compileDebugKotlin", "sources": sources}, valid[1]],
+            [{"task": valid[0]["task"], "sources": {}}, valid[1]],
+            [{"task": valid[0]["task"], "sources": {**sources, next(iter(sources)): "f" * 40}}, valid[1]],
+            [{"task": valid[0]["task"], "sources": sources, "result": "success"}, valid[1]],
+            [None, valid[1]],
+        )
+        for records in invalid:
+            with self.subTest(records=records), self.assertRaises(PortError):
+                ci.validate_benchmark_consumer_compilation(records, snapshot)
+        with self.assertRaises(PortError):
+            ci.benchmark_consumer_sources({})
+
+    def test_evidence_reader_rejects_malformed_and_dirty_source_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = {}
+            for index, relative in enumerate(ci.BENCHMARK_CONSUMER_SOURCES):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                data = f"fixture {index}\n".encode()
+                path.write_bytes(data)
+                snapshot[relative] = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+            records = [
+                {"task": task, "sources": snapshot.copy()}
+                for task in ci.BENCHMARK_CONSUMER_KOTLIN_TASKS
+            ]
+            evidence = root / "consumer.jsonl"
+            evidence.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+            with patch.object(ci, "git", return_value=("a" * 40).encode()), \
+                    patch.object(ci, "tree", return_value=snapshot):
+                self.assertEqual(ci.read_benchmark_consumer_compilation(evidence, root), records)
+                evidence.write_text("{bad-json}\n", encoding="utf-8")
+                with self.assertRaises(PortError):
+                    ci.read_benchmark_consumer_compilation(evidence, root)
+                evidence.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+                (root / ci.BENCHMARK_CONSUMER_SOURCES[0]).write_text("dirty", encoding="utf-8")
+                with self.assertRaisesRegex(PortError, "differs from the committed head"):
+                    ci.read_benchmark_consumer_compilation(evidence, root)
 
 
 class SourceDispositionTests(unittest.TestCase):
@@ -404,6 +839,11 @@ class SourceDispositionTests(unittest.TestCase):
                 {"scopes": ["module:core/l10n"], "full_scaffold": False},
                 {"full_scaffold": "false", "localization": "true"},
             ),
+            (
+                ["scaffold", "protocol", "backup"],
+                {"scopes": ["scaffold", "protocol", "backup"], "full_scaffold": True},
+                {"full_scaffold": "true", "localization": "true"},
+            ),
         )
         for event_name in ("pull_request", "push", "merge_group"):
             for scopes, plan, expected_outputs in cases:
@@ -423,10 +863,25 @@ class SourceDispositionTests(unittest.TestCase):
                     ):
                         ci.run_stage("scaffold", state, output, scopes=scopes, affected_candidate=True)
                     self.assertEqual(run.call_args.args[1], plan)
+                    self.assertEqual(run.call_args.args[5].count("--stacktrace"), 1)
+                    self.assertIn("--parallel", run.call_args.args[5])
+                    self.assertIn("--max-workers=8", run.call_args.args[5])
+                    build_options = run.call_args.kwargs["build_options"]
+                    self.assertIn("--max-workers=1", build_options)
+                    self.assertNotIn("--max-workers=8", build_options)
+                    self.assertNotIn("--parallel", build_options)
+                    self.assertEqual(
+                        [option for option in run.call_args.args[5]
+                         if option != "--parallel" and option != "--max-workers=8"],
+                        [option for option in build_options if option != "--max-workers=1"],
+                    )
                     self.assertEqual(planner.call_args.kwargs["merge_base_only"], event_name == "pull_request")
                     self.assertEqual(run.call_args.kwargs["merge_base_only"], event_name == "pull_request")
                     self.assertEqual(planner.call_args.args[3] if len(planner.call_args.args) > 3 else None,
-                                     None if scopes == ["scaffold"] else ["protocol", "module:core/protocol"])
+                                     None if scopes == ["scaffold"] else list(dict.fromkeys([
+                                         *plan["scopes"],
+                                         *(scope for scope in scopes if scope in ("protocol", "backup")),
+                                     ])))
                     self.assertEqual(
                         dict(line.split("=", 1) for line in output_file.read_text().splitlines()),
                         expected_outputs,

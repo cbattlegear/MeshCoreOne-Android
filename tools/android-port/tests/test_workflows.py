@@ -24,6 +24,25 @@ class WorkflowTests(unittest.TestCase):
         text = (REPO / ".github" / "workflows" / name).read_text(encoding="utf-8")
         return parse_yaml(text), text
 
+    def guarded_step(self, workflow, target):
+        if target == "scope":
+            return workflow["jobs"]["scope"]["steps"][1]
+        if target == "controller":
+            return next(step for step in workflow["jobs"]["controller"]["steps"]
+                        if "controller/test_runner.py" in step.get("run", ""))
+        if target == "stage":
+            return next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+        if target == "aggregate":
+            return workflow["jobs"]["android-ci"]["steps"][0]
+        if target in ("setup", "localization", "inspection"):
+            names = {
+                "setup": "Check worker readiness",
+                "localization": "Validate localization discovery",
+                "inspection": "Inspect exact APK and static alignment",
+            }
+            return next(step for step in workflow["jobs"]["build"]["steps"] if step.get("name") == names[target])
+        raise ValueError(f"Unknown guarded workflow step: {target}")
+
     def test_actual_workflows_parse_and_have_the_real_trust_boundaries(self):
         self.assertEqual(validate_workflows(REPO)["result"], "valid")
 
@@ -38,6 +57,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("exit $LASTEXITCODE", selected[0]["run"])
         self.assertIn("$affected = @()", selected[0]["run"])
         self.assertIn("--affected-candidate", selected[0]["run"])
+        self.assertLess(
+            selected[0]["run"].index("controller/ci.py run --stage benchmark"),
+            selected[0]["run"].index("ci.py run --stage scaffold @affected @scopes"),
+        )
         self.assertEqual(workflow["jobs"]["android-ci"]["if"], "${{ always() }}")
         validate_candidate(workflow, text)
 
@@ -198,7 +221,9 @@ class WorkflowTests(unittest.TestCase):
                 validate_candidate(changed, text)
 
     def test_merged_controller_keeps_parity_and_native_event_discovery_in_one_execution(self):
-        original, text = self.read("android-ci.yml")
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
         runner = next(step for step in original["jobs"]["controller"]["steps"]
                       if "controller/test_runner.py" in step.get("run", ""))
         current = next(line for line in runner["run"].splitlines() if "controller/test_runner.py" in line)
@@ -210,8 +235,12 @@ class WorkflowTests(unittest.TestCase):
             changed = copy.deepcopy(original)
             step = next(step for step in changed["jobs"]["controller"]["steps"]
                         if "controller/test_runner.py" in step.get("run", ""))
-            step["run"] = step["run"].replace(current, command)
-            validate_candidate(changed, text)
+            step["run"] = (
+                "# Ordinary Bash comment\n#requires -Modules ExampleOnly\n"
+                + step["run"].replace(current, command)
+            )
+            text = yaml.safe_dump(changed, sort_keys=False)
+            validate_candidate(parse_yaml(text), text)
 
     def test_combined_controller_discovery_rejects_duplicates_and_unknown_families(self):
         original, text = self.read("android-ci.yml")
@@ -231,6 +260,61 @@ class WorkflowTests(unittest.TestCase):
             step["run"] = step["run"].replace(command, bad)
             with self.subTest(command=bad), self.assertRaises(PortError):
                 validate_candidate(changed, text)
+
+    def test_controller_job_rejects_failure_masking_and_execution_overrides(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for kind in (
+            "masked-runner", "disable-errexit", "remove-validation", "comment-validation",
+            "job-continue-on-error", "job-shell", "job-environment", "runner-shell",
+            "runner-environment", "runner-working-directory", "extra-selected-step",
+            "extra-pinned-action", "installer-command", "installer-shell", "checkout-ref",
+        ):
+            value = copy.deepcopy(original)
+            job = value["jobs"]["controller"]
+            runner = next(step for step in job["steps"] if "controller/test_runner.py" in step.get("run", ""))
+            installer = next(step for step in job["steps"] if step.get("name") == "Install checksum-pinned YAML parser")
+            if kind == "masked-runner":
+                runner["run"] = "set +e\n" + runner["run"] + "\ntrue\n"
+            elif kind == "disable-errexit":
+                runner["run"] = "set +e\n" + runner["run"]
+            elif kind == "remove-validation":
+                runner["run"] = runner["run"].replace("python tools/android-port/controller/validate.py\n", "")
+            elif kind == "comment-validation":
+                runner["run"] = runner["run"].replace(
+                    "python tools/android-port/controller/validate.py", "# python tools/android-port/controller/validate.py",
+                )
+            elif kind == "job-continue-on-error":
+                job["continue-on-error"] = "true"
+            elif kind == "job-shell":
+                job["defaults"] = {"run": {"shell": "bash {0}"}}
+            elif kind == "job-environment":
+                job["env"] = {"BASH_ENV": "/tmp/example-only"}
+            elif kind == "runner-shell":
+                runner["shell"] = "bash {0}"
+            elif kind == "runner-environment":
+                runner["env"] = {"BASH_ENV": "/tmp/example-only"}
+            elif kind == "runner-working-directory":
+                runner["working-directory"] = "example-only"
+            elif kind == "extra-selected-step":
+                job["steps"].insert(job["steps"].index(runner), {"if": runner["if"], "run": "echo example-only"})
+            elif kind == "extra-pinned-action":
+                extra = copy.deepcopy(job["steps"][1])
+                extra["name"] = "Unexpected additional setup"
+                job["steps"].insert(job["steps"].index(runner), extra)
+            elif kind == "installer-command":
+                installer["run"] += "\nset +e\n"
+            elif kind == "installer-shell":
+                installer["shell"] = "bash {0}"
+            else:
+                job["steps"][0]["with"]["ref"] = "${{ github.sha }}"
+            self.assertNotEqual(value, original, f"Mutation {kind} did not change the workflow")
+            text = yaml.safe_dump(value, sort_keys=False)
+            parsed = parse_yaml(text)
+            self.assertEqual(parsed, value)
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_candidate(parsed, text)
 
     def test_protocol_workflow_executes_the_real_nonzero_jvm_suite_on_linux(self):
         from controller.ci import TASKS
@@ -257,7 +341,8 @@ class WorkflowTests(unittest.TestCase):
         jobs = workflow["jobs"]
         self.assertEqual(
             set(jobs["scope"]["outputs"]),
-            {"controller", "accessibility-suite", "scaffold", "protocol", "backup", "external-oracle"},
+            {"controller", "accessibility-suite", "scaffold", "protocol", "backup", "benchmark",
+             "benchmark-consumer", "external-oracle"},
         )
         self.assertEqual(jobs["scope"]["outputs"]["controller"], "${{ steps.changed.outputs.controller }}")
         self.assertEqual(
@@ -266,6 +351,21 @@ class WorkflowTests(unittest.TestCase):
         )
         gradle = next(step for step in jobs["build"]["steps"] if step.get("id") == "gradle")
         self.assertEqual(gradle["env"]["RUN_CONTROLLER"], "${{ needs.scope.outputs.controller }}")
+        self.assertEqual(gradle["env"]["RUN_BENCHMARK"], "${{ needs.scope.outputs.benchmark }}")
+        self.assertIn("needs.scope.outputs.benchmark == 'true'", jobs["build"]["if"])
+        self.assertIn("needs.scope.outputs['benchmark-consumer'] == 'true'", jobs["build"]["if"])
+        consumer = next(step for step in jobs["build"]["steps"] if step.get("name") == "Compile benchmark consumer")
+        self.assertEqual(consumer["if"], "${{ needs.scope.outputs['benchmark-consumer'] == 'true' }}")
+        self.assertIn("ci.py run --stage scaffold --scope benchmark-consumer", consumer["run"])
+        aggregate = next(step for step in jobs["android-ci"]["steps"]
+                         if step.get("name") == "Require every selected scope to pass")
+        self.assertEqual(aggregate["env"]["BENCHMARK_SELECTED"], "${{ needs.scope.outputs.benchmark }}")
+        self.assertIn('[ "$BENCHMARK_SELECTED" = "true" ]', aggregate["run"])
+        self.assertEqual(
+            aggregate["env"]["BENCHMARK_CONSUMER_SELECTED"],
+            "${{ needs.scope.outputs['benchmark-consumer'] }}",
+        )
+        self.assertIn('[ "$BENCHMARK_CONSUMER_SELECTED" = "true" ]', aggregate["run"])
         expected = {
             "external-oracle": ("external-oracle", ["scope"]),
             "backup-oracle": ("backup", ["scope", "build"]),
@@ -286,6 +386,46 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('github.event_name', scope_run)
         self.assertIn('github.event_path', scope_run)
         self.assertIn('$GITHUB_OUTPUT', scope_run)
+
+    def test_benchmark_consumer_step_and_aggregate_cannot_be_bypassed(self):
+        original, text = self.read("android-ci.yml")
+        for kind in (
+            "missing-output", "wrong-output", "missing-step", "duplicate-step", "wrong-guard",
+            "wrong-command", "ignored-failure", "build-condition", "aggregate-env", "aggregate-gate",
+        ):
+            value = copy.deepcopy(original)
+            jobs = value["jobs"]
+            steps = jobs["build"]["steps"]
+            consumer = next(step for step in steps if step.get("name") == "Compile benchmark consumer")
+            aggregate = next(step for step in jobs["android-ci"]["steps"]
+                             if step.get("name") == "Require every selected scope to pass")
+            if kind == "missing-output":
+                jobs["scope"]["outputs"].pop("benchmark-consumer")
+            elif kind == "wrong-output":
+                jobs["scope"]["outputs"]["benchmark-consumer"] = "${{ steps.changed.outputs.benchmark }}"
+            elif kind == "missing-step":
+                steps.remove(consumer)
+            elif kind == "duplicate-step":
+                steps.insert(steps.index(consumer), copy.deepcopy(consumer))
+            elif kind == "wrong-guard":
+                consumer["if"] = "${{ false }}"
+            elif kind == "wrong-command":
+                consumer["run"] = consumer["run"].replace("--scope benchmark-consumer", "--scope scaffold")
+            elif kind == "ignored-failure":
+                consumer["continue-on-error"] = "true"
+            elif kind == "build-condition":
+                jobs["build"]["if"] = jobs["build"]["if"].replace(
+                    "needs.scope.outputs['benchmark-consumer'] == 'true'",
+                    "needs.scope.outputs.backup == 'true'",
+                )
+            elif kind == "aggregate-env":
+                aggregate["env"].pop("BENCHMARK_CONSUMER_SELECTED")
+            else:
+                aggregate["run"] = aggregate["run"].replace(
+                    ' || [ "$BENCHMARK_CONSUMER_SELECTED" = "true" ]', "",
+                )
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_candidate(value, text)
 
     def test_gradle_cache_is_namespaced_and_tracks_actual_locks_and_toolchain(self):
         workflow, _ = self.read("android-ci.yml")
@@ -329,6 +469,7 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertIn("$affected = @()", gradle_runs[0])
         self.assertIn("ci.py run --stage scaffold @affected @scopes", gradle_runs[0])
+        self.assertIn("controller/ci.py run --stage benchmark", gradle_runs[0])
         self.assertNotIn(":convention:test", text)
         scoped = copy.deepcopy(original)
         scoped["on"]["pull_request"]["paths"] = ["android/**", "tools/android-port/**"]
@@ -338,7 +479,8 @@ class WorkflowTests(unittest.TestCase):
             "uses": "actions/cache@caa296126883cff596d87d8935842f9db880ef25",
             "with": {"path": "~/.gradle/caches", "key": "gradle-read-only-fixture"},
         })
-        validate_candidate(cached, text)
+        with self.assertRaisesRegex(PortError, "Linux build handoff has missing or additional steps"):
+            validate_candidate(cached, text)
         for kind in ("merge", "gate", "needs", "host", "strategy"):
             value = copy.deepcopy(original)
             if kind == "merge":
@@ -353,6 +495,316 @@ class WorkflowTests(unittest.TestCase):
                 value["jobs"]["build"]["strategy"] = {"matrix": {"host": ["linux", "windows"]}}
             with self.subTest(kind=kind), self.assertRaises(PortError):
                 validate_candidate(value, text)
+
+    def test_benchmark_scope_cannot_skip_its_stage_or_required_build_gate(self):
+        original, text = self.read("android-ci.yml")
+        for kind in ("workflow-shell", "workflow-environment", "scope-output",
+                     "build-condition", "build-conjunction", "build-shell",
+                     "build-ignored-failure", "stage-command", "stage-comment", "stage-false-guard",
+                     "stage-ignored-failure", "stage-shell", "stage-environment",
+                     "aggregate-environment", "aggregate-selection", "aggregate-comment",
+                     "aggregate-override", "aggregate-shell", "aggregate-ignored-failure"):
+            value = copy.deepcopy(original)
+            gradle = next(step for step in value["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+            aggregate = next(step for step in value["jobs"]["android-ci"]["steps"]
+                             if step.get("name") == "Require every selected scope to pass")
+            benchmark_command = "& python tools/android-port/controller/ci.py run --stage benchmark"
+            if kind == "workflow-shell":
+                value["defaults"] = {"run": {"shell": "bash {0}"}}
+            elif kind == "workflow-environment":
+                value["env"] = {"BASH_ENV": "fixture"}
+            elif kind == "scope-output":
+                value["jobs"]["scope"]["outputs"].pop("benchmark")
+            elif kind == "build-condition":
+                value["jobs"]["build"]["if"] = value["jobs"]["build"]["if"].replace(
+                    "needs.scope.outputs.benchmark == 'true'",
+                    "needs.scope.outputs.backup == 'true'",
+                )
+            elif kind == "build-conjunction":
+                value["jobs"]["build"]["if"] = value["jobs"]["build"]["if"].replace(
+                    "needs.scope.outputs.backup == 'true' ||",
+                    "needs.scope.outputs.backup == 'true' &&",
+                )
+            elif kind == "build-shell":
+                value["jobs"]["build"]["defaults"]["run"]["shell"] = "bash"
+            elif kind == "build-ignored-failure":
+                value["jobs"]["build"]["continue-on-error"] = "true"
+            elif kind == "stage-command":
+                gradle["run"] = gradle["run"].replace(
+                    benchmark_command,
+                    "echo benchmark stage omitted",
+                )
+            elif kind == "stage-comment":
+                gradle["run"] = gradle["run"].replace(benchmark_command, "# " + benchmark_command)
+            elif kind == "stage-false-guard":
+                gradle["run"] = gradle["run"].replace(
+                    benchmark_command, "if ($false) {\n  " + benchmark_command + "\n}",
+                )
+            elif kind == "stage-ignored-failure":
+                gradle["run"] = gradle["run"].replace(
+                    "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+                    "# if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+                    1,
+                )
+            elif kind == "stage-shell":
+                gradle["shell"] = "bash"
+            elif kind == "stage-environment":
+                gradle["env"].pop("RUN_BENCHMARK")
+            elif kind == "aggregate-environment":
+                aggregate["env"].pop("BENCHMARK_SELECTED")
+            elif kind == "aggregate-selection":
+                aggregate["run"] = aggregate["run"].replace(
+                    ' || [ "$BENCHMARK_SELECTED" = "true" ]', "",
+                )
+            elif kind == "aggregate-comment":
+                start = aggregate["run"].index('if [ "$SCAFFOLD_SELECTED"')
+                end = aggregate["run"].index("fi\n", start) + len("fi\n")
+                block = aggregate["run"][start:end]
+                aggregate["run"] = aggregate["run"][:start] + "".join(
+                    "# " + line for line in block.splitlines(keepends=True)
+                ) + aggregate["run"][end:]
+            elif kind == "aggregate-override":
+                aggregate["run"] = 'BUILD_RESULT="success"\n' + aggregate["run"]
+            elif kind == "aggregate-shell":
+                value["jobs"]["android-ci"]["defaults"] = {"run": {"shell": "bash {0}"}}
+            else:
+                value["jobs"]["android-ci"]["continue-on-error"] = "true"
+            self.assertNotEqual(value, original, f"Mutation {kind} did not change the workflow")
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_candidate(value, text)
+
+    def test_scope_classifier_and_outputs_cannot_be_removed_or_overridden(self):
+        import yaml
+
+        original, text = self.read("android-ci.yml")
+        scope_step = original["jobs"]["scope"]["steps"][1]
+        scope_step["run"] = "# Valid scope explanation\n\n" + scope_step["run"]
+        validate_candidate(original, text)
+        for kind in (
+            "classifier-removed", "classifier-commented", "classifier-duplicated",
+            "classifier-output", "classifier-failure", "output-override",
+            "scope-output", "step-shell", "job-shell", "job-environment",
+            "checkout-ref", "additional-step", "selector-commented",
+        ):
+            value = copy.deepcopy(original)
+            scope = value["jobs"]["scope"]
+            step = scope["steps"][1]
+            commands = [
+                line.strip(" \t") for line in step["run"].split("\n")
+                if line.strip(" \t") and not line.lstrip(" \t").startswith("#")
+            ]
+            self.assertEqual(len(commands), 2)
+            classifier, selector = commands
+            if kind == "classifier-removed":
+                step["run"] = selector + "\n"
+            elif kind == "classifier-commented":
+                step["run"] = "# " + classifier + "\n" + selector + "\n"
+            elif kind == "classifier-duplicated":
+                step["run"] = classifier + "\n" + classifier + "\n" + selector + "\n"
+            elif kind == "classifier-output":
+                step["run"] = step["run"].replace('--output "$GITHUB_OUTPUT"', "--output /dev/null", 1)
+            elif kind == "classifier-failure":
+                step["run"] = classifier + " || true\n" + selector + "\n"
+            elif kind == "output-override":
+                step["run"] += 'echo "benchmark=false" >> "$GITHUB_OUTPUT"\n'
+            elif kind == "scope-output":
+                scope["outputs"]["scaffold"] = "${{ steps.changed.outputs.benchmark }}"
+            elif kind == "step-shell":
+                step["shell"] = "bash {0}"
+            elif kind == "job-shell":
+                scope["defaults"] = {"run": {"shell": "bash {0}"}}
+            elif kind == "job-environment":
+                scope["env"] = {"BASH_ENV": "fixture"}
+            elif kind == "checkout-ref":
+                scope["steps"][0]["with"]["ref"] = "${{ github.sha }}"
+            elif kind == "additional-step":
+                scope["steps"].insert(1, {"run": "echo benchmark=false"})
+            else:
+                step["run"] = classifier + "\n# " + selector + "\n"
+            self.assertNotEqual(value, original, f"Mutation {kind} did not change the workflow")
+            text = yaml.safe_dump(value, sort_keys=False)
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_candidate(parse_yaml(text), text)
+
+    def test_build_setup_and_handoffs_cannot_replace_the_selected_verifier(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for kind in (
+            "insert-verifier-replacement", "insert-path-override", "replace-in-preflight",
+            "inject-environment", "preflight-shell", "preflight-working-directory",
+            "checkout-ref", "python-version", "cache-path", "cache-key", "cache-restore",
+            "remove-preflight", "between-stage-and-localization",
+            "between-localization-and-inspection", "localization-command", "inspection-shell",
+            "inspection-environment", "backup-condition",
+        ):
+            value = copy.deepcopy(original)
+            steps = value["jobs"]["build"]["steps"]
+            stage = next(index for index, step in enumerate(steps) if step.get("id") == "gradle")
+            preflight = next(step for step in steps if step.get("name") == "Check worker readiness")
+            localization = next(step for step in steps if step.get("name") == "Validate localization discovery")
+            inspection = next(step for step in steps if step.get("name") == "Inspect exact APK and static alignment")
+            backup = next(step for step in steps if step.get("name") == "Transfer actual backup bytes to the platform oracle")
+            replacement = "Set-Content -LiteralPath 'tools/android-port/controller/ci.py' -Value 'raise SystemExit(0)'"
+            if kind == "insert-verifier-replacement":
+                steps.insert(stage, {"name": "Replace verifier", "run": replacement})
+            elif kind == "insert-path-override":
+                steps.insert(stage, {"name": "Override Python", "run": "'fixture' | Out-File $env:GITHUB_PATH -Append"})
+            elif kind == "replace-in-preflight":
+                preflight["run"] += "\n" + replacement
+            elif kind == "inject-environment":
+                preflight["env"] = {"PYTHONPATH": "fixture"}
+            elif kind == "preflight-shell":
+                preflight["shell"] = "bash"
+            elif kind == "preflight-working-directory":
+                preflight["working-directory"] = "fixture"
+            elif kind == "checkout-ref":
+                steps[0]["with"]["ref"] = "${{ github.sha }}"
+            elif kind == "python-version":
+                steps[1]["with"]["python-version"] = "3.13"
+            elif kind in ("cache-path", "cache-key", "cache-restore"):
+                cache = next(step for step in steps if step.get("name") == "Restore verified Gradle and task-output cache")
+                key = {"cache-path": "path", "cache-key": "key", "cache-restore": "restore-keys"}[kind]
+                cache["with"][key] = "fixture"
+            elif kind == "remove-preflight":
+                steps.remove(preflight)
+            elif kind == "between-stage-and-localization":
+                steps.insert(stage + 1, {"run": replacement})
+            elif kind == "between-localization-and-inspection":
+                steps.insert(steps.index(inspection), {"run": replacement})
+            elif kind == "localization-command":
+                localization["run"] += "\n" + replacement
+            elif kind == "inspection-shell":
+                inspection["shell"] = "bash"
+            elif kind == "inspection-environment":
+                inspection["env"] = {"PYTHONPATH": "fixture"}
+            else:
+                backup["if"] = "${{ false }}"
+            self.assertNotEqual(value, original, f"Mutation {kind} did not change the workflow")
+            text = yaml.safe_dump(value, sort_keys=False)
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_candidate(parse_yaml(text), text)
+
+    def test_build_handoffs_reject_additional_steps_after_backup_upload(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        original_steps = original["jobs"]["build"]["steps"]
+        backup = original_steps[-1]
+        self.assertEqual(backup.get("name"), "Transfer actual backup bytes to the platform oracle")
+        extra_action = copy.deepcopy(backup)
+        extra_action["name"] = "Unexpected additional upload"
+        for kind, added_steps in (
+            ("requires", [{"run": "#requires -Modules ExampleOnly\nWrite-Output ok\n"}]),
+            ("command", [{"run": "Write-Output ok\n"}]),
+            ("pinned-action", [extra_action]),
+            ("multiple", [{"run": "Write-Output one\n"}, {"run": "Write-Output two\n"}]),
+        ):
+            value = copy.deepcopy(original)
+            value["jobs"]["build"]["steps"].extend(copy.deepcopy(added_steps))
+            text = yaml.safe_dump(value, sort_keys=False)
+            parsed = parse_yaml(text)
+            self.assertEqual(parsed["jobs"]["build"]["steps"][-len(added_steps):], added_steps)
+            with self.subTest(kind=kind), self.assertRaisesRegex(
+                PortError, "Linux build handoff has missing or additional steps",
+            ):
+                validate_candidate(parsed, text)
+
+    def test_workflow_guards_reject_powershell_requires_directives_in_every_fixed_build_script(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for index, step in enumerate(original["jobs"]["build"]["steps"]):
+            if "run" not in step:
+                continue
+            for directive in (
+                "#requires -Modules WorkflowGuardRegressionOnly",
+                "#ReQuIrEs -mOdUlEs @{ ModuleName = 'WorkflowGuardRegressionOnly'; RequiredVersion = '1.0' }",
+                " \t#REQUIRES\t-MODULES ./WorkflowGuardRegressionOnly.psm1",
+                "\t#requires  -Modules\tWorkflowGuardRegressionOnly,OtherWorkflowGuardRegressionOnly",
+                "#requires -Version 7.0",
+                "#requires-not-a-directive -Modules WorkflowGuardRegressionOnly",
+            ):
+                for position in ("before", "after"):
+                    value = copy.deepcopy(original)
+                    changed = value["jobs"]["build"]["steps"][index]
+                    changed["run"] = (
+                        directive + "\n" + step["run"] if position == "before"
+                        else step["run"] + "\n" + directive + "\n"
+                    )
+                    text = yaml.safe_dump(value, sort_keys=False)
+                    parsed = parse_yaml(text)
+                    self.assertEqual(parsed["jobs"]["build"]["steps"][index]["run"], changed["run"])
+                    with self.subTest(step=index, directive=directive, position=position):
+                        with self.assertRaisesRegex(PortError, "#requires directive"):
+                            validate_candidate(parsed, text)
+
+    def test_workflow_guards_allow_comments_and_indentation_without_treating_comments_as_commands(self):
+        import yaml
+
+        workflow, _ = self.read("android-ci.yml")
+        comments = (
+            " \t# Additional explanation\n"
+            "# requires -Modules WorkflowGuardRegressionOnly\n"
+            "#\trequires -Modules WorkflowGuardRegressionOnly\n"
+            "##requires -Modules WorkflowGuardRegressionOnly\n"
+            "# Note about #requires -Modules WorkflowGuardRegressionOnly\n\n"
+            "#requ\u0131res -Modules WorkflowGuardRegressionOnly\n"
+            "#requ\u0130res -Modules WorkflowGuardRegressionOnly\n"
+            "#require\u017f -Modules WorkflowGuardRegressionOnly\n\n"
+        )
+        gradle = next(step for step in workflow["jobs"]["build"]["steps"] if step.get("id") == "gradle")
+        gate = workflow["jobs"]["android-ci"]["steps"][0]
+        scope = workflow["jobs"]["scope"]["steps"][1]
+        gradle["run"] = comments + gradle["run"]
+        bash_comment = " \t#ReQuIrEs\t-MoDuLeS WorkflowGuardRegressionOnly\n"
+        gate["run"] = bash_comment + comments + gate["run"]
+        scope["run"] = bash_comment + comments + scope["run"]
+        for step in workflow["jobs"]["controller"]["steps"]:
+            if "run" in step:
+                step["run"] = bash_comment + comments + step["run"]
+        for step in workflow["jobs"]["build"]["steps"]:
+            if "run" in step and step.get("id") != "gradle":
+                step["run"] = comments + step["run"]
+        text = yaml.safe_dump(workflow, sort_keys=False)
+        validate_candidate(parse_yaml(text), text)
+
+    def test_workflow_guards_reject_encoded_non_lf_shell_line_separators(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for target in ("scope", "controller", "setup", "stage", "localization", "inspection", "aggregate", "build-condition"):
+            for separator in ("\r", "\v", "\f", "\x85", "\u2028", "\u2029"):
+                value = copy.deepcopy(original)
+                if target == "build-condition":
+                    condition = value["jobs"]["build"]["if"]
+                    value["jobs"]["build"]["if"] = condition.replace("||", separator + "||", 1)
+                    self.assertNotEqual(value["jobs"]["build"]["if"], condition)
+                else:
+                    step = self.guarded_step(value, target)
+                    step["run"] = "".join("#" + separator + line + "\n" for line in step["run"].splitlines())
+                text = yaml.safe_dump(value, sort_keys=False)
+                parsed = parse_yaml(text)
+                if target == "build-condition":
+                    self.assertEqual(parsed["jobs"]["build"]["if"], value["jobs"]["build"]["if"])
+                else:
+                    parsed_step = self.guarded_step(parsed, target)
+                    self.assertEqual(parsed_step["run"], step["run"])
+                with self.subTest(target=target, separator=repr(separator)), self.assertRaises(PortError):
+                    validate_candidate(parsed, text)
+
+    def test_workflow_guards_reject_expression_expansion_inside_comments(self):
+        import yaml
+
+        original, _ = self.read("android-ci.yml")
+        for target in ("scope", "controller", "setup", "stage", "localization", "inspection", "aggregate"):
+            value = copy.deepcopy(original)
+            step = self.guarded_step(value, target)
+            step["run"] = "# ${{ github.event.pull_request.body }}\n" + step["run"]
+            text = yaml.safe_dump(value, sort_keys=False)
+            parsed = parse_yaml(text)
+            with self.subTest(target=target), self.assertRaisesRegex(PortError, "expression"):
+                validate_candidate(parsed, text)
 
     def test_read_only_checkout_ephemeral_runners_pins_and_secret_absence(self):
         original, text = self.read("android-ci.yml")

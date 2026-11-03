@@ -45,6 +45,140 @@ def parse_yaml(text: str):
     return value
 
 
+def workflow_text(value, label: str):
+    if not isinstance(value, str):
+        raise PortError(f"{label} must be a string")
+    if any(
+        (ord(character) < 32 and character not in "\t\n")
+        or 127 <= ord(character) <= 159 or character in "\u2028\u2029"
+        for character in value
+    ):
+        raise PortError(f"{label} contains a non-LF or control character")
+    return value
+
+
+def executable_lines(script: str, *, expression_lines=(), powershell=False):
+    script = workflow_text(script, "Workflow run script")
+    lines = script.split("\n")
+    if any("${{" in line and line.strip(" \t") not in expression_lines for line in lines):
+        raise PortError("Workflow run script contains GitHub expression expansion")
+    if powershell and any(re.match(r"[ \t]*#requires", line, re.IGNORECASE | re.ASCII) for line in lines):
+        raise PortError("Workflow run script contains a PowerShell #requires directive")
+    return [
+        line.strip(" \t") for line in lines
+        if line.strip(" \t") and not line.lstrip(" \t").startswith("#")
+    ]
+
+
+def validate_fixed_steps(steps, expected, label: str, *, powershell=True, expression_lines=()):
+    if len(steps) != len(expected):
+        raise PortError(f"{label} has missing or additional steps")
+    for index, (step, fixed) in enumerate(zip(steps, expected)):
+        if (
+            not isinstance(step, dict)
+            or {key: value for key, value in step.items() if key != "run"}
+            != {key: value for key, value in fixed.items() if key != "run"}
+            or ("run" in step) != ("run" in fixed)
+            or (
+                "run" in fixed
+                and executable_lines(
+                    step["run"], expression_lines=expression_lines, powershell=powershell,
+                ) != fixed["run"]
+            )
+        ):
+            raise PortError(f"{label} step {index + 1} differs from the fixed execution contract")
+
+
+def validate_build_setup(steps):
+    toolchain_hash = (
+        "${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', "
+        "'android/gradle/wrapper/gradle-wrapper.jar', 'tools/android-port/controller/toolchain-pins.json') }}"
+    )
+    dependencies_hash = (
+        "${{ hashFiles('android/gradle/libs.versions.toml', 'android/gradle/verification-metadata.xml', "
+        "'android/gradle/dependency-locks/*.lockfile', 'android/**/gradle.lockfile') }}"
+    )
+    cache_prefix = "android-gradle-v4-${{ runner.os }}-" + toolchain_hash + "-" + dependencies_hash + "-"
+    validate_fixed_steps(steps, [
+        {
+            "name": "Read-only exact candidate",
+            "uses": "actions/checkout@" + ACTION_PINS["actions/checkout"],
+            "with": {
+                "ref": "${{ github.event.pull_request.head.sha || github.sha }}",
+                "fetch-depth": "0",
+                "persist-credentials": "false",
+            },
+        },
+        {
+            "uses": "actions/setup-python@" + ACTION_PINS["actions/setup-python"],
+            "with": {"python-version": "3.12.4", "architecture": "x64"},
+        },
+        {
+            "name": "Install checksum-pinned workflow parser",
+            "run": [
+                "python -m pip install --disable-pip-version-check --require-hashes "
+                "--no-deps --only-binary=:all: -r tools/android-port/controller/requirements-ci.txt --quiet",
+            ],
+        },
+        {
+            "name": "Declare one toolchain, work and Gradle cache root",
+            "run": [
+                "$root = Join-Path $env:RUNNER_TEMP 'meshcoreone-ci'",
+                '"ANDROID_CI_WORK=$(Join-Path $root \'work\')" | Out-File $env:GITHUB_ENV -Append -Encoding utf8',
+                '"ANDROID_CI_STATE=$(Join-Path (Join-Path $root \'toolchain\') \'environment.json\')" '
+                '| Out-File $env:GITHUB_ENV -Append -Encoding utf8',
+                '"GRADLE_USER_HOME=$(Join-Path $root \'gradle-home\')" | Out-File $env:GITHUB_ENV -Append -Encoding utf8',
+            ],
+        },
+        {
+            "name": "Restore verified Gradle and task-output cache",
+            "uses": "actions/cache@" + ACTION_PINS["actions/cache"],
+            "with": {
+                "path": "${{ env.GRADLE_USER_HOME }}",
+                "key": cache_prefix + "${{ github.run_id }}-${{ github.run_attempt }}",
+                "restore-keys": (
+                    cache_prefix + "\n"
+                    "android-gradle-v3-${{ runner.os }}-\n"
+                    "android-gradle-${{ runner.os }}-\n"
+                ),
+            },
+        },
+        {
+            "name": "Validate frozen source inputs",
+            "run": [
+                "python tools/android-port/test_inventory.py --check",
+                "python tools/android-port/extract_vectors.py --check",
+            ],
+        },
+        {
+            "name": "Run selected Python oracle assertions",
+            "if": "${{ needs.scope.outputs.scaffold == 'true' }}",
+            "run": [
+                "python tools/android-port/oracle/run_tests.py --output (Join-Path $env:RUNNER_TEMP 'oracle-tests.json')",
+            ],
+        },
+        {
+            "name": "Provision exact first-party JDK and SDK archives",
+            "run": [
+                "python tools/android-port/controller/ci.py provision --root "
+                "(Split-Path $env:ANDROID_CI_STATE -Parent) --accept-sdk-license",
+            ],
+        },
+        {
+            "name": "Check worker readiness",
+            "run": ["python tools/android-port/controller/ci.py preflight"],
+        },
+        {
+            "name": "Compile benchmark consumer",
+            "if": "${{ needs.scope.outputs['benchmark-consumer'] == 'true' }}",
+            "run": [
+                "python tools/android-port/controller/ci.py run --stage scaffold --scope benchmark-consumer "
+                "--output (Join-Path $env:ANDROID_CI_WORK 'benchmark-consumer')",
+            ],
+        },
+    ], "Linux build setup")
+
+
 def validate_boundary(value: dict, text: str):
     if value.get("permissions") != {"contents": "read"}:
         raise PortError("Workflow token must have contents:read only")
@@ -68,6 +202,8 @@ def validate_boundary(value: dict, text: str):
 
 def validate_candidate(value: dict, text: str):
     validate_boundary(value, text)
+    if set(value) != {"name", "on", "permissions", "concurrency", "jobs"}:
+        raise PortError("Candidate workflow must not add global shell defaults or environment")
     events = value.get("on", {})
     if not {"pull_request", "merge_group", "push", "workflow_dispatch"}.issubset(events):
         raise PortError("Required PR/merge-group/push/manual event is missing")
@@ -75,34 +211,119 @@ def validate_candidate(value: dict, text: str):
     if set(jobs) != {"scope", "controller", "build", "external-oracle", "backup-oracle", "android-ci"}:
         raise PortError("Missing/unknown mandatory CI job")
     gate = jobs["android-ci"]
-    scope_outputs = jobs["scope"].get("outputs", {})
+    scope = jobs["scope"]
+    if not isinstance(scope, dict):
+        raise PortError("Candidate scope job is malformed")
+    event_arguments = (
+        '--candidate-event-name "${{ github.event_name }}" '
+        '--candidate-event-path "${{ github.event_path }}"'
+    )
+    selector_command = (
+        "python tools/android-port/controller/test_runner.py " + event_arguments + ' --scope-output "$GITHUB_OUTPUT"'
+    )
+    classifier_command = (
+        'python tools/android-port/oracle/workflow_scope.py --event-name "${{ github.event_name }}" '
+        '--event-path "${{ github.event_path }}" --output "$GITHUB_OUTPUT"'
+    )
+    scope_outputs = {
+        "controller": "${{ steps.changed.outputs.controller }}",
+        "accessibility-suite": "${{ steps.changed.outputs.accessibility-suite }}",
+        "scaffold": "${{ steps.changed.outputs.scaffold }}",
+        "protocol": "${{ steps.changed.outputs.protocol }}",
+        "backup": "${{ steps.changed.outputs.backup }}",
+        "benchmark": "${{ steps.changed.outputs.benchmark }}",
+        "benchmark-consumer": "${{ steps.changed.outputs.benchmark-consumer }}",
+        "external-oracle": "${{ steps.changed.outputs['external-oracle'] }}",
+    }
+    scope_steps = scope.get("steps")
     if (
-        scope_outputs.get("controller") != "${{ steps.changed.outputs.controller }}"
-        or scope_outputs.get("accessibility-suite") != "${{ steps.changed.outputs.accessibility-suite }}"
+        set(scope) != {"name", "runs-on", "timeout-minutes", "outputs", "steps"}
+        or scope.get("name") != "Classify candidate scopes"
+        or scope.get("runs-on") != "ubuntu-24.04" or scope.get("timeout-minutes") != "5"
+        or scope.get("outputs") != scope_outputs
+        or not isinstance(scope_steps, list) or len(scope_steps) != 2
+        or scope_steps[0] != {
+            "name": "Read-only exact candidate and immutable diff endpoints",
+            "uses": "actions/checkout@" + ACTION_PINS["actions/checkout"],
+            "with": {
+                "ref": "${{ github.event.pull_request.head.sha || github.sha }}",
+                "fetch-depth": "0",
+                "persist-credentials": "false",
+            },
+        }
+        or not isinstance(scope_steps[1], dict)
+        or set(scope_steps[1]) != {"id", "name", "run"}
+        or scope_steps[1]["id"] != "changed"
+        or scope_steps[1]["name"] != "Classify changed inputs with fail-safe defaults"
+        or executable_lines(
+            scope_steps[1]["run"], expression_lines=(classifier_command, selector_command),
+        ) != [classifier_command, selector_command]
     ):
-        raise PortError("Diff-derived controller scope and committed accessibility-suite selection must remain separate")
-    if (gate.get("name") != "android-ci" or gate.get("if") != "${{ always() }}"
+        raise PortError("Candidate scopes must come from the exact classifier and native selector without overrides")
+    if (set(gate) != {"name", "if", "needs", "runs-on", "timeout-minutes", "steps"}
+            or gate.get("name") != "android-ci" or gate.get("if") != "${{ always() }}"
+            or gate.get("runs-on") != "ubuntu-24.04" or gate.get("timeout-minutes") != "5"
             or gate.get("needs") != ["scope", "controller", "build", "external-oracle", "backup-oracle"]):
         raise PortError("android-ci must always report every selected build outcome")
     build = jobs["build"]
     if any(jobs[name].get("runs-on") != "macos-26-intel" for name in ("external-oracle", "backup-oracle")):
         raise PortError("Reference oracles require the supported macOS26 Intel host; do not downgrade runtime or skip oracles")
-    if (build.get("runs-on") != "ubuntu-24.04" or "strategy" in build
+    build_condition = (
+        "${{ needs.scope.outputs.scaffold == 'true' || "
+        "needs.scope.outputs.protocol == 'true' || "
+        "needs.scope.outputs.backup == 'true' || "
+        "needs.scope.outputs.benchmark == 'true' || "
+        "needs.scope.outputs['benchmark-consumer'] == 'true' }}"
+    )
+    condition = workflow_text(build.get("if"), "Linux build condition")
+    if (set(build) != {"name", "needs", "if", "runs-on", "timeout-minutes", "defaults", "steps"}
+            or build.get("name") != "One Linux Android build"
+            or build.get("runs-on") != "ubuntu-24.04" or build.get("timeout-minutes") != "75"
+            or build.get("defaults") != {"run": {"shell": "pwsh"}}
             or build.get("needs") != ["scope"]
-            or "needs.scope.outputs" not in build.get("if", "")):
+            or " ".join(re.split(r"[ \t\n]+", condition.strip(" \t\n"))) != build_condition):
         raise PortError("The selected Linux execution host must be mandatory, dependency-gated and unmatrixed")
     steps = build["steps"]
+    if not isinstance(steps, list) or any(not isinstance(step, dict) for step in steps):
+        raise PortError("Candidate Linux build steps are malformed")
     stage_steps = [step for step in steps if step.get("id") == "gradle"]
     if len(stage_steps) != 1:
-        raise PortError("Candidate workflow must use one consolidated scaffold Gradle invocation")
+        raise PortError("Candidate workflow must use one consolidated Gradle execution step")
+    stage = steps.index(stage_steps[0])
+    validate_build_setup(steps[:stage])
     stage_run = stage_steps[0].get("run", "")
+    stage_environment = stage_steps[0].get("env", {})
+    expected_stage_environment = {
+        "RUN_SCAFFOLD": "${{ needs.scope.outputs.scaffold }}",
+        "RUN_PROTOCOL": "${{ needs.scope.outputs.protocol }}",
+        "RUN_BACKUP": "${{ needs.scope.outputs.backup }}",
+        "RUN_BENCHMARK": "${{ needs.scope.outputs.benchmark }}",
+        "RUN_CONTROLLER": "${{ needs.scope.outputs.controller }}",
+    }
+    stage_lines = [
+        "if ($env:RUN_BENCHMARK -eq 'true') {",
+        "& python tools/android-port/controller/ci.py run --stage benchmark",
+        "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+        "}",
+        "if ($env:RUN_SCAFFOLD -eq 'true' -or $env:RUN_PROTOCOL -eq 'true' -or $env:RUN_BACKUP -eq 'true') {",
+        "$scopes = @()",
+        *(
+            f"if ($env:RUN_{scope.upper()} -eq 'true') {{ $scopes += @('--scope', '{scope}') }}"
+            for scope in ("scaffold", "protocol", "backup")
+        ),
+        "$affected = @()",
+        "if ($env:RUN_CONTROLLER -ne 'true') { $affected = @('--affected-candidate') }",
+        "& python tools/android-port/controller/ci.py run --stage scaffold @affected @scopes",
+        "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+        "}",
+    ]
     if (
-        stage_steps[0].get("env", {}).get("RUN_CONTROLLER") != "${{ needs.scope.outputs.controller }}"
-        or "$affected = @()" not in stage_run
-        or "if ($env:RUN_CONTROLLER -ne 'true') { $affected = @('--affected-candidate') }" not in stage_run
-        or "ci.py run --stage scaffold @affected @scopes" not in stage_run
+        set(stage_steps[0]) != {"id", "name", "env", "run"}
+        or stage_steps[0].get("name") != "Run parallel Gradle validation and Android tasks"
+        or stage_environment != expected_stage_environment
+        or executable_lines(stage_run, powershell=True) != stage_lines
     ):
-        raise PortError("Candidate Gradle invocation must use exact affected planning outside controller changes")
+        raise PortError("Candidate Gradle stages must run selected benchmark verification and exact affected scaffold planning")
     selected_controller = (
         "${{ needs.scope.outputs.controller == 'true' || "
         "needs.scope.outputs.accessibility-suite == 'true' }}"
@@ -111,7 +332,18 @@ def validate_candidate(value: dict, text: str):
         "${{ needs.scope.outputs.controller != 'true' && "
         "needs.scope.outputs.accessibility-suite != 'true' }}"
     )
-    controller_steps = jobs["controller"]["steps"]
+    controller = jobs["controller"]
+    if (
+        set(controller) != {"name", "needs", "runs-on", "timeout-minutes", "steps"}
+        or controller.get("name") != "Controller and workflow policy"
+        or controller.get("needs") != ["scope"]
+        or controller.get("runs-on") != "ubuntu-24.04"
+        or controller.get("timeout-minutes") != "10"
+    ):
+        raise PortError("Controller CI must use the fixed fail-closed job environment and shell")
+    controller_steps = controller["steps"]
+    if not isinstance(controller_steps, list) or any(not isinstance(step, dict) for step in controller_steps):
+        raise PortError("Controller CI steps are malformed")
     selected_steps = [step for step in controller_steps if step.get("name") != "No controller inputs selected"]
     unselected_steps = [step for step in controller_steps if step.get("name") == "No controller inputs selected"]
     if (
@@ -119,57 +351,96 @@ def validate_candidate(value: dict, text: str):
         or len(unselected_steps) != 1 or unselected_steps[0].get("if") != unselected_controller
     ):
         raise PortError("Controller execution must honor either diff-selected inputs or the mandatory accessibility suite")
-    inspections = [
-        index for index, step in enumerate(steps)
-        if "ci.py inspect" in step.get("run", "")
-    ]
-    apk_uploads = [
-        index for index, step in enumerate(steps)
-        if step.get("name") == "Upload inspected debug APK for human testing"
-    ]
-    if len(inspections) != 1 or len(apk_uploads) != 1:
-        raise PortError("Candidate requires one inspected debug APK handoff")
-    inspection, upload = inspections[0], apk_uploads[0]
-    stage = steps.index(stage_steps[0])
-    localization_checks = [
-        (index, step) for index, step in enumerate(steps)
-        if step.get("name") == "Validate localization discovery"
-    ]
-    if (
-        steps[inspection].get("run") != "python tools/android-port/controller/ci.py inspect"
-        or steps[inspection].get("if") != "${{ steps.gradle.outputs.full_scaffold == 'true' }}"
-        or steps[inspection].get("continue-on-error")
-        or upload != inspection + 1
-        or stage >= inspection or "if" in steps[stage] or steps[stage].get("continue-on-error")
-        or len(localization_checks) != 1
-        or localization_checks[0][1].get("if") != "${{ steps.gradle.outputs.localization == 'true' }}"
-        or not stage < localization_checks[0][0] < inspection
-    ):
-        raise PortError("Debug APK upload must immediately follow successful scaffold APK inspection")
-    if steps[upload] != {
-        "name": "Upload inspected debug APK for human testing",
-        "if": "${{ success() && steps.gradle.outputs.full_scaffold == 'true' }}",
-        "uses": "actions/upload-artifact@" + ACTION_PINS["actions/upload-artifact"],
-        "with": {
-            "name": (
-                "debug-apk-${{ github.event.pull_request.head.sha || github.sha }}"
-                "-${{ github.run_id }}-${{ github.run_attempt }}"
-            ),
-            "path": "android/app/build/outputs/apk/debug/app-debug.apk",
-            "if-no-files-found": "error",
-            "retention-days": "7",
+    validate_fixed_steps(steps[stage + 1:], [
+        {
+            "name": "Validate localization discovery",
+            "if": "${{ steps.gradle.outputs.localization == 'true' }}",
+            "run": [
+                "python tools/android-port/l10n_convert.py --check "
+                "--verify-android-tests android/core/l10n/build/test-results/testDebugUnitTest",
+            ],
         },
-    }:
-        raise PortError("Debug APK handoff must be successful, scaffold-only, exact-candidate/run-bound and fail on absence")
-    gate_runs = "\n".join(s.get("run", "") for s in gate["steps"])
-    gate_environment = {
-        key: value for step in gate["steps"] for key, value in step.get("env", {}).items()
-    }
+        {
+            "name": "Inspect exact APK and static alignment",
+            "if": "${{ steps.gradle.outputs.full_scaffold == 'true' }}",
+            "run": ["python tools/android-port/controller/ci.py inspect"],
+        },
+        {
+            "name": "Upload inspected debug APK for human testing",
+            "if": "${{ success() && steps.gradle.outputs.full_scaffold == 'true' }}",
+            "uses": "actions/upload-artifact@" + ACTION_PINS["actions/upload-artifact"],
+            "with": {
+                "name": (
+                    "debug-apk-${{ github.event.pull_request.head.sha || github.sha }}"
+                    "-${{ github.run_id }}-${{ github.run_attempt }}"
+                ),
+                "path": "android/app/build/outputs/apk/debug/app-debug.apk",
+                "if-no-files-found": "error",
+                "retention-days": "7",
+            },
+        },
+        {
+            "name": "Transfer actual backup bytes to the platform oracle",
+            "if": "${{ needs.scope.outputs.backup == 'true' }}",
+            "uses": "actions/upload-artifact@" + ACTION_PINS["actions/upload-artifact"],
+            "with": {
+                "name": "backup-input-${{ github.run_id }}-${{ github.run_attempt }}",
+                "path": "android/core/data/build/reports/wp203/interop/",
+                "if-no-files-found": "error",
+                "retention-days": "1",
+            },
+        },
+    ], "Linux build handoff")
     if (
-        gate_environment.get("BUILD_RESULT") != "${{ needs.build.result }}"
-        or "aggregate --artifacts" in gate_runs
-        or any(step.get("uses", "").startswith(("actions/upload-artifact@", "actions/download-artifact@"))
-               for step in gate["steps"])
+        sum("ci.py inspect" in step.get("run", "") for step in steps) != 1
+        or sum(step.get("name") == "Upload inspected debug APK for human testing" for step in steps) != 1
+        or sum(step.get("name") == "Validate localization discovery" for step in steps) != 1
+    ):
+        raise PortError("Candidate requires one localization check and one inspected debug APK handoff")
+    selected_build_gate = (
+        'if [ "$SCAFFOLD_SELECTED" = "true" ] || [ "$PROTOCOL_SELECTED" = "true" ] '
+        '|| [ "$BACKUP_SELECTED" = "true" ] || [ "$BENCHMARK_SELECTED" = "true" ] '
+        '|| [ "$BENCHMARK_CONSUMER_SELECTED" = "true" ]; then'
+    )
+    gate_steps = gate.get("steps")
+    gate_environment = {
+        "CONTROLLER_SELECTED": "${{ needs.scope.outputs.controller }}",
+        "SCAFFOLD_SELECTED": "${{ needs.scope.outputs.scaffold }}",
+        "PROTOCOL_SELECTED": "${{ needs.scope.outputs.protocol }}",
+        "BACKUP_SELECTED": "${{ needs.scope.outputs.backup }}",
+        "BENCHMARK_SELECTED": "${{ needs.scope.outputs.benchmark }}",
+        "BENCHMARK_CONSUMER_SELECTED": "${{ needs.scope.outputs['benchmark-consumer'] }}",
+        "EXTERNAL_SELECTED": "${{ needs.scope.outputs['external-oracle'] }}",
+        "CONTROLLER_RESULT": "${{ needs.controller.result }}",
+        "BUILD_RESULT": "${{ needs.build.result }}",
+        "EXTERNAL_RESULT": "${{ needs.external-oracle.result }}",
+        "BACKUP_RESULT": "${{ needs.backup-oracle.result }}",
+    }
+    gate_lines = [
+        'test "$CONTROLLER_RESULT" = "success"',
+        selected_build_gate,
+        'test "$BUILD_RESULT" = "success"',
+        "else",
+        'test "$BUILD_RESULT" = "skipped"',
+        "fi",
+        'if [ "$EXTERNAL_SELECTED" = "true" ]; then',
+        'test "$EXTERNAL_RESULT" = "success"',
+        "else",
+        'test "$EXTERNAL_RESULT" = "skipped"',
+        "fi",
+        'if [ "$BACKUP_SELECTED" = "true" ]; then',
+        'test "$BACKUP_RESULT" = "success"',
+        "else",
+        'test "$BACKUP_RESULT" = "skipped"',
+        "fi",
+    ]
+    if (
+        not isinstance(gate_steps, list) or len(gate_steps) != 1
+        or not isinstance(gate_steps[0], dict)
+        or set(gate_steps[0]) != {"name", "env", "run"}
+        or gate_steps[0]["name"] != "Require every selected scope to pass"
+        or gate_steps[0]["env"] != gate_environment
+        or executable_lines(gate_steps[0]["run"]) != gate_lines
     ):
         raise PortError("Android CI must use direct fail-closed job results without duplicate report artifacts")
     all_runs = "\n".join(
@@ -177,19 +448,12 @@ def validate_candidate(value: dict, text: str):
     )
     if all_runs.count("controller/test_runner.py") != 2:
         raise PortError("Controller requires one scope-only selector and exactly one strict test invocation")
-    event_arguments = (
-        '--candidate-event-name "${{ github.event_name }}" '
-        '--candidate-event-path "${{ github.event_path }}"'
-    )
     runner_command = (
         "python tools/android-port/controller/test_runner.py --include-tests tools/android-port/local "
         + event_arguments
     )
     parity_runner_command = runner_command.replace(
         " --candidate-event-name", " --include-tests android/parity-tests --candidate-event-name", 1,
-    )
-    selector_command = (
-        "python tools/android-port/controller/test_runner.py " + event_arguments + ' --scope-output "$GITHUB_OUTPUT"'
     )
     selectors = [step for step in jobs["scope"]["steps"] if "controller/test_runner.py" in step.get("run", "")]
     if (
@@ -209,6 +473,52 @@ def validate_candidate(value: dict, text: str):
         ] not in ([runner_command], [parity_runner_command])
     ):
         raise PortError("Controller CI must discover the real native accessibility runner regressions once and fail closed")
+    controller_checks = [
+        "python tools/android-port/controller/verification_config.py --check",
+        "python tools/android-port/controller/validate.py",
+        "python tools/android-port/portmap.py",
+        "python android/parity-tests/audit.py --check",
+        "python android/parity-tests/semantic.py --check",
+    ]
+    runner_lines = executable_lines(
+        runners[0]["run"], expression_lines=(runner_command, parity_runner_command),
+    )
+    if runner_lines not in (
+        [runner_command, *controller_checks], [parity_runner_command, *controller_checks],
+    ):
+        raise PortError("Controller CI must run the complete fixed validation sequence without overrides")
+    validate_fixed_steps(controller_steps, [
+        {
+            "name": "Read-only exact candidate",
+            "if": selected_controller,
+            "uses": "actions/checkout@" + ACTION_PINS["actions/checkout"],
+            "with": {
+                "ref": "${{ github.event.pull_request.head.sha || github.sha }}",
+                "fetch-depth": "0",
+                "persist-credentials": "false",
+            },
+        },
+        {
+            "name": "Setup pinned Python",
+            "if": selected_controller,
+            "uses": "actions/setup-python@" + ACTION_PINS["actions/setup-python"],
+            "with": {"python-version": "3.12.4", "architecture": "x64"},
+        },
+        {
+            "name": "Install checksum-pinned YAML parser",
+            "if": selected_controller,
+            "run": [
+                "python -m pip install --disable-pip-version-check --require-hashes "
+                "--no-deps --only-binary=:all: -r tools/android-port/controller/requirements-ci.txt --quiet",
+            ],
+        },
+        {"name": "Run controller tests once", "if": selected_controller, "run": runner_lines},
+        {
+            "name": "No controller inputs selected",
+            "if": unselected_controller,
+            "run": ['echo "Controller suite not selected."'],
+        },
+    ], "Controller job", powershell=False, expression_lines=(runner_command, parity_runner_command))
     for name in ("build", "external-oracle", "backup-oracle"):
         job = jobs[name]
         if job.get("if") == "${{ always() }}" or "scope" not in job.get("needs", []):

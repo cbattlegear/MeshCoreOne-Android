@@ -105,15 +105,18 @@ class EnvironmentTests(unittest.TestCase):
         self.assertIn("--dependency-verification", arguments)
         self.assertEqual("strict", arguments[arguments.index("--dependency-verification") + 1])
         self.assertNotIn("--rerun-tasks", arguments)
-        self.assertIn("--build-cache", arguments)
-        self.assertIn("--max-workers=8", arguments)
-        self.assertIn("--parallel", arguments)
+        self.assertEqual("--build-cache" in arguments, not local)
+        self.assertEqual("--max-workers=1" in arguments, not local)
+        self.assertNotIn("--max-workers=8", arguments)
+        self.assertNotIn("--parallel", arguments)
+        self.assertEqual("--stacktrace" in arguments, not local)
         self.assertNotIn("--no-build-cache", arguments)
         if split_preflight:
-            self.assertIn("--parallel", preflight_arguments)
-            self.assertIn("--max-workers=8", preflight_arguments)
+            self.assertEqual("--parallel" in preflight_arguments, not local)
+            self.assertEqual("--stacktrace" in preflight_arguments, not local)
+            self.assertEqual("--max-workers=8" in preflight_arguments, not local)
             self.assertNotIn("--max-workers=1", preflight_arguments)
-            self.assertIn("--build-cache", preflight_arguments)
+            self.assertEqual("--build-cache" in preflight_arguments, not local)
         return output, state, arguments, observe_identity.call_count, preflight_arguments
 
     def test_scaffold_selects_android_test_compilation_without_install_or_execution(self):
@@ -144,6 +147,16 @@ class EnvironmentTests(unittest.TestCase):
                         forbidden in task.lower()
                         for task in tasks for forbidden in ("connected", "install", "device")
                     ))
+
+    def test_local_scaffold_keeps_its_existing_execution_options(self):
+        for host in ("linux", "windows"):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as temporary:
+                _, _, arguments, _, preflight = self.captured_stage(
+                    Path(temporary), host, "scaffold", self.forwarding_identity(), local=True,
+                )
+                self.assertIn("-PscaffoldTestHeap=256m", arguments)
+                self.assertIn("-PscaffoldTestHeap=256m", preflight)
+                self.assertTrue(any(argument.startswith("-PscaffoldTestJvmArgs=") for argument in arguments))
 
     def test_scaffold_graph_requires_the_declared_android_test_compiler(self):
         from controller.ci import TASKS, validate_candidate_task_graph
@@ -252,26 +265,123 @@ class EnvironmentTests(unittest.TestCase):
                 "verify_candidate_task_graph.gradle"
             ))
 
+    def test_benchmark_serializes_but_compile_consumer_keeps_parallel_workers(self):
+        from controller import ci
+
+        cases = (
+            ("benchmark", None, False),
+            ("benchmark", None, True),
+            ("scaffold", [ci.BENCHMARK_CONSUMER_SCOPE], False),
+        )
+        for host in ("linux", "windows"):
+            for stage, scopes, local in cases:
+                with self.subTest(host=host, stage=stage, scopes=scopes, local=local), \
+                        tempfile.TemporaryDirectory() as temporary:
+                    directory = Path(temporary)
+                    output = directory / "output"
+                    calls = []
+
+                    def execute(command, environment, log, **kwargs):
+                        calls.append((command, log))
+                        if log.name == f"gradle-{stage}-preflight.log":
+                            graph = Path(environment["ANDROID_CI_TASK_GRAPH"])
+                            graph.parent.mkdir(parents=True, exist_ok=True)
+                            graph.write_text(json.dumps({
+                                "schema_version": 1,
+                                "tasks": [{"path": ":validateModuleGraph", "type": "fixture", "command": []}],
+                            }), encoding="utf-8")
+                        elif log.name == f"gradle-{stage}.log":
+                            raise PortError("Stopped before fixture build execution")
+
+                    with (
+                        patch.object(ci, "load_manifest", return_value=None),
+                        patch.object(ci, "port_map", return_value={}),
+                        patch.object(ci, "candidate_environment", return_value={}),
+                        patch.object(
+                            ci, "prepare_benchmark_consumer_state",
+                            return_value=(output / "gradle-user-home", output / "gradle-project-cache"),
+                        ) as isolate,
+                        patch.object(ci, "verify_wrapper"),
+                        patch.object(ci.shutil, "which", return_value="fixture-pwsh"),
+                        patch.object(ci, "execute", side_effect=execute),
+                        patch.dict(os.environ, {"GITHUB_OUTPUT": ""}),
+                        self.assertRaisesRegex(PortError, "Stopped before fixture build execution"),
+                    ):
+                        ci.run_stage(
+                            stage, {**self.state(directory), "host": host}, output,
+                            local=local, scopes=scopes,
+                        )
+
+                    if stage == "benchmark":
+                        isolate.assert_not_called()
+                    else:
+                        isolate.assert_called_once_with(REPO / "android", output)
+                    self.assertEqual(len(calls), 3)
+                    if host == "windows":
+                        preflight = load_json(output / f"gradle-{stage}-preflight-invocation.json")["arguments"]
+                        build = load_json(output / f"gradle-{stage}-invocation.json")["arguments"]
+                    else:
+                        preflight, build = calls[1][0][3:], calls[2][0][3:]
+                    self.assertEqual(preflight[:preflight.index("--no-daemon")], ["validateModuleGraph"])
+                    expected_tasks = (
+                        [":benchmark:verifyBenchmarkHarness"] if stage == "benchmark"
+                        else list(ci.BENCHMARK_CONSUMER_TASKS[1:])
+                    )
+                    self.assertEqual(build[:build.index("--no-daemon")], expected_tasks)
+                    for arguments in (preflight, build):
+                        self.assertIn("--dependency-verification", arguments)
+                        self.assertEqual(arguments[arguments.index("--dependency-verification") + 1], "strict")
+                        self.assertIn("--init-script", arguments)
+                        self.assertEqual("--stacktrace" in arguments, stage == "scaffold" and not local)
+                    if local:
+                        self.assertNotIn("--max-workers=1", build)
+                        self.assertNotIn("--parallel", build)
+                    else:
+                        self.assertIn("--parallel", preflight)
+                        self.assertIn("--max-workers=8", preflight)
+                        if stage == "benchmark":
+                            self.assertIn("--build-cache", build)
+                            self.assertIn("--max-workers=1", build)
+                            self.assertNotIn("--max-workers=8", build)
+                            self.assertNotIn("--parallel", build)
+                        else:
+                            self.assertNotIn("--build-cache", build)
+                            self.assertIn("--no-build-cache", build)
+                            self.assertIn("--no-configuration-cache", build)
+                            self.assertIn("--max-workers=8", build)
+                            self.assertIn("--parallel", build)
+
     def test_only_wp203_test_task_is_cacheable_and_its_side_effects_are_declared(self):
         script = (REPO / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_text(
             encoding="utf-8",
+        )
+        before_tests, marker, test_tasks = script.partition(
+            "project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->"
+        )
+        self.assertTrue(marker)
+        self.assertEqual(before_tests.count("task.outputs.cacheIf("), 1)
+        self.assertIn(
+            'task.outputs.cacheIf("Benchmark consumer source observation requires task execution") { false }',
+            before_tests,
         )
         cache_policy = (
             'task.outputs.cacheIf("Only WP-203 test inputs and interop outputs are explicitly declared") {\n'
             '            task.path == ":core:data:testDebugUnitTest"\n'
             "        }"
         )
-        self.assertIn(cache_policy, script)
-        self.assertEqual(script.count("task.outputs.cacheIf("), 1)
-        self.assertLess(script.index(cache_policy), script.index('if (task.path == ":core:data:testDebugUnitTest")'))
-        self.assertIn('task.outputs.dir(interopOutput)', script)
-        self.assertIn("task.inputs.dir(interopInput)", script)
-        self.assertIn("task.doFirst", script)
-        self.assertIn("task.inputs.files.files.any", script)
-        self.assertLess(script.index("task.doFirst {"), script.index("task.inputs.files.files.any"))
-        self.assertLess(script.index("task.inputs.files.files.any"), script.index("gradle.taskGraph.whenReady"))
-        self.assertIn("WP-203 interop artifacts are not declared Gradle task outputs", script)
-        self.assertIn("WP-203 interoperability fixture is not a Gradle task input", script)
+        self.assertIn(cache_policy, test_tasks)
+        self.assertEqual(test_tasks.count("task.outputs.cacheIf("), 1)
+        self.assertLess(
+            test_tasks.index(cache_policy),
+            test_tasks.index('if (task.path == ":core:data:testDebugUnitTest")'),
+        )
+        wp203 = test_tasks[test_tasks.index('if (task.path == ":core:data:testDebugUnitTest")'):]
+        self.assertIn('task.outputs.dir(interopOutput)', wp203)
+        self.assertIn("task.inputs.dir(interopInput)", wp203)
+        self.assertLess(wp203.index("task.doFirst {"), wp203.index("task.inputs.files.files.any"))
+        self.assertLess(wp203.index("task.inputs.files.files.any"), wp203.index("gradle.taskGraph.whenReady"))
+        self.assertIn("WP-203 interop artifacts are not declared Gradle task outputs", wp203)
+        self.assertIn("WP-203 interoperability fixture is not a Gradle task input", wp203)
 
     def test_app_tests_reuse_the_worker_jvm_instead_of_forking_for_each_class(self):
         app_build = (REPO / "android/app/build.gradle.kts").read_text(encoding="utf-8")

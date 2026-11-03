@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -29,7 +30,7 @@ from controller.gates import Binding, policy_revision
 from controller.local_scope import (
     SCOPED_TASKS, TASKS, validation_preflight_options, split_preflight_tasks,
 )
-from controller.model import git, load_manifest
+from controller.model import git, load_manifest, tree
 from controller.module_junit import check_module_tests, module_method_inventory
 from controller.provision import provision
 from controller.runtime_inputs import verify_committed_inputs
@@ -38,6 +39,22 @@ from controller.test_runner import run_suite
 from portmap import port_map
 
 TASK_GRAPH_GUARD = REPO / "tools" / "android-port" / "controller" / "verify_candidate_task_graph.gradle"
+BENCHMARK_CONSUMER_SCOPE = "benchmark-consumer"
+BENCHMARK_CONSUMER_KOTLIN_TASKS = (
+    ":app:compileBenchmarkKotlin",
+    ":app:compileProfileKotlin",
+)
+BENCHMARK_CONSUMER_TASKS = (
+    "validateModuleGraph",
+    BENCHMARK_CONSUMER_KOTLIN_TASKS[0],
+    ":app:compileBenchmarkJavaWithJavac",
+    BENCHMARK_CONSUMER_KOTLIN_TASKS[1],
+    ":app:compileProfileJavaWithJavac",
+)
+BENCHMARK_CONSUMER_SOURCES = (
+    "android/benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt",
+    "android/benchmark/dataset/kotlin/com/meshcoreone/android/benchmark/Workload.kt",
+)
 
 # AndroidOnly: WP-501 Fixed observation identities may precede the bounded failed-command tail.
 WP501_OBSERVATION_METHODS = {
@@ -345,19 +362,123 @@ def write_github_outputs(*, full_scaffold: bool, localization: bool):
             stream.write(f"localization={'true' if localization else 'false'}\n")
 
 
+def benchmark_consumer_sources(snapshot):
+    if not isinstance(snapshot, dict):
+        raise PortError("Malformed committed benchmark consumer source tree")
+    sources = {}
+    for path in BENCHMARK_CONSUMER_SOURCES:
+        blob = snapshot.get(path)
+        if not isinstance(blob, str) or re.fullmatch(r"[0-9a-f]{40}", blob) is None:
+            raise PortError(f"Missing committed benchmark consumer source: {path}")
+        sources[path] = blob
+    return sources
+
+
+def validate_benchmark_consumer_compilation(records, snapshot):
+    expected = benchmark_consumer_sources(snapshot)
+    if not isinstance(records, list) or len(records) != len(BENCHMARK_CONSUMER_KOTLIN_TASKS):
+        raise PortError("Missing or duplicate benchmark consumer compilation records")
+    seen = set()
+    for record in records:
+        fields(record, {"task", "sources"}, label="benchmark consumer compilation")
+        task = record["task"]
+        if task not in BENCHMARK_CONSUMER_KOTLIN_TASKS or task in seen:
+            raise PortError("Unexpected or duplicate benchmark consumer compilation task")
+        if record["sources"] != expected:
+            raise PortError("Benchmark consumer compiler sources differ from the committed head")
+        seen.add(task)
+    if seen != set(BENCHMARK_CONSUMER_KOTLIN_TASKS):
+        raise PortError("Missing benchmark consumer compilation task")
+    return sorted(records, key=lambda record: record["task"])
+
+
+def read_benchmark_consumer_compilation(path, repo):
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
+        raise PortError("Missing or unsafe benchmark consumer compilation evidence")
+    head = git(repo, "rev-parse", "HEAD").decode("ascii").strip()
+    snapshot = tree(repo, head)
+    for relative, expected in benchmark_consumer_sources(snapshot).items():
+        source = repo / Path(relative)
+        if source.is_symlink() or not source.is_file():
+            raise PortError(f"Missing or linked benchmark consumer source: {relative}")
+        data = source.read_bytes()
+        actual = hashlib.sha1(f"blob {len(data)}\0".encode("ascii") + data).hexdigest()
+        if actual != expected:
+            raise PortError(f"Benchmark consumer source differs from the committed head: {relative}")
+    try:
+        records = [decode_json(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    except (OSError, UnicodeError) as error:
+        raise PortError("Unreadable benchmark consumer compilation evidence") from error
+    return validate_benchmark_consumer_compilation(records, snapshot)
+
+
+def prepare_benchmark_consumer_state(project: Path, output: Path):
+    if not project.is_dir() or project.is_symlink() or project.is_junction():
+        raise PortError("Benchmark consumer requires an unlinked Android project directory")
+    if not output.is_absolute():
+        raise PortError("Benchmark consumer output directory must be absolute")
+    for path in (output, *output.parents):
+        if path.is_symlink() or path.is_junction():
+            raise PortError(f"Linked benchmark consumer output directory: {path}")
+    project_path, output_path = project.resolve(), output.resolve()
+    if output_path.is_relative_to(project_path) or project_path.is_relative_to(output_path):
+        raise PortError("Benchmark consumer output must be separate from the Android project")
+
+    def walk_error(error):
+        raise PortError("Cannot inspect benchmark consumer project state") from error
+
+    for current, directories, files in os.walk(project, followlinks=False, onerror=walk_error):
+        directory = Path(current)
+        if {"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"} & set(files):
+            for name in ("build", ".gradle"):
+                previous = directory / name
+                if previous.exists() or previous.is_symlink() or previous.is_junction():
+                    raise PortError(f"Benchmark consumer project state is not fresh: {previous}")
+        for name in directories:
+            path = directory / name
+            if path.is_symlink() or path.is_junction():
+                raise PortError(f"Linked benchmark consumer project directory: {path}")
+        directories[:] = [name for name in directories if name not in ("build", ".gradle")]
+
+    output.mkdir(parents=True, exist_ok=True)
+    home, cache = output / "gradle-user-home", output / "gradle-project-cache"
+    if any(path.exists() or path.is_symlink() or path.is_junction() for path in (home, cache)):
+        raise PortError("Benchmark consumer Gradle state must use new directories")
+    home.mkdir(mode=0o700)
+    cache.mkdir(mode=0o700)
+    return home, cache
+
+
+def stage_tasks(stage, selected, *, affected_candidate=False):
+    if BENCHMARK_CONSUMER_SCOPE in selected:
+        if stage != "scaffold" or selected != [BENCHMARK_CONSUMER_SCOPE] or affected_candidate:
+            raise PortError("Benchmark consumer compilation requires its exclusive scaffold scope")
+        return list(BENCHMARK_CONSUMER_TASKS)
+    if stage not in ("scaffold", "protocol") or not selected or any(scope not in SCOPED_TASKS for scope in selected):
+        return TASKS[stage]
+    return list(dict.fromkeys(task for scope in selected for task in SCOPED_TASKS[scope]))
+
+
 def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None, affected_candidate=False):
     dispositions = port_map(load_manifest(REPO))
     print(f"Verified Kotlin source dispositions and pinned provenance: {len(dispositions)} files", flush=True)
     if platform.python_version() != toolchain_lock()["python"]:
         raise PortError("Declared CI executor requires Python 3.12.4")
+    project = REPO / "android"
+    default_selection = ("scaffold",) if stage == "scaffold" else ("protocol",) if stage == "protocol" else ()
+    selected = list(scopes or default_selection)
+    tasks = stage_tasks(stage, selected, affected_candidate=affected_candidate)
+    consumer = selected == [BENCHMARK_CONSUMER_SCOPE]
     environment = candidate_environment(state, local=local)
+    cache = Path(state["private_root"]) / "project-root"
+    if consumer and not local:
+        home, cache = prepare_benchmark_consumer_state(project, output)
+        environment["GRADLE_USER_HOME"] = str(home)
     task_graph = output / f"gradle-{stage}-task-graph.json"
     verify_wrapper()
     execute([sys.executable, str(REPO / "android" / "scaffold" / "check_environment.py")],
             environment, output / f"{stage}-preflight.log", timeout=60)
     environment["ANDROID_CI_TASK_GRAPH"] = str(task_graph)
-    project = REPO / "android"
-    cache = Path(state["private_root"]) / "project-root"
     options = [
         "--no-daemon", "--console=plain", "--dependency-verification", "strict",
         "-Pkotlin.compiler.execution.strategy=in-process",
@@ -366,15 +487,21 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
     ]
     if not local:
         options.extend(("--build-cache", "--parallel", "--max-workers=8"))
+        if stage == "scaffold":
+            options.append("--stacktrace")
+    if consumer:
+        options = [option for option in options if option != "--build-cache"]
+        options.extend(("--no-build-cache", "--no-configuration-cache"))
     if local:
         options.append("-PscaffoldTestJvmArgs=-Xms32m -XX:+UseSerialGC -XX:ActiveProcessorCount=2 -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=32m -XX:MaxMetaspaceSize=256m")
+    build_options = options
+    if not local and (stage == "benchmark" or stage == "scaffold" and not consumer):
+        # Bound build-phase concurrency without changing preflight or selected tasks.
+        build_options = [
+            option for option in options
+            if option != "--parallel" and not option.startswith("--max-workers=")
+        ] + ["--max-workers=1"]
     wrapper = REPO / "android" / ("gradlew.bat" if state["host"] == "windows" else "gradlew")
-    default_selection = ("scaffold",) if stage == "scaffold" else ("protocol",) if stage == "protocol" else ()
-    selected = list(scopes or default_selection)
-    if stage not in ("scaffold", "protocol") or not selected or any(scope not in SCOPED_TASKS for scope in selected):
-        tasks = TASKS[stage]
-    else:
-        tasks = list(dict.fromkeys(task for scope in selected for task in SCOPED_TASKS[scope]))
     if affected_candidate:
         if local or stage != "scaffold" or state["host"] != "linux":
             raise PortError("Affected candidate selection is available only for hosted Linux scaffold verification")
@@ -411,7 +538,7 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
 
         report = run_scaffold(
             REPO, plan, environment, output, execute_affected, options,
-            trusted_base=base, merge_base_only=merge_base_only,
+            trusted_base=base, merge_base_only=merge_base_only, build_options=build_options,
         )
         print(json.dumps({"result": "success", **report}, indent=2))
         return
@@ -419,6 +546,13 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
     sources_path = prepare_test_sources(output)
     environment["ANDROID_CI_TEST_LINEAGE"] = str(lineage_path)
     environment["ANDROID_CI_TEST_SOURCES"] = str(sources_path)
+    environment.pop("ANDROID_CI_BENCHMARK_CONSUMER", None)
+    consumer_evidence = output / "benchmark-consumer-compilation.jsonl"
+    if consumer:
+        if consumer_evidence.is_symlink():
+            raise PortError("Linked benchmark consumer compilation evidence")
+        consumer_evidence.unlink(missing_ok=True)
+        environment["ANDROID_CI_BENCHMARK_CONSUMER"] = str(consumer_evidence)
     write_github_outputs(
         full_scaffold="scaffold" in selected,
         localization="scaffold" in selected or "core/l10n" in selected,
@@ -448,10 +582,10 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
     if split_preflight:
         phases = [
             ("preflight", preflight_tasks, preflight_graph, validation_preflight_options(options)),
-            ("build", build_tasks, task_graph, options),
+            ("build", build_tasks, task_graph, build_options),
         ]
     else:
-        phases = [("build", tasks, task_graph, options)]
+        phases = [("build", tasks, task_graph, build_options)]
     for _, _, graph_path, _ in phases:
         if graph_path.is_symlink():
             raise PortError("Linked resolved task graph")
@@ -505,6 +639,8 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
         "stage": stage, "scopes": selected, "result": "success", "tasks": tasks,
         "strict_verification": True, "resolved_task_graph": graph,
     }
+    if consumer:
+        report["benchmark_consumer_compilation"] = read_benchmark_consumer_compilation(consumer_evidence, REPO)
     if "scaffold" in selected:
         report["suites"] = collect_suites(REPO / "android")
         report["module_unit_tests"] = check_module_tests(REPO)
@@ -598,7 +734,7 @@ def main(argv=None):
     parser.add_argument("--accept-sdk-license", action="store_true")
     parser.add_argument("--local", action="store_true", help="Measured shared-host build flags only")
     parser.add_argument("--stage", choices=tuple(TASKS))
-    parser.add_argument("--scope", action="append", choices=tuple(SCOPED_TASKS))
+    parser.add_argument("--scope", action="append", choices=(*SCOPED_TASKS, BENCHMARK_CONSUMER_SCOPE))
     parser.add_argument("--affected-candidate", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -619,7 +755,12 @@ def main(argv=None):
             python_checks(output_directory(args.output))
         else:
             state, output = inputs(args.state), output_directory(args.output)
-            output.mkdir(parents=True, exist_ok=True)
+            hosted_consumer = (
+                args.command == "run" and not args.local and args.scope is not None
+                and BENCHMARK_CONSUMER_SCOPE in args.scope
+            )
+            if not hosted_consumer:
+                output.mkdir(parents=True, exist_ok=True)
             if args.command == "preflight":
                 preflight(state, output, local=args.local)
             elif args.command == "run":

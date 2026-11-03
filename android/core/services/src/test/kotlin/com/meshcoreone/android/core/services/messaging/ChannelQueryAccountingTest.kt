@@ -690,10 +690,19 @@ class ChannelQueryAccountingTest {
         val subscriptionCancelled = CompletableDeferred<Unit>()
         val releaseSubscription = CompletableDeferred<Unit>()
         val readinessWait = CompletableDeferred<Unit>()
+        val timerCancelled = CompletableDeferred<Unit>()
+        val releaseTimer = CompletableDeferred<Unit>()
+        var holdTimerCleanup = false
         val clock = object : SessionClock by h.clock {
             override suspend fun sleepFor(duration: Duration) {
                 readinessWait.complete(Unit)
-                h.clock.sleepFor(duration)
+                try { h.clock.sleepFor(duration) }
+                finally {
+                    if (holdTimerCleanup) withContext(NonCancellable) {
+                        timerCancelled.complete(Unit)
+                        releaseTimer.await()
+                    }
+                }
             }
         }
         val signals = object : ConnectionSignals by h.signals {
@@ -737,10 +746,14 @@ class ChannelQueryAccountingTest {
             assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
 
             h.signals.set(h.token, DeviceConnectionState.READY)
+            holdTimerCleanup = true
             queue.transportDidOpen()
+            runCurrent()
+            assertTrue(timerCancelled.isCompleted, "The readiness wake must win before shutdown starts")
             val stopping = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { queue.shutdown() }
             assertTrue(subscriptionCancelled.isCompleted, "Shutdown must invalidate ownership before releasing the sender")
             assertFalse(stopping.isCompleted)
+            releaseTimer.complete(Unit)
             runCurrent()
             releaseSubscription.complete(Unit)
             runCurrent()
@@ -757,6 +770,7 @@ class ChannelQueryAccountingTest {
             assertEquals(0L, retained.attemptCount)
             assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
         } finally {
+            releaseTimer.complete(Unit)
             releaseSubscription.complete(Unit)
             queue.shutdown()
             h.close()

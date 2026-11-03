@@ -79,8 +79,8 @@ ownership is closing into `CancellationException`, retaining the typed failure
 as its cause. This routes the envelope through `SendQueue`'s existing
 cancellation/requeue behavior; unrelated readiness failures remain unchanged.
 New direct-message and channel regressions use the real service/queue, select a
-readiness wake, and hold connection-observer cancellation until shutdown has
-invalidated ownership. A further direct-message regression starts from a genuine
+readiness wake, hold the deadline timer's cancellation cleanup, and hold
+connection-observer cancellation until shutdown has invalidated ownership. A further direct-message regression starts from a genuine
 transient transport error and selects the parked-send wake before shutdown.
 Together they assert pending identity, attempt count, `PENDING` message status,
 and absence of terminal and queue-callback failures. These new tests have not

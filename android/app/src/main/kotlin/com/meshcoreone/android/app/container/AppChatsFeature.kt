@@ -221,7 +221,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?,
                 publications: ContactLinkPublications,
             ) = container.completeContactLookup(
-                context, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing, publications,
+                context, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
+                selectChats = false, publications = publications,
             )
             override val parser = MeshCoreLinkParser
             override fun navigateToMap(latitude: Double, longitude: Double) =

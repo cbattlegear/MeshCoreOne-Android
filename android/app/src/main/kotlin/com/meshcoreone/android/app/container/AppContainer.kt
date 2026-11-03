@@ -374,7 +374,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
 
     internal fun completeContactLookup(
         context: ContactLinkContext, link: ContactLinkRequest, existing: ContactDTO?,
-        publications: ContactLinkPublications,
+        selectChats: Boolean, publications: ContactLinkPublications,
     ): ContactLinkCompletion {
         val captured = context as? CapturedContactLinkContext ?: return ContactLinkCompletion.StaleContext
         return withNavigationCommitBoundary {
@@ -396,7 +396,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             }
             if (!valid) ContactLinkCompletion.StaleContext else navigation.completeCapturedContactLookup(
                 lookup, link, existing, current?.token, lookup.allowsInitialBinding,
-                current?.navigationPublicKey.takeIf { lookup.allowsInitialBinding }, publications,
+                current?.navigationPublicKey.takeIf { lookup.allowsInitialBinding }, selectChats, publications,
             )
         }
     }

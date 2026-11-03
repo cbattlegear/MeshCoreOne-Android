@@ -18,6 +18,7 @@ sealed class ChannelDispatchFailure(message: String, cause: Throwable? = null) :
     class RetiredSession : ChannelDispatchFailure("The initiating channel session is no longer active.")
     class UnknownOccupant : ChannelDispatchFailure("The intended channel occupant cannot be proved.")
     class ReplacedOccupant : ChannelDispatchFailure("The intended channel occupant has been replaced.")
+    class UnreconciledSession : ChannelDispatchFailure("This channel has not been authoritatively reconciled on the active connection.")
     class UnsettledDispatch(cause: Throwable) :
         ChannelDispatchFailure("Channel dispatch is uncertain; this radio remains quarantined.", cause)
 }
@@ -45,6 +46,7 @@ class ChannelDispatchFence(
         internal val connection: Any,
     ) {
         internal var retired = false
+        internal val reconciledSlots = mutableSetOf<UByte>()
     }
 
     private val stateLock = Any()
@@ -117,6 +119,23 @@ class ChannelDispatchFence(
     }
 
     /**
+     * The channel producer records only slots actually read/ACKed and successfully persisted
+     * inside this operation. Cached rows, READY and another connection's reads are not proof.
+     * A retired operation may finish persistence, but cannot admit its old lease for dispatch.
+     */
+    suspend fun recordReconciled(
+        lease: Lease, scope: ChannelIdentityWriteScope, indices: Collection<UByte>,
+    ) {
+        identity.requireChannelOperationScope(scope)
+        synchronized(stateLock) {
+            requireCurrent(lease)
+            lease.reconciledSlots.addAll(indices)
+        }
+    }
+
+    internal fun requireActive(lease: Lease) = requireCurrent(lease)
+
+    /**
      * [currentOccupantID] is a plain authoritative read, not a mint/reconciliation operation.
      * [operation] must use this lease's connection and [index], await the actual protocol call,
      * and may update an operation-local outcome
@@ -137,6 +156,9 @@ class ChannelDispatchFence(
     ): T = identity.withChannelOperation {
         requireCurrent(lease)
         if (expectedOccupantID == null) throw ChannelDispatchFailure.UnknownOccupant()
+        synchronized(stateLock) {
+            if (index !in lease.reconciledSlots) throw ChannelDispatchFailure.UnreconciledSession()
+        }
         identity.withChannelIdentityMutation {
             val current = currentOccupantID(lease.token.radioId, index) ?: throw ChannelDispatchFailure.UnknownOccupant()
             if (current != expectedOccupantID) throw ChannelDispatchFailure.ReplacedOccupant()

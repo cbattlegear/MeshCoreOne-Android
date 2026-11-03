@@ -36,15 +36,17 @@ internal fun TraceCodeInput(state: TracePathState, holder: TracePathStateHolder)
     var expanded by rememberSaveable { mutableStateOf(false) }
     var input by rememberSaveable { mutableStateOf("") }
     var outcome by remember { mutableStateOf<CodeInputResult?>(null) }
+    var nextHopAnnouncement by remember { mutableStateOf<Int?>(null) }
     val clipboard = LocalClipboardManager.current
     val focus = remember { FocusRequester() }
-    val classifications = remember(input, state) { holder.classifyCodes(input) }
+    val classifications = remember(input, state, holder) { holder.classifyCodes(input) }
     val addable = classifications.filter { it.willBeAdded }.map { it.code }
 
     fun edit(value: String) {
         if (value.contains(',')) holder.adoptHashSize(value)
         input = value
         outcome = null
+        nextHopAnnouncement = null
     }
 
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -96,7 +98,9 @@ internal fun TraceCodeInput(state: TracePathState, holder: TracePathStateHolder)
             }
             Button(
                 onClick = {
-                    outcome = holder.addCodes(input)
+                    val result = holder.addCodes(input)
+                    outcome = result
+                    nextHopAnnouncement = if (result.added.isNotEmpty()) holder.state.value.outboundPath.size + 1 else null
                     input = ""
                 },
                 enabled = addable.isNotEmpty(),
@@ -109,8 +113,11 @@ internal fun TraceCodeInput(state: TracePathState, holder: TracePathStateHolder)
                     ),
                 )
             }
-            outcome?.takeIf { it.hasErrors }?.let { result ->
+            outcome?.takeIf { it.added.isNotEmpty() || it.hasErrors }?.let { result ->
                 Column(Modifier.semantics { liveRegion = LiveRegionMode.Polite }) {
+                    nextHopAnnouncement?.let { nextHop ->
+                        Text(stringResource(Strings.string.l10n_app_contacts_contacts_pathedit_positionappend, nextHop))
+                    }
                     if (result.invalidFormat.isNotEmpty()) Text(
                         stringResource(
                             Strings.string.l10n_app_contacts_contacts_codeinput_error_invalidformat,
@@ -132,7 +139,7 @@ internal fun TraceCodeInput(state: TracePathState, holder: TracePathStateHolder)
                 }
             }
             TextButton(
-                onClick = { expanded = false; input = ""; outcome = null },
+                onClick = { expanded = false; input = ""; outcome = null; nextHopAnnouncement = null },
                 modifier = Modifier.sizeIn(minHeight = 48.dp),
             ) { Text(stringResource(L.commonDone)) }
             LaunchedEffect(Unit) { focus.requestFocus() }

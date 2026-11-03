@@ -16,6 +16,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
@@ -98,10 +99,12 @@ class TraceCodeInputComposeTest {
         click("Add nodes: AA, BB")
         assertEquals("", input().config[SemanticsProperties.EditableText].text)
         assertTrue(texts().containsAll(listOf("FF not found", "Invalid format: ZZ")))
+        assertTrue(announcementTexts().containsAll(listOf("Adding as hop 3", "FF not found", "Invalid format: ZZ")))
         assertEquals(2, recents.values.values.single().size)
         setInput("AA,BB")
         assertTrue(texts().containsAll(listOf("AA already in path", "BB already in path")))
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+        assertFalse(announcementTexts().any { it.startsWith("Adding as hop") })
         click("Done")
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
         click("Add Hop")
@@ -194,6 +197,24 @@ class TraceCodeInputComposeTest {
         assertEquals(2, harness.state.outboundPath.size)
     }
 
+    @Test fun successfulMountedAddAnnouncesTheNextHopButDuplicateAndEmptyEditsDoNot() {
+        val harness = configured()
+        mount(harness)
+        click("Add Hop")
+        paste("AA,BB")
+        assertTrue(announcementTexts().isEmpty())
+        click("Add nodes: AA, BB")
+        assertEquals(2, harness.state.outboundPath.size)
+        assertEquals(listOf("Adding as hop 3"), announcementTexts())
+        setInput("AA,BB")
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+        assertTrue(announcementTexts().isEmpty())
+        setInput(" , ")
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+        assertTrue(announcementTexts().isEmpty())
+        assertEquals(2, harness.state.outboundPath.size)
+    }
+
     private fun configured(supportsOverride: Boolean = true) = TraceHarness(configureDependencies = true).also {
         it.deps.device = device(firmwareVersionString = if (supportsOverride) "v1.11.0" else "v1.10.0")
         it.holder.setContactsForTesting(listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")))
@@ -259,6 +280,15 @@ class TraceCodeInputComposeTest {
     }
 
     private fun texts() = nodes().flatMap { it.config.getOrElse(SemanticsProperties.Text) { emptyList() } }.map { it.text }
+
+    private fun announcementTexts(): List<String> {
+        fun textBelow(node: SemanticsNode): List<String> =
+            node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.map { it.text } +
+                node.children.flatMap(::textBelow)
+        return nodes().filter {
+            it.config.getOrElseNullable(SemanticsProperties.LiveRegion) { null } == LiveRegionMode.Polite
+        }.flatMap(::textBelow)
+    }
 
     private fun nodes(): List<SemanticsNode> {
         val root = composeRoot()

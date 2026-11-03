@@ -11,6 +11,9 @@ import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 
 class ContainerDeepLinkEnvironment(
     private val container: AppContainer,
@@ -29,6 +32,17 @@ class ContainerDeepLinkEnvironment(
 
     override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact, selectChats: Boolean) =
         navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType), selectChats)
+
+    override fun captureContactLinkContext(
+        publicKey: Bytes, publications: ContactLinkPublications,
+    ): ContactLinkContext = container.captureContactLinkContext(publicKey, publications)
+
+    override fun completeContactLookup(
+        context: ContactLinkContext, link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
+        selectChats: Boolean, publications: ContactLinkPublications,
+    ): ContactLinkCompletion = container.completeContactLookup(
+        context, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing, selectChats, publications,
+    )
 
     override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel, selectChats: Boolean) =
         navigation.stageChannelLink(

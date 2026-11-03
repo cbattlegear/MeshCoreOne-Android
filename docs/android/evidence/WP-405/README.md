@@ -1,5 +1,56 @@
 # WP-405 evidence
 
+## Dependent external adapter for producer 208dad904
+
+Exact producer commits `3a372fd709bd266bc987296b5338d7e78186c41a` and
+`208dad904c730210d21fbc209d2d71946ca89d18` are available in the repository's
+Git object database and were read without another checkout/import. The adapter
+requires the latter's explicit `selectChats` argument and shared typed
+capture/completion/publication API; no unsafe default implementation was added.
+This branch does not contain those producer definitions and is not independently
+compilable/landable. Combined source custody belongs to the coordinated owners.
+
+Actual trusted admission accepted `modify` for each of:
+
+- `android/app/src/main/kotlin/com/meshcoreone/android/app/deeplinks/AppDeepLinkRouter.kt`
+- `android/app/src/main/kotlin/com/meshcoreone/android/app/deeplinks/ContainerDeepLinkEnvironment.kt`
+- `android/app/src/main/kotlin/com/meshcoreone/android/app/deeplinks/DeepLinkModels.kt`
+
+It accepted `add-or-update-related-test` for each of:
+
+- `android/app/src/test/kotlin/com/meshcoreone/android/app/deeplinks/AppDeepLinkRouterTest.kt`
+- `android/app/src/test/kotlin/com/meshcoreone/android/app/deeplinks/ExternalRouteReplacementTest.kt`
+- `android/app/src/test/kotlin/com/meshcoreone/android/app/deeplinks/LinkConsumerIntegrationTest.kt`
+
+The same advisory owner/attempt
+`d76f0641-87d4-4218-92e9-3cdf3f972471` evolved revision 18 to 20 for the two
+new exact test-path capability entries; the existing integration entry was
+already covered and remained revision 20. A stale revision-18 evolution attempt
+was refused without mutation, then retried against actual revision 19.
+Authorization prose, foreign reservations and the retained execution lock
+were not changed. Per-WP deviations/evidence remain within owned paths.
+
+Seven router and two real-container integration test methods were added.
+Existing replacement methods retain cancellation, once-only delivery, state,
+back-stack and exact identity assertions while consuming the new producer.
+No new test has been discovered or executed. Source checks actually passed:
+
+```powershell
+python .\tools\android-port\controller\validate.py
+# PASS: valid manifest/reference ownership
+python .\tools\android-port\portmap.py
+# PASS: 2,003 implementation records
+git diff --check
+# PASS: no whitespace errors
+```
+
+These are not a Kotlin build or Android/native test result. Product execution
+remains blocked by `local-check:f516a7e271f444dd9cb2efcc8b995a16` and its
+missing genuine supervisor cleanup proof. The WP-405 local-tested-before-
+publication condition also applies if these consumer hunks are combined into
+#495; source transfer cannot waive it. Existing PRs/runs are preserved, and no
+push, independent consumer landing or combined acceptance occurred.
+
 ## Terminal-ID producer seam: source-only follow-up
 
 The existing coordinator assigned the exact-ID restoration support seam

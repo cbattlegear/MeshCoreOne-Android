@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.deeplinks
 
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
+import com.meshcoreone.android.app.navigation.ContactLinkLookup
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.navigation.MapFocusRequest
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
@@ -16,6 +17,10 @@ import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
+import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -131,7 +136,7 @@ class ExternalRouteReplacementTest {
         if (identicalUri) {
             assertEquals(2, lookups)
             if (known) assertEquals(contact(), state.pendingContactDetail)
-            else assertEquals(ContactLinkRequest("Alice", key, ContactType.CHAT), state.pendingContactLink)
+            else assertPendingContact(state)
         } else {
             assertEquals(
                 ChannelLinkRequest("#test", secret, "testregion", hasHashtagSecretMismatch = true),
@@ -168,7 +173,7 @@ class ExternalRouteReplacementTest {
         release.complete(Unit)
         assertIs<PendingExternalRoute.SubmitOutcome.Routed>(first.await())
         assertEquals(1, lookups)
-        assertEquals(ContactLinkRequest("Alice", key, ContactType.CHAT), environment.navigation.state.value.pendingContactLink)
+        assertPendingContact(environment.navigation.state.value)
     }
 
     @Test
@@ -193,7 +198,7 @@ class ExternalRouteReplacementTest {
             assertEquals(1, commits)
             val state = environment.navigation.state.value
             if (known) assertEquals(contact(), state.pendingContactDetail)
-            else assertEquals(ContactLinkRequest("Alice", key, ContactType.CHAT), state.pendingContactLink)
+            else assertPendingContact(state)
         }
     }
 
@@ -217,8 +222,9 @@ class ExternalRouteReplacementTest {
                 assertTrue(caller.isCancelled)
                 val committed = environment.navigation.state.value
                 if (known) assertEquals(contact(), committed.pendingContactDetail)
-                else assertEquals(ContactLinkRequest("Alice", key, ContactType.CHAT), committed.pendingContactLink)
+                else assertPendingContact(committed)
                 assertNull(pending.snapshot(), "A committed target must not be left available for retry")
+                assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
                 assertIs<PendingExternalRoute.SubmitOutcome.Staged>(pending.retry())
                 assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(pending.submit(delivery))
                 assertEquals(1, commits)
@@ -277,15 +283,16 @@ class ExternalRouteReplacementTest {
                 pending.markReady()
                 val first = async { pending.submit(PendingExternalRoute.Delivery("A", contactUri)) }
                 started.await()
-                assertEquals(original, environment.navigation.state.value, "Lookup must not select a speculative host")
+                val captured = original.copy(contactLookupRevision = original.contactLookupRevision + 1)
+                assertEquals(captured, environment.navigation.state.value, "Lookup must not select a speculative host")
                 val replacement = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
                     pending.submit(PendingExternalRoute.Delivery("B", malformedContactUri)),
                 )
                 assertIs<DeepLinkRouteOutcome.Rejected>(replacement.outcome)
-                assertEquals(original, environment.navigation.state.value)
+                assertEquals(captured, environment.navigation.state.value)
                 release.complete(Unit)
                 assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(first.await())
-                assertEquals(original, environment.navigation.state.value, "Obsolete completion must not roll back navigation")
+                assertEquals(captured, environment.navigation.state.value, "Obsolete completion must not roll back navigation")
                 assertNull(pending.snapshot())
             }
         }
@@ -338,7 +345,7 @@ class ExternalRouteReplacementTest {
                 assertEquals(contact(), committed.pendingContactDetail)
             } else {
                 assertEquals(AppTab.CHATS, committed.selectedTab)
-                assertEquals(ContactLinkRequest("Alice", key, ContactType.CHAT), committed.pendingContactLink)
+                assertPendingContact(committed)
             }
             val rejected = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
                 pending.submit(PendingExternalRoute.Delivery("B", malformedContactUri)),
@@ -386,7 +393,7 @@ class ExternalRouteReplacementTest {
                 }
                 contactUri -> {
                     assertEquals(AppTab.CHATS, committed.selectedTab)
-                    assertEquals(ContactLinkRequest("Alice", key, ContactType.CHAT), committed.pendingContactLink)
+                    assertPendingContact(committed)
                     assertEquals(2, lookups, "Identical URI text with a new ID must route independently")
                 }
                 else -> {
@@ -465,9 +472,7 @@ class ExternalRouteReplacementTest {
                     observed += state
                     if (state.selectedTab == AppTab.CHATS && replacement == null) {
                         when (uri) {
-                            contactUri -> assertEquals(
-                                ContactLinkRequest("Alice", key, ContactType.CHAT), state.pendingContactLink,
-                            )
+                            contactUri -> assertPendingContact(state)
                             channelUri -> assertEquals(
                                 ChannelLinkRequest("#test", secret, "testregion", true), state.pendingChannelLink,
                             )
@@ -486,7 +491,11 @@ class ExternalRouteReplacementTest {
             val committed = environment.navigation.state.value
             assertEquals(AppTab.MAP, committed.selectedTab)
             assertEquals(MapFocusRequest(51.5074, -0.1278), committed.pendingMapFocus)
-            assertEquals(listOf(AppTab.SETTINGS, AppTab.CHATS, AppTab.MAP), observed.map { it.selectedTab })
+            assertEquals(
+                if (uri == contactUri) listOf(AppTab.SETTINGS, AppTab.SETTINGS, AppTab.CHATS, AppTab.MAP)
+                else listOf(AppTab.SETTINGS, AppTab.CHATS, AppTab.MAP),
+                observed.map { it.selectedTab },
+            )
             assertEquals(committed, observed.last())
             assertNull(pending.snapshot())
             assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(
@@ -519,7 +528,13 @@ class ExternalRouteReplacementTest {
                     environment.navigation.clearPendingHashtag()
                 }
             }
-            assertEquals(original, environment.navigation.state.value)
+            assertEquals(
+                if (uri == contactUri) original.copy(
+                    nextEntryId = original.nextEntryId + 1,
+                    contactLookupRevision = original.contactLookupRevision + 2,
+                ) else original,
+                environment.navigation.state.value,
+            )
         }
     }
 
@@ -537,6 +552,22 @@ class ExternalRouteReplacementTest {
         assertNull(state.selectedContact)
     }
 
+    private fun assertPendingContact(state: NavigationState) {
+        assertEquals(
+            ContactLinkRequest(
+                "Alice", key, ContactType.CHAT, targetRadioId = radio,
+                generation = state.generation, deliveryId = state.nextEntryId - 1,
+            ),
+            state.pendingContactLink,
+        )
+    }
+
+    private class CapturedLookup(val lookup: ContactLinkLookup) : ContactLinkContext {
+        override val radioId: RadioId? get() = lookup.radioId
+        override val selfPublicKey: Bytes? get() = lookup.selfPublicKey
+        override val disposition: ContactLinkCaptureDisposition get() = lookup.disposition
+    }
+
     private class Environment : AppDeepLinkEnvironment {
         val navigation = NavigationCoordinator()
         var contactLookup: suspend () -> ContactDTO? = { null }
@@ -548,6 +579,24 @@ class ExternalRouteReplacementTest {
             set(value) = navigation.selectTab(value)
         override val currentRadioId: RadioId = radio
         override val connectedDevicePublicKey: Bytes? = null
+        override fun captureContactLinkContext(
+            publicKey: Bytes, publications: ContactLinkPublications,
+        ): ContactLinkContext = CapturedLookup(navigation.captureContactLinkLookup(
+            publicKey, radio, null, null, null, true, publications,
+        ))
+        override fun completeContactLookup(
+            context: ContactLinkContext, link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
+            selectChats: Boolean, publications: ContactLinkPublications,
+        ): ContactLinkCompletion {
+            val lookup = (context as CapturedLookup).lookup
+            beforeContactCommit()
+            val result = navigation.completeCapturedContactLookup(
+                lookup, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
+                null, true, null, selectChats, publications,
+            )
+            afterContactCommit()
+            return result
+        }
         override fun navigateToMap(latitude: Double, longitude: Double) = navigation.navigateToMap(latitude, longitude)
         override fun navigateToContactDetail(contact: ContactDTO) {
             beforeContactCommit()

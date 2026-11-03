@@ -347,11 +347,15 @@ class SettingsRerunNavigationTest {
         val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {
             val processJob = checkNotNull(processScope.coroutineContext[Job])
-            val presets = object : OnboardingPresetPort {
-                override val canApply = MutableStateFlow(true)
-                override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
-            }
-            val dependencies = appOnboarding(processScope, presets).forRerun()
+            val base = appOnboarding(
+                processScope,
+                object : OnboardingPresetPort {
+                    override val canApply = MutableStateFlow(true)
+                    override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+                },
+            )
+            val baselineJobs = processJob.children.toSet()
+            val dependencies = base.forRerun()
             val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
             var previousFlow: OnboardingFlowCoordinator? = null
 
@@ -364,8 +368,8 @@ class SettingsRerunNavigationTest {
                 compose.onNodeWithText(applyLabel).performClick()
                 compose.waitUntil { navigation.state.value.selectedTab == AppTab.CHATS }
                 assertTrue(processJob.isActive)
-                compose.waitUntil { processJob.children.none() }
-                assertTrue(processJob.children.none())
+                compose.waitUntil { processJob.children.toSet() == baselineJobs }
+                assertTrue(baselineJobs.all { it.isActive })
                 navigation.selectTab(AppTab.SETTINGS)
             }
         } finally {

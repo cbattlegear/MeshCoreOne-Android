@@ -39,13 +39,15 @@ internal class TraceCodeInputState {
     var outcome by mutableStateOf<CodeInputResult?>(null)
     var nextHopAnnouncement by mutableStateOf<Int?>(null)
     var restoringDraft by mutableStateOf(false)
+    var restoredHashMode: UByte? = null
 }
 
-private val TraceCodeInputSaver = Saver<TraceCodeInputState, Bundle>(
+private fun traceCodeInputSaver(holder: TracePathStateHolder) = Saver<TraceCodeInputState, Bundle>(
     save = { entry ->
         Bundle().apply {
             putBoolean("expanded", entry.expanded)
             putString("input", entry.input)
+            holder.state.value.traceHashMode?.let { putInt("traceHashMode", it.toInt()) }
             entry.nextHopAnnouncement?.let { putInt("nextHop", it) }
             entry.outcome?.let { result ->
                 putStringArrayList("added", ArrayList(result.added))
@@ -59,6 +61,9 @@ private val TraceCodeInputSaver = Saver<TraceCodeInputState, Bundle>(
         TraceCodeInputState().apply {
             expanded = saved.getBoolean("expanded")
             input = requireNotNull(saved.getString("input"))
+            restoredHashMode = if (saved.containsKey("traceHashMode")) {
+                saved.getInt("traceHashMode").also { require(it in 0..255) }.toUByte()
+            } else null
             nextHopAnnouncement = if (saved.containsKey("nextHop")) saved.getInt("nextHop") else null
             if (saved.containsKey("added")) outcome = CodeInputResult(
                 added = requireNotNull(saved.getStringArrayList("added")),
@@ -73,11 +78,12 @@ private val TraceCodeInputSaver = Saver<TraceCodeInputState, Bundle>(
 
 @Composable
 internal fun rememberTraceCodeInputState(holder: TracePathStateHolder): TraceCodeInputState {
-    val entry = rememberSaveable(saver = TraceCodeInputSaver) { TraceCodeInputState() }
+    val saver = remember(holder) { traceCodeInputSaver(holder) }
+    val entry = rememberSaveable(saver = saver) { TraceCodeInputState() }
     LaunchedEffect(entry, holder) {
-        // A lazy-item remount must not reapply inference over an explicit width choice.
+        // Restore only saved screen state, never a lazy-item remount.
         if (entry.restoringDraft) {
-            if (entry.input.contains(',')) holder.adoptHashSize(entry.input)
+            entry.restoredHashMode?.let(holder::adoptTraceHashMode)
             entry.restoringDraft = false
         }
     }

@@ -279,6 +279,48 @@ class TraceCodeInputComposeTest {
         assertRecreatedDraft("AA000000,BB000000", "4 B")
     }
 
+    @Test fun actualActivityRecreationPreservesAnExplicitOneByteModeOverAnInferredTwoByteDraft() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
+        settle()
+        scrollToIndex(47)
+        click("1 B")
+        assertTrue(button("1 B").config[SemanticsProperties.Selected])
+        scrollToIndex(0)
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        val before = host.get()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertNotSame(before, host.get())
+        assertEquals("AA00,BB00", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+        scrollToIndex(47)
+        assertTrue(button("1 B").config[SemanticsProperties.Selected])
+    }
+
+    @Test fun actualActivityRestorationDoesNotApplyASavedOverrideToUnsupportedFirmware() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        assertTrue(texts().containsAll(listOf("AA00 will be added", "BB00 will be added")))
+        host.get().setFirmware("v1.10.0")
+        val before = host.get()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertNotSame(before, host.get())
+        assertEquals("AA00,BB00", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+        assertTrue(host.get().sender.sent.isEmpty())
+    }
+
     private fun assertRecreatedDraft(draft: String, mode: String) {
         host.get().mountTraceScreen()
         settle()
@@ -416,9 +458,11 @@ class TraceCodeInputTestActivity : ComponentActivity() {
         this.sender = this@TraceCodeInputTestActivity.sender
     }
     private var traceScreenMounted = false
+    private var firmware = "v1.11.0"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        savedInstanceState?.getString("firmware")?.let(::setFirmware)
         content = ComposeView(this).apply {
             id = android.R.id.custom
             setViewTreeLifecycleOwner(this@TraceCodeInputTestActivity)
@@ -442,8 +486,14 @@ class TraceCodeInputTestActivity : ComponentActivity() {
         }
     }
 
+    internal fun setFirmware(version: String) {
+        firmware = version
+        dependencies.device = device(firmwareVersionString = version)
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("traceScreenMounted", traceScreenMounted)
+        outState.putString("firmware", firmware)
         super.onSaveInstanceState(outState)
     }
 

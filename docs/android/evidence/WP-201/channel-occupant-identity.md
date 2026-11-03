@@ -556,6 +556,28 @@ retained execution owner `local-check:f516a7e271f444dd9cb2efcc8b995a16` is uncha
 and cannot be executed through. Exact successor hosted verification remains
 required; no receive/history/restore activation or queue integration is claimed.
 
+Exact head `1d910b285c18fb44c03e30cae7d818710e408284` ran in
+[41615675090](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41615675090).
+The run completed **FAILURE**: data 650 discovered / 648 passed / the same two
+protected MessagingRoomIntegrationTest failures at lines 519 and 490. The six
+additional readiness methods executed without new failures, including disk
+reopen and cancellation at committed return. Available aggregate reports contain
+12,128 discovered / 12,126 passed / two failed / zero errors or skips; the
+mandatory App report is missing. Controller and Swift codec jobs passed
+separately. This verifies the bounded storage delta, not the actual consumer's
+unexecuted recreation/error controls or a complete candidate.
+
+The actual queue owner reports all four WP-208 merge-integration/
+merge-disjoint-semantic-edits admissions passed at its 994797 base and the
+unchanged 902276 diff applied with `--index -C2`. Its consumer uses exact
+pending/message counting once per drain, explicit missing-role retention and
+diagnostic-only readback after failed/lost/cancelled return. Those are reported
+composition facts, not execution evidence. Storage custody remains here.
+Coordinator dispositions retain source drain-count restart parity and require
+all raw DeviceError outcomes to remain UNCERTAIN without authoritative
+per-attempt proof; see WP-202 deviations. No new storage/schema seam is needed
+or authorized by these dispositions. All existing activation holds remain.
+
 ## Shared connection admission support
 
 The runtime lifecycle owner and fence owner agreed the bounded WP-201

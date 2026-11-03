@@ -236,7 +236,7 @@ class ContactService(
             beforeDispatchAction = { handle -> ContactWriteRecovery.beforeDispatch(preferences, radioId, handle) },
             onExchangeFinishedAction = { handle ->
                 ContactWriteRecovery.finishWrite(preferences, radioId, handle) { failure ->
-                    requireContactWriteReconciliation(radioId, failure, handle)
+                    requireContactReconciliation(radioId, failure, handle)
                 }
             },
         )
@@ -250,13 +250,13 @@ class ContactService(
                         syncCoordinator?.notifyContactsChanged()
                         ContactWriteRecovery.completeWrite(preferences, radioId, dispatch)
                     } catch (cancelled: CancellationException) {
-                        requireContactWriteReconciliation(radioId, cancelled, dispatch)
+                        requireContactReconciliation(radioId, cancelled, dispatch)
                         throw cancelled
                     } catch (error: ContactWriteCompletionFailed) {
-                        requireContactWriteReconciliation(radioId, error, dispatch)
+                        requireContactReconciliation(radioId, error, dispatch)
                         throw error
                     } catch (error: Exception) {
-                        requireContactWriteReconciliation(radioId, error, dispatch)
+                        requireContactReconciliation(radioId, error, dispatch)
                         throw ContactWriteCompletionFailed(radioId, contact.publicKey, error)
                     }
                 }
@@ -267,10 +267,10 @@ class ContactService(
                     ContactWriteRecovery.abandonDefinitelyUnsent(preferences, radioId, dispatch)
                 ContactWriteDispatchOutcome.ACCEPTED -> {
                     if (ContactWriteRecovery.isWriteTracked(preferences, radioId, dispatch)) {
-                        requireContactWriteReconciliation(radioId, cancelled, dispatch)
+                        requireContactReconciliation(radioId, cancelled, dispatch)
                     }
                 }
-                else -> requireContactWriteReconciliation(radioId, cancelled, dispatch)
+                else -> requireContactReconciliation(radioId, cancelled, dispatch)
             }
             throw cancelled
         } catch (blocked: ContactWriteAdmissionBlocked) {
@@ -278,7 +278,7 @@ class ContactService(
             throw blocked
         } catch (error: MeshCoreException) {
             if (error !is MeshCoreException.DeviceError && error !is MeshCoreException.InvalidInput) {
-                requireContactWriteReconciliation(radioId, error, dispatch)
+                requireContactReconciliation(radioId, error, dispatch)
             } else {
                 ContactWriteRecovery.abandonWrite(preferences, radioId, dispatch)
             }
@@ -287,7 +287,7 @@ class ContactService(
         } catch (error: ContactWriteCompletionFailed) {
             throw error
         } catch (error: Exception) {
-            requireContactWriteReconciliation(radioId, error, dispatch)
+            requireContactReconciliation(radioId, error, dispatch)
             throw error
         }
     }
@@ -296,7 +296,7 @@ class ContactService(
     fun needsContactWriteReconciliation(radioId: RadioId): Boolean =
         ContactWriteRecovery.snapshot(preferences, radioId) != null
 
-    private fun requireContactWriteReconciliation(
+    private fun requireContactReconciliation(
         radioId: RadioId,
         failure: Exception,
         dispatch: ContactWriteDispatch? = null,
@@ -305,64 +305,88 @@ class ContactService(
             ContactWriteRecovery.require(preferences, radioId, dispatch)
         } catch (recordingFailure: Exception) {
             failure.addSuppressed(recordingFailure)
-            logger.log(ContactLogLevel.WARNING, "Contact write recovery marker could not be persisted")
+            logger.log(ContactLogLevel.WARNING, "Contact recovery marker could not be persisted")
         }
-        logger.log(ContactLogLevel.WARNING, "Contact write requires a complete radio contact sync")
+        logger.log(ContactLogLevel.WARNING, "Contact state requires a complete radio contact sync")
     }
 
     /**
      * Remove a contact from the device.
      *
+     * The per-radio mutation fence spans the device command and local cleanup so a contact snapshot
+     * cannot apply between the two sides. Cancellation while waiting for the fence sends no command;
+     * an uncertain command result or a local failure after acknowledgement requires reconciliation.
+     *
      * ZephCore V-contact remove is disabled: no `CMD_REMOVE` (which would turn `v.contact` off), no
      * local wipe, and no `NodeDeleted` storage-full clear.
      */
-    suspend fun removeContact(radioId: RadioId, publicKey: Bytes) {
-        if (isProtectedVContact(radioId, publicKey)) {
-            logger.log(ContactLogLevel.INFO, "removeContact ignored for ZephCore V-contact (remove disabled)")
-            return
-        }
-
-        try {
-            session.removeContact(publicKey)
-
-            // Remove from local database
-            val contact = contacts.fetchContact(radioId, publicKey)
-            if (contact != null) {
-                val key = EntityKey(contact.radioId, contact.id)
-                contacts.deleteContact(key)
-
-                // Trigger cleanup (notifications, badge, session)
-                cleanupCoordinator?.handleCleanup(key, ContactCleanupReason.DELETED, publicKey)
+    suspend fun removeContact(radioId: RadioId, publicKey: Bytes) =
+        ContactWriteRecovery.withContactMutationFence(preferences, radioId) {
+            if (isProtectedVContact(radioId, publicKey)) {
+                logger.log(ContactLogLevel.INFO, "removeContact ignored for ZephCore V-contact (remove disabled)")
+                return@withContactMutationFence
             }
 
-            // Notify that a node was deleted (for clearing storage full flag)
-            eventBroadcaster.yield(ContactServiceEvent.NodeDeleted)
+            try {
+                session.removeContact(publicKey)
+            } catch (cancelled: CancellationException) {
+                requireContactReconciliation(radioId, cancelled)
+                throw cancelled
+            } catch (error: MeshCoreException) {
+                if (error !is MeshCoreException.DeviceError && error !is MeshCoreException.InvalidInput) {
+                    requireContactReconciliation(radioId, error)
+                }
+                if (error.isDeviceError(ErrorCode.NOT_FOUND)) throw ContactServiceError.ContactNotFound()
+                throw ContactServiceError.SessionError(error)
+            } catch (error: Exception) {
+                requireContactReconciliation(radioId, error)
+                throw error
+            }
 
-            // Notify UI to refresh contacts list
-            syncCoordinator?.notifyContactsChanged()
-        } catch (error: MeshCoreException) {
-            if (error.isDeviceError(ErrorCode.NOT_FOUND)) throw ContactServiceError.ContactNotFound()
-            throw ContactServiceError.SessionError(error)
+            try {
+                // Remove from local database only after the radio confirms the command.
+                val contact = contacts.fetchContact(radioId, publicKey)
+                if (contact != null) {
+                    val key = EntityKey(contact.radioId, contact.id)
+                    contacts.deleteContact(key)
+
+                    // Trigger cleanup (notifications, badge, session)
+                    cleanupCoordinator?.handleCleanup(key, ContactCleanupReason.DELETED, publicKey)
+                }
+
+                // Notify that a node was deleted (for clearing storage full flag)
+                eventBroadcaster.yield(ContactServiceEvent.NodeDeleted)
+
+                // Notify UI to refresh contacts list
+                syncCoordinator?.notifyContactsChanged()
+            } catch (cancelled: CancellationException) {
+                requireContactReconciliation(radioId, cancelled)
+                throw cancelled
+            } catch (error: Exception) {
+                requireContactReconciliation(radioId, error)
+                throw error
+            }
         }
-    }
 
     /**
      * Remove a contact's local data and run the full cleanup chain without contacting the device.
-     * Use when the device reports the contact doesn't exist but local data remains.
+     * Use when the device reports the contact doesn't exist but local data remains. The per-radio
+     * mutation fence orders this deletion with a fetched contact snapshot.
      * ZephCore V-contact remove is disabled (same policy as [removeContact]).
      */
-    suspend fun removeLocalContact(contact: EntityKey, publicKey: Bytes) {
-        val stored = contactTryOptional { contacts.fetchContact(contact) }
-        if (stored != null && isProtectedVContact(stored.radioId, publicKey)) {
-            logger.log(ContactLogLevel.INFO, "removeLocalContact ignored for ZephCore V-contact (remove disabled)")
-            return
-        }
+    suspend fun removeLocalContact(contact: EntityKey, publicKey: Bytes) =
+        ContactWriteRecovery.withContactMutationFence(preferences, contact.radioId) {
+            val stored = contactTryOptional { contacts.fetchContact(contact) }
+            if (stored != null && isProtectedVContact(stored.radioId, publicKey)) {
+                logger.log(ContactLogLevel.INFO, "removeLocalContact ignored for ZephCore V-contact (remove disabled)")
+                return@withContactMutationFence
+            }
 
-        contacts.deleteContact(contact)
-        cleanupCoordinator?.handleCleanup(contact, ContactCleanupReason.DELETED, publicKey)
-        eventBroadcaster.yield(ContactServiceEvent.NodeDeleted)
-        syncCoordinator?.notifyContactsChanged()
-    }
+            contacts.deleteContact(contact)
+            cleanupCoordinator?.handleCleanup(contact, ContactCleanupReason.DELETED, publicKey)
+            eventBroadcaster.yield(ContactServiceEvent.NodeDeleted)
+            syncCoordinator?.notifyContactsChanged()
+        }
 
     /** Whether [publicKey] is the ZephCore V-contact for this radio (remove/prune protected). */
     private suspend fun isProtectedVContact(radioId: RadioId, publicKey: Bytes): Boolean {

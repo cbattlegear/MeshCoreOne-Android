@@ -81,6 +81,29 @@ internal object ContactWriteRecovery {
         }
     }
 
+    suspend fun <T> withContactMutationFence(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        operation: suspend () -> T,
+    ): T {
+        val state = synchronized(this) { state(preferences, radioId) }
+        return state.syncMutex.withLock {
+            synchronized(this) {
+                loadEpoch(preferences, radioId, state)
+                if (state.dispatchingWrites.isNotEmpty()) throw ContactServiceError.SyncInterrupted()
+                state.syncing = true
+                state.writes.filterNot { it in state.dispatchingWrites }.forEach {
+                    state.invalidatedWrites.add(it)
+                }
+            }
+            try {
+                operation()
+            } finally {
+                synchronized(this) { state.syncing = false }
+            }
+        }
+    }
+
     @Synchronized
     fun registerWrite(preferences: ContactPreferenceFlags, radioId: RadioId, dispatch: ContactWriteDispatch) {
         val state = state(preferences, radioId)

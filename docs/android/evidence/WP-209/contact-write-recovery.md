@@ -91,7 +91,7 @@ ContactService/service-test overlap; its UI stays with its existing owner.
 
 ## Behavioral evidence to execute
 
-`ContactWriteRecoveryTests` contains 20 deterministic methods using an actual
+`ContactWriteRecoveryTests` contains 28 deterministic methods using an actual
 `MeshCoreSession` and controlled raw frames, not a fake contact session:
 queued-before-send cancellation; retired caller plus late successful ACK;
 identical/different replacement delivery correlation; active and late rejection;
@@ -112,6 +112,17 @@ refuses stale snapshot application when the old exchange could have completed
 during that interval. No full sync, teardown, reconnect or READY state is treated
 as physical drain proof. Service persistence here is an explicit in-memory role,
 not claimed Room evidence.
+
+Eight additional service methods cover both orderings of device removal and
+snapshot application, local-only deletion behind an older snapshot, cancellation
+while waiting without a dispatched removal or uncertainty marker, cancellation
+after remove dispatch, transport uncertainty, local-delete failure after device
+acknowledgement, and rejection of removal while an Add exchange awaits its
+acknowledgement. `removeContact` and `removeLocalContact` use the existing
+per-radio `syncMutex`, ordering mutation and cleanup against snapshot
+fetch/application without adding a non-reentrant mutex or serializing unrelated
+channel/message work. V-contact protection, device `NOT_FOUND` mapping, and
+local-only recovery behavior remain unchanged.
 
 `ContactWriteCompletionRoomTest` has three real-Room methods for transactional
 radio isolation, complete local metadata preservation, stale/equal-time CAS
@@ -192,7 +203,92 @@ passing SwiftData restore/export oracle is not an iOS-device run.
   positively discovered all 18 `ContactWriteRecoveryTests` methods; the service
   test task completed without failures. This is a feature-branch workflow
   diagnostic, not a PR-bound protected check or merge/repair-acceptance gate.
+- Candidate `9f58ec44e4e64b3872509a07797bac95102a8499`, based on current main
+  `99479711bfdb7c621765f09d671068ca8b8318ce`, passed selected hosted jobs in
+  run [41611480901, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41611480901).
+  This run predates the uncommitted manual-refresh lease changes below and does
+  not verify them.
+
+### Manual-refresh/shared-owner arbitration hold
+
+The current worktree has uncommitted changes based on
+`9f58ec44e4e64b3872509a07797bac95102a8499`. They add a per-radio manual-refresh
+mutex and `ContactService.withManualContactRefresh`, which runs caller cleanup
+inside the lease and preserves the existing convenience method. A deterministic
+Room/service/coordinator test was added for two manual callers, cancellation
+while waiting, reset ordering, and advert deferral. It has not been executed.
+
+Source inspection found that this callback contract alone does not establish
+ownership against initial connection sync or disconnect/reconnect:
+
+- `SyncCoordinatorSync.kt:18-23` `tryClaimSync` checks only
+  `isSyncInProgress`. `onConnectionEstablished` calls it at lines 222-228
+  without checking `manualContactSyncActive`, then sets and clears the same
+  advertisement Boolean at lines 253, 292, and failure cleanup 304-306.
+- `SyncCoordinatorContacts.kt:170-187` manual claim waits for the advert claim
+  and sets a Boolean but does not reserve the general sync claim.
+  `performAdvertContactSync` rejects while that Boolean is set at lines 208-212,
+  while `SyncCoordinatorSync.kt:326-330` clears it unconditionally on disconnect.
+- `AdvertisementService.kt:473-479` implements `setSyncingContacts` as a plain
+  Boolean assignment. Capturing the initiating graph's service avoids looking
+  up a replacement graph during cleanup, but does not prevent same-instance
+  initial-sync/manual owners from clearing one another's flag.
+- The consumer graph seam is also separate: `NodesSession` exposes two
+  independent service accessors (`NodesFeatureDependencies.kt:109-110`), and
+  `AppNodesSession` independently reads `sessions.current` for each one
+  (`AppNodesFeature.kt:86-88`). The registry getter is synchronized per read,
+  not across the pair (`RadioSessionContainerFactory.kt:53-62`); the current
+  state holder resolves the contact service and advert service at separate
+  points (`ContactsStateHolder.kt:140,144,164`). Capturing the advert service
+  once prevents cleanup from looking up a successor, but does not prove that it
+  came from the same graph as the contact service. The consumer must obtain both
+  from one captured graph snapshot or another atomic pair seam; no consumer path
+  was modified here.
+- `ContactWriteRecovery.withSyncFence` serializes contact snapshot application
+  per preference-role/radio. It does not own the coordinator and advertisement
+  flags, so it is not proof of safe ownership for those interleavings.
+
+The coordinator source belongs to WP-214 (`PORTING_PLAN.md:451`), outside the
+WP-209 admitted write paths. No WP-214 path was changed. Do not integrate the
+manual-refresh API or publish this producer until an admitted shared contract
+coordinates initial-sync, manual-refresh, and disconnect/reconnect ownership,
+including owner-scoped advertisement suppression, and a deterministic
+overlap/late-cleanup regression covers those paths. The current local
+`gradle-execution` reservation remains held without cleanup evidence; no local
+Gradle test was run. Run 41611480901 is not evidence for the uncommitted changes.
+
+The WP-214 sync-concerns session reports its current edit scope is disjoint
+(ChannelReceiveEnvelope contract, MessagePollingService, associated test and
+WP-214 evidence), with no current or intended suppression edits and no active
+`AdvertisementService.setSyncingContacts` admission/reservation receipt in that
+session. This is not a transfer or release. The coordinator's current
+open-PR-path inventory contains no published `AdvertisementService.kt` change,
+but that does not prove unpublished owner intent is clear. Although
+`PORTING_PLAN.md:446` maps `AdvertisementService` to WP-209, current hunk custody
+and path-operation admission for the suppression API/caller cleanup remain
+unestablished. No suppression file was edited and no admission or ownership
+transfer is claimed.
 
 The local Gradle execution reservation remains held without cleanup evidence;
 no local Gradle command was run. The exact workflow logs remain the authoritative
 hosted evidence; no second CI-result bundle was committed.
+
+### Delete-vs-snapshot source candidate
+
+The bounded source-only candidate is authored from HEAD
+`9f58ec44e4e64b3872509a07797bac95102a8499` and adds the shared mutation fence
+and the eight service regression methods above in `ContactService.kt`,
+`ContactWriteRecovery.kt`, and `ContactWriteRecoveryTests.kt`. Fresh WP-209
+`modify` admission passed for all three paths; `git diff --check` passed and the
+trusted `validate.py` ownership/traceability validator passed. WP-209 has no
+configured module verification command. The source-only candidate does not
+include the unrelated dirty core-data Room test path. The new methods have not
+been executed: the shared Gradle execution reservation remains held without
+cleanup evidence. The core-data Room test path is not admitted for this work, so
+no Room test was added or claimed.
+
+This mutation fence addresses deletion versus a service-owned snapshot. It does
+not resolve the separate protocol invalidation/retirement-to-Room-prune/marker
+linearization prerequisite. The WP-107 proof-only candidate remains unimported
+and does not authorize prune or recovery-marker clearing; full #517 reconciliation
+therefore remains incomplete.

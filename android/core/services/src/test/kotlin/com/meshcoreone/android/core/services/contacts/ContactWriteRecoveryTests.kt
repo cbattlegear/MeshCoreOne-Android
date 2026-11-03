@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.ContactSaveResult
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.ContactFrame
 import com.meshcoreone.android.core.model.RadioId
@@ -577,6 +578,238 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
+    fun removeContactWaitsForAnOlderSnapshotThenDeletesThePersistedRow() = runTest {
+        withFixture {
+            val producer = service()
+            val add = async { producer.addOrUpdateContact(radioA, frame(1, "Present")) }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+            add.await()
+
+            val snapshotEntered = CompletableDeferred<Unit>()
+            val releaseSnapshot = CompletableDeferred<Unit>()
+            radio.snapshotHold = HeldRadio.SnapshotHold(snapshotEntered, releaseSnapshot)
+            val snapshot = async { producer.syncContacts(radioA, null) }
+            runCurrent()
+            assertTrue(snapshotEntered.isCompleted)
+
+            val removal = async { producer.removeContact(radioA, contactsKey(1)) }
+            runCurrent()
+            assertTrue(radio.removeRequests.isEmpty(), "Removal waits until the captured snapshot is applied")
+            assertNotNull(store.fetchContact(radioA, contactsKey(1)))
+
+            releaseSnapshot.complete(Unit)
+            runCurrent()
+            snapshot.await()
+            removal.await()
+
+            assertEquals(1, radio.removeRequests.size)
+            assertNull(radio.contact(contactsKey(1)))
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
+        }
+    }
+
+    @Test
+    fun snapshotWaitsForDeviceAndLocalRemovalBeforeFetching() = runTest {
+        withFixture {
+            val producer = service()
+            val add = async { producer.addOrUpdateContact(radioA, frame(1, "Present")) }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+            add.await()
+
+            val removalEntered = CompletableDeferred<Unit>()
+            val releaseRemoval = CompletableDeferred<Unit>()
+            radio.removeHold = HeldRadio.RemoveHold(removalEntered, releaseRemoval)
+            val removal = async { producer.removeContact(radioA, contactsKey(1)) }
+            runCurrent()
+            assertTrue(removalEntered.isCompleted)
+
+            val snapshot = async { producer.syncContacts(radioA, null) }
+            runCurrent()
+            assertTrue(radio.contactRequests.isEmpty(), "The snapshot cannot start during the removal transaction")
+            assertNotNull(store.fetchContact(radioA, contactsKey(1)))
+
+            releaseRemoval.complete(Unit)
+            runCurrent()
+            removal.await()
+            snapshot.await()
+
+            assertEquals(1, radio.contactRequests.size)
+            assertNull(radio.contact(contactsKey(1)))
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
+        }
+    }
+
+    @Test
+    fun localOnlyRemovalWaitsForAnOlderSnapshotApplication() = runTest {
+        withFixture {
+            val producer = service()
+            val add = async { producer.addOrUpdateContact(radioA, frame(1, "Present")) }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+            add.await()
+            val contact = assertNotNull(store.fetchContact(radioA, contactsKey(1)))
+
+            val snapshotEntered = CompletableDeferred<Unit>()
+            val releaseSnapshot = CompletableDeferred<Unit>()
+            radio.snapshotHold = HeldRadio.SnapshotHold(snapshotEntered, releaseSnapshot)
+            val snapshot = async { producer.syncContacts(radioA, null) }
+            runCurrent()
+            assertTrue(snapshotEntered.isCompleted)
+
+            val removal = async { producer.removeLocalContact(EntityKey(radioA, contact.id), contact.publicKey) }
+            runCurrent()
+            assertFalse(removal.isCompleted)
+            assertEquals(1, radio.removeRequests.size, "Local-only recovery never sends another device removal")
+
+            releaseSnapshot.complete(Unit)
+            runCurrent()
+            snapshot.await()
+            removal.await()
+
+            assertNull(store.fetchContact(radioA, contact.publicKey))
+            assertEquals(1, radio.removeRequests.size)
+        }
+    }
+
+    @Test
+    fun cancellationWhileWaitingForSnapshotFenceDoesNotClaimADeviceRemoval() = runTest {
+        withFixture {
+            val producer = service()
+            val add = async { producer.addOrUpdateContact(radioA, frame(1, "Present")) }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+            add.await()
+
+            val snapshotEntered = CompletableDeferred<Unit>()
+            val releaseSnapshot = CompletableDeferred<Unit>()
+            radio.snapshotHold = HeldRadio.SnapshotHold(snapshotEntered, releaseSnapshot)
+            val snapshot = async { producer.syncContacts(radioA, null) }
+            runCurrent()
+            assertTrue(snapshotEntered.isCompleted)
+
+            val removal = async {
+                try {
+                    kotlinx.coroutines.withTimeout(1) { producer.removeContact(radioA, contactsKey(1)) }
+                    null
+                } catch (failure: Exception) {
+                    failure
+                }
+            }
+            runCurrent()
+            assertTrue(radio.removeRequests.isEmpty())
+            advanceTimeBy(1)
+            runCurrent()
+
+            assertIs<kotlinx.coroutines.TimeoutCancellationException>(removal.await())
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            assertTrue(radio.removeRequests.isEmpty())
+            assertNotNull(store.fetchContact(radioA, contactsKey(1)))
+
+            releaseSnapshot.complete(Unit)
+            snapshot.await()
+        }
+    }
+
+    @Test
+    fun cancellationAfterRemoveDispatchRetainsLocalRowAndRequiresReconciliation() = runTest {
+        withFixture {
+            val producer = service()
+            val add = async { producer.addOrUpdateContact(radioA, frame(1, "Present")) }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+            add.await()
+
+            val removalEntered = CompletableDeferred<Unit>()
+            val releaseRemoval = CompletableDeferred<Unit>()
+            radio.removeHold = HeldRadio.RemoveHold(removalEntered, releaseRemoval)
+            val removal = async { producer.removeContact(radioA, contactsKey(1)) }
+            runCurrent()
+            assertTrue(removalEntered.isCompleted)
+
+            removal.cancelAndJoin()
+
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+            assertNotNull(store.fetchContact(radioA, contactsKey(1)))
+            assertEquals(1, radio.removeRequests.size)
+        }
+    }
+
+    @Test
+    fun acknowledgedRemoveWithLocalDeleteFailureDoesNotReturnSuccess() = runTest {
+        withFixture {
+            val producer = service()
+            val add = async { producer.addOrUpdateContact(radioA, frame(1, "Present")) }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+            add.await()
+
+            val diskFailure = IOException("contact delete failed")
+            val failingPersistence = object : ContactPersisting by store {
+                override suspend fun deleteContact(contact: com.meshcoreone.android.core.contracts.domain.EntityKey) {
+                    throw diskFailure
+                }
+            }
+            val removal = service(persistence = failingPersistence)
+            assertSame(diskFailure, assertFailsWith<IOException> {
+                removal.removeContact(radioA, contactsKey(1))
+            })
+
+            assertNull(radio.contact(contactsKey(1)))
+            assertNotNull(store.fetchContact(radioA, contactsKey(1)))
+            assertTrue(removal.needsContactWriteReconciliation(radioA))
+        }
+    }
+
+    @Test
+    fun uncertainRemoveTransportFailureKeepsTheLocalRowAndRequiresReconciliation() = runTest {
+        withFixture {
+            val producer = service()
+            val add = async { producer.addOrUpdateContact(radioA, frame(1, "Present")) }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+            add.await()
+
+            radio.removeFailure = IOException("remove response lost")
+            val failure = runCatching { producer.removeContact(radioA, contactsKey(1)) }.exceptionOrNull()
+
+            assertNotNull(failure)
+            assertEquals(1, radio.removeRequests.size)
+            assertNotNull(store.fetchContact(radioA, contactsKey(1)))
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+        }
+    }
+
+    @Test
+    fun activeContactWritePreventsDeviceRemovalFromOvertakingItsAck() = runTest {
+        withFixture {
+            val producer = service()
+            val add = async { producer.addOrUpdateContact(radioA, frame(1, "In flight")) }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                producer.removeContact(radioA, contactsKey(1))
+            }
+
+            assertTrue(radio.removeRequests.isEmpty())
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
+            add.cancelAndJoin()
+            radio.accept()
+            runCurrent()
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+        }
+    }
+
+    @Test
     fun unresolvedWriteRejectsReplacementSyncBeforeSnapshotAndKeepsQueuedWriteBlocked() = runTest {
         withFixture {
             val producer = service()
@@ -752,7 +985,10 @@ class ContactWriteRecoveryTests {
         private val mock = MockTransport()
         val writes: MutableList<Bytes> get() = shared.writes
         val contactRequests = mutableListOf<Bytes>()
+        val removeRequests = mutableListOf<Bytes>()
         var snapshotHold: SnapshotHold? = null
+        var removeHold: RemoveHold? = null
+        var removeFailure: Exception? = null
         var reportedTotal: Int?
             get() = shared.reportedTotal
             set(value) { shared.reportedTotal = value }
@@ -782,6 +1018,16 @@ class ContactWriteRecoveryTests {
                     shared.rows.values.forEach { mock.simulateReceive(Bytes.of(0x03) + it) }
                     mock.simulateReceive(Bytes.of(0x04) + le32(100))
                 }
+                0x0F -> {
+                    removeRequests += data
+                    removeFailure?.let { throw it }
+                    removeHold?.let {
+                        it.entered.complete(Unit)
+                        it.release.await()
+                    }
+                    shared.rows.remove(data.slice(1, 33))
+                    mock.simulateReceive(Bytes.of(0x00))
+                }
             }
         }
 
@@ -803,6 +1049,11 @@ class ContactWriteRecoveryTests {
         fun contact(publicKey: Bytes) = shared.rows[publicKey]?.let(Parsers::parseContactData)
 
         class SnapshotHold(
+            val entered: CompletableDeferred<Unit>,
+            val release: CompletableDeferred<Unit>,
+        )
+
+        class RemoveHold(
             val entered: CompletableDeferred<Unit>,
             val release: CompletableDeferred<Unit>,
         )

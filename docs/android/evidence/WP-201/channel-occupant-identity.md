@@ -11,6 +11,79 @@ or completion of the independent queue/fence/consumer/restore producers.
 
 ## Local retained-submission storage candidate (source-only)
 
+### Follow-up: observable contention and current-main verification blocker
+
+Assignment `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_9ElZlj99QJuYiW8FBOVqc9BP`
+addresses the independent review's two validation gaps. Test-only candidate
+`dd4e7c35761ef5545474d2b88666e253e1980e3d` adds two methods (three controlled
+orderings) to the actual Room test path. Both test paths separately passed their
+current WP-202/WP-201 `modify` admissions.
+
+The new control opens two file-backed Room handles with independent native
+transaction executors. A direct query callback holds the first receipt SELECT,
+records `inTransaction()` on that transaction's own thread, and requires the
+second handle's intercepted BEGIN attempt before releasing the first writer.
+Exact intent must return the first receipt; conflicting intent must reject without
+replacement, for both possible designated first intents. Final assertions read the
+actual receipt and pending row through the second store. Missing callback/transaction
+observations fail with bounded timeouts; they are not skipped or treated as evidence
+of concurrency. The test proves attempted transaction contention only if executed:
+two write transactions cannot simultaneously own SQLite's exclusive writer.
+Existing scheduler-based controls remain distinct and are not simultaneous-entry
+proof. All new controls are **AUTHORED, UNEXECUTED** under the retained local lock.
+
+The prior v3 test is now explicitly named
+`composedV1ToV3DispatchingFixtureIsPreservedWithoutInventingSubmissionReceipts`.
+It starts from the real v1 export, then uses production migration SQL to construct
+v3. This can detect composition/data-preservation errors but is **not independent
+exported-v3 migration coverage**. No unavailable export is fabricated, no missing
+file is skipped, and no export-based passing result is claimed.
+
+Read-only `git fetch --no-tags origin main` resolved current main to
+`16d6ff9146142c16226cecc1f1461e0afc450137`. Both that tree and this source tree
+contain only `core/database/schemas/...MeshCoreDatabase/1.json`; the inspected
+tracked schema history provides no v2/v3 export. No local Gradle/KSP was run.
+
+A disposable Git index based on that exact main was used for
+`git apply --cached --check` of the exact Android-only `879f9bc`-to-`4868999` delta.
+The check exited 1: `PendingSendRepository`, `RoomPersistenceStore`,
+`MeshCoreDatabase` and `RoomBoundaryTest` do not match the required prerequisite
+context; `ChannelOccupantMigrationTest` is absent. The live index/worktree was
+not changed by this composition probe, and its temporary files were removed.
+These are not merely an endorsement to import full ancestry: the substantive
+dependencies absent from main are:
+
+| Required dependency | Actual missing main surface |
+| --- | --- |
+| Exact original intent projection | `MessageDTO`/envelope/pending occupant fields and Room mappings |
+| Retained transport state/evidence | `QueuedChannelAttempt` model, pending state/pointer columns and journal entity/DAO |
+| Real completion integration | Begin/settle/accepted-complete/terminal-retire transaction implementation and conditional pending SQL |
+| Original schema chain | Separately attributable original v1-to-v2/v2-to-v3 schema changes and genuine independent v3 export |
+| Source-compatible consumers | Existing canonical journal port additions require actual implementation/fake admission; main's direct `RenderingInMemoryMessageStore : MessagePersisting` cannot inherit new abstract operations without adaptation |
+
+The receipt relies on real accepted/retired transactions, not only model/schema
+types. Therefore a candidate made from the primitive plus only type/schema files
+is not established as self-contained. No aggregate-port rewrite, fake body, whole
+54-file ancestry, history-policy/authority/runtime code or held producer import
+was used to paper over this dependency. The add-only scope/input files can remain
+independently attributable without importing whole-history work.
+
+The actual main `android-ci.yml` supports exact published event/ref candidates
+with read-only checkout and ephemeral execution. Its `workflow_dispatch` has no
+isolated patch/prerequisite inputs; it is not a mechanism to compile this unpublished
+local delta against a synthesized dependency graph. **No supported, self-contained
+hosted candidate has been established, and no CI was dispatched.** The actionable
+prerequisite is a reviewed, separately attributable model/schema/journal transaction
+candidate with necessary canonical-port implementation admissions, followed by
+genuine previous-schema export generation/provenance and exact-candidate hosted
+verification. Schema4 generation and actual Room contention/migration execution
+then remain required. Required parity and all runtime/integration/publication holds
+are unchanged.
+
+After these test edits, the declared `portmap.py`, controller `validate.py` and
+`git diff --check` source checks passed again. They do not establish Kotlin
+compilation, native SQLite lock behavior, callback compatibility or migration parity.
+
 Implementation: `48689995b2d23d7d66c5e30d8720508b5afffd64`, directly on
 `879f9bc5b01936558e017c672a26037ed86ed159`; no held producer ancestry was imported.
 Assignment: `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_rgoBHDEqoqs4s3EYibaisFLx`.

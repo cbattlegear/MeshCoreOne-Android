@@ -267,6 +267,7 @@ class SettingsRerunNavigationTest {
             releaseApply.complete(Unit)
             flow.preset.state.first { it.error != null }
             compose.onNodeWithText("held back apply failure").assertIsDisplayed()
+            Unit
         } finally {
             processScope.cancel()
         }

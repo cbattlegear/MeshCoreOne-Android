@@ -7,6 +7,7 @@ package com.meshcoreone.android.core.services.messaging
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.contracts.domain.errors.*
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
@@ -22,6 +23,7 @@ import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.math.pow
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -93,10 +95,13 @@ class MessageService(
     }
 
     private suspend fun <T> owned(operation: String, mutex: Mutex? = null, block: suspend () -> T): T {
+        val caller = currentCoroutineContext()
+        val receipts = (caller[NotificationActionReceipt] ?: EmptyCoroutineContext) +
+            (caller[PendingMessageCreation] ?: EmptyCoroutineContext)
         ownership.check(operation)
         val task = synchronized(lock) {
             if (ownership.closing) throw MessageServiceException(MessageServiceError.NotConnected)
-            ownership.scope.async(start = CoroutineStart.LAZY) {
+            ownership.scope.async(context = receipts, start = CoroutineStart.LAZY) {
                 suspend fun runOperation(): T {
                     ownership.check(operation)
                     return block()
@@ -397,22 +402,70 @@ class MessageService(
         id = newID(), radioId = token.radioId, contactID = contact.id, text = text, timestamp = timestamp(),
         createdAt = clock.wallClock.instant(), textType = type, replyToID = replyToID,
     )
-    override suspend fun createPendingMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO {
-        ownership.check("createPendingMessage")
-        validate(text, contact)
-        val message = outgoing(text, contact, textType, replyToID)
-        dataStore.saveMessage(message)
-        ownership.check("createPendingMessage.saved")
-        dataStore.updateContactLastMessage(key(contact.id), message.date)
-        ownership.check("createPendingMessage.contact")
-        return message
+    private suspend fun savePendingCreation(message: MessageDTO) {
+        val receipt = currentCoroutineContext()[PendingMessageCreation]
+        receipt?.writing(message)
+        try {
+            dataStore.saveMessage(message)
+        } catch (failure: Exception) {
+            // The write has settled, but a thrown return does not prove rollback. Only read this
+            // operation's exact process-store key; no wire work or successor-generation mutation.
+            if (receipt != null) withContext(NonCancellable) {
+                try {
+                    val stored = dataStore.fetchMessage(key(message.id))
+                    val state = when {
+                        stored == null -> PendingMessageCreation.State.NOT_COMMITTED
+                        stored == message -> PendingMessageCreation.State.COMMITTED
+                        else -> {
+                            remember("pendingCreation.${message.id}.identity",
+                                PersistenceStoreException(PersistenceStoreError.InvalidData))
+                            PendingMessageCreation.State.UNKNOWN
+                        }
+                    }
+                    receipt.settled(state)
+                } catch (readFailure: Exception) {
+                    receipt.settled(PendingMessageCreation.State.UNKNOWN)
+                    remember("pendingCreation.${message.id}.read", readFailure)
+                    if (failure !== readFailure) failure.addSuppressed(readFailure)
+                }
+            }
+            throw failure
+        }
+        receipt?.settled(PendingMessageCreation.State.COMMITTED)
+    }
+
+    override suspend fun createPendingMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO =
+        owned("createPendingMessage", pendingOperations) {
+            validate(text, contact)
+            val message = outgoing(text, contact, textType, replyToID)
+            savePendingCreation(message)
+            ownership.check("createPendingMessage.saved")
+            dataStore.updateContactLastMessage(key(contact.id), message.date)
+            ownership.check("createPendingMessage.contact")
+            message
+        }
+
+    private suspend fun <T> inlineWire(block: suspend () -> T): T {
+        val receipt = currentCoroutineContext()[NotificationActionReceipt]
+        receipt?.wireStarted()
+        try {
+            val result = block()
+            receipt?.accepted()
+            return result
+        } catch (rejected: MeshCoreException.DeviceError) {
+            receipt?.wireRejected()
+            throw rejected
+        } catch (failure: Exception) {
+            receipt?.uncertain()
+            throw failure
+        }
     }
 
     override suspend fun sendDirectMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO =
         owned("sendDirectMessage") {
             validate(text, contact)
             val message = outgoing(text, contact, textType, replyToID)
-            val info = sendBoundary(message.id, true) {
+            val (info, tracking, predicted) = sendBoundary(message.id, true) {
                 dataStore.saveMessage(message)
                 ownership.check("sendDirectMessage.saved")
                 checkIdentity("sendDirectMessage")
@@ -421,13 +474,13 @@ class MessageService(
                 val info = withPoolBackoff(3u) {
                     dmOperations.withLock {
                         checkIdentity("sendDirectMessage.wire")
-                        session.sendMessage(contact.publicKey, text, Instant.ofEpochSecond(message.timestamp.toLong()))
+                        inlineWire { session.sendMessage(contact.publicKey, text, Instant.ofEpochSecond(message.timestamp.toLong())) }
                     }
                 }
-                ownership.check("sendDirectMessage.accepted")
-                if (pendingAck(message.id)?.receipt === tracking.receipt) mergeSentInfo(message.id, contact.id, predicted, info, 0u, null)
-                info
+                Triple(info, tracking, predicted)
             }
+            ownership.check("sendDirectMessage.accepted")
+            if (pendingAck(message.id)?.receipt === tracking.receipt) mergeSentInfo(message.id, contact.id, predicted, info, 0u, null)
             postDMSent(message.id, contact.id, info)
             fetchSaved(message.id)
         }
@@ -735,12 +788,13 @@ class MessageService(
             createdAt = clock.wallClock.instant(), textType = textType)
     }
 
-    override suspend fun createPendingChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO {
-        val dto = outgoingChannel(text, channelIndex, radioId, textType)
-        dataStore.saveMessage(dto)
-        ownership.check("createPendingChannel.saved")
-        return dto
-    }
+    override suspend fun createPendingChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO =
+        owned("createPendingChannel", pendingOperations) {
+            val dto = outgoingChannel(text, channelIndex, radioId, textType)
+            savePendingCreation(dto)
+            ownership.check("createPendingChannel.saved")
+            dto
+        }
 
     override suspend fun sendChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): ChannelSendReceipt =
         owned("sendChannelMessage", channelOperations) {
@@ -750,7 +804,7 @@ class MessageService(
                 ownership.check("sendChannelMessage.persisted")
                 withPoolBackoff(2u) {
                     checkIdentity("sendChannelMessage.wire")
-                    session.sendChannelMessage(channelIndex, text, Instant.ofEpochSecond(dto.timestamp.toLong()))
+                    inlineWire { session.sendChannelMessage(channelIndex, text, Instant.ofEpochSecond(dto.timestamp.toLong())) }
                 }
             }
             ownership.check("sendChannelMessage.accepted")

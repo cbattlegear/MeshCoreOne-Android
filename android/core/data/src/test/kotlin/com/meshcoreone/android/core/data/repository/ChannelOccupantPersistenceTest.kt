@@ -399,4 +399,33 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         store.batchSaveChannels(RADIO_A, listOf(info()).snapshot(), SnapshotList.empty(), null)
         assertEquals(original, store.fetchChannelOccupantID(RADIO_A, 5u))
     }
+
+    @Test fun scopedOrphanSlotCleanupRetainsUnresolvedIntentButExplicitHistoryEraseStillDeletesIt() = runTest {
+        val intended = UUID.randomUUID()
+        val unresolved = message(contactID = null, channelIndex = 5u, text = "orphan pending text\n", status = MessageStatus.PENDING)
+            .copy(channelOccupantID = intended)
+        val history = message(contactID = null, channelIndex = 5u, status = MessageStatus.SENT)
+        store.saveMessage(unresolved)
+        store.saveMessage(history)
+        val queued = PendingSendDTO.fromEnvelope(
+            ChannelMessageEnvelope(unresolved.id, 5u, false, unresolved.text, unresolved.timestamp, null, intended),
+            RADIO_A, enqueuedAt = AT,
+        )
+        store.insertPendingSendAssigningSequence(queued)
+        assertNull(store.fetchChannel(RADIO_A, 5u))
+        store.withChannelOperation { scoped, _ ->
+            scoped.deleteMessagesForChannel(RADIO_A, 5u)
+            scoped.invalidateChannelOccupant(RADIO_A, 5u)
+        }
+        assertEquals(unresolved.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(RADIO_A, unresolved.id)))
+        assertNull(store.fetchMessage(EntityKey(RADIO_A, history.id)))
+        val retained = store.fetchPendingSends(RADIO_A).single()
+        assertEquals(queued.id, retained.id)
+        assertEquals(intended, retained.channelOccupantID)
+        assertEquals(unresolved.text, retained.messageText)
+        assertNull(store.fetchChannelOccupantID(RADIO_A, 5u))
+        store.deleteMessagesForChannel(RADIO_A, 5u)
+        assertNull(store.fetchMessage(EntityKey(RADIO_A, unresolved.id)))
+        assertTrue(store.fetchPendingSends(RADIO_A).isEmpty())
+    }
 }

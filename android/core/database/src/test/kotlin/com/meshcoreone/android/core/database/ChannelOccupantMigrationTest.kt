@@ -1,7 +1,6 @@
 // AndroidOnly: WP-201 Real exported-v1 SQLite upgrade retains legacy rows without manufacturing channel intent.
 package com.meshcoreone.android.core.database
 
-import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
@@ -96,7 +95,8 @@ class ChannelOccupantMigrationTest {
 
     private fun insertLegacy(db: SQLiteDatabase, entity: JSONObject, values: Map<String, Any>) {
         val fields = entity.getJSONArray("fields")
-        val content = ContentValues()
+        val columns = mutableListOf<String>()
+        val arguments = mutableListOf<Any?>()
         for (i in 0 until fields.length()) {
             val field = fields.getJSONObject(i)
             val name = field.getString("columnName")
@@ -105,14 +105,16 @@ class ChannelOccupantMigrationTest {
                 "BLOB" -> ByteArray(0)
                 else -> 0L
             }
-            when (value) {
-                null -> content.putNull(name)
-                is String -> content.put(name, value)
-                is ByteArray -> content.put(name, value)
-                is Long -> content.put(name, value)
-                else -> error("Unsupported legacy fixture field $name")
+            require(value == null || value is String || value is ByteArray || value is Long) {
+                "Unsupported legacy fixture field $name"
             }
+            columns += "`${name.replace("`", "``")}`"
+            arguments += value
         }
-        db.insertOrThrow(entity.getString("tableName"), null, content)
+        val table = entity.getString("tableName").replace("`", "``")
+        db.execSQL(
+            "INSERT INTO `$table` (${columns.joinToString()}) VALUES (${columns.joinToString { "?" }})",
+            arguments.toTypedArray(),
+        )
     }
 }

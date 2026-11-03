@@ -43,7 +43,10 @@ or queue rows, and channel DTO / portable backup wire shapes remain unchanged.
 Replacement/clear retains unresolved outgoing rows and their queued intent with
 original text/epoch, marking them failed. Ordinary resolved history retains the
 existing deletion behavior. Explicit user history deletion remains destructive as
-before. A stale/unknown epoch still requires a typed queue/inline failure from the
+before. Scoped service cleanup through `deleteMessagesForChannel` preserves
+unresolved outgoing text and queue intent even when the channel row is absent;
+the same method on the ordinary store remains an explicit full history erase.
+A stale/unknown epoch still requires a typed queue/inline failure from the
 service producer; this persistence patch does not implement a recovery UI.
 
 ## Shared exclusion and producer boundary
@@ -139,14 +142,15 @@ Executed with pinned native Windows Python 3.12.4:
 
 Declared new product regressions, not passing executions:
 
-- Seventeen `ChannelOccupantPersistenceTest` methods: rename/replacement/recreation,
+- Eighteen `ChannelOccupantPersistenceTest` methods: rename/replacement/recreation,
   DTO/batch/radio partition, late successful save, retained unresolved text/queue,
   unknown legacy/ambiguous slot, actual disk reopen/hydration, independent-context
   exclusion, whole-operation restore/callback ordering, model equality, invalidation,
   direct-writer SET/save-gap exclusion, scoped success/child/expired rejection,
   forged/foreign/exact-Job capability validation, exception/cancellation expiry,
   actual restart with an unresolved pre-SET marker and no DTO clear, atomic failed
-  reconciliation rollback, and cancelled/escaped marker and metadata-write rejection.
+  reconciliation rollback, cancelled/escaped marker and metadata-write rejection,
+  and scoped orphan-slot cleanup versus ordinary explicit history erase.
 - One `ChannelOccupantMigrationTest` method creates a real v1 SQLite database from
   the retained KSP export, opens it through the registered production migration,
   checks retained legacy text/queue/null intent, and reopens the upgraded file.
@@ -166,6 +170,7 @@ was not weakened. Separately, misplaced local `channelWrite`/`channelOperation`
 functions were corrected to actual context members. The run did not execute the
 Room persistence/migration tests; its canonical log is authoritative, not acceptance
 of these corrections or the new marker tests.
+
 ## Shared connection admission support
 
 The runtime lifecycle owner and fence owner agreed the bounded WP-201
@@ -185,3 +190,18 @@ admitted model-module contract test surface, as the existing `DomainContractTest
 does: value/reference mismatch, revoke before admission, retained admitted count,
 concurrent idempotent completion, acquisition/revocation race and exact count
 overflow. These are authored declarations pending execution, not drain evidence.
+
+The corrected independent composition at `8148c0f43bae5fc3f9d5ceea44007513861c41b6`
+was executed by [41599331042](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41599331042).
+All 166 model tests passed, including the unchanged abstract repository invariant.
+Controller/workflow policy and the Swift codec oracle passed separately. The Linux
+Android job failed in `ChannelOccupantMigrationTest` at the legacy fixture's
+`SQLiteDatabase.insertOrThrow` call, before opening the production migration.
+That fixture used unquoted column identifiers including SQLite's reserved `index`;
+the correction uses identifier-quoted SQL and bound values, without changing the
+legacy preservation assertions or production migration.
+Available mandatory reports contained 5,953 tests: 5,952 passed, one failed,
+zero errors/skips, with evidence explicitly incomplete. The database suite was
+48 passed/one failed; the data/services suites did not produce mandatory reports.
+This run does not establish Room repository, fence or fixture execution, nor does
+it contain the later fresh-lease gate or held ChannelService/runtime composition.

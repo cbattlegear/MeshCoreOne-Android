@@ -39,7 +39,8 @@ class RoomPersistenceStore private constructor(
         scope: CoroutineScope,
         clock: Clock = Clock.systemUTC(),
         reporter: RepositoryIssueReporter = AndroidRepositoryIssueReporter,
-    ) : this(RoomRepositoryContext(database, clock, scope, reporter))
+        channelIdentityMutation: ChannelIdentityMutation = ChannelIdentityMutex.PROCESS,
+    ) : this(RoomRepositoryContext(database, clock, scope, reporter, channelIdentityMutation))
 
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.fetchMessage(deduplicationKey, radioId)

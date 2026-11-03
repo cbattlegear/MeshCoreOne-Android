@@ -7,6 +7,8 @@ package com.meshcoreone.android.core.data.repository
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.database.MessageEntity
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.MessageDirection
+import com.meshcoreone.android.core.model.MessageStatus
 
 internal suspend fun RepositoryTransaction.deleteMessageDependents(
     radioId: RadioId,
@@ -27,8 +29,26 @@ internal suspend fun RepositoryTransaction.deleteContactMessages(key: EntityKey)
     database.messages().deleteContactMessages(key.radioId.value, key.id)
 }
 
-internal suspend fun RepositoryTransaction.deleteChannelMessages(radioId: RadioId, index: UByte) {
+internal suspend fun RepositoryTransaction.deleteChannelMessages(
+    radioId: RadioId, index: UByte, preserveUnresolved: Boolean = false,
+) {
     val messages = database.messages().newestForChannel(radioId.value, index.toLong(), -1)
-    deleteMessageDependents(radioId, messages, reactionsByMessage = true)
-    database.messages().deleteChannelMessages(radioId.value, index.toLong())
+    if (!preserveUnresolved) {
+        deleteMessageDependents(radioId, messages, reactionsByMessage = true)
+        database.messages().deleteChannelMessages(radioId.value, index.toLong())
+        return
+    }
+    for (message in messages) {
+        val unresolved = message.directionRawValue == MessageDirection.OUTGOING.rawValue &&
+            (message.statusRawValue in setOf(
+                MessageStatus.PENDING.rawValue, MessageStatus.SENDING.rawValue,
+                MessageStatus.RETRYING.rawValue, MessageStatus.FAILED.rawValue,
+            ) || database.pendingSends().forMessage(radioId.value, message.id).isNotEmpty())
+        if (unresolved) {
+            database.messages().setStatusUnlessDelivered(radioId.value, message.id, MessageStatus.FAILED.rawValue)
+        } else {
+            deleteMessageDependents(radioId, listOf(message), reactionsByMessage = true)
+            database.messages().delete(radioId.value, message.id)
+        }
+    }
 }

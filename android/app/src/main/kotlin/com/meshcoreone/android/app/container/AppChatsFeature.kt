@@ -693,7 +693,13 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     initiating.chatSendQueueService
                 }
                 decorateSender(object : ComposerSendPort by pinned {
-                    override fun canRestoreDraft() = isSameSlot()
+                    override suspend fun canRestoreDraft(): Boolean {
+                        if (!isSameSlot()) return false
+                        if (target !is ComposerTarget.Channel) return true
+                        val current = store.fetchChannel(radio, target.channel.index)
+                        return current != null && current.id == target.channel.id &&
+                            current.secret == target.channel.secret && current.isEnabled && isSameSlot()
+                    }
                     override fun creationOutcome(): ComposerCreationOutcome {
                         val snapshot = receipt.snapshot
                         return when (snapshot.state) {

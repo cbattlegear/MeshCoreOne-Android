@@ -37,7 +37,7 @@ sealed interface ComposerTarget {
  * the queue. Implementations validate length again and surface typed creation/enqueue failures.
  */
 interface ComposerSendPort {
-    fun canRestoreDraft(): Boolean = true
+    suspend fun canRestoreDraft(): Boolean = true
     /** Creation only, never queue acceptance or wire delivery. Read after a failed/cancelled create. */
     fun creationOutcome(): ComposerCreationOutcome = ComposerCreationOutcome.NotCommitted
 

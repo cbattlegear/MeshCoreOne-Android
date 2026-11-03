@@ -234,6 +234,10 @@ class ComposerStateHolder(
                         recoverCreation(text, acceptedPort, pendingId, acceptedRevision, storedRevision, cancelled)
                     } catch (recoveryFailure: Exception) {
                         diagnostics.report("sendRecovery", recoveryFailure)
+                        mutableState.update { it.copy(sendPhase = ComposerSendPhase.Failed(
+                            ComposerSendFailure.OTHER,
+                            pendingId != null || acceptedPort.creationOutcome() is ComposerCreationOutcome.Committed,
+                        )) }
                         cancelled.addSuppressed(recoveryFailure)
                     }
                 }
@@ -241,7 +245,18 @@ class ComposerStateHolder(
             throw cancelled
         } catch (failure: Throwable) {
             diagnostics.report("send", failure)
-            recoverCreation(text, acceptedPort, pendingId, acceptedRevision, storedRevision, failure)
+            try {
+                recoverCreation(text, acceptedPort, pendingId, acceptedRevision, storedRevision, failure)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (recoveryFailure: Exception) {
+                diagnostics.report("sendRecovery", recoveryFailure)
+                mutableState.update { it.copy(sendPhase = ComposerSendPhase.Failed(
+                    ComposerSendFailure.OTHER,
+                    pendingId != null || acceptedPort.creationOutcome() is ComposerCreationOutcome.Committed,
+                )) }
+                failure.addSuppressed(recoveryFailure)
+            }
         }
     }
 

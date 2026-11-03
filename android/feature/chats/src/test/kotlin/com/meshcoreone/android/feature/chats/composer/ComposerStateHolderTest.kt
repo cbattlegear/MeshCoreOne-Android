@@ -270,6 +270,23 @@ class ComposerStateHolderTest {
     }
 
     @Test
+    fun `typing and then explicitly clearing prevents delayed unsaved text restoration`() = scenario {
+        for (target in listOf<ComposerTarget>(ComposerTarget.Direct(alice), ComposerTarget.Channel(channel))) {
+            val rig = rig(target)
+            rig.port.createGate = CompletableDeferred()
+            rig.port.createFailure = MessageServiceException(MessageServiceError.NotConnected)
+            rig.holder.onDraftChanged("old accepted text")
+            assertTrue(rig.holder.send())
+            rig.holder.onDraftChanged("new text")
+            rig.holder.onDraftChanged("")
+            rig.port.createGate!!.complete(Unit)
+            assertEquals("", rig.state.draft)
+            assertNull(rig.drafts.values[target.conversationId])
+            assertTrue(rig.port.pendingMessages.isEmpty())
+        }
+    }
+
+    @Test
     fun `failure after the pending row exists leaves the draft empty and defers retry to the timeline`() = scenario {
         val rig = rig(ComposerTarget.Direct(alice))
         rig.port.enqueueFailure = ChatSendQueueServiceException(

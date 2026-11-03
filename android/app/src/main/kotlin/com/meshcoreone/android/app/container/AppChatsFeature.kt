@@ -28,6 +28,7 @@ import com.meshcoreone.android.feature.chats.rooms.*
 import com.meshcoreone.android.feature.chats.channels.*
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
+import com.meshcoreone.android.core.services.messaging.PendingMessageCreation
 import com.meshcoreone.android.core.services.notifications.NotificationService
 import java.time.Clock
 import java.time.Instant
@@ -60,6 +61,7 @@ import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.ZoneId
 
 class AppChatsFeature internal constructor(private val container: AppContainer) {
@@ -119,12 +121,29 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         return changes.map { current() }.stateIn(screenScope, SharingStarted.Eagerly, current())
     }
 
-    val drafts = object : TimelineDraftStore {
-        override fun get(conversationId: ChatConversationID) = app.draftStore.draft(conversationId)
-        override fun set(conversationId: ChatConversationID, text: String?) {
+    private val draftLock = Any()
+    private val draftRevisions = mutableMapOf<ChatConversationID, Long>()
+    private val unresolvedCreations = java.util.concurrent.ConcurrentHashMap<UUID, PendingMessageCreation>()
+    val drafts = object : ComposerDraftStore {
+        override fun get(conversationId: ChatConversationID) = synchronized(draftLock) {
+            app.draftStore.draft(conversationId)
+        }
+        override fun set(conversationId: ChatConversationID, text: String?) = synchronized(draftLock) {
+            draftRevisions[conversationId] = (draftRevisions[conversationId] ?: 0L) + 1
             if (text == null) app.draftStore.clearDraft(conversationId)
             else app.draftStore.setDraft(text, conversationId)
         }
+        override fun revision(conversationId: ChatConversationID) = synchronized(draftLock) {
+            draftRevisions[conversationId] ?: 0L
+        }
+        override fun restoreIfUnchanged(conversationId: ChatConversationID, revision: Long, text: String) =
+            synchronized(draftLock) {
+                if (this.revision(conversationId) != revision || get(conversationId) != null) false
+                else {
+                    set(conversationId, text)
+                    true
+                }
+            }
     }
 
     internal fun restoreNotificationDraft(
@@ -632,25 +651,95 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val diagnostics = TimelineDiagnostics { operation, failure -> report(operation, failure) }
     }
 
-    fun sender(radio: RadioId): ComposerSendPort = object : ComposerSendPort {
+    internal fun composer(
+        target: ComposerTarget,
+        environment: ComposerEnvironment,
+        screenScope: CoroutineScope,
+        decorateSender: (ComposerSendPort) -> ComposerSendPort = { it },
+    ): ComposerStateHolder {
+        val radio = target.conversationId.radioId
+        return ComposerStateHolder(
+            target, decorateSender(sender(radio)), drafts, environment, screenScope,
+            ComposerTimer { kotlinx.coroutines.delay(it) }, ComposerDiagnostics(::report),
+            sendScope = scope,
+            captureSendPort = {
+                val initiating = container.sessions.current
+                val receipt = PendingMessageCreation()
+                val captured = {
+                    if (initiating == null || initiating.token.radioId != radio || session(radio) !== initiating) {
+                        throw MessageServiceException(MessageServiceError.NotConnected)
+                    }
+                    initiating
+                }
+                val pinned = sender(radio, captured) {
+                    if (initiating == null || initiating.token.radioId != radio ||
+                        container.sessions.current !== initiating ||
+                        app.connectionState != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                    ) throw ChatSendQueueServiceException(ChatSendQueueServiceError.NotConnected)
+                    initiating.chatSendQueueService
+                }
+                decorateSender(object : ComposerSendPort by pinned {
+                    override fun creationOutcome(): ComposerCreationOutcome {
+                        val snapshot = receipt.snapshot
+                        return when (snapshot.state) {
+                            PendingMessageCreation.State.NOT_STARTED,
+                            PendingMessageCreation.State.NOT_COMMITTED -> ComposerCreationOutcome.NotCommitted
+                            PendingMessageCreation.State.COMMITTED ->
+                                ComposerCreationOutcome.Committed(checkNotNull(snapshot.message))
+                            PendingMessageCreation.State.WRITING,
+                            PendingMessageCreation.State.UNKNOWN -> {
+                                snapshot.message?.let { unresolvedCreations[it.id] = receipt }
+                                ComposerCreationOutcome.Uncertain(snapshot.message)
+                            }
+                        }
+                    }
+                    override suspend fun createPendingDirect(
+                        text: String, contact: ContactDTO, textType: TextType, replyToId: UUID?,
+                    ) = withContext(receipt) {
+                        pinned.createPendingDirect(text, contact, textType, replyToId)
+                    }
+                    override suspend fun createPendingChannel(
+                        text: String, channelIndex: UByte, radioId: RadioId, textType: TextType,
+                    ) = withContext(receipt) {
+                        pinned.createPendingChannel(text, channelIndex, radioId, textType)
+                    }
+                    override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) =
+                        pinned.enqueueChannel(envelope.copy(
+                            localNodeName = app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName,
+                        ))
+                })
+            },
+        )
+    }
+
+    fun sender(radio: RadioId): ComposerSendPort = sender(radio, { session(radio) }, { sendQueue(radio) })
+
+    private fun sender(
+        radio: RadioId,
+        acceptedSession: () -> RadioSessionContainer,
+        acceptedQueue: () -> ChatSendQueueService,
+    ): ComposerSendPort = object : ComposerSendPort {
         override suspend fun createPendingDirect(text: String, contact: ContactDTO, textType: TextType, replyToId: UUID?) =
-            session(radio).messageService.createPendingMessage(text, contact, textType, replyToId).also {
+            acceptedSession().messageService.createPendingMessage(text, contact, textType, replyToId).also {
                 app.messageEventStream.send(MessageEvent.DirectMessageReceived(it, contact))
                 app.refreshConversations()
             }
         override suspend fun createPendingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType) =
-            session(radio).messageService.createPendingChannelMessage(text, channelIndex, radioId, textType).also {
+            acceptedSession().messageService.createPendingChannelMessage(text, channelIndex, radioId, textType).also {
                 app.messageEventStream.send(MessageEvent.ChannelMessageReceived(it, channelIndex))
                 app.refreshConversations()
             }
         override suspend fun enqueueDM(envelope: DirectMessageEnvelope) =
-            sendQueue(radio).enqueueDM(envelope)
+            acceptedQueue().enqueueDM(envelope)
         override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) =
-            sendQueue(radio).enqueueChannel(envelope)
+            acceptedQueue().enqueueChannel(envelope)
         override suspend fun signalDMEnqueued(envelope: DirectMessageEnvelope) =
             sendQueue(radio).signalDMEnqueued(envelope)
-        override suspend fun recordLocalEnqueueFailure(messageId: UUID) =
-            failPending(savedMessage(radio, messageId))
+        override suspend fun recordLocalEnqueueFailure(messageId: UUID) {
+            if (store.fetchPendingSendsForMessage(EntityKey(radio, messageId)).isEmpty()) {
+                failPending(savedMessage(radio, messageId))
+            }
+        }
     }
 
     private suspend fun savedMessage(radio: RadioId, id: UUID): MessageDTO =

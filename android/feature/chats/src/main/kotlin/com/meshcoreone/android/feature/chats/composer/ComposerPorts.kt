@@ -12,6 +12,7 @@ import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.feature.chats.timeline.TimelineDraftStore
 import java.util.UUID
 import kotlinx.coroutines.flow.StateFlow
 
@@ -36,6 +37,9 @@ sealed interface ComposerTarget {
  * the queue. Implementations validate length again and surface typed creation/enqueue failures.
  */
 interface ComposerSendPort {
+    /** Creation only, never queue acceptance or wire delivery. Read after a failed/cancelled create. */
+    fun creationOutcome(): ComposerCreationOutcome = ComposerCreationOutcome.NotCommitted
+
     suspend fun createPendingDirect(
         text: String, contact: ContactDTO, textType: TextType = TextType.PLAIN, replyToId: UUID? = null,
     ): MessageDTO
@@ -50,6 +54,18 @@ interface ComposerSendPort {
 
     /** Mark the saved message failed unless delivered, publishing its actual status/event through the app adapter. */
     suspend fun recordLocalEnqueueFailure(messageId: UUID)
+}
+
+sealed interface ComposerCreationOutcome {
+    data object NotCommitted : ComposerCreationOutcome
+    data class Committed(val message: MessageDTO) : ComposerCreationOutcome
+    data class Uncertain(val message: MessageDTO?) : ComposerCreationOutcome
+}
+
+/** Process draft revisions fence recovery against typing (including typing then clearing) in another screen. */
+interface ComposerDraftStore : TimelineDraftStore {
+    fun revision(conversationId: ChatConversationID): Long
+    fun restoreIfUnchanged(conversationId: ChatConversationID, revision: Long, text: String): Boolean
 }
 
 /** The connected node as the composer sees it (iOS `appState.connectedDevice` subset). */

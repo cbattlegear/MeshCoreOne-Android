@@ -1,14 +1,19 @@
 # Issue #383: AppState collectors over the native BLE graph
 
-Status: **source-only, locally UNVERIFIED candidate** for independent review.
-No Kotlin compilation, test discovery, hosted acceptance or device result is
-claimed. This adds software controls to WP-303, not WP-205 completion or a new
-receipt for the historical #529 candidate.
+<!-- android-port-wp:WP-303 -->
+
+Status: **source-reviewed, execution-pending candidate**. No Kotlin compilation,
+test discovery or execution of the two new methods is claimed. This adds software
+controls to WP-303, not WP-205 completion or a new receipt for the historical
+#529 candidate.
 
 ## Binding and custody
 
-- Trusted main: `99479711bfdb7c621765f09d671068ca8b8318ce`, rechecked against
-  the remote before editing.
+- Trusted main for the reviewed source: `99479711bfdb7c621765f09d671068ca8b8318ce`.
+- Reconciled current main: `cd8a315ebe08e2b38d7817dc159a95314d1d6c67`.
+- Current-main reconciliation merge: `4ceb50dfd0048f3fe0a8208d71d0e8ab62771d31`,
+  with `cd8a315e` as its second parent. It preserves the exact reviewed test
+  blob; the final evidence refresh is a descendant of this merge.
 - Retained owner parent: `ba7a02e5927b2cad22f9c92cbe808dbccf26a8ce`.
 - Actual producer: session `b33644ad-3a9a-4a37-af40-9a50b34ced2a`, managed
   branch `cbattlegear-ble-integration`.
@@ -18,15 +23,18 @@ receipt for the historical #529 candidate.
 - Manifest SHA-256:
   `11120a20d04408b3d21fac09180412df0490cabf1dafb8a3c98fe83e0fad31e4`.
 
-The source candidate is parented directly to trusted main and contains only
-the two-path delta. A separate retention merge on the managed owner branch
-keeps that candidate reachable alongside the previously handed-off queue repair
-history, without rewriting either history or creating another branch. Only the
-main-parented source commit is eligible for this assignment's composition or
-review; the retention merge is not a test-only verification candidate. Before
-this delta, the test and relevant AppState and AppContainer production files
-were identical to trusted main. No production file, shared harness, prior test
-method or historical evidence file is changed by the source candidate.
+The reviewed source commit `944f87d51da7e8cb1fdc229688910191ecf22337`
+was directly based on `99479711`. Its test blob
+`968979214fa3fb203b0c3761237f06796462a4f2` is unchanged after reconciliation
+onto `cd8a315e`. The current branch's ordinary merge reports conflicts in
+ChatSendQueueService, ChannelQueryAccountingTest and park-wake evidence because
+its retained history predates the already-landed #543 repair. The current-main
+versions were selected for those paths; comparison against current main then
+shows only this collector test and evidence file changed. No unique local queue
+repair was discarded, and the retained owner merge was not placed in the
+candidate diff. The relevant AppState and AppContainer production files and the
+BLE fixture helpers are unchanged. No production file, shared harness or
+original test method is changed.
 
 The immutable #529 receipt still binds
 `73a98bcf621a4d75c421953c4004d70c12f4c05a` and its original three methods.
@@ -51,6 +59,15 @@ cancels the six dispatcher consumers, checks the first subscriber decrement
 while four standalone AppState jobs remain, then performs AppState teardown
 and checks the second decrement. No executed failure or successful test is
 claimed from that source diagnosis.
+
+Independent source review `1be` examined exact candidate
+`944f87d51da7e8cb1fdc229688910191ecf22337` / base
+`99479711bfdb7c621765f09d671068ca8b8318ce`; it found no blocking source defect.
+That review applies to the unchanged test blob above, not to the evidence
+refresh or runtime behavior. It explicitly notes that stale native callbacks
+alone do not reject every stale raw SelfInfo when no settings request is pending.
+Keep the existing `toolEvents` current/retired/current positive and negative
+controls; they are essential and remain byte-preserved.
 
 Trusted `reserve.py admit` accepted:
 
@@ -79,6 +96,13 @@ per-connection tasks.
 
 The existing production-composed fixture remains in use: AndroidGattFacade,
 BleTransport, runtime link/manager, AppContainer, RadioSessionContainer and Room.
+Since the original source review, current main merged #543's bounded queue
+retirement repair and added a reaction persistence mutex parameter to
+RadioSessionContainer. The candidate uses the current-main factory/graph and
+changes neither behavior. The exact #543 hosted run
+`41714959984` passed on head `f1c8220e676ff22ea3d355ec952a10f9447c84cd`;
+it verifies that merged teardown candidate only and did not execute the two
+new collector methods.
 The new optional Peer response overrides only the firmware AppStart reply when
 explicitly selected; its null default preserves all existing firmware responses.
 It does not inject a SettingsEvent or replace AppState, its connection port,
@@ -130,6 +154,9 @@ Observed with pinned native Windows Python `3.12.4`:
 - `python tools\android-port\controller\validate.py`: passed, `result=valid`.
 - `python tools\android-port\portmap.py`: passed, exit 0.
 - `git diff --check`: passed.
+- Current-main reconciliation check: passed; the candidate diff from
+  `cd8a315e` contains only the BLE collector test and this evidence file, and
+  the reviewed test blob remains `968979214fa3fb203b0c3761237f06796462a4f2`.
 
 `python tools\android-port\controller\execution_recovery.py status` still reports
 the retained `gradle-execution` owner
@@ -140,9 +167,9 @@ Gradle, runtime deployment, push or hosted dispatch was attempted.
 
 The declared verification is `android-scaffold` with the actual App unit-test
 runner (`:app:testDebugUnitTest`), subject to normal admission. Independent
-source review and fresh exact-candidate hosted positive discovery/execution of
-all five methods in the changed test file remain required. Do not copy, hash or
-commit another CI-result bundle.
+source review is complete for the unchanged test blob; fresh exact-candidate
+hosted positive discovery/execution of all five methods in the changed test
+file remains required. Do not copy, hash or commit another CI-result bundle.
 
 Physical Android BLE/CDM, OEM/background behavior, bond refresh, SDK/device proof
 and protected gates remain separate. The approved no-implicit-rearm adaptation,

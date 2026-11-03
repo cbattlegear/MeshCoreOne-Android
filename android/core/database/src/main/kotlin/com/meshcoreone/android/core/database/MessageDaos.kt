@@ -112,6 +112,14 @@ interface ReactionDao : RowWriter<ReactionEntity> {
 
 @Dao
 interface PendingSendDao : RowWriter<PendingSendEntity> {
+    @Query("SELECT * FROM pending_sends WHERE radioId = :radioId AND id = :id")
+    suspend fun byId(radioId: UUID, id: UUID): PendingSendEntity?
+    @Query("UPDATE pending_sends SET channelDispatchStateRawValue = 1, channelAttemptID = :attemptID WHERE radioId = :radioId AND id = :id AND messageID = :messageID AND kindRawValue = 1 AND channelOccupantID = :occupantID AND channelDispatchStateRawValue = 0 AND channelAttemptID IS NULL")
+    suspend fun beginChannelAttempt(radioId: UUID, id: UUID, messageID: UUID, occupantID: UUID, attemptID: UUID): Int
+    @Query("UPDATE pending_sends SET channelDispatchStateRawValue = :next, channelAttemptID = :nextAttemptID WHERE radioId = :radioId AND id = :id AND messageID = :messageID AND kindRawValue = 1 AND channelOccupantID = :occupantID AND channelDispatchStateRawValue = 1 AND channelAttemptID = :attemptID")
+    suspend fun settleChannelAttempt(radioId: UUID, id: UUID, messageID: UUID, occupantID: UUID, attemptID: UUID, next: Long, nextAttemptID: UUID?): Int
+    @Query("DELETE FROM pending_sends WHERE radioId = :radioId AND id = :id AND messageID = :messageID AND kindRawValue = 1 AND channelDispatchStateRawValue = 2 AND channelAttemptID = :attemptID")
+    suspend fun deleteAcceptedChannelAttempt(radioId: UUID, id: UUID, messageID: UUID, attemptID: UUID): Int
     @Query("SELECT * FROM pending_sends WHERE radioId = :radioId ORDER BY sequence") suspend fun forRadio(radioId: UUID): List<PendingSendEntity>
     @Query("SELECT * FROM pending_sends WHERE radioId = :radioId AND messageID = :messageID ORDER BY sequence")
     suspend fun forMessage(radioId: UUID, messageID: UUID): List<PendingSendEntity>

@@ -33,13 +33,15 @@ class RoomPersistenceStore private constructor(
     MessagePersisting by messages, HeardRepeatPersisting by messages, ReactionPersisting by messages,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
-    RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata {
+    RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
+    QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending {
     constructor(
         database: MeshCoreDatabase,
         scope: CoroutineScope,
         clock: Clock = Clock.systemUTC(),
         reporter: RepositoryIssueReporter = AndroidRepositoryIssueReporter,
-    ) : this(RoomRepositoryContext(database, clock, scope, reporter))
+        channelIdentityMutation: ChannelIdentityMutation = ChannelIdentityMutex.PROCESS,
+    ) : this(RoomRepositoryContext(database, clock, scope, reporter, channelIdentityMutation))
 
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.fetchMessage(deduplicationKey, radioId)

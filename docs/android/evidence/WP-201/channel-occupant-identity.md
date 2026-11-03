@@ -690,3 +690,67 @@ whitespace, not Kotlin/Room execution. The retained local Gradle execution owner
 was not changed or used. Run 41604742338 supplies the bounded storage evidence
 above, not passing consumer/whole-graph acceptance; df6 and the rendering support
 successor remain UNVERIFIED until exact-candidate hosted execution.
+
+## Nonactivated canonical producer inputs
+
+Coordinator assignment `call_BMdSgWyrFdD0TDyPEJZ3rURo` recovers the actual
+WP-308 no-overlap and semantic responses dated 2026-11-03T12:44:14Z and
+12:44:47Z. Together with the explicit WP-208 producer/queue serialization,
+this clears overlap for minimal input types only. It does not authorize service,
+UI, Room, DAO, runtime, history-policy or integration changes.
+
+Base `ed550ea094ddab8149d301499ee6f210bb7bf50e` is unchanged except for:
+
+- `d20ad3c7b6285f784a8951e9951954fd4bae91bd` extracts the existing
+  `ChannelHistoryScope` into its own file, preserving its fully qualified name,
+  constructor, snapshot conversion and value semantics.
+- `9a94ef69c860d8aa0cdcbfedb57cfe2cfbcda3d9` adds
+  `ChannelMessageCreation(messageID, origin, text, textType)` and
+  `ChannelSubmission(pendingID, origin, envelope)`, plus four authored contract
+  test methods. IDs have no defaults. Submission construction and copy reject
+  NULL/different occupant or a different channel index.
+
+The context is attribution, not proof creation, persistence evidence or a wire
+permit. Callers must capture the initiating authoritative context before save;
+timestamps/creation metadata remain service-owned, and producers must derive
+the envelope from the exact saved DTO, retaining existing local-node-name timing.
+These values perform no save, enqueue, retry or current-slot sampling. Existing
+MessagingContracts/SendEnvelopes ports, implementations and fakes are unchanged.
+No implementation consumes the new values in this candidate; the serialized
+producer/queue owners must perform their separately admitted adoption.
+
+Actual current WP-201 `modify` admissions passed under `wp-owned` for
+`ChannelHistoryScope.kt`, `ChannelHistoryPersisting.kt`,
+`ChannelSubmissionContracts.kt`, model `ChannelSubmissionContractTest.kt` and
+this evidence file. The historical claim attempt returned
+`Existing WP lease is bound to different source/base/manifest/backend`;
+it remains an audit fact, not a current identity receipt or transfer. Trusted
+99479711 AUTOMATION lines 12-23 and 205-211 plus the coordinator's correction
+permit this assigned, isolated, capability-admitted source work without changing
+that history. No reservation identity, revision or authorization was rewritten.
+
+For exact consumer base `cb4dbd64918ec84bfdb0a4a6a713299cf286b842`, only the
+new `ChannelHistoryScope.kt` path diff from d20ad3 and the two-path 9a94ef diff
+are required. The scope removal hunk applies only to cohorts already containing
+the old declaration in ChannelHistoryPersisting. Do not import the full history
+candidate or its parents merely for a type. A temporary Git index at cb4 accepted
+the scope addition and passed `git apply --cached --check` for the unchanged
+input delta. Temporary files were removed; no live consumer tree was edited.
+
+Source checks passed:
+`C:\Python312\python.exe tools\android-port\portmap.py`,
+`C:\Python312\python.exe tools\android-port\controller\validate.py` and
+`git diff --check`. The four new test methods are authored but NOT executed;
+no Kotlin compilation, Gradle, CI, push, physical-radio or acceptance credit is
+claimed. The retained local execution owner and all publication/integration
+holds remain unchanged.
+
+No persistence-result interface or placeholder operation is added. Real
+byte-identical insertion idempotence, typed conflicting-ID rejection and
+independently inspectable reconciliation still require an admitted actual
+storage implementation. A per-context mutex cannot fence a queue job that has
+not entered it; retained attempt rows alone lack the full original intent after
+pending cleanup. COMMITTED requires exact retained evidence, NOT_COMMITTED
+requires a genuine admission/owner-lifetime barrier, and unproved state must
+remain UNKNOWN. Creation and durable queue admission are separate; an in-memory
+request is not restart durability and missing rows never authorize recreation.

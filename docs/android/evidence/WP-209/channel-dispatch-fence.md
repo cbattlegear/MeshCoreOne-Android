@@ -71,6 +71,10 @@ quarantine, same-epoch rename, different epoch, clear and ABA, restore before/af
 interval, a fresh registry consuming a supplied epoch, unknown legacy intent, wrong connection/process
 or fence, and radio isolation of quarantine. These are authored methods, **zero executed/credited**.
 The fresh-registry test is not a real Room migration, process restart, transport or hardware test.
+WP-405's exact-object inspection found same-token/same-object reopening returned the old lease before
+checking quarantine. The follow-up candidate moves quarantine rejection before that success path;
+both dispatch-poisoning and producer-quarantine methods now assert factory reopening is rejected
+with the exact original cause. These added controls remain unexecuted.
 
 ## Actual checks and limitations
 

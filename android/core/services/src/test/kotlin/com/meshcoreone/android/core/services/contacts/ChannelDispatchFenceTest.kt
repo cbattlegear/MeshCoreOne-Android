@@ -196,6 +196,9 @@ class ChannelDispatchFenceTest {
         assertSame(failure, assertFailsWith<MeshCoreException.ConnectionLost> {
             f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> f.occupant }) { throw failure }
         })
+        assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+            f.fence.openSession(f.token(1), f.connection)
+        }.cause)
         assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.replace() }
         assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.send() }
         f.fence.retire(f.lease)
@@ -228,7 +231,11 @@ class ChannelDispatchFenceTest {
     @Test
     fun producerUncertainMutationQuarantinesOtherInstances() = runTest {
         val f = Fixture()
-        f.fence.withMutation(f.lease) { f.fence.quarantine(f.lease, MeshCoreException.Timeout()) }
+        val failure = MeshCoreException.Timeout()
+        f.fence.withMutation(f.lease) { f.fence.quarantine(f.lease, failure) }
+        assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+            f.fence.openSession(f.token(1), f.connection)
+        }.cause)
         assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.send() }
     }
 

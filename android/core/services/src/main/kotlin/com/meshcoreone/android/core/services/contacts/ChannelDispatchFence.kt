@@ -58,6 +58,7 @@ class ChannelDispatchFence(
      */
     fun openSession(token: SessionToken, connectionIdentity: Any): Lease = synchronized(stateLock) {
         if (epoch != null && epoch != token.epoch) throw ChannelDispatchFailure.RetiredSession()
+        uncertainRadios[token.radioId]?.let { throw ChannelDispatchFailure.UnsettledDispatch(it) }
         val previous = sessions[token.radioId]
         if (previous != null) {
             if (!previous.retired && previous.token == token && previous.connection === connectionIdentity) {
@@ -67,7 +68,6 @@ class ChannelDispatchFence(
                 throw ChannelDispatchFailure.RetiredSession()
             }
         }
-        uncertainRadios[token.radioId]?.let { throw ChannelDispatchFailure.UnsettledDispatch(it) }
         epoch = token.epoch
         Lease(this, token, connectionIdentity).also { sessions[token.radioId] = it }
     }

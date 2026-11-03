@@ -125,4 +125,29 @@ remains historical diagnostic evidence only; it does not verify the current-main
 integration commit or its eventual successor candidate.
 
 WP-302 owns mounted confirmation cancellation/re-entry evidence. No physical
-radio, Android device, signing, iOS or hardware execution is claimed here.
+radio, Android device, signing or hardware execution is claimed here. The
+passing SwiftData restore/export oracle is not an iOS-device run.
+
+### Exact current-base candidate diagnostics
+
+- Candidate `8841480ad2603c1d5c8184934c92af8761707d7c`, run
+  [41592559682, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41592559682),
+  completed successfully. It predates the serialized-admission and sync-fence
+  repairs and is historical only.
+- Candidate `45b590a3bc83c8da1ede7b189899bf50ca391615`, run
+  [41596125999, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41596125999),
+  failed three `ContactWriteRecoveryTests` assertions. The follow-up corrected
+  the block-reason precedence and used metadata newer than the radio snapshot in
+  the post-reconciliation retry cases.
+- Candidate `577989425c08fc673535e16d12060f432014557d`, based on current main
+  `796a872a3565a66c74f782b738a9ecb3c273fb25`, completed
+  [run 41597617286, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41597617286)
+  successfully. Every workflow job passed, including `One Linux Android build`
+  and its declared parallel Gradle validation/Android tasks. The build report
+  positively discovered all 18 `ContactWriteRecoveryTests` methods; the service
+  test task completed without failures. This is a feature-branch workflow
+  diagnostic, not a PR-bound protected check or merge/repair-acceptance gate.
+
+The local Gradle execution reservation remains held without cleanup evidence;
+no local Gradle command was run. The exact workflow logs remain the authoritative
+hosted evidence; no second CI-result bundle was committed.

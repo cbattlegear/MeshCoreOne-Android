@@ -17,7 +17,9 @@ import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.protocol.model.MeshContact
+import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
 import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
+import com.meshcoreone.android.core.protocol.session.MessageWriteDispatch
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import java.time.Duration
@@ -445,18 +447,27 @@ class MessageService(
             message
         }
 
-    private suspend fun <T> inlineWire(block: suspend () -> T): T {
+    private suspend fun <T> inlineWire(block: suspend (MessageWriteDispatch?) -> T): T {
         val receipt = currentCoroutineContext()[NotificationActionReceipt]
-        receipt?.wireStarted()
+        if (receipt == null) return block(null)
+        val dispatch = MessageWriteDispatch()
+        receipt.wireStarted()
         try {
-            val result = block()
-            receipt?.accepted()
+            val result = block(dispatch)
+            receipt.accepted()
             return result
+        } catch (cancelled: CancellationException) {
+            if (dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                receipt.wireNotDispatched()
+            } else {
+                receipt.uncertain()
+            }
+            throw cancelled
         } catch (rejected: MeshCoreException.DeviceError) {
-            receipt?.wireRejected()
+            receipt.wireRejected()
             throw rejected
         } catch (failure: Exception) {
-            receipt?.uncertain()
+            receipt.uncertain()
             throw failure
         }
     }
@@ -474,7 +485,11 @@ class MessageService(
                 val info = withPoolBackoff(3u) {
                     dmOperations.withLock {
                         checkIdentity("sendDirectMessage.wire")
-                        inlineWire { session.sendMessage(contact.publicKey, text, Instant.ofEpochSecond(message.timestamp.toLong())) }
+                        inlineWire { dispatch ->
+                            val timestamp = Instant.ofEpochSecond(message.timestamp.toLong())
+                            if (dispatch == null) session.sendMessage(contact.publicKey, text, timestamp)
+                            else session.sendMessage(contact.publicKey, text, timestamp, dispatch = dispatch)
+                        }
                     }
                 }
                 Triple(info, tracking, predicted)
@@ -804,7 +819,11 @@ class MessageService(
                 ownership.check("sendChannelMessage.persisted")
                 withPoolBackoff(2u) {
                     checkIdentity("sendChannelMessage.wire")
-                    inlineWire { session.sendChannelMessage(channelIndex, text, Instant.ofEpochSecond(dto.timestamp.toLong())) }
+                    inlineWire { dispatch ->
+                        val timestamp = Instant.ofEpochSecond(dto.timestamp.toLong())
+                        if (dispatch == null) session.sendChannelMessage(channelIndex, text, timestamp)
+                        else session.sendChannelMessage(channelIndex, text, timestamp, dispatch = dispatch)
+                    }
                 }
             }
             ownership.check("sendChannelMessage.accepted")

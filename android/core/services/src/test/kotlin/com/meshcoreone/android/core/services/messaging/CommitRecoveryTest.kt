@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationActionRe
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
+import com.meshcoreone.android.core.protocol.session.MessageWriteDispatch
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
 import java.time.Instant
@@ -167,6 +168,29 @@ class CommitRecoveryTest {
 
     @TestFactory fun inlineAcceptanceBoundaries() = Destination.entries.flatMap { destination ->
         listOf(
+            native("${destination}_cancelBehindActualSerializerProvesUnsentAndAllowsOneRetry") {
+                val h = Harness(this); h.start()
+                val holding = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+                h.transport.beforeReply = {
+                    if (it[0] == CommandCode.RESET_PATH.rawValue) { holding.complete(Unit); release.await() }
+                }
+                val priorCommand = backgroundScope.async { h.session.resetPath(TARGET) }
+                holding.await()
+                val receipt = NotificationActionReceipt()
+                val call = backgroundScope.async(receipt) { destination.send(h.service) }
+                runCurrent()
+                assertEquals(NotificationActionReceipt.State.IN_FLIGHT, receipt.state)
+                assertTrue(h.sends(destination.wire).isEmpty())
+                call.cancelAndJoin()
+                assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+                assertFalse(receipt.preventsReplay)
+                assertTrue(h.sends(destination.wire).isEmpty())
+                release.complete(Unit); priorCommand.await(); runCurrent()
+                assertTrue(h.sends(destination.wire).isEmpty())
+                withContext(receipt) { destination.send(h.service) }
+                assertTrue(receipt.isAccepted)
+                assertEquals(1, h.sends(destination.wire).size)
+            },
             native("${destination}_acceptedBeforeCallerCancelIsNotFailedOrReplayed") {
                 val h = Harness(this); h.start()
                 val accepted = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
@@ -197,12 +221,21 @@ class CommitRecoveryTest {
                 assertEquals(NotificationActionReceipt.State.READY, receipt.state)
                 assertFalse(receipt.preventsReplay); assertTrue(h.sends(destination.wire).isEmpty())
             },
-            native("${destination}_missingWireReplyIsUncertainAndCannotAuthorizeReplay") {
+            native("${destination}_mayHaveWrittenWithoutReplyIsUncertainAndCannotAuthorizeReplay") {
                 val h = Harness(this); h.start()
-                h.transport.beforeReply = { if (it[0] == destination.wire.rawValue) awaitCancellation() }
+                val enteredTransport = CompletableDeferred<Unit>()
+                val waitForReply = CompletableDeferred<Unit>()
+                h.transport.beforeReply = {
+                    if (it[0] == destination.wire.rawValue) {
+                        enteredTransport.complete(Unit)
+                        waitForReply.await()
+                    }
+                }
                 val receipt = NotificationActionReceipt()
                 val call = backgroundScope.async(receipt) { destination.send(h.service) }
-                runCurrent(); assertEquals(NotificationActionReceipt.State.IN_FLIGHT, receipt.state)
+                enteredTransport.await()
+                assertEquals(1, h.sends(destination.wire).size)
+                assertEquals(NotificationActionReceipt.State.IN_FLIGHT, receipt.state)
                 call.cancelAndJoin()
                 assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
                 assertTrue(receipt.preventsReplay); assertFalse(receipt.isAccepted)
@@ -244,8 +277,20 @@ class CommitRecoveryTest {
                         actual.sendMessage(destination, text, timestamp, attempt).also {
                             h.signals.set(token(generation = 2), DeviceConnectionState.READY)
                         }
+                    override suspend fun sendMessage(
+                        destination: Bytes, text: String, timestamp: Instant, attempt: UByte, dispatch: MessageWriteDispatch,
+                    ): MessageSentInfo =
+                        actual.sendMessage(destination, text, timestamp, attempt, dispatch).also {
+                            h.signals.set(token(generation = 2), DeviceConnectionState.READY)
+                        }
                     override suspend fun sendChannelMessage(channel: UByte, text: String, timestamp: Instant) {
                         actual.sendChannelMessage(channel, text, timestamp)
+                        h.signals.set(token(generation = 2), DeviceConnectionState.READY)
+                    }
+                    override suspend fun sendChannelMessage(
+                        channel: UByte, text: String, timestamp: Instant, dispatch: MessageWriteDispatch,
+                    ) {
+                        actual.sendChannelMessage(channel, text, timestamp, dispatch)
                         h.signals.set(token(generation = 2), DeviceConnectionState.READY)
                     }
                 }

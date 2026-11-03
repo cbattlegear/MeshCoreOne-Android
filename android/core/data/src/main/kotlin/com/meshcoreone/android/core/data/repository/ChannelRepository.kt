@@ -72,9 +72,6 @@ internal class ChannelRepository(
     override suspend fun saveChannel(dto: ChannelDTO) = context.channelWrite("saveChannel", identityScope = identityScope) {
         val existing = database.channels().byId(dto.radioId.value, dto.id)
         val row = existing?.applying(dto) ?: dto.toEntity()
-        if (existing != null && existing.secret != row.secret) {
-            deleteChannelMessages(dto.radioId, row.toDTO().index, preserveUnresolved = true)
-        }
         database.channels().upsert(row)
         updateOccupant(existing, row, authoritative = false)
         save()

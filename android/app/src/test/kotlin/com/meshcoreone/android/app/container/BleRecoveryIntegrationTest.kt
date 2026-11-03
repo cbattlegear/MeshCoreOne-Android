@@ -82,8 +82,9 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             val peer = f.peers.single()
             f.until("AppState collectors are installed") { state.activeSessionJobCount == 4 }
             assertTrue(state.hasSettingsEventsJob)
+            assertEquals(6, state.messageEventDispatcher.activeJobCount)
             val subscribers = graph.syncCoordinator.dataEventBroadcaster.subscriberCount
-            assertTrue(subscribers > 0)
+            assertTrue(subscribers >= 2)
             val version = state.servicesVersion.value
 
             f.refreshDeviceInfo(graph, peer, "Observed")
@@ -91,11 +92,21 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             val stored = assertNotNull(store.fetchDevice(f.target.deviceId))
             val connected = assertNotNull(f.manager.connectedDevice)
 
+            state.messageEventDispatcher.cancelAll()
+            f.pump()
+            assertEquals(0, state.messageEventDispatcher.activeJobCount)
+            assertEquals(4, state.activeSessionJobCount,
+                "dispatcher cancellation must not cancel the standalone AppState collectors")
+            assertEquals(subscribers - 1, graph.syncCoordinator.dataEventBroadcaster.subscriberCount,
+                "dispatcher owns one sync-data subscription")
+
             state.tearDownAppStateSessionState()
             f.pump()
+            assertEquals(0, state.messageEventDispatcher.activeJobCount)
             assertFalse(state.hasSettingsEventsJob)
             assertEquals(0, state.activeSessionJobCount)
-            assertEquals(subscribers - 1, graph.syncCoordinator.dataEventBroadcaster.subscriberCount)
+            assertEquals(subscribers - 2, graph.syncCoordinator.dataEventBroadcaster.subscriberCount,
+                "AppState teardown also retires the standalone sync-data subscription")
             assertFalse(graph.isTornDown, "AppState cancellation must not retire the radio graph")
             assertSame(graph, f.container.sessions.current)
             assertEquals(DeviceConnectionState.READY, f.manager.connectionState)
@@ -108,6 +119,7 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             f.runOperation { state.wireServicesIfConnected() }
             f.until("AppState collectors are reinstalled") { state.activeSessionJobCount == 4 }
             assertTrue(state.hasSettingsEventsJob)
+            assertEquals(6, state.messageEventDispatcher.activeJobCount)
             assertEquals(subscribers, graph.syncCoordinator.dataEventBroadcaster.subscriberCount)
             assertEquals(version, state.servicesVersion.value, "same-graph rewire is not a new service generation")
             f.refreshDeviceInfo(graph, peer, "Resubscribed")
@@ -127,8 +139,9 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             val old = assertNotNull(f.container.sessions.current)
             val oldPeer = f.peers.single()
             f.until("first AppState collectors are installed") { state.activeSessionJobCount == 4 }
+            assertEquals(6, state.messageEventDispatcher.activeJobCount)
             val subscribers = old.syncCoordinator.dataEventBroadcaster.subscriberCount
-            assertTrue(subscribers > 0)
+            assertTrue(subscribers >= 2)
             f.refreshDeviceInfo(old, oldPeer, "Before loss")
             f.awaitDeviceName("Before loss")
             val stored = assertNotNull(store.fetchDevice(f.target.deviceId))
@@ -140,6 +153,7 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
                     state.activeSessionJobCount == 0 && !state.hasSettingsEventsJob &&
                     state.syncCoordinator == null
             }
+            assertEquals(0, state.messageEventDispatcher.activeJobCount)
             assertEquals(0, old.syncCoordinator.dataEventBroadcaster.subscriberCount)
             assertEquals(1, f.peers.size, "collector retirement must not implicitly rearm BLE")
             assertEquals(stored, store.fetchDevice(f.target.deviceId))
@@ -155,6 +169,7 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             assertEquals(old.token.radioId, fresh.token.radioId)
             assertSame(fresh.syncCoordinator, state.syncCoordinator)
             assertTrue(state.hasSettingsEventsJob)
+            assertEquals(6, state.messageEventDispatcher.activeJobCount)
             assertEquals(subscribers, fresh.syncCoordinator.dataEventBroadcaster.subscriberCount)
             assertEquals(0, old.syncCoordinator.dataEventBroadcaster.subscriberCount)
             assertEquals(version + 1, state.servicesVersion.value)
@@ -177,6 +192,7 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             f.awaitDeviceName("Still subscribed")
             assertEquals(stored.radioId, store.fetchDevice(f.target.deviceId)?.radioId)
             assertEquals(4, state.activeSessionJobCount)
+            assertEquals(6, state.messageEventDispatcher.activeJobCount)
             assertEquals(subscribers, fresh.syncCoordinator.dataEventBroadcaster.subscriberCount)
         } finally { f.close() }
     }

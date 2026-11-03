@@ -42,6 +42,16 @@ not imported, executed or assumed here. Future composition must review their
 token-owned installation/reuse/retirement semantics against these assertions.
 The paused #508 consumer was not inspected or advanced.
 
+Source candidate `9312e184db53930660a1e483523e773185a95852` is withdrawn:
+a853 identified that teardown cancels two sync-data subscriptions, not one.
+Source tracing confirmed `RadioSessionContainer.subscribeMessageEvents` supplies
+the second stream to `MessageEventDispatcher`, whose cancellation unregisters
+it in the broadcaster flow's `finally`. The corrected successor separately
+cancels the six dispatcher consumers, checks the first subscriber decrement
+while four standalone AppState jobs remain, then performs AppState teardown
+and checks the second decrement. No executed failure or successful test is
+claimed from that source diagnosis.
+
 Trusted `reserve.py admit` accepted:
 
 - `android/app/src/test/kotlin/com/meshcoreone/android/app/container/BleRecoveryIntegrationTest.kt`
@@ -59,7 +69,9 @@ released or used as a pre-edit lock.
 `ObserverBridge.onServicesAvailable` and `onConnectionLost` call the actual
 `AppState.onSessionStateChanged` through the injected main context.
 `AppState.wireServicesIfConnected` installs four session-group collectors:
-settings, sync-data, advertisement and RX-log. Teardown cancels those jobs;
+settings, sync-data, advertisement and RX-log. The separately owned
+MessageEventDispatcher installs six consumers, including another sync-data
+subscription from the same graph. Teardown cancels both groups;
 settings closes its single-consumer subscription in `finally`. Rewiring on the
 same graph replaces subscriptions without bumping the graph's services version.
 The pinned `AppState+Wiring.swift` cancels/re-subscribes those corresponding
@@ -85,13 +97,15 @@ New JUnit methods:
 
 1. `appStateSettingsCollectorCanCancelAndResubscribeOnTheSameNativeGraph`:
    a positive native settings query updates manager and Room; actual AppState
-   cancellation leaves zero active session-group jobs and one fewer sync-data
-   subscriber while the graph remains READY. A completed native query after
+   dispatcher cancellation leaves zero dispatcher jobs and one fewer sync-data
+   subscriber while four standalone AppState jobs remain. AppState teardown
+   then leaves zero jobs in both groups and two fewer sync-data subscribers
+   while the graph remains READY. A completed native query after
    cancellation cannot change either snapshot. Actual same-graph rewiring
-   restores four jobs and the original subscriber count without a services
+   restores four standalone jobs, six dispatcher jobs and the original subscriber count without a services
    version bump. A new query must update both manager and Room.
 2. `nativeGraphReplacementRetiresAppStateCollectorsAndConsumesFreshSettingsOnly`:
-   native loss must retire AppState jobs/settings wiring and all old graph
+   native loss must retire both AppState and dispatcher jobs/settings wiring and all old graph
    sync-data subscriptions, with no implicit BLE rearm. Explicit health reconnect
    must install one fresh graph/token and its four collectors, retain the radio
    partition and bump services version once. A fresh settings query is a positive

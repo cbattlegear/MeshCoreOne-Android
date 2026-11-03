@@ -13,6 +13,22 @@ internal class ChannelRepository(
     private val context: RoomRepositoryContext,
     private val rooms: RoomRepository,
 ) : ChannelPersisting {
+    override suspend fun fetchChannelOccupantID(radioId: RadioId, index: UByte): UUID? =
+        fetchChannelOccupantSnapshot(radioId, index)?.occupantID
+
+    override suspend fun fetchChannelOccupantSnapshot(radioId: RadioId, index: UByte): ChannelOccupantSnapshot? =
+        context.read("fetchChannelOccupantID") {
+            val channel = database.channels().forIndex(radioId.value, index.toLong()).singleOrNull()
+            if (channel == null || !channel.isEnabled) null
+            else database.channelOccupants().forIndex(radioId.value, index.toLong())
+                ?.let { ChannelOccupantSnapshot(channel.toDTO(), it) }
+        }
+
+    override suspend fun invalidateChannelOccupant(radioId: RadioId, index: UByte) =
+        context.channelWrite("invalidateChannelOccupant") {
+            if (database.channelOccupants().invalidate(radioId.value, index.toLong()) > 0) save()
+        }
+
     override suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO> = context.read("fetchChannels") {
         database.channels().forRadio(radioId.value).map { it.toDTO() }.snapshot()
     }
@@ -26,17 +42,23 @@ internal class ChannelRepository(
     }
 
     override suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): UUID =
-        context.write("saveChannelInfo", flushBeforeRollback = true) {
+        context.channelWrite("saveChannelInfo", flushBeforeRollback = true) {
             val existing = database.channels().forIndex(radioId.value, info.index.toLong()).firstOrNull()
             val row = if (existing != null) applyingRadioInfo(existing, info) else ChannelDTO.fromInfo(radioId, info).toEntity()
             database.channels().upsert(row)
+            updateOccupant(existing, row)
             save()
             row.id
         }
 
-    override suspend fun saveChannel(dto: ChannelDTO) = context.write("saveChannel") {
+    override suspend fun saveChannel(dto: ChannelDTO) = context.channelWrite("saveChannel") {
         val existing = database.channels().byId(dto.radioId.value, dto.id)
-        database.channels().upsert(existing?.applying(dto) ?: dto.toEntity())
+        val row = existing?.applying(dto) ?: dto.toEntity()
+        if (existing != null && existing.secret != row.secret) {
+            deleteChannelMessages(dto.radioId, row.toDTO().index, preserveUnresolved = true)
+        }
+        database.channels().upsert(row)
+        updateOccupant(existing, row)
         save()
     }
 
@@ -45,23 +67,26 @@ internal class ChannelRepository(
         configured: SnapshotList<ChannelInfo>,
         unconfiguredIndices: SnapshotList<UByte>,
         pruneBeyond: UByte?,
-    ): SnapshotList<ChannelDTO> = context.write("batchSaveChannels", flushBeforeRollback = true) {
+    ): SnapshotList<ChannelDTO> = context.channelWrite("batchSaveChannels", flushBeforeRollback = true) {
         val byIndex = LinkedHashMap<Long, ChannelEntity>()
         for (row in database.channels().forRadio(radioId.value)) byIndex.putIfAbsent(row.index, row)
         for (info in configured) {
             val existing = byIndex[info.index.toLong()]
             val row = if (existing == null) ChannelDTO.fromInfo(radioId, info).toEntity() else applyingRadioInfo(existing, info)
             database.channels().upsert(row)
+            updateOccupant(existing, row)
             byIndex[row.index] = row
         }
         for (index in unconfiguredIndices) {
-            deleteChannelMessages(radioId, index)
+            deleteChannelMessages(radioId, index, preserveUnresolved = true)
+            database.channelOccupants().invalidate(radioId.value, index.toLong())
             byIndex.remove(index.toLong())?.let { database.channels().delete(radioId.value, it.id) }
         }
         if (pruneBeyond != null) {
             for ((index, row) in byIndex.toMap()) {
                 if (index >= pruneBeyond.toLong()) {
-                    deleteChannelMessages(radioId, row.toDTO().index)
+                    deleteChannelMessages(radioId, row.toDTO().index, preserveUnresolved = true)
+                    database.channelOccupants().invalidate(radioId.value, index)
                     database.channels().delete(radioId.value, row.id)
                     byIndex.remove(index)
                 }
@@ -73,15 +98,27 @@ internal class ChannelRepository(
 
     private suspend fun RepositoryTransaction.applyingRadioInfo(row: ChannelEntity, info: ChannelInfo): ChannelEntity {
         if (row.secret == info.secret) return row.copy(name = info.name, secret = info.secret)
-        deleteChannelMessages(RadioId(row.radioId), row.toDTO().index)
+        deleteChannelMessages(RadioId(row.radioId), row.toDTO().index, preserveUnresolved = true)
         return row.copy(name = info.name, secret = info.secret, lastMessageDate = null, unreadCount = 0, unreadMentionCount = 0)
     }
 
-    override suspend fun deleteChannel(key: EntityKey) = context.write("deleteChannel", flushBeforeRollback = true) {
-        val row = database.channels().byId(key.radioId.value, key.id) ?: return@write
-        deleteChannelMessages(key.radioId, row.toDTO().index)
+    override suspend fun deleteChannel(key: EntityKey) = context.channelWrite("deleteChannel", flushBeforeRollback = true) {
+        val row = database.channels().byId(key.radioId.value, key.id) ?: return@channelWrite
+        deleteChannelMessages(key.radioId, row.toDTO().index, preserveUnresolved = true)
+        database.channelOccupants().invalidate(key.radioId.value, row.index)
         database.channels().delete(key.radioId.value, key.id)
         save()
+    }
+
+    private suspend fun RepositoryTransaction.updateOccupant(previous: ChannelEntity?, row: ChannelEntity) {
+        val occupants = database.channelOccupants()
+        if (!row.isEnabled || database.channels().forIndex(row.radioId, row.index).size != 1) {
+            occupants.invalidate(row.radioId, row.index)
+        } else if (previous == null || !previous.isEnabled || previous.secret != row.secret ||
+            occupants.forIndex(row.radioId, row.index) == null
+        ) {
+            occupants.upsert(ChannelOccupantEntity(row.radioId, row.index, UUID.randomUUID()))
+        }
     }
 
     override suspend fun deleteMessagesForChannel(radioId: RadioId, channelIndex: UByte) =

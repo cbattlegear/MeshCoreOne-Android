@@ -142,6 +142,46 @@ guard was relaxed. Available reports: 6,358 discovered, 6,357 passed, one failed
 zero errors/skips; mandatory App, data, services and other reports were absent.
 The composed `df6e14a25` identity successor has no data execution credit here.
 
+Fifth hosted run [41608375025](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41608375025)
+at exact `53620897f8ab80e4c3e4740cd2c12999cd93e1e1` passed all 309 runtime
+tests with zero failures/errors/skips. Services discovered 2,833 tests and failed
+only `ChannelDispatchFenceTest.ambiguousFailurePoisonsRadioAcrossRetirementAndReconnect`
+at its throwable-reference assertion, line 352. The fence producer retains that
+fixture correction. Overall available reports discovered 11,896 tests, 11,895
+passed, one failed, zero errors/skips; mandatory App/UI reports were absent.
+Controller/workflow policy and Swift codec oracle passed. Runtime execution is
+bounded evidence, not acceptance of missing App integration or the whole run.
+
+## Separate durable navigation prerequisite (#538)
+
+After the runtime slice passed, the actual WP-207 `modify` operation for
+`android/core/runtime/src/main/kotlin/com/meshcoreone/android/core/runtime/ConnectionManager.kt`
+was admitted by `wp-owned`. Producer custody is a separate requirement: the
+WP-302 producer identified `cb42a0789` manager lifecycle-stamp/capture/currentness
+and registry/graph commit boundaries, plus the single graph public-key addition
+in `3a372fd70`, as its immutable support hunks. These have been inspected, not
+imported or replaced. Its dirty AppContainer/navigation consumers remain there.
+
+No manager/session-bound durable transition receipt, route-journal transaction
+contract or supersession/publication barrier exists in this candidate's runtime
+or contracts. Issue #538 explicitly leaves the cross-store design and producer
+identity/tombstone semantics unfrozen. A revoked dispatch handle cannot certify
+absence of a successor or an adoption in progress while UI state is DISCONNECTED.
+Capturing a new revision after retirement can capture the successor; requiring
+the predecessor's old revision unchanged rejects normal explicit disconnect.
+An additive in-memory stamp cannot close either crash-ordering gap.
+
+The required producer contract must order exact owner/session/adoption
+transitions and route supersession durably outside lifecycle locks, then
+revalidate their receipt with navigation CAS under manager -> registry -> graph
+-> app ordering before observable publication. Same-radio retained selection
+must remain deliberate. Back/tab ingress must retain UI-observed revision and
+state, including a newer observed revision while an earlier input is unsettled;
+cancelled predictive Back is not a committed navigation/supersession. The
+isolated model's conservative block is not an approved production UX policy.
+Implementation remains blocked on that actual cross-store API and exact-hunk
+serialization, not on permission to create a placeholder or default receipt.
+
 Full production ChannelService wiring is blocked by its owner's frozen WP-405
 dispatch/UUID-receipt/uncertainty cohort; MessageService wiring remains its current
 producer's work. No interface-only or fake-only result completes that integration.

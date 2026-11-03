@@ -113,6 +113,13 @@ consent, and once-only delivery accounting. It is uncompiled/unexecuted.
 The complementary actual-coordinator schedule supersedes the lookup revision
 during retry and asserts that stale completion adds no state publication,
 navigation, consent, failure or consumption, retaining the retryable delivery.
+An additional authored actual-coordinator schedule cancels the retry caller
+immediately after the real `WrongTarget` publication, before the parent can
+consume the route result, on standard and unconfined test dispatchers. It
+asserts visible failure/revision-only publication, cancellation propagation,
+exact terminal delivery accounting and no replay via retry, duplicate submit,
+or old-attempt actions. This source is uncompiled/unexecuted; it does not
+establish cancellation-at-WrongTarget execution evidence.
 
 The adapter-only successor `1fec5c1c7751fd80989cb5d09a12b5dd7debee09`
 did not close the consumer failure path: the router still used `lookupOrNull`.

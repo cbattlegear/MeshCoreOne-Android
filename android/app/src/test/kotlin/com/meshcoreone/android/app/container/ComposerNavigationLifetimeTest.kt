@@ -263,7 +263,11 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(peerKey, "Lifetime peer")
             radio.respond = { frame ->
-                if (frame[0].toInt() in 2..3) listOf(Bytes.of(1, if (channel) 6 else 2)) else null
+                when (frame[0].toInt()) {
+                    2, 3 -> listOf(Bytes.of(1, if (channel) 6 else 2))
+                    0x20 -> listOf(Bytes.of(0))
+                    else -> null
+                }
             }
         }
         try {
@@ -392,7 +396,11 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             if (replaceSlot) {
                 val secret = Bytes(ByteArray(16) { 9 })
                 if (successfulReplacedSave) {
+                    val writesBefore = h.links.radios.single().sent.count { it[0].toInt() == 0x20 }
                     initiating.channelService.setChannelWithSecret(radio, slot.index, slot.name, secret)
+                    assertEquals(writesBefore + 1,
+                        h.links.radios.single().sent.count { it[0].toInt() == 0x20 })
+                    assertEquals(secret, requireNotNull(store.fetchChannel(radio, slot.index)).secret)
                 } else {
                     store.saveChannel(slot.copy(secret = secret))
                     h.appState.handleChannelSlotOccupantChanged(radio, setOf(slot.index))

@@ -351,9 +351,13 @@ lifecycle=RESUMED`; its printed host semantics included the contact and chooser,
 not a completed persistence action. This establishes no service invocation in
 that observed window, not the reason encoding/selection did not reach it.
 Both `realNavigationPredictiveBackCancellationPreservesAnInFlightAvatarWrite`
-variants timed out at line 165, the crop-Choose presentation wait after injected
-picker return, before any predictive Back event. Their Back/held-write assertions
-therefore did not execute.
+variants timed out at line 165 before any predictive Back event. The initial
+evidence/report attributed that line to crop presentation; that attribution was
+incorrect. Immutable `f54bd768c` line 165 is the `entered.isCompleted` held-service
+entry wait, after the crop Choose click at line 164. The crop presentation wait
+is lines 160-163 and returned. Thus both variants reached crop confirmation but
+did not observe service entry within five seconds; why remains unproven.
+Their subsequent saving, Back and held-write assertions did not execute.
 
 API31's `saveContinuesWhenTheProfileRowLeavesTheLazyViewport` and
 `savingAnnouncesProgressAndPreventsASecondSelectionUntilTheStoreCompletes`

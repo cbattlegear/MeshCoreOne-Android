@@ -174,3 +174,62 @@ or whole-current-base verification is claimed by this candidate's run.
 Exact current-base review/merge remains the coordinator's separate action.
 No PR was opened, no historical reservation or local execution hold was
 released, and no whole-WP or device/hardware acceptance is claimed.
+
+## Current-main reviewable composition
+
+The subsequent coordinator assignment continues this same bounded #406 concern,
+not the other reaction/actions work or the nonactivated channel-history feature.
+Live main is `99479711bfdb7c621765f09d671068ca8b8318ce`; its merge base with
+published `446ba8da0eaade9da5d3606c1d802b4f74548696` is
+`796a872a3565a66c74f782b738a9ecb3c273fb25`. The ten-behind/seven-ahead comparison
+does not mean ten intervening product changes: the exact main tree delta is only
+the merged BLE integration test/evidence described above. An ordinary merge,
+`2395d20ec0f7335494ce39cbd7b259d657973476`, adds exactly those two paths and
+preserves all five replay Kotlin blobs, including the original nine and 30 tests.
+There is no rebase, force push, cherry-pick or adoption of another producer.
+
+Fresh trusted `reserve.py admit` calls passed for all three production files
+with `modify-related-consumer` / `reviewed-support-consumer`, both App test files
+with `add-or-update-related-test` / `reviewed-support-test`, this evidence with
+`record-evidence` / `wp-owned`, and the deviation with `modify` / `wp-owned`.
+The scoped claim again refused
+`Existing WP lease is bound to different source/base/manifest/backend`.
+Historical WP-309 attempt `c2707711-5b8b-4bfb-8d51-ada7caaf12a4`, revision 5,
+was not adopted, evolved, released or recreated.
+
+Exact producer reconciliation uses published immutable Git/server diffs and
+specific seam messages, not session names or assumed handoff:
+
+- Messaging producer `aa4b9d95-ca8d-4023-bb04-049e969e6d6c`, #530 head
+  `0d67cfa6e2c8009b46621f29f15f01a97ae0a84e`, changes App draft revisions,
+  pending-message creation/committed recovery, session-pinned send/enqueue and
+  resend guards. It does not change `prepareTimelineMessages`, reaction queues,
+  or the history fetch methods. Its identical `PersistenceStoreError` import
+  is a deterministic textual overlap, not shared replay-state ownership.
+- Persistence producer `b5a401f1-8ec2-46e2-96b8-325468cd9761`, published head
+  `6fd2f90411c140b62f2de8c4c20a0a78a9c32ee1`, has no path intersection with
+  this slice. `ChannelHistoryPersisting` is explicitly separate from
+  `MessagePersisting` and nonactivated. Its proposed reads require initiating
+  occupant proof, reject `UNBOUND_HISTORY` instead of silently filtering history,
+  and confer no wire authority. This replay slice changes none of those APIs,
+  existing timeline queries, `MessageDTO`, pending-send origin, or unbound UX.
+- Both actual producers received the exact replay symbols and pending-object
+  distinction for any unpushed semantic collision. At composition time their
+  responses were pending. The published evidence establishes disjoint edits,
+  not global custody clearance or release of either producer's work; a newly
+  reported actual collision still requires serialization. No other worktree
+  was inspected or modified.
+
+The ordinary merge imports neither #530 nor #535/#537, grants no dependency
+unlock, and does not treat query storage or a committed message as completed
+dispatch. Current input preflight, manifest validation, traceability, semantic
+source check and whitespace check passed. The retained local execution owner
+is untouched; hosted PR-triggered checks and independent exact-bound review
+remain separate requirements.
+
+Historical run
+[41604460960](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41604460960)
+was `workflow_dispatch`, attempt 1, for parent
+`0ee2a57a900d622e1e1768a2c2c27b076720bf59`, not a pass for evidence-only
+`446ba8da0` or this current-main composition. Subsequent PR metadata and its
+authenticated bounded scope must identify their own exact base/head/run.

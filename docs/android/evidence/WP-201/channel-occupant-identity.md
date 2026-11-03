@@ -166,3 +166,22 @@ was not weakened. Separately, misplaced local `channelWrite`/`channelOperation`
 functions were corrected to actual context members. The run did not execute the
 Room persistence/migration tests; its canonical log is authoritative, not acceptance
 of these corrections or the new marker tests.
+## Shared connection admission support
+
+The runtime lifecycle owner and fence owner agreed the bounded WP-201
+`ChannelDispatchAdmission(token, connectionIdentity)` support contract. It compares
+the immutable `SessionToken` by value and the actual connection object by reference.
+`tryAcquire` atomically increments a 63-bit admitted count only while unrevoked;
+wrong bindings, revoked state and count overflow return null. `revoke` atomically
+sets the remaining bit, retaining existing admissions. Each returned `Permit.complete`
+decrements at most once, even concurrently, and never resets revocation. These
+operations are nonsuspending and do not call user code, take locks, close transport
+or establish physical drain. Runtime graph publication and the actual fence's
+consumption/cleanup remain the respective producers' responsibilities.
+
+Production path admission passed under WP-201. A proposed contracts-module test
+path was denied; no file was created there. Six regressions instead use WP-201's
+admitted model-module contract test surface, as the existing `DomainContractTest`
+does: value/reference mismatch, revoke before admission, retained admitted count,
+concurrent idempotent completion, acquisition/revocation race and exact count
+overflow. These are authored declarations pending execution, not drain evidence.

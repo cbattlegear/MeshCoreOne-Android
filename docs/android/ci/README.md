@@ -120,8 +120,10 @@ compile-only result does not establish a full benchmark build, performance,
 device behavior or WP-504 acceptance.
 
 Outside the isolated consumer invocation, hosted Gradle task-output caching is
-enabled. Only `:core:data:testDebugUnitTest` is explicitly eligible for
-test-result caching; all other Gradle `Test` tasks
+enabled. Hosted scaffold invocations request Gradle stack traces so the original
+job log can expose nested task failures when available; this changes neither
+task selection nor worker scheduling. Only `:core:data:testDebugUnitTest` is
+explicitly eligible for test-result caching; all other Gradle `Test` tasks
 are explicitly denied cache eligibility until their external inputs and side
 effects are accounted for. The candidate task-graph init script declares the WP-203
 fixture directory as an input and the interop artifact directory as an output,

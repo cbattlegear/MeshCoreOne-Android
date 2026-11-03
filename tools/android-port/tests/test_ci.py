@@ -131,6 +131,30 @@ class BenchmarkConsumerTests(unittest.TestCase):
                     ci.prepare_benchmark_consumer_state(project, output)
                 self.assertEqual(marker.read_text(encoding="utf-8"), "unchanged")
 
+    def test_hosted_consumer_rejects_dangling_junctions_as_existing_state(self):
+        for relative in ("android/build", "android/.gradle",
+                         "output/gradle-user-home", "output/gradle-project-cache"):
+            with self.subTest(previous=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = root / "android"
+                project.mkdir()
+                (project / "settings.gradle.kts").write_text("", encoding="utf-8")
+                junction = root / relative
+                original = Path.is_junction
+
+                def simulated_junction(path):
+                    return path == junction or original(path)
+
+                message = (
+                    "project state is not fresh" if relative.startswith("android/")
+                    else "must use new directories"
+                )
+                with patch.object(Path, "is_junction", simulated_junction):
+                    with self.assertRaisesRegex(PortError, message):
+                        ci.prepare_benchmark_consumer_state(project, root / "output")
+                self.assertFalse(junction.exists())
+                self.assertFalse((root / "output" / "gradle-user-home").exists())
+
     def test_hosted_consumer_refuses_linked_or_unreadable_project_inputs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -227,6 +251,7 @@ class BenchmarkConsumerTests(unittest.TestCase):
                     self.assertEqual("--no-build-cache" in arguments, consumer)
                     self.assertEqual("--no-configuration-cache" in arguments, consumer)
                     self.assertEqual("--build-cache" in arguments, not consumer and not local)
+                    self.assertEqual("--stacktrace" in arguments, not local)
                     cache = output / "gradle-project-cache" if consumer and not local else root / "private" / "project-root"
                     self.assertEqual(arguments[arguments.index("--project-cache-dir") + 1], str(cache))
 
@@ -696,6 +721,7 @@ class SourceDispositionTests(unittest.TestCase):
                     ):
                         ci.run_stage("scaffold", state, output, scopes=scopes, affected_candidate=True)
                     self.assertEqual(run.call_args.args[1], plan)
+                    self.assertEqual(run.call_args.args[5].count("--stacktrace"), 1)
                     self.assertEqual(planner.call_args.kwargs["merge_base_only"], event_name == "pull_request")
                     self.assertEqual(run.call_args.kwargs["merge_base_only"], event_name == "pull_request")
                     self.assertEqual(planner.call_args.args[3] if len(planner.call_args.args) > 3 else None,

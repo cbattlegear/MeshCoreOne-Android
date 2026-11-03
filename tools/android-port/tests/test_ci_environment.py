@@ -108,9 +108,11 @@ class EnvironmentTests(unittest.TestCase):
         self.assertIn("--build-cache", arguments)
         self.assertIn("--max-workers=8", arguments)
         self.assertIn("--parallel", arguments)
+        self.assertIn("--stacktrace", arguments)
         self.assertNotIn("--no-build-cache", arguments)
         if split_preflight:
             self.assertIn("--parallel", preflight_arguments)
+            self.assertIn("--stacktrace", preflight_arguments)
             self.assertIn("--max-workers=8", preflight_arguments)
             self.assertNotIn("--max-workers=1", preflight_arguments)
             self.assertIn("--build-cache", preflight_arguments)
@@ -319,6 +321,7 @@ class EnvironmentTests(unittest.TestCase):
                         self.assertIn("--dependency-verification", arguments)
                         self.assertEqual(arguments[arguments.index("--dependency-verification") + 1], "strict")
                         self.assertIn("--init-script", arguments)
+                        self.assertEqual("--stacktrace" in arguments, stage == "scaffold" and not local)
                     if local:
                         self.assertNotIn("--max-workers=1", build)
                         self.assertNotIn("--parallel", build)

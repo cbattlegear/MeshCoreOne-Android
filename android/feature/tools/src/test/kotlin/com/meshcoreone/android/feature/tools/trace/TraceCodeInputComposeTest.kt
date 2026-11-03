@@ -64,15 +64,20 @@ class TraceCodeInputComposeTest {
     private val frames get() = host.get().frames
     private var frameNanos = 0L
 
-    @Before fun setup() {
+    @Before fun setup() = attachHost()
+
+    @After fun dispose() = destroyHost()
+
+    private fun attachHost() {
         host = Robolectric.buildActivity(TraceCodeInputTestActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
     }
 
-    @After fun dispose() {
+    private fun destroyHost() {
         host.windowFocusChanged(false)
         host.pause().stop().destroy()
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
     }
 
     @Test fun realTraceScreenExposesPastePreviewAndAddsOnlyDistinctResolvableCodes() {
@@ -381,6 +386,28 @@ class TraceCodeInputComposeTest {
         assertFalse(button("Add nodes: AA").config.contains(SemanticsProperties.Disabled))
     }
 
+    @Test fun recreatedAndDestroyedActivityDoesNotStarveTheNextMountedScreen() {
+        host.get().mountObservedEntry()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        val before = host.get()
+        host.recreate()
+        settle()
+        assertNotSame(before, host.get())
+        assertEquals("AA00,BB00", input().config[SemanticsProperties.EditableText].text)
+
+        destroyHost()
+        attachHost()
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA,BB")
+        assertTrue(texts().containsAll(listOf("AA will be added", "BB will be added")))
+        click("Add nodes: AA, BB")
+        assertEquals(2, host.get().recents.values.values.single().size)
+    }
+
     @Test fun restoringAnExplicitDefaultOverrideDoesNotInvalidateAnExistingPathOrResult() {
         val harness = configured()
         val saved = savedPath(Bytes.of(0xAA), hashSize = 1)
@@ -464,11 +491,19 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
-    private fun input() = nodes().single { it.config.contains(SemanticsActions.SetText) }
+    private fun input(): SemanticsNode {
+        val matches = nodes().filter { it.config.contains(SemanticsActions.SetText) }
+        assertEquals(1, matches.size, "Expected one editable trace-code field")
+        return matches[0]
+    }
 
-    private fun button(label: String) = nodes().single {
-        it.config.contains(SemanticsActions.OnClick) &&
-            it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == label }
+    private fun button(label: String): SemanticsNode {
+        val matches = nodes().filter {
+            it.config.contains(SemanticsActions.OnClick) &&
+                it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == label }
+        }
+        assertEquals(1, matches.size, "Expected one action labeled '$label'; visible text: ${texts()}")
+        return matches[0]
     }
 
     private fun settle() {

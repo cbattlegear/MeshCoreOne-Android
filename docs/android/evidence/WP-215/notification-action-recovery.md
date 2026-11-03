@@ -4,6 +4,9 @@
 - Bounded repair: issue #514; acceptance references `WP-215-behavior`,
   `WP-215-boundaries`, `WP-215-source-test-parity`. This is not whole-WP completion.
 - Trusted starting base: `1e1ff70345f203b41f9a8b04836c2cc4640500c9`.
+- Resumed trusted main: `796a872a3565a66c74f782b738a9ecb3c273fb25`,
+  merged into the consumer at `5e02ff9c99c34b021e073059f8ede0b47c381dae`.
+  This includes WP-107's genuinely landed #531 dispatch-provenance API.
 - Read-only source: `db14559b39d32322b06477c6ae676112f583db50`.
 - Shared receipt contract: `bfd2418d99395e7302ff45dade2b67cba8611857`.
 - Initial combined diagnostic head: `d4c63e7027469ac63a1515e66cc0fb2f3bf53697`
@@ -53,6 +56,25 @@ consumer remain untouched. Reply wire acceptance and mark-read commitment remain
 separate from navigation commitment and from WP-401's proposed durable OPEN store.
 No enqueue result is reinterpreted as durable navigation acknowledgement.
 
+### Producer-first resume
+
+The sole WP-208 producer confirmed #535 head
+`0d7c139228679d88c51ad38539819ef81d060cb5` is canonical, but still open rather
+than trusted-landed at this resume. Its MessageService, CommitRecoveryTest and
+WP-208 deviation differ from the historical producer imported here. The consumer
+must integrate the actual producer landing and any subsequent canonical test
+correction before publication; blob equality against the stale consumer does not
+supersede producer ownership or acceptance.
+
+The normal separate #514 PR is authorized after that reconciliation. Existing
+pull-request classification provides changed-scope hosted checks; neither workflow
+nor build-resource policy is changed. Fresh exact-head checks and independent
+review/receipt gates remain mandatory before merge. The historical full-graph OOM
+run above is retained as historical failure, not final product evidence.
+Current trusted `reserve.py admit` checks reconfirmed WP-owned handler modification
+and reviewed-support-consumer dispatcher modification. Reservation identity and
+historical binding remain intact; no release/recreate or authorization-text edit.
+
 ## Deterministic regression witnesses
 
 The following are authored tests, **not executed passing evidence**:
@@ -62,6 +84,7 @@ The following are authored tests, **not executed passing evidence**:
 | Real MeshCoreSession/MessageService, direct and channel | Firmware command returns; hold persistence tail, cancel waiting caller, retain ACCEPTED, exactly one observed wire command, no unsent draft/failure notification |
 | Owned-child result handoff | Cancel only the awaiting caller during final saved-row read; retain the independently published acceptance receipt |
 | Before wire | Cancellation during initial save leaves READY, no wire command, and existing direct draft/failure behavior |
+| Real protocol serializer contention | Direct/channel handler cancellation while RESET_PATH holds the actual serializer leaves READY and preserves draft/failure behavior; release cannot dispatch the cancelled request, and explicit retry produces one wire command |
 | Unobserved direct/channel response | Cancellation after entering the real session call produces UNCERTAIN, suppresses automatic replay and does not restore an unsent draft |
 | Explicit radio rejection | DeviceError leaves READY and preserves existing direct draft/failure behavior |
 | Non-cancellation uncertainty | Typed uncertain outcome rather than success or an unsent draft |

@@ -23,6 +23,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
@@ -44,6 +45,56 @@ class NotificationAcceptanceRecoveryTests {
 
     @Test fun directAcceptanceSurvivesCancellationBeforeOwnedResultReturns() = acceptedReply(channel = false)
     @Test fun channelAcceptanceSurvivesCancellationBeforeOwnedResultReturns() = acceptedReply(channel = true)
+
+    @Test fun directCancellationBehindProtocolSerializerKeepsDraftAndPermitsRetry() = unsentBehindSerializer(channel = false)
+    @Test fun channelCancellationBehindProtocolSerializerReportsFailureAndPermitsRetry() = unsentBehindSerializer(channel = true)
+
+    private fun unsentBehindSerializer(channel: Boolean) = runTest {
+        val h = Harness(this)
+        val n = NotificationHarness(this, RADIO).authorize()
+        val holding = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        try {
+            h.start()
+            n.store.contacts[h.contact.key] = h.contact
+            h.transport.beforeReply = {
+                if (it[0] == CommandCode.RESET_PATH.rawValue) {
+                    holding.complete(Unit)
+                    release.await()
+                }
+            }
+            val prior = backgroundScope.async { h.session.resetPath(h.contact.publicKey) }
+            holding.await()
+            val handler = NotificationActionHandler(n.store, sender(h), n.service, n.rooms, n.sync)
+            handler.configure({ true }, { "Me" })
+            val receipt = NotificationActionReceipt()
+            suspend fun reply() {
+                if (channel) handler.handleChannelQuickReply(RADIO, 0u, "retry safely")
+                else handler.handleQuickReply(h.contact.key, "retry safely")
+            }
+            val caller = launch(receipt) { reply() }
+            runCurrent()
+            val wire = if (channel) CommandCode.SEND_CHANNEL_MESSAGE else CommandCode.SEND_MESSAGE
+            assertEquals(NotificationActionReceipt.State.IN_FLIGHT, receipt.state)
+            assertTrue(h.sends(wire).isEmpty())
+            caller.cancelAndJoin()
+            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+            assertFalse(receipt.preventsReplay)
+            if (!channel) assertEquals("retry safely", n.service.consumeDraft(h.contact.key))
+            assertEquals(1, n.delivery.posted.size)
+            release.complete(Unit)
+            prior.await()
+            runCurrent()
+            assertTrue(h.sends(wire).isEmpty(), "A cancelled request cannot dispatch after serializer release")
+            withContext(receipt) { reply() }
+            assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
+            assertEquals(1, h.sends(wire).size)
+            assertEquals(1, n.sync.notifications)
+        } finally {
+            release.complete(Unit)
+            h.close()
+        }
+    }
 
     private fun acceptedReply(channel: Boolean) = runTest {
         val h = Harness(this)

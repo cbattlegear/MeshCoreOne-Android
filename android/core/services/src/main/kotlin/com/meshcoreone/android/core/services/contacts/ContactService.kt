@@ -23,6 +23,7 @@ import com.meshcoreone.android.core.protocol.model.ErrorCode
 import com.meshcoreone.android.core.protocol.model.MeshContact
 import com.meshcoreone.android.core.protocol.session.ContactSessionOps
 import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
+import com.meshcoreone.android.core.protocol.session.ContactWriteDispatchOutcome
 import java.time.Clock
 import java.time.Instant
 import kotlin.coroutines.cancellation.CancellationException
@@ -91,43 +92,46 @@ class ContactService(
      * @param since Optional date for incremental sync (only contacts modified after this time);
      *   `null` is a full sync that may prune local contacts the device no longer has.
      */
-    override suspend fun syncContacts(radioId: RadioId, since: Instant?): ContactSyncResult = mapSession {
-        val recoveryEpoch = ContactWriteRecovery.snapshot(preferences, radioId)
-        val effectiveSince = if (recoveryEpoch != null) null else since
-        val fetchResult = session.getContactsReportingTotal(effectiveSince)
-        val meshContacts = fetchResult.contacts
-        val total = meshContacts.size.toLong()
+    override suspend fun syncContacts(radioId: RadioId, since: Instant?): ContactSyncResult =
+        ContactWriteRecovery.withSyncFence(preferences, radioId) {
+            mapSession {
+                val recoveryEpoch = ContactWriteRecovery.snapshot(preferences, radioId)
+                val effectiveSince = if (recoveryEpoch != null) null else since
+                val fetchResult = session.getContactsReportingTotal(effectiveSince)
+                val meshContacts = fetchResult.contacts
+                val total = meshContacts.size.toLong()
 
-        eventBroadcaster.yield(ContactServiceEvent.SyncProgress(received = 0, total = total))
+                eventBroadcaster.yield(ContactServiceEvent.SyncProgress(received = 0, total = total))
 
-        // Build set of public keys from device for cleanup
-        val devicePublicKeys = meshContacts.mapTo(LinkedHashSet()) { it.publicKey }
+                // Build set of public keys from device for cleanup
+                val devicePublicKeys = meshContacts.mapTo(LinkedHashSet()) { it.publicKey }
 
-        // Persist every received contact in a single transaction.
-        val frames = meshContacts.map { it.toContactFrame() }.snapshot()
-        val receivedCount = contacts.batchSaveContacts(radioId, frames)
+                // Persist every received contact in a single transaction.
+                val frames = meshContacts.map { it.toContactFrame() }.snapshot()
+                val receivedCount = contacts.batchSaveContacts(radioId, frames)
 
-        val lastTimestamp = meshContacts.maxOfOrNull { it.lastModified.toUInt32Seconds() } ?: 0u
+                val lastTimestamp = meshContacts.maxOfOrNull { it.lastModified.toUInt32Seconds() } ?: 0u
 
-        eventBroadcaster.yield(ContactServiceEvent.SyncProgress(received = receivedCount, total = total))
+                eventBroadcaster.yield(ContactServiceEvent.SyncProgress(received = receivedCount, total = total))
 
-        // On full sync, remove local contacts that no longer exist on device.
-        val fullSnapshotApplied = if (effectiveSince == null) {
-            pruneOrphans(radioId, devicePublicKeys, fetchResult.reportedTotal)
-        } else false
+                // On full sync, remove local contacts that no longer exist on device.
+                val fullSnapshotApplied = if (effectiveSince == null) {
+                    pruneOrphans(radioId, devicePublicKeys, fetchResult.reportedTotal)
+                } else false
 
-        if (recoveryEpoch != null) {
-            if (!fullSnapshotApplied || devicePublicKeys.size.toLong() != fetchResult.reportedTotal) {
-                throw ContactServiceError.SyncInterrupted()
+                if (recoveryEpoch != null) {
+                    if (!fullSnapshotApplied || devicePublicKeys.size.toLong() != fetchResult.reportedTotal) {
+                        throw ContactServiceError.SyncInterrupted()
+                    }
+                    ContactWriteRecovery.reconciled(preferences, radioId, recoveryEpoch)
+                }
+                ContactSyncResult(
+                    contactsReceived = receivedCount,
+                    lastSyncTimestamp = lastTimestamp,
+                    isIncremental = effectiveSince != null,
+                )
             }
-            ContactWriteRecovery.reconciled(preferences, radioId, recoveryEpoch)
         }
-        ContactSyncResult(
-            contactsReceived = receivedCount,
-            lastSyncTimestamp = lastTimestamp,
-            isIncremental = effectiveSince != null,
-        )
-    }
 
     /**
      * Removes local contacts that a full fetch proves are gone from the device.
@@ -226,7 +230,15 @@ class ContactService(
      */
     suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
         val previousFrame = contacts.fetchContact(radioId, contact.publicKey)?.toContactFrame()
-        val dispatch = ContactWriteDispatch()
+        val dispatch = ContactWriteDispatch(
+            beforeDispatchAction = { handle -> ContactWriteRecovery.beforeDispatch(preferences, radioId, handle) },
+            onExchangeFinishedAction = { handle ->
+                ContactWriteRecovery.finishWrite(preferences, radioId, handle) { failure ->
+                    requireContactWriteReconciliation(radioId, failure, handle)
+                }
+            },
+        )
+        ContactWriteRecovery.registerWrite(preferences, radioId, dispatch)
         try {
             session.addContact(contact.toMeshContact(), dispatch) {
                 withContext(NonCancellable) {
@@ -234,31 +246,46 @@ class ContactService(
                         contacts.saveContactPreservingNewer(radioId, contact, previousFrame)
                             ?: throw ContactWriteCompletionFailed(radioId, contact.publicKey)
                         syncCoordinator?.notifyContactsChanged()
+                        ContactWriteRecovery.completeWrite(preferences, radioId, dispatch)
                     } catch (cancelled: CancellationException) {
-                        requireContactWriteReconciliation(radioId, cancelled)
+                        requireContactWriteReconciliation(radioId, cancelled, dispatch)
                         throw cancelled
                     } catch (error: ContactWriteCompletionFailed) {
-                        requireContactWriteReconciliation(radioId, error)
+                        requireContactWriteReconciliation(radioId, error, dispatch)
                         throw error
                     } catch (error: Exception) {
-                        requireContactWriteReconciliation(radioId, error)
+                        requireContactWriteReconciliation(radioId, error, dispatch)
                         throw ContactWriteCompletionFailed(radioId, contact.publicKey, error)
                     }
                 }
             }
         } catch (cancelled: CancellationException) {
-            if (!dispatch.definitelyUnsent) requireContactWriteReconciliation(radioId, cancelled)
+            when (dispatch.outcome) {
+                ContactWriteDispatchOutcome.DEFINITELY_UNSENT ->
+                    ContactWriteRecovery.abandonDefinitelyUnsent(preferences, radioId, dispatch)
+                ContactWriteDispatchOutcome.ACCEPTED -> {
+                    if (ContactWriteRecovery.isWriteTracked(preferences, radioId, dispatch)) {
+                        requireContactWriteReconciliation(radioId, cancelled, dispatch)
+                    }
+                }
+                else -> requireContactWriteReconciliation(radioId, cancelled, dispatch)
+            }
             throw cancelled
+        } catch (blocked: ContactWriteAdmissionBlocked) {
+            ContactWriteRecovery.abandonWrite(preferences, radioId, dispatch)
+            throw blocked
         } catch (error: MeshCoreException) {
             if (error !is MeshCoreException.DeviceError && error !is MeshCoreException.InvalidInput) {
-                requireContactWriteReconciliation(radioId, error)
+                requireContactWriteReconciliation(radioId, error, dispatch)
+            } else {
+                ContactWriteRecovery.abandonWrite(preferences, radioId, dispatch)
             }
             if (error.isDeviceError(ErrorCode.TABLE_FULL)) throw ContactServiceError.ContactTableFull()
             throw ContactServiceError.SessionError(error)
         } catch (error: ContactWriteCompletionFailed) {
             throw error
         } catch (error: Exception) {
-            requireContactWriteReconciliation(radioId, error)
+            requireContactWriteReconciliation(radioId, error, dispatch)
             throw error
         }
     }
@@ -267,9 +294,13 @@ class ContactService(
     fun needsContactWriteReconciliation(radioId: RadioId): Boolean =
         ContactWriteRecovery.snapshot(preferences, radioId) != null
 
-    private fun requireContactWriteReconciliation(radioId: RadioId, failure: Exception) {
+    private fun requireContactWriteReconciliation(
+        radioId: RadioId,
+        failure: Exception,
+        dispatch: ContactWriteDispatch? = null,
+    ) {
         try {
-            ContactWriteRecovery.require(preferences, radioId)
+            ContactWriteRecovery.require(preferences, radioId, dispatch)
         } catch (recordingFailure: Exception) {
             failure.addSuppressed(recordingFailure)
             logger.log(ContactLogLevel.WARNING, "Contact write recovery marker could not be persisted")

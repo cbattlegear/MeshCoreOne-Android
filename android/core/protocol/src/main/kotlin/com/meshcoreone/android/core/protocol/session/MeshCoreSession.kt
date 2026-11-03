@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
@@ -215,7 +216,22 @@ class MeshCoreSession private constructor(
         requireFullPublicKey(contact.publicKey, "addContact")
         validateContactPath(contact.outPathLength, contact.outPath)
         core.exchange(dispatch.exchangeDispatch) {
-            simple(PacketBuilder.updateContact(contact))
+            dispatch.beforeDispatch()
+            try {
+                simple(PacketBuilder.updateContact(contact))
+                dispatch.markAccepted()
+            } catch (rejected: MeshCoreException.DeviceError) {
+                dispatch.markRejected(rejected)
+                throw rejected
+            } catch (invalid: MeshCoreException.InvalidInput) {
+                dispatch.markRejected(invalid)
+                throw invalid
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                dispatch.markUncertain(failure)
+                throw failure
+            }
             // The radio has committed. Caller cancellation or teardown cannot undo this local tail.
             withContext(NonCancellable) { onCommitted() }
         }

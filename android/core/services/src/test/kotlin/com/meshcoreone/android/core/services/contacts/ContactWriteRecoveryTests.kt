@@ -93,6 +93,65 @@ class ContactWriteRecoveryTests {
         }
     }
 
+    @Test
+    fun queuedSameRadioWriteRechecksRecoveryAtTheSerializedDispatchBoundary() = runTest {
+        withFixture {
+            val producer = service()
+            val first = async { producer.addOrUpdateContact(radioA, frame(1, "First")) }
+            runCurrent()
+            val queued = async {
+                try {
+                    producer.addOrUpdateContact(radioA, frame(2, "Queued"))
+                    null
+                } catch (blocked: ContactWriteAdmissionBlocked) {
+                    blocked
+                }
+            }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+
+            first.cancelAndJoin()
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+            radio.accept()
+            runCurrent()
+
+            assertEquals(ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED, assertNotNull(queued.await()).reason)
+            assertEquals(1, radio.writes.size, "A queued retry cannot dispatch after the first write becomes uncertain")
+            assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertNull(store.fetchContact(radioA, contactsKey(2)))
+
+            producer.syncContacts(radioA, null)
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            val retry = async { producer.addOrUpdateContact(radioA, frame(2, "Queued")) }
+            runCurrent()
+            assertEquals(2, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            retry.await()
+            assertEquals("Queued", store.fetchContact(radioA, contactsKey(2))?.name)
+        }
+    }
+
+    @Test
+    fun successfulCompletionReleasesAdmissionForTheNextSameRadioWrite() = runTest {
+        withFixture {
+            val producer = service()
+            val first = async { producer.addOrUpdateContact(radioA, frame(1, "First")) }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+            first.await()
+
+            val second = async { producer.addOrUpdateContact(radioA, frame(2, "Second")) }
+            runCurrent()
+            assertEquals(2, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            second.await()
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+        }
+    }
+
     @Test fun identicalReplacementDeliveryCannotConsumeTheRetiredAck() = replacementDelivery(sameKey = true)
     @Test fun differentReplacementDeliveryCannotConsumeTheRetiredAck() = replacementDelivery(sameKey = false)
 
@@ -107,19 +166,31 @@ class ContactWriteRecoveryTests {
             runCurrent()
             old.cancelAndJoin()
             val replacement = frame(if (sameKey) 1 else 2, "Replacement", modified = 2u)
-            val next = async { producer.addOrUpdateContact(radioA, replacement) }
+            val next = async {
+                try {
+                    producer.addOrUpdateContact(radioA, replacement)
+                    null
+                } catch (blocked: ContactWriteAdmissionBlocked) {
+                    blocked
+                }
+            }
             runCurrent()
             assertEquals(1, radio.writes.size)
             radio.accept()
             runCurrent()
             assertEquals("Old", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertEquals(ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED, assertNotNull(next.await()).reason)
+            assertEquals(1, radio.writes.size)
+            assertFalse(oldAcknowledged)
+
+            producer.syncContacts(radioA, null)
+            val retry = async { producer.addOrUpdateContact(radioA, replacement) }
+            runCurrent()
             assertEquals(2, radio.writes.size)
-            assertFalse(next.isCompleted)
             radio.accept()
             runCurrent()
-            next.await()
+            retry.await()
             assertEquals("Replacement", store.fetchContact(radioA, replacement.publicKey)?.name)
-            assertFalse(oldAcknowledged)
         }
     }
 
@@ -254,7 +325,7 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
-    fun acceptedPersistenceTailKeepsSerializationUntilTheSaveFinishes() = runTest {
+    fun cancelledAcceptedPersistenceTailBlocksAnotherWriteUntilReconciliation() = runTest {
         withFixture {
             val saveGate = CompletableDeferred<Unit>()
             val entered = CompletableDeferred<Unit>()
@@ -273,16 +344,30 @@ class ContactWriteRecoveryTests {
             runCurrent()
             assertTrue(entered.isCompleted)
             first.cancelAndJoin()
-            val second = async { service().addOrUpdateContact(radioA, frame(1, "Second", 2u)) }
+            val second = async {
+                try {
+                    service().addOrUpdateContact(radioA, frame(1, "Second", 2u))
+                    null
+                } catch (blocked: ContactWriteAdmissionBlocked) {
+                    blocked
+                }
+            }
             runCurrent()
             assertEquals(1, radio.writes.size)
+            assertEquals(
+                ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED,
+                assertNotNull(second.await()).reason,
+            )
             saveGate.complete(Unit)
             runCurrent()
             assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
+            service().syncContacts(radioA, null)
+            val retry = async { service().addOrUpdateContact(radioA, frame(1, "Second", 2u)) }
+            runCurrent()
             assertEquals(2, radio.writes.size)
             radio.accept()
             runCurrent()
-            second.await()
+            retry.await()
             assertEquals("Second", store.fetchContact(radioA, contactsKey(1))?.name)
         }
     }
@@ -290,6 +375,7 @@ class ContactWriteRecoveryTests {
     @Test
     fun greaterAndEqualTimestampReplacementMetadataSurvivesOlderCompletion() = runTest {
         withFixture {
+            val producer = service()
             for (modified in listOf(1u, 2u)) {
                 val oldFrame = frame(modified.toInt(), "Old", 1u)
                 val original = ContactDTO.fromFrame(radioA, oldFrame)
@@ -305,6 +391,7 @@ class ContactWriteRecoveryTests {
                 radio.accept()
                 runCurrent()
                 assertEquals(newer, store.fetchContact(radioA, original.publicKey))
+                producer.syncContacts(radioA, null)
             }
         }
     }
@@ -399,7 +486,7 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
-    fun incompleteSnapshotCannotClearRecoveryAndAnOlderSnapshotCannotClearANewerUncertainty() = runTest {
+    fun fullSyncFenceBlocksWritesUntilSnapshotApplicationAndMarkerClearFinish() = runTest {
         withFixture {
             val old = async { service().addOrUpdateContact(radioA, frame(1, "First")) }
             runCurrent()
@@ -426,17 +513,71 @@ class ContactWriteRecoveryTests {
             val snapshot = async { service(persistence = held).syncContacts(radioA, null) }
             runCurrent()
             assertTrue(entered.isCompleted)
-            val newer = async { service().addOrUpdateContact(radioA, frame(2, "Second")) }
+            val newer = async {
+                try {
+                    service().addOrUpdateContact(radioA, frame(2, "Second"))
+                    null
+                } catch (blocked: ContactWriteAdmissionBlocked) {
+                    blocked
+                }
+            }
             runCurrent()
-            newer.cancelAndJoin()
+            assertEquals(
+                ContactWriteAdmissionBlockReason.SYNC_IN_PROGRESS,
+                assertNotNull(newer.await()).reason,
+            )
+            assertEquals(1, radio.writes.size, "The snapshot cannot be followed by a write before its local tail")
             gate.complete(Unit)
             runCurrent()
             snapshot.await()
-            assertTrue(service().needsContactWriteReconciliation(radioA))
+            assertFalse(service().needsContactWriteReconciliation(radioA))
+
+            val retry = async { service().addOrUpdateContact(radioA, frame(2, "Second")) }
+            runCurrent()
+            assertEquals(2, radio.writes.size)
             radio.accept()
             runCurrent()
-            service().syncContacts(radioA, null)
-            assertFalse(service().needsContactWriteReconciliation(radioA))
+            retry.await()
+            assertEquals("Second", store.fetchContact(radioA, contactsKey(2))?.name)
+        }
+    }
+
+    @Test
+    fun syncFenceRejectsAnAlreadyQueuedWriteAtTheSerializedDispatchBoundary() = runTest {
+        withFixture {
+            val producer = service()
+            val first = async { producer.addOrUpdateContact(radioA, frame(1, "First")) }
+            runCurrent()
+            val queued = async {
+                try {
+                    producer.addOrUpdateContact(radioA, frame(2, "Queued"))
+                    null
+                } catch (blocked: ContactWriteAdmissionBlocked) {
+                    blocked
+                }
+            }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+
+            first.cancelAndJoin()
+            val snapshot = async { producer.syncContacts(radioA, null) }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+
+            assertEquals(ContactWriteAdmissionBlockReason.SYNC_IN_PROGRESS, assertNotNull(queued.await()).reason)
+            assertFalse(snapshot.await().isIncremental)
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            assertEquals(1, radio.writes.size)
+            assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
+
+            val retry = async { producer.addOrUpdateContact(radioA, frame(2, "Queued")) }
+            runCurrent()
+            assertEquals(2, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            retry.await()
+            assertEquals("Queued", store.fetchContact(radioA, contactsKey(2))?.name)
         }
     }
 

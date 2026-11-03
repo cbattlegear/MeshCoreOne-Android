@@ -27,12 +27,15 @@ Owner: `services-porter`, directly assigned Project child
   `MessageWriteDispatch` messaging overloads to `MessagingSessionOps` and
   `MeshCoreSession`; the WP-209 contact overload remains on
   `ContactSessionOps` and continues to own contact persistence inside the same
-  serialized response exchange. Both use the existing serializer and
-  `ChannelWriteDispatch` fence. The messaging additions do not change contact
-  request bytes, ACK correlation, the non-cancellable contact persistence tail,
-  or caller cancellation behavior. The merge had no conflict markers or
-  discarded edits.
-- All 15 WP-209 changed paths below were re-admitted against current main with
+  serialized response exchange. The contact guard runs at the actual serialized
+  dispatch boundary. `RequestContext` now finalizes cancellation disposition and
+  the contact exchange callback before releasing the serializer, so a queued
+  same-radio write cannot pass between caller cancellation and recovery marking.
+  Recovery sync also excludes writes through snapshot application, pruning and
+  marker clearing. The messaging additions do not change contact request bytes,
+  ACK correlation or caller cancellation behavior. The merge had no conflict
+  markers or discarded edits.
+- All 17 WP-209 changed paths below were re-admitted against current main with
   their actual operation and trusted capability. The inherited WP-107 additions
   are base content, not new WP-209 changed paths.
 
@@ -43,13 +46,13 @@ matched each actual edit before authoring:
 |---|---|---|
 | `core/services/.../contacts/ContactService.kt`, `ContactWriteRecovery.kt` | `modify` | `wp-owned` |
 | `core/services/.../contacts/ContactsTestSupport.kt`, `ContactWriteRecoveryTests.kt` | `modify` | `wp-owned` |
+| `core/services/.../device/DiscoveryTestRoles.kt` | `add-or-update-related-test` | `reviewed-support-test` |
 | WP-209 deviation and this evidence document | `modify` | `wp-owned` |
-| `core/protocol/.../session/SessionRoles.kt`, `MeshCoreSession.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
+| `core/protocol/.../session/SessionRoles.kt`, `MeshCoreSession.kt`, `RequestContext.kt`, `ChannelWriteDispatch.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
 | `core/contracts/.../domain/DeviceAndContactPersisting.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
 | `core/data/.../repository/ContactRepository.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
 | `app/.../container/AndroidPlatformAdapters.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
-| `core/data/.../repository/ContactWriteCompletionRoomTest.kt` | `add-or-update-related-test` | `reviewed-support-test` |
-| `core/services/.../device/DiscoveryTestRoles.kt` | `add-or-update-related-test` | `reviewed-support-test` |
+| `core/data/.../repository/ContactPathCoordinatorRoomTest.kt`, `ContactWriteCompletionRoomTest.kt` | `add-or-update-related-test` | `reviewed-support-test` |
 | `app/.../container/ContactRecoveryFlagsTest.kt` | `add-or-update-related-test` | `reviewed-support-test` |
 
 These are Android-relative source/test surfaces; no build configuration, resource,
@@ -59,6 +62,10 @@ make the newer-row decision atomically, and the existing process preference
 adapter must report durable-write failure rather than claiming recovery was saved.
 The discovery test role explicitly rejects the added abstract persistence operation,
 preserving the existing repository contract invariant and its unrelated tests.
+The production process container passes the same `ContactPreferenceFlags` instance
+through each `SessionEnvironment` and replacement radio graph, so the in-process
+epoch and sync fence are shared. Its SharedPreferences adapter uses checked
+synchronous `commit()`; this is not device or abrupt-process-death evidence.
 
 The initial supported `claim` attempt was refused with
 `Existing WP lease is bound to different source/base/manifest/backend`.
@@ -71,7 +78,7 @@ ContactService/service-test overlap; its UI stays with its existing owner.
 
 ## Behavioral evidence to execute
 
-`ContactWriteRecoveryTests` contains 15 deterministic methods using an actual
+`ContactWriteRecoveryTests` contains 18 deterministic methods using an actual
 `MeshCoreSession` and controlled raw frames, not a fake contact session:
 queued-before-send cancellation; retired caller plus late successful ACK;
 identical/different replacement delivery correlation; active and late rejection;
@@ -79,9 +86,13 @@ unanswered radio acceptance followed by a fresh-session full sync; active and
 orphaned local-save failure; accepted persistence-tail serialization; greater and
 equal-timestamp newer metadata, including a live superseded completion that must
 not return import success; failed durable recovery recording with explicit
-failure and process-retained uncertainty; teardown/different-radio replacement; partial
-snapshot and cross-service newer-uncertainty fencing. Service persistence here is
-an explicit in-memory role, not claimed Room evidence.
+failure and process-retained uncertainty; teardown/different-radio replacement;
+queued-write exclusion after cancellation, ordinary subsequent-write admission,
+partial-snapshot rejection, an already-queued write rejected at the sync
+dispatch boundary, and blocked write admission while a full-snapshot batch save
+is held. The service fence also remains active through pruning and marker
+clearing. Service persistence here is an explicit in-memory role, not claimed
+Room evidence.
 
 `ContactWriteCompletionRoomTest` has three real-Room methods for transactional
 radio isolation, complete local metadata preservation, stale/equal-time CAS

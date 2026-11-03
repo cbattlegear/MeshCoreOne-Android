@@ -11,6 +11,7 @@
 package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.*
 import com.meshcoreone.android.core.protocol.model.*
 import java.time.Instant
@@ -59,8 +60,27 @@ interface ContactSessionOps {
      */
     suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
         dispatch.exchangeDispatch.claim()
-        addContact(contact)
-        onCommitted()
+        try {
+            dispatch.beforeDispatch()
+            try {
+                addContact(contact)
+                dispatch.markAccepted()
+            } catch (rejected: MeshCoreException.DeviceError) {
+                dispatch.markRejected(rejected)
+                throw rejected
+            } catch (invalid: MeshCoreException.InvalidInput) {
+                dispatch.markRejected(invalid)
+                throw invalid
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                dispatch.markUncertain(failure)
+                throw failure
+            }
+            onCommitted()
+        } finally {
+            dispatch.exchangeDispatch.exchangeFinished()
+        }
     }
     suspend fun removeContact(publicKey: Bytes)
     suspend fun resetPath(publicKey: Bytes)
@@ -73,12 +93,66 @@ interface ContactSessionOps {
 }
 
 /** Android-only cancellation fence for a contact write, using the existing serialized-write accounting. */
-class ContactWriteDispatch {
-    internal val exchangeDispatch = ChannelWriteDispatch()
+class ContactWriteDispatch(
+    private val beforeDispatchAction: (ContactWriteDispatch) -> Unit = {},
+    private val onExchangeFinishedAction: (ContactWriteDispatch) -> Unit = {},
+) {
+    internal val exchangeDispatch = ChannelWriteDispatch { onExchangeFinishedAction(this) }
+
+    private val terminalOutcome = java.util.concurrent.atomic.AtomicReference<ContactWriteDispatchOutcome?>(null)
+    private val failure = java.util.concurrent.atomic.AtomicReference<Exception?>(null)
 
     /** Read after cancellation; false means unknown or potentially written, never rolled back. */
     val definitelyUnsent: Boolean
-        get() = exchangeDispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT
+        get() = outcome == ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+
+    val cancellationDisposition: ChannelWriteCancellationDisposition
+        get() = exchangeDispatch.cancellationDisposition
+
+    val terminalFailure: Exception? get() = failure.get()
+
+    val outcome: ContactWriteDispatchOutcome
+        get() = terminalOutcome.get() ?: when (exchangeDispatch.cancellationDisposition) {
+            ChannelWriteCancellationDisposition.UNKNOWN -> ContactWriteDispatchOutcome.UNKNOWN
+            ChannelWriteCancellationDisposition.DEFINITELY_UNSENT -> ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+            ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN -> ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN
+        }
+
+    internal fun beforeDispatch() {
+        try {
+            beforeDispatchAction(this)
+        } catch (failure: Exception) {
+            markDefinitelyUnsent(failure)
+            throw failure
+        }
+    }
+
+    internal fun markAccepted() {
+        terminalOutcome.set(ContactWriteDispatchOutcome.ACCEPTED)
+    }
+
+    internal fun markRejected(failure: Exception) {
+        this.failure.set(failure)
+        terminalOutcome.set(ContactWriteDispatchOutcome.REJECTED)
+    }
+
+    internal fun markUncertain(failure: Exception) {
+        this.failure.set(failure)
+        terminalOutcome.compareAndSet(null, ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN)
+    }
+
+    private fun markDefinitelyUnsent(failure: Exception) {
+        this.failure.set(failure)
+        terminalOutcome.set(ContactWriteDispatchOutcome.DEFINITELY_UNSENT)
+    }
+}
+
+enum class ContactWriteDispatchOutcome {
+    UNKNOWN,
+    DEFINITELY_UNSENT,
+    MAY_HAVE_WRITTEN,
+    ACCEPTED,
+    REJECTED,
 }
 
 interface ChannelSessionOps {

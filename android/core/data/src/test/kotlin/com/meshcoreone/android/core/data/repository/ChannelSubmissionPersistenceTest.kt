@@ -7,16 +7,26 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.*
 import java.util.UUID
 import java.util.concurrent.Executor
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 class ChannelSubmissionPersistenceTest : RepositoryTest() {
@@ -259,6 +269,100 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
                 second.reconcileChannelSubmission(committed.submission)).evidence)
             assertEquals(1, store.fetchPendingSends(RADIO_A).size)
         } finally { second.close() }
+    }
+
+    @Test fun exactReplayContendsWithAnOpenRoomWriterAndReturnsItsFirstAdmission() = runTest {
+        verifyContendedAdmission(conflicting = false, changedFirst = false)
+    }
+
+    @Test fun conflictingIntentContendsWithAnOpenRoomWriterWithoutReplacingEitherWinner() = runTest {
+        verifyContendedAdmission(conflicting = true, changedFirst = false)
+        verifyContendedAdmission(conflicting = true, changedFirst = true)
+    }
+
+    private suspend fun verifyContendedAdmission(conflicting: Boolean, changedFirst: Boolean) {
+        val name = "submission-contention-${UUID.randomUUID()}.db"
+        val firstRead = CountDownLatch(1)
+        val secondBegin = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val armed = AtomicBoolean(false)
+        val held = AtomicBoolean(false)
+        val heldInTransaction = AtomicBoolean(false)
+        val firstExecutor = Executors.newSingleThreadExecutor()
+        val secondExecutor = Executors.newSingleThreadExecutor()
+        val immediate = Executor { it.run() }
+        val lifetime = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        lateinit var firstDatabase: MeshCoreDatabase
+        firstDatabase = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .setQueryExecutor(firstExecutor).setTransactionExecutor(firstExecutor)
+            .setQueryCallback({ sql, _ ->
+                if (armed.get() && sql.startsWith("SELECT", ignoreCase = true) &&
+                    sql.contains("channel_submissions") && held.compareAndSet(false, true)) {
+                    heldInTransaction.set(firstDatabase.inTransaction())
+                    firstRead.countDown()
+                    check(releaseFirst.await(30, TimeUnit.SECONDS)) { "Controlled Room writer was not released" }
+                }
+            }, immediate).build()
+        val secondDatabase = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .setQueryExecutor(secondExecutor).setTransactionExecutor(secondExecutor)
+            .setQueryCallback({ sql, _ ->
+                if (armed.get() && sql.startsWith("BEGIN", ignoreCase = true)) secondBegin.countDown()
+            }, immediate).build()
+        val firstStore = RoomPersistenceStore(firstDatabase, lifetime, clock)
+        val secondStore = RoomPersistenceStore(secondDatabase, lifetime, clock)
+        try {
+            val message = row()
+            firstStore.saveMessage(message)
+            // Open both handles before arming; callbacks must observe admission, not database setup.
+            secondStore.fetchPendingSends(RADIO_A)
+            val original = submission(message)
+            val changed = original.copy(envelope = original.envelope.copy(localNodeName = "competing node"))
+            val winner = if (changedFirst) changed else original
+            val contender = if (conflicting) {
+                if (changedFirst) original else changed
+            } else original
+            armed.set(true)
+            val first = lifetime.async { firstStore.admitChannelSubmission(winner, AT) }
+            val reachedRead = withContext(Dispatchers.IO) { firstRead.await(10, TimeUnit.SECONDS) }
+            assertTrue(reachedRead, "First Room transaction must reach its retained-receipt SQL read")
+            assertTrue(heldInTransaction.get(), "The held read must be inside the actual Room transaction")
+            val second = lifetime.async {
+                try { secondStore.admitChannelSubmission(contender, AT.plusSeconds(1)) }
+                catch (failure: PersistenceStoreException) {
+                    assertTrue(conflicting, "Exact replay must not reject")
+                    assertEquals(ChannelSubmissionConflict.IDENTITY_CONFLICT,
+                        assertIs<ChannelSubmissionRejected>(failure.cause).reason)
+                    null
+                }
+            }
+            val reachedBegin = withContext(Dispatchers.IO) { secondBegin.await(10, TimeUnit.SECONDS) }
+            assertTrue(reachedBegin, "Second Room handle must attempt BEGIN while the first writer is held")
+            assertFalse(first.isCompleted)
+            assertFalse(second.isCompleted, "Contender must not finish while the first write transaction is open")
+            releaseFirst.countDown()
+            val committed = withTimeout(20_000) { first.await() }
+            val replay = withTimeout(20_000) { second.await() }
+            assertEquals(winner, committed.submission)
+            if (conflicting) assertNull(replay) else assertEquals(committed, replay)
+            assertEquals(committed, assertIs<ChannelSubmissionReconciliation.Known>(
+                secondStore.reconcileChannelSubmission(winner)).evidence)
+            assertEquals(1, secondStore.fetchPendingSends(RADIO_A).size)
+        } finally {
+            armed.set(false)
+            releaseFirst.countDown()
+            val job = assertNotNull(lifetime.coroutineContext[Job])
+            job.cancel()
+            withTimeout(20_000) { job.join() }
+            firstStore.close()
+            secondStore.close()
+            firstDatabase.close()
+            secondDatabase.close()
+            firstExecutor.shutdown()
+            secondExecutor.shutdown()
+            assertTrue(withContext(Dispatchers.IO) { firstExecutor.awaitTermination(10, TimeUnit.SECONDS) })
+            assertTrue(withContext(Dispatchers.IO) { secondExecutor.awaitTermination(10, TimeUnit.SECONDS) })
+            context.deleteDatabase(name)
+        }
     }
 
     @Test fun receiptCompletionUpdateFailureRollsBackCleanupAndPreservesAcceptedEvidence() = runTest {

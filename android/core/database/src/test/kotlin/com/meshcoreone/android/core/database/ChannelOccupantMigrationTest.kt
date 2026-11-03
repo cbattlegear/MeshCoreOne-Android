@@ -32,7 +32,7 @@ class ChannelOccupantMigrationTest {
         verifyUpgrade(2)
     }
 
-    @Test fun versionThreeDispatchingJournalIsPreservedWithoutInventingSubmissionReceipts() = runTest {
+    @Test fun composedV1ToV3DispatchingFixtureIsPreservedWithoutInventingSubmissionReceipts() = runTest {
         verifyUpgrade(3)
     }
 

@@ -45,6 +45,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -337,6 +338,36 @@ class SettingsRerunNavigationTest {
                 navigation.state.value.activeStack.last().destination,
             )
             Unit
+        } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `successful reruns retire flow collection while process scope remains alive`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val processJob = checkNotNull(processScope.coroutineContext[Job])
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+            }
+            val dependencies = appOnboarding(processScope, presets).forRerun()
+            val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
+            var previousFlow: OnboardingFlowCoordinator? = null
+
+            repeat(2) {
+                val flow = checkNotNull(dependencies.retainedFlowCoordinator())
+                previousFlow?.let { assertNotSame(it, flow) }
+                previousFlow = flow
+                val option = flow.preset.visiblePresets().first()
+                val applyLabel = enterSettingsRerun(navigation, dependencies, flow, option)
+                compose.onNodeWithText(applyLabel).performClick()
+                compose.waitUntil { navigation.state.value.selectedTab == AppTab.CHATS }
+                assertTrue(processJob.isActive)
+                compose.waitUntil { processJob.children.none() }
+                assertTrue(processJob.children.none())
+                navigation.selectTab(AppTab.SETTINGS)
+            }
         } finally {
             processScope.cancel()
         }

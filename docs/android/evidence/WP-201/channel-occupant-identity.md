@@ -272,6 +272,56 @@ and c590/d45 foundation repairs, but predates df6. Its outcome cannot verify df6
 the later fence/runtime/held service or the separately assigned restore writer.
 It was dispatched only after the previous same-ref run was terminal.
 
+That exact run completed **FAILURE**: database 50/50 and model 172/172 passed;
+data discovered 629, with 627 passed and two failures. All sixteen journal Room
+methods executed without failure, including reopen and retained-attempt cases.
+The seven earlier foundation data failures are absent. Available aggregate reports
+contain 8,345 discovered, 8,343 passed, two failed, no errors or skips; mandatory
+App/services/UI/tools/shortcuts/widgets/scaffold reports remain incomplete.
+The controller and Swift codec jobs passed separately, not whole-graph acceptance.
+
+The two failures are existing queue-consumer methods in
+`MessagingRoomIntegrationTest`:
+`channelQueryFailureCapRetiresOnlyItsEnvelopeAndPreservesTheNextActualRoomRow`
+and `theActualChannelServiceUnconfiguredSlotTerminallyRetiresOnlyItsMissingSlotEnvelope`.
+The current consumer publishes FAILED before a broad pending delete, then catches
+the storage guard rejection and completes its in-memory envelope. Retaining those
+rows is not a reason to weaken the guard or change deletion assertions alone.
+WP-202's actual `add-or-update-related-test` admission passed for that fixture;
+custody remains here until the WP-208 immutable consumer and existing holds permit
+the real integration changes. The agreed families are genuine READY plus proven
+DEFINITELY_UNSENT exact-ID retirement, retained null/DISPATCHING/UNCERTAIN with no
+wire/counter/status/event remap, and ACCEPTED cleanup-only after reopen. Successor
+and foreign rows must remain protected.
+
+The same diagnostic also fails `:core:services:compileTestKotlin` because the
+rendering-only `RenderingInMemoryMessageStore` lacks the five new abstract journal
+methods. Its bounded support repair implements all five through the existing
+`unsupported()` helper; it does not simulate journal state or return fake success.
+One focused regression calls every method and requires
+`UnsupportedOperationException`. Actual WP-201 `add-or-update-related-test`
+admissions passed for the existing fixture and new
+`RenderingInMemoryJournalRejectionTest` under `reviewed-support-test`, preserving
+all existing cases and excluding production/build/resource edits. The installed
+reservation records are historical advisory owners, not this producer's receipt;
+their identities and revisions were not adopted or rewritten. Exact successor
+hosted execution is still required for this repair and df6.
+
+### Separate durable-origin query gap
+
+Persisting original proof does not yet constrain active-conversation display:
+the current timeline/window/count/summary/reaction SQL surfaces remain index-only.
+Exact-key reads intentionally retain old DTO/text for recovery, including a late
+successful old-row save, but a replacement view must not treat that row as its
+own. No active-occupant SQL filtering or restart-safe consumer adoption is claimed.
+The proposed separate contract is a required expected-occupant read context,
+current known authority validated in the same Room transaction, and original-proof
+predicates before LIMIT/OFFSET/count/summary/candidate selection, not page
+postfiltering. Unknown legacy/imported and currently unstamped incoming rows need
+explicit producer/consumer handling without silently dropping data or minting
+current proof. This gap is coordinated with WP-208/WP-308; neither journal
+settlement nor the physical-wire fence resolves it.
+
 ## Shared connection admission support
 
 The runtime lifecycle owner and fence owner agreed the bounded WP-201
@@ -381,5 +431,6 @@ Journal source checks passed using `C:\Python312\python.exe`:
 `tools\android-port\portmap.py`, `tools\android-port\controller\validate.py`
 and `git diff --check`. These validate source provenance, controller policy and
 whitespace, not Kotlin/Room execution. The retained local Gradle execution owner
-was not changed or used. The immutable journal candidate remains UNVERIFIED
-until its own exact-candidate hosted run discovers and passes the required suites.
+was not changed or used. Run 41604742338 supplies the bounded storage evidence
+above, not passing consumer/whole-graph acceptance; df6 and the rendering support
+successor remain UNVERIFIED until exact-candidate hosted execution.

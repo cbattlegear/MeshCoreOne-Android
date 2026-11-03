@@ -63,15 +63,20 @@ runtime result is claimed, and no producer/environment/lifecycle implementation
 is imported from that source exploration. Existing admission covers this test;
 no claim mutation, product execution or publication occurred.
 
-The eventual producer composition must also retain WP-302 support commit
-`c8d11bd06e13e74273bcaa7f81ccb6c88f8cc808` (tree
-`5eed1571f4cc01cae9ca0a9362f739d8d99bee2b`), a descendant of the inspected
-`28883bb7995e1179a8b13878309863b7861cb2af` exploration. Its exact
+The eventual producer composition must retain the Room fixture at WP-302 head
+`c4d8b73184dd02da370a2650c3fa3a218ec16231` (tree
+`191db8b627647cf25d1e7514ce5949c6ce27a2c2`), which supersedes support commit
+`c8d11bd06e13e74273bcaa7f81ccb6c88f8cc808` and descends from the inspected
+`28883bb7995e1179a8b13878309863b7861cb2af` exploration. The predecessor's
 `android/app/src/test/kotlin/com/meshcoreone/android/app/rooms/RoomAccessibilityComposeTest.kt`
 edit implements the two required typed `ChatLinkEnvironment` methods in the
 existing fixture and adds
 `contactLinkActionInRoomNavigatesToTheCapturedSavedContact`. The support diff was
-inspected directly and preserves existing assertions. Omitting it leaves that
+inspected directly and preserves existing assertions. The successor removes an
+unreachable `ConfirmationStaged` success branch: an absent contact still invokes
+the fixture's existing `error("Unexpected contact import")`, not fake success.
+The corrected fixture blob is `660cb0193c7f4e023598b160425fa3c80fd1ca82`.
+Omitting the interface support leaves that
 fixture unable to implement the new interface. It depends on producer types and
 is not imported into this older, still-dependent worktree in isolation.
 Source inspection is not mounted execution evidence; the fixture regression and

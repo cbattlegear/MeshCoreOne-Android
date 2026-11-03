@@ -6,6 +6,8 @@ import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.testing.Test
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.gradle.process.CommandLineArgumentProvider
 
 plugins {
@@ -46,6 +48,13 @@ class NodesRobolectricSdkArguments(
 }
 
 tasks.withType<Test>().configureEach {
+    testLogging.quiet {
+        events(TestLogEvent.FAILED)
+        exceptionFormat = TestExceptionFormat.FULL
+        showExceptions = true
+        showCauses = true
+        showStackTraces = true
+    }
     dependsOn(prepareRobolectricSdks)
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     jvmArgumentProviders.add(NodesRobolectricSdkArguments(robolectricSdkDirectory))

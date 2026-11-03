@@ -21,8 +21,9 @@ Room v2 adds nullable columns to `messages` and `pending_sends`, plus a separate
 `channel_occupants(radioId,index,occupantID,unresolved)` authority table. The registered v1-to-v2
 migration neither deletes data nor backfills legacy outgoing intent from current
 slots. The historical KSP v1 export remains unchanged. The v2 KSP export must be
-generated and its Room validation executed by the real hosted build; no handwritten
-generated-schema claim is made.
+generated and its Room validation executed by the real hosted build; the exact
+e1f4 database suite below passes that boundary. The separate journal advances to
+v3 and requires its own generated-schema execution; no handwritten export is made.
 
 `ChannelPersisting.fetchChannelOccupantSnapshot` returns channel metadata and epoch
 from one Room transaction. Consumers must capture that original snapshot before
@@ -31,9 +32,10 @@ is not permitted. Missing, disabled, ambiguous or unreconciled authority returns
 null, never a fabricated proof. `fetchChannelOccupantID` is suitable for the fence's
 already-excluded validation, not a check-then-send authorization.
 
-The real repository establishes a fresh opaque UUID on first authoritative save,
-secret change, re-enabling or reconciliation after invalidation. Same-secret rename
-preserves an existing epoch. Clear/delete and device-data deletion invalidate it;
+The real repository establishes known opaque proof only through authoritative
+radio-info reconciliation. DTO-created/replaced/re-enabled identities allocate
+fresh unresolved epochs until that reconciliation; same-secret metadata preserves
+already-known proof and cannot clear quarantine. Clear/delete and device-data deletion invalidate it;
 recreation and observed ABA transitions do not reuse it. All these changes commit
 with their channel mutation. Repository interface methods remain abstract, preserving
 the existing contract assertion rather than adding success-shaped defaults.
@@ -103,14 +105,17 @@ owns service/protocol operation exclusion, connection retirement and dispatch.
 WP-208 (`13a03908-afb8-42bd-9c96-57a27920076e`) owns queue and inline propagation.
 WP-308 (`aa4b9d95-ca8d-4023-bb04-049e969e6d6c`) owns original composer capture.
 WP-405 (`82e47f77-38d4-4f6b-ba74-2ae7755c4fb9`) supplied mutation constraints only.
-WP-318 (`328fdb2f-354a-419f-9239-d7590b303a3b`) was asked to coordinate backup
-restore invalidation and stripping local epochs from programmatic export/import.
+WP-318 (`328fdb2f-354a-419f-9239-d7590b303a3b`) is separately assigned the
+foundation-aware backup writer slice, coordinated with actual WP-203 producer
+`68581ff8-206b-49d8-8d03-b1c128ec16b3`. Frozen WP-203 codec success predates these
+fields and is not integration credit.
 
 No other producer's service, protocol, UI or backup implementation is edited here.
 Raw DAO writers must participate in the agreed discipline; the table alone cannot
 prove radio identity, unobserved external ABA, reconnect continuity or transport
-drain after an ambiguous write. Restore must invalidate affected/remapped authority
-in its transaction and never import a local epoch or stamp imported messages from
+drain after an ambiguous write. Restore must commit fresh/replacement unresolved
+tombstones for affected/remapped authority in its existing transaction and never
+import a local epoch or stamp imported messages from
 the destination slot. Those integrations require their actual producer commits.
 Keep #535's independently bounded producer candidate separate. Durable accepted-send
 attempt/cleanup replay across service restart remains a separate WP-208 contract:
@@ -120,8 +125,9 @@ an explicit retry attempt was accepted.
 ## Admission and verification
 
 Actual trusted `reserve.py admit --wp WP-201/WP-202 --path <path> --operation modify`
-calls returned `wp-owned` for every changed path, including new contract/entity/test
-files and these owned evidence/deviation paths. The current WP-201 owner confirmed
+calls returned `wp-owned` for the original changed paths, including new contract/entity/test
+files and these owned evidence/deviation paths. The separately attributed backup
+test support operation is recorded below. The current WP-201 owner confirmed
 no active overlap. The historical WP-202 custodian is archived with merged PR #471;
 its original receipt is not adopted.
 
@@ -142,7 +148,7 @@ Executed with pinned native Windows Python 3.12.4:
 
 Declared new product regressions, not passing executions:
 
-- Eighteen `ChannelOccupantPersistenceTest` methods: rename/replacement/recreation,
+- Nineteen `ChannelOccupantPersistenceTest` methods: rename/replacement/recreation,
   DTO/batch/radio partition, late successful save, retained unresolved text/queue,
   unknown legacy/ambiguous slot, actual disk reopen/hydration, independent-context
   exclusion, whole-operation restore/callback ordering, model equality, invalidation,
@@ -150,11 +156,14 @@ Declared new product regressions, not passing executions:
   forged/foreign/exact-Job capability validation, exception/cancellation expiry,
   actual restart with an unresolved pre-SET marker and no DTO clear, atomic failed
   reconciliation rollback, cancelled/escaped marker and metadata-write rejection,
-  and scoped orphan-slot cleanup versus ordinary explicit history erase.
-- One `ChannelOccupantMigrationTest` method creates a real v1 SQLite database from
-  the retained KSP export, opens it through the registered production migration,
-  checks retained legacy text/queue/null intent, and reopens the upgraded file.
-- The existing complete KSP/SQLite boundary assertion now checks v2 and 18 tables.
+  scoped orphan-slot cleanup versus ordinary explicit history erase, and DTO-only
+  creation/replacement/re-enable quarantine through reopen and previous-radio-secret
+  reconciliation without reviving an original epoch.
+- Two `ChannelOccupantMigrationTest` methods use retained exported v1 or the actual
+  v1-to-v2 migration to construct legacy databases, open the registered migration
+  chain and retain original text/proof/null dispatch state through actual reopen.
+- The complete current KSP/SQLite boundary assertion checks v3 and 19 tables;
+  the independently executed e1f4 predecessor checked v2 and 18.
 
 No local Gradle/JVM/WSL execution occurred. Retained execution owner
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` is unchanged. Normal hosted diagnostic
@@ -244,6 +253,24 @@ historical lease or producer identity was rewritten. Both commit diffs are
 compatible with the independent e1f4 schema-v2 candidate and contain no journal/
 schema-v3 or held producer bytes; consumers import only those diffs, never parents.
 Their corrected assertions still require fresh exact-candidate execution.
+
+Standalone `df6e14a2543bce651d7c21eb855ed441d9394efc` closes a related actual
+authority gap after consultation with the fence owner: per-lease/per-slot
+reconciliation is not epoch-bound, so a new DB-only known UUID could otherwise
+pass an already-reconciled slot while the radio still has its previous key.
+Non-authoritative identity minting is now always unresolved. Same-secret known
+metadata remains known, unresolved metadata remains unresolved, and authoritative
+readback of either the edited or previous radio secret cannot revive an earlier
+epoch. Its nineteen Room declarations include real reopen/new-row/re-enable and
+previous-secret schedules. This diff changes only the admitted repository and
+Room tests, not APIs, journal/schema-v3 or other producers.
+
+The journal-inclusive non-acceptance diagnostic
+[41604742338](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41604742338)
+binds `27dc369dd8ed76d1de325cd9d4e539cca502de59`, contains c0fd/7a2 journal
+and c590/d45 foundation repairs, but predates df6. Its outcome cannot verify df6,
+the later fence/runtime/held service or the separately assigned restore writer.
+It was dispatched only after the previous same-ref run was terminal.
 
 ## Shared connection admission support
 

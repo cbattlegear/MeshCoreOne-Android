@@ -91,12 +91,12 @@ class NavigationActivityTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java, intent).setup().visible()
         try {
             testScheduler.runCurrent()
-            assertTrue(delivered.isEmpty(), "An exported launcher intent is not a trusted notification entry point")
+            assertTrue("An exported launcher intent is not a trusted notification entry point", delivered.isEmpty())
             controller.recreate()
             testScheduler.runCurrent()
             controller.newIntent(Intent(intent))
             testScheduler.runCurrent()
-            assertTrue(delivered.isEmpty(), "A forged onNewIntent payload must not enter the action queue")
+            assertTrue("A forged onNewIntent payload must not enter the action queue", delivered.isEmpty())
         } finally {
             controller.pause().stop().destroy()
             scope.cancel()
@@ -131,7 +131,7 @@ class NavigationActivityTest {
             assertEquals(NotificationContentTapResult.QUEUE_FULL, NotificationContentTap.enqueue(Intent(intent)))
 
             testScheduler.runCurrent()
-            assertTrue(entered.isCompleted, "Accepted queue items remain available to the installed consumer")
+            assertTrue("Accepted queue items remain available to the installed consumer", entered.isCompleted)
             release.complete(Unit)
             testScheduler.runCurrent()
             assertEquals(List(32) { response }, delivered)

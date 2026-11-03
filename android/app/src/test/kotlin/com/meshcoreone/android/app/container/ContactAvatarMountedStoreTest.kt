@@ -332,28 +332,31 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             recreate()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).assertExists()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).performClick()
-            fun awaitWrite(stage: String, condition: () -> Boolean) {
+            val saveDeadline = System.nanoTime() + 5_000_000_000L
+            fun awaitWrite(stage: String, deadline: Long, condition: () -> Boolean) {
+                fun diagnostic() =
+                    "$stage; calls=${writes.map { it.first }}, returned=${returned.get()}, " +
+                        "serviceFailure=${serviceFailure.get()}, lifecycle=${host.get().lifecycle.currentState}; " +
+                        compose.onAllNodes(SemanticsMatcher("all mounted nodes") { true },
+                            useUnmergedTree = true).fetchSemanticsNodes().joinToString { it.config.toString() }
+                val remainingMillis = (deadline - System.nanoTime()) / 1_000_000L
+                if (remainingMillis <= 0) throw AssertionError(diagnostic())
                 try {
-                    compose.waitUntil(5_000) {
+                    compose.waitUntil(remainingMillis) {
                         harness.scheduler.runCurrent()
                         condition()
                     }
                 } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
-                    throw AssertionError(
-                        "$stage; calls=${writes.map { it.first }}, returned=${returned.get()}, " +
-                            "serviceFailure=${serviceFailure.get()}, lifecycle=${host.get().lifecycle.currentState}; " +
-                            compose.onAllNodes(SemanticsMatcher("all mounted nodes") { true },
-                                useUnmergedTree = true).fetchSemanticsNodes().joinToString { it.config.toString() },
-                        timeout,
-                    )
+                    throw AssertionError(diagnostic(), timeout)
                 }
+                if (System.nanoTime() >= deadline) throw AssertionError(diagnostic())
             }
-            awaitWrite("Production encoder must reach the actual avatar service") { writes.isNotEmpty() }
+            awaitWrite("Production encoder must reach the actual avatar service", saveDeadline) { writes.isNotEmpty() }
             assertEquals(targetKey, writes.single().first)
-            awaitWrite("Actual Room avatar persistence") {
+            awaitWrite("Actual Room avatar persistence", saveDeadline) {
                 runBlocking { store.fetchContact(targetKey)?.avatarImageData != null }
             }
-            awaitWrite("Actual avatar service completion") { returned.get() == 1 }
+            awaitWrite("Actual avatar service completion", saveDeadline) { returned.get() == 1 }
             assertNull(serviceFailure.get())
             val saved = assertNotNull(assertNotNull(store.fetchContact(targetKey)).avatarImageData).toByteArray()
             assertEquals(saved.toList(), assertNotNull(writes.single().second).toByteArray().toList())
@@ -370,10 +373,11 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             }
             click(C.contactsDetailAvatarChooseSource)
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarRemovePhoto)).assertExists().performClick()
-            awaitWrite("Actual Room avatar removal") {
+            val removeDeadline = System.nanoTime() + 5_000_000_000L
+            awaitWrite("Actual Room avatar removal", removeDeadline) {
                 runBlocking { store.fetchContact(targetKey)?.avatarImageData == null }
             }
-            awaitWrite("Actual avatar removal service completion") { returned.get() == 2 }
+            awaitWrite("Actual avatar removal service completion", removeDeadline) { returned.get() == 2 }
             assertEquals(listOf(targetKey, targetKey), writes.map { it.first })
             assertNull(writes.last().second)
             assertEquals(storedForeign, store.fetchContact(foreignKey))

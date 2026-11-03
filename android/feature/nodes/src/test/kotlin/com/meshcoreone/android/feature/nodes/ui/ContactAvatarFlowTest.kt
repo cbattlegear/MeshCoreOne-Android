@@ -2,6 +2,9 @@
 package com.meshcoreone.android.feature.nodes.ui
 
 import android.app.Activity
+import android.app.Dialog
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
@@ -10,6 +13,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.Display
 import android.view.View
+import android.widget.TextView
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.result.ActivityResultRegistry
 import androidx.activity.result.ActivityResultRegistryOwner
@@ -44,6 +49,7 @@ import kotlinx.coroutines.CompletableDeferred
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Robolectric
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -81,8 +87,13 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     }
 
     private fun showingDialog() = ShadowDialog.getShownDialogs().lastOrNull { it.isShowing }
+    private var failureDialog: Dialog? = null
+    private var checkingFailure = false
 
-    override fun rootView(): View = showingDialog()?.window?.decorView ?: super.rootView()
+    override fun rootView(): View = when {
+        checkingFailure -> failureDialog?.window?.decorView ?: super.rootView()
+        else -> showingDialog()?.window?.decorView ?: super.rootView()
+    }
 
     private fun start(initial: ContactDTO = contact) {
         selected.value = initial
@@ -123,14 +134,14 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     private fun awaitAvatarState(
         description: String,
         timeout: (String) -> AssertionError = ::AvatarStateTimeout,
+        deadline: Long = System.nanoTime() + 10_000_000_000L,
         condition: () -> Boolean,
     ) {
-        val deadline = System.nanoTime() + 10_000_000_000L
-        do {
+        while (System.nanoTime() < deadline) {
             advanceFrames()
-            if (condition()) return
+            if (condition() && System.nanoTime() < deadline) return
             Thread.sleep(10)
-        } while (System.nanoTime() < deadline)
+        }
         val diagnostic = "Timed out waiting for $description: " + allSemanticsNodes().joinToString { node ->
             "${node.config.getOrElse(SemanticsProperties.Text) { emptyList() }}@${node.boundsInRoot}"
         }
@@ -138,8 +149,12 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         throw timeout(diagnostic)
     }
 
-    private fun awaitAvatarText(text: String, timeout: (String) -> AssertionError = ::AvatarVisibleTextTimeout) {
-        awaitAvatarState("visible text '$text'", timeout) {
+    private fun awaitAvatarText(
+        text: String,
+        timeout: (String) -> AssertionError = ::AvatarVisibleTextTimeout,
+        deadline: Long = System.nanoTime() + 10_000_000_000L,
+    ) {
+        awaitAvatarState("visible text '$text'", timeout, deadline) {
             allSemanticsNodes().any { node ->
                 node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text } &&
                     isDisplayed(node)
@@ -157,25 +172,52 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         assertEquals(LiveRegionMode.Polite, liveRegion.config[SemanticsProperties.LiveRegion])
     }
 
-    private fun awaitAvatarFailure(message: String) {
+    private fun Context.activity(): Activity? = when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.takeIf { it !== this }?.activity()
+        else -> null
+    }
+
+    private fun currentFailureDialog(previous: Set<Dialog>): Dialog? =
+        ShadowDialog.getShownDialogs().lastOrNull { dialog ->
+            dialog !in previous && dialog.isShowing && dialog.context.activity() === controller.get()
+        }
+
+    private fun awaitAvatarFailure(
+        message: String,
+        previous: Set<Dialog>,
+        deadline: Long,
+        assertions: () -> Unit = {},
+    ) {
         val retained = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java]
         val detail = retained.lifetimes.single()
-        awaitAvatarState("the completed save's exact error state", ::AvatarFailureStateTimeout) {
-            detail.active && !detail.holder.state.value.isSavingAvatar &&
-                detail.holder.state.value.errorMessage == NodesMessage.Text(message)
-        }
-        awaitAvatarState("the Activity lifecycle required by production UI collection", ::AvatarFailureLifecycleTimeout) {
-            controller.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
-        }
-        awaitAvatarState("a showing error dialog", ::AvatarFailureDialogTimeout) {
-            showingDialog() != null
-        }
-        awaitAvatarState("the error dialog's exact text semantics", ::AvatarFailureTextTimeout) {
-            allSemanticsNodes().any { node ->
-                node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == message }
+        checkingFailure = true
+        try {
+            awaitAvatarState("the completed save's exact error state", ::AvatarFailureStateTimeout, deadline) {
+                detail.active && !detail.holder.state.value.isSavingAvatar &&
+                    detail.holder.state.value.errorMessage == NodesMessage.Text(message)
             }
+            awaitAvatarState("the Activity lifecycle required by production UI collection", ::AvatarFailureLifecycleTimeout, deadline) {
+                controller.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            }
+            awaitAvatarState("a new showing error dialog owned by this Activity", ::AvatarFailureDialogTimeout, deadline) {
+                currentFailureDialog(previous)?.also { failureDialog = it } != null
+            }
+            val dialog = assertNotNull(failureDialog)
+            awaitAvatarState("the pinned error dialog's exact text semantics", ::AvatarFailureTextTimeout, deadline) {
+                dialog.isShowing && allSemanticsNodes().any { node ->
+                    node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == message }
+                }
+            }
+            awaitAvatarText(message, ::AvatarFailureVisibilityTimeout, deadline)
+            assertSame(dialog.window?.decorView, rootView())
+            assertTrue(dialog.isShowing)
+            assertNotNull(actionNode(controller.get().getString(C.contactsCommonOk)))
+            assertions()
+        } finally {
+            failureDialog = null
+            checkingFailure = false
         }
-        awaitAvatarText(message, ::AvatarFailureVisibilityTimeout)
     }
 
     private fun pick(file: Boolean = false) {
@@ -496,15 +538,71 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             assertTrue(chooser.config.contains(SemanticsProperties.Disabled))
             assertEquals(1, harness.contactService.avatars.size)
             assertNull(harness.store.contacts.single().avatarImageData)
+            val previous = ShadowDialog.getShownDialogs().toSet()
+            val deadline = System.nanoTime() + 10_000_000_000L
             gate.complete(Unit)
-            awaitAvatarFailure("failed: write rejected")
-            action(C.contactsCommonOk)
+            awaitAvatarFailure("failed: write rejected", previous, deadline) { action(C.contactsCommonOk) }
             val recovered = assertNotNull(actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource)))
             kotlin.test.assertFalse(recovered.config.contains(SemanticsProperties.Disabled))
             assertEquals(1, harness.contactService.avatars.size)
             assertNull(harness.store.contacts.single().avatarImageData)
         } finally {
             gate.cancel()
+        }
+    }
+
+    @Test
+    fun sameMessageStaleAndForeignDialogsCannotSatisfyTheCurrentSaveFailure() {
+        start()
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val message = "failed: write rejected"
+        harness.contactService.avatarBehavior = { _, _ ->
+            entered.complete(Unit)
+            gate.await()
+            throw java.io.IOException("write rejected")
+        }
+        val foreignHost = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        val stale = Dialog(controller.get())
+        val foreign = Dialog(foreignHost.get())
+        try {
+            pick(file = true)
+            result()
+            action(C.contactsDetailAvatarCropChoose)
+            awaitHeldSave(entered)
+            val staleText = TextView(controller.get()).apply { text = message }
+            stale.setContentView(staleText)
+            stale.show()
+            val previous = ShadowDialog.getShownDialogs().toSet()
+            val foreignText = TextView(foreignHost.get()).apply { text = message }
+            foreign.setContentView(foreignText)
+            foreign.show()
+            assertTrue(stale.isShowing)
+            assertTrue(foreign.isShowing)
+            assertEquals(message, staleText.text.toString())
+            assertEquals(message, foreignText.text.toString())
+            assertNull(currentFailureDialog(previous), "Neither same-message decoy belongs to the new current failure")
+            val deadline = System.nanoTime() + 10_000_000_000L
+            gate.complete(Unit)
+            awaitAvatarFailure(message, previous, deadline) {
+                val current = assertNotNull(failureDialog)
+                assertTrue(current !== stale && current !== foreign)
+                // Reordering a foreign same-message window cannot change the pinned semantics root.
+                foreign.dismiss()
+                foreign.show()
+                assertSame(current.window?.decorView, rootView())
+                action(C.contactsCommonOk)
+                kotlin.test.assertFalse(current.isShowing)
+            }
+            assertTrue(stale.isShowing)
+            assertTrue(foreign.isShowing)
+            assertEquals(1, harness.contactService.avatars.size)
+            assertNull(harness.store.contacts.single().avatarImageData)
+        } finally {
+            gate.cancel()
+            stale.dismiss()
+            foreign.dismiss()
+            foreignHost.pause().stop().destroy()
         }
     }
 
@@ -547,8 +645,10 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             val chooser = actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource))
             assertTrue(chooser == null || !isDisplayed(chooser), "The profile row must leave the lazy viewport")
             assertEquals(1, harness.contactService.avatars.size)
+            val previous = ShadowDialog.getShownDialogs().toSet()
+            val deadline = System.nanoTime() + 10_000_000_000L
             gate.complete(Unit)
-            awaitAvatarFailure("failed: retained operation")
+            awaitAvatarFailure("failed: retained operation", previous, deadline)
             assertEquals(1, harness.contactService.avatars.size)
             assertNull(harness.store.contacts.single().avatarImageData)
         } finally {

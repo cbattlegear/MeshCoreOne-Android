@@ -305,3 +305,62 @@ existing App failure-stack reporter can expose them in the original job log.
 No fake successful write or replacement store is used. The existing required JPEG,
 foreign-contact, recreation, cancel and remove checks remain. Complete required
 reports were still missing from the failed run; no suite/device acceptance is inferred.
+
+The independent source review of `f54bd768c` confirmed the entry-heading,
+Back/state/Room and real-service-forwarding assertions, but identified two
+fixture limits: still-showing dialog discovery lacked current-failure identity,
+and sequential diagnostic stages accumulated fresh timeout budgets. The local
+follow-up was prepared while immutable run `41625098790` remained in progress,
+without a successor push or local Android execution.
+
+The App stages now share one monotonic five-second deadline beginning immediately
+after crop confirmation; only the remaining budget is available to each stage.
+Removal has its own original five-second deadline. Feature error-state,
+lifecycle, new-dialog, exact-text and visibility stages share one ten-second
+deadline captured immediately before releasing the held failure. No stage can
+reset these budgets, including lifecycle; a successful condition after the
+deadline is rejected rather than accepted.
+
+Before gate release, the feature snapshots all previously shown dialog identities.
+A candidate must be newly shown, still showing, and have a context whose Activity
+is the current host. Once selected, the exact dialog decor is pinned through text,
+visible-bounds and OK-action assertions instead of reselecting a global root.
+Until selection, only the current host root is pumped; unrelated native windows
+cannot become the queried semantics root. An added API31/API37 adversarial flow
+shows a same-message stale dialog on the current Activity before the snapshot and
+a same-message foreign-Activity dialog after it. Neither may satisfy the new
+failure identity. The real failed save must produce its own error dialog; moving
+the foreign window to the latest position cannot change the pinned root, and OK
+must dismiss the actual error while both decoys remain showing. The one failed
+attempt and unchanged stored avatar are still required.
+
+These are source-only fixture changes pending compilation, execution and successor
+review. Native decoy windows carry real TextView messages, not manufactured
+production Compose errors. Context unwrapping and dialog snapshots establish a
+test-host Activity/new-presentation identity, not an OS-issued failure token or
+device-level dialog proof. No production changes, lease/lock changes or timing
+extension are intended.
+
+The original run [41625098790](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41625098790),
+attempt 1 on exact `f54bd768c281dcdfbbe3836292204fac56598689` / base
+`99479711bfdb7c621765f09d671068ca8b8318ce`, subsequently ended **failure**.
+Linux job `125880450451` reports App 1,853 tests, three failures.
+`productionPickerCropAndRemovePersistOnlyTheSelectedRadioContact` failed at the
+encoder-to-service-entry stage, with `calls=[], returned=0, serviceFailure=null,
+lifecycle=RESUMED`; its printed host semantics included the contact and chooser,
+not a completed persistence action. This establishes no service invocation in
+that observed window, not the reason encoding/selection did not reach it.
+Both `realNavigationPredictiveBackCancellationPreservesAnInFlightAvatarWrite`
+variants timed out at line 165, the crop-Choose presentation wait after injected
+picker return, before any predictive Back event. Their Back/held-write assertions
+therefore did not execute.
+
+API31's `saveContinuesWhenTheProfileRowLeavesTheLazyViewport` and
+`savingAnnouncesProgressAndPreventsASecondSelectionUntilTheStoreCompletes`
+again reported `AvatarFailureDialogTimeout`, at line 170. The original log
+ultimately records a 3,600-second command timeout and incomplete mandatory reports.
+No API37 or whole-product pass is inferred. The prepared dialog-identity/deadline
+follow-up does not purport to fix the unproven production/presentation cause.
+It is retained as an immutable local source-only candidate for independent review;
+the PR head remains `f54bd768c` until that review and a publication decision.
+Fresh exact-head/current-base normal affected hosted execution is still required.

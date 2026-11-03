@@ -301,7 +301,7 @@ class PresetStepCoordinatorTest {
         null to listOf(OnboardingPresetOption("loc", "Locale", 433.0)),
     )
 
-    private fun coordinator(port: FakePresets, region: FakeRegion = FakeRegion(presets = presets), done: () -> Unit = {}) =
+    private fun coordinator(port: FakePresets, region: FakeRegion = FakeRegion(presets = presets), done: suspend () -> Unit = {}) =
         PresetStepCoordinator(scope, region, port, done)
 
     @Test fun visiblePresetsFollowRegionWithLocaleFallback() {
@@ -327,6 +327,22 @@ class PresetStepCoordinatorTest {
         val c = coordinator(FakePresets(OnboardingPresetOutcome.NoRadioToConfigure), done = { done += 1 })
         c.select("loc"); c.apply()
         assertEquals(1, done)
+    }
+
+    @Test fun completionWriteFailureCanRetryWithoutReapplyingThePreset() {
+        val port = FakePresets()
+        var completions = 0
+        val c = coordinator(port, done = {
+            completions += 1
+            if (completions == 1) error("preference write failed")
+        })
+        c.select("loc"); c.apply()
+        assertEquals(listOf("loc"), port.applied)
+        assertTrue(c.state.value.completionNeedsRetry)
+        c.retry()
+        assertEquals(listOf("loc"), port.applied)
+        assertEquals(2, completions)
+        assertEquals(1, c.state.value.commitTick)
     }
 
     @Test fun notConnectedSurfacesErrorWithoutCompleting() {
@@ -402,6 +418,29 @@ class OnboardingFlowCoordinatorTest {
         assertTrue(flow.onboarding.hasCompletedOnboarding)
         assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
         assertEquals(OnboardingStep.PAIR, flow.currentStep)
+    }
+
+    @Test fun noDeviceCompletionFailureStaysPendingUntilRetrySucceeds() {
+        var writes = 0
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = false
+            override fun setBoolean(key: String, value: Boolean) = Unit
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                writes += 1
+                if (writes == 1) error("preference write failed")
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
+        flow.deviceScan.showSheet(PairSheet.NO_DEVICE)
+        flow.confirmNoDevice()
+        assertTrue(flow.hasCompletionError.value)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertEquals(PairSheet.NO_DEVICE, flow.deviceScan.state.value.sheet)
+        flow.retryCompletion()
+        assertFalse(flow.hasCompletionError.value)
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+        assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
+        assertEquals(2, writes)
     }
 
     @Test fun wifiConnectNavigatesToRegionAndClosesSheet() {

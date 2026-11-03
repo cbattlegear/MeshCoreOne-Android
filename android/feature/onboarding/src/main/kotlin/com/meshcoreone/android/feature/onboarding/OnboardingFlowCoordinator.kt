@@ -23,6 +23,9 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
 
     private val clearing = MutableStateFlow(false)
     val isClearingPairings: StateFlow<Boolean> = clearing.asStateFlow()
+    private val completionError = MutableStateFlow(false)
+    val hasCompletionError: StateFlow<Boolean> = completionError.asStateFlow()
+    private var completing = false
     private var pendingPairAfterPermission = false
 
     val currentStep: OnboardingStep get() = onboarding.onboardingPath.lastOrNull() ?: OnboardingStep.WELCOME
@@ -57,8 +60,33 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     }
 
     fun confirmNoDevice() {
-        deviceScan.dismissSheet()
-        onboarding.completeOnboarding()
+        completeWithoutDevice()
+    }
+
+    fun retryCompletion() {
+        if (completionError.value) completeWithoutDevice()
+    }
+
+    fun dismissCompletionError() {
+        completionError.value = false
+    }
+
+    private fun completeWithoutDevice() {
+        if (completing) return
+        completing = true
+        scope.launch {
+            try {
+                onboarding.completeOnboarding()
+                completionError.value = false
+                deviceScan.dismissSheet()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                completionError.value = true
+            } finally {
+                completing = false
+            }
+        }
     }
 
     fun clearStalePairings() {

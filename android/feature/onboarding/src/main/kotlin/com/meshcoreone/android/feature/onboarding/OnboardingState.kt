@@ -14,6 +14,9 @@ enum class OnboardingStep(val rawValue: String) {
 interface OnboardingFlagStore {
     fun getBoolean(key: String): Boolean
     fun setBoolean(key: String, value: Boolean)
+
+    /** Waits for durable adapters to confirm the write before publishing completion. */
+    suspend fun persistBoolean(key: String, value: Boolean) = setBoolean(key, value)
 }
 
 class InMemoryOnboardingFlagStore(initial: Map<String, Boolean> = emptyMap()) : OnboardingFlagStore {
@@ -52,10 +55,14 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         return true
     }
 
-    fun completeOnboarding() { hasCompletedOnboarding = true }
+    suspend fun completeOnboarding() {
+        store.persistBoolean(KEY_HAS_COMPLETED, true)
+        completed.value = true
+    }
 
-    fun resetOnboarding() {
-        hasCompletedOnboarding = false
+    suspend fun resetOnboarding() {
+        store.persistBoolean(KEY_HAS_COMPLETED, false)
+        completed.value = false
         path.value = emptyList()
     }
 

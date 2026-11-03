@@ -84,7 +84,11 @@ fun PresetStepScreen(
     state.error?.let {
         AlertDialog(
             onDismissRequest = actions.onDismissError, title = { Text(stringResource(S.alertErrorTitle)) }, text = { Text(uiString(it)) },
-            confirmButton = { TextButton(actions.onDismissError) { Text(stringResource(L.commonOk)) } },
+            confirmButton = {
+                TextButton(if (state.completionNeedsRetry) actions.onRetry else actions.onDismissError) {
+                    Text(stringResource(if (state.completionNeedsRetry) L.commonTryAgain else L.commonOk))
+                }
+            },
         )
     }
     state.retryAlert?.let { alert ->

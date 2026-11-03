@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.os.UserManager
 import androidx.test.core.app.ApplicationProvider
+import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.datastore.PreferenceKey
 import com.meshcoreone.android.core.datastore.StorageFailure
@@ -38,8 +40,8 @@ import org.robolectric.annotation.Config
 @Config(sdk = [31])
 class ShowOnceTipsTest {
     @get:Rule val temporary = TemporaryFolder()
-    private val connected = TipHostState(true, true, false)
-    private val status = TipHostState(false, true, true)
+    private val connected = TipHostState(AppTab.CHATS, true, true, false)
+    private val status = TipHostState(AppTab.SETTINGS, false, true, true)
 
     private class Harness(val directory: File) {
         val application = ApplicationProvider.getApplicationContext<Context>()
@@ -64,6 +66,64 @@ class ShowOnceTipsTest {
             assertFalse(h.storage.preferences.snapshot().contains(SharedTip.DEVICE_MENU.displayedKey))
             assertTrue(h.tips.claim(SharedTip.DEVICE_MENU) { connected })
         } finally { h.close() }
+    }
+
+    @Test fun completionPersistsItsTipUntilAValidTabHasAnEligibleHost() = runBlocking {
+        val directory = temporary.newFolder()
+        val h = Harness(directory)
+        try {
+            h.tips.completeOnboarding()
+            assertTrue(h.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            for (tab in listOf(AppTab.SETTINGS, AppTab.TOOLS)) {
+                assertFalse(h.tips.claim(SharedTip.DEVICE_MENU) { connected.copy(selectedTab = tab) })
+            }
+            assertFalse(h.tips.hasDisplayed(SharedTip.DEVICE_MENU))
+            assertTrue(h.tips.claim(SharedTip.DEVICE_MENU) { connected })
+        } finally { h.close() }
+
+        val reopened = Harness(directory)
+        try {
+            assertTrue(reopened.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            assertTrue(reopened.tips.hasDisplayed(SharedTip.DEVICE_MENU))
+            assertFalse(reopened.tips.claim(SharedTip.DEVICE_MENU) { connected })
+        } finally { reopened.close() }
+    }
+
+    @Test fun completionAndTipDonationRemainUncommittedOnWriteFailureAndCanRetry() = runBlocking {
+        val directory = temporary.newFolder()
+        val h = Harness(directory)
+        val blockingTemp = File(File(directory, "meshcoreone-datastore"), "app.preferences_pb.tmp")
+        blockingTemp.parentFile.mkdirs()
+        assertTrue(blockingTemp.mkdir())
+        try {
+            assertFailsWith<StorageFailure> { h.tips.completeOnboarding() }
+            assertFalse(h.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            assertFalse(h.tips.claim(SharedTip.DEVICE_MENU) { connected })
+            assertFalse(h.tips.hasDisplayed(SharedTip.DEVICE_MENU))
+            assertTrue(h.reported.isNotEmpty())
+        } finally {
+            blockingTemp.deleteRecursively()
+            h.close()
+        }
+
+        val reopened = Harness(directory)
+        try {
+            assertFalse(reopened.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            reopened.tips.completeOnboarding()
+            assertTrue(reopened.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            assertTrue(reopened.tips.claim(SharedTip.DEVICE_MENU) { connected })
+        } finally { reopened.close() }
+    }
+
+    @Test fun persistedDonationCanBeClaimedOnEachOriginalEligibleTab() = runBlocking {
+        for (tab in listOf(AppTab.CHATS, AppTab.NODES, AppTab.MAP)) {
+            val h = Harness(temporary.newFolder())
+            try {
+                h.tips.completeOnboarding()
+                assertTrue(h.tips.claim(SharedTip.DEVICE_MENU) { connected.copy(selectedTab = tab) })
+                assertTrue(h.tips.hasDisplayed(SharedTip.DEVICE_MENU))
+            } finally { h.close() }
+        }
     }
 
     @Test fun thirtyTwoIndependentConsumersHaveExactlyOneRealAtomicDurableClaim() = runBlocking {

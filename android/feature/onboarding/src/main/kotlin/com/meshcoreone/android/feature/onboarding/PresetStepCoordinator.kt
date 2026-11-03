@@ -24,17 +24,19 @@ data class PresetStepState(
     val error: UiText? = null,
     val retryAlert: PresetRetryAlert? = null,
     val commitTick: Int = 0,
+    val completionNeedsRetry: Boolean = false,
 )
 
 class PresetStepCoordinator(
     private val scope: CoroutineScope,
     private val regionPort: OnboardingRegionPort,
     private val presets: OnboardingPresetPort,
-    private val onCompleted: () -> Unit,
+    private val onCompleted: suspend () -> Unit,
 ) {
     private val mutable = MutableStateFlow(PresetStepState())
     val state: StateFlow<PresetStepState> = mutable.asStateFlow()
     private var retryCount = 0
+    private var presetApplied = false
 
     fun visiblePresets(): List<OnboardingPresetOption> = regionPort.catalog.presets(regionPort.selection.value)
 
@@ -46,8 +48,12 @@ class PresetStepCoordinator(
 
     /** Resolves the user's selection against what is actually visible (a stale id is ignored). */
     fun apply(id: String? = mutable.value.selectedId) {
-        val option = visiblePresets().firstOrNull { it.id == id } ?: return
         if (mutable.value.isApplying) return
+        if (presetApplied) {
+            scope.launch { persistCompletion() }
+            return
+        }
+        val option = visiblePresets().firstOrNull { it.id == id } ?: return
         mutable.update { it.copy(isApplying = true) }
         scope.launch {
             val outcome = try {
@@ -62,12 +68,12 @@ class PresetStepCoordinator(
         }
     }
 
-    private fun finish(id: String, outcome: OnboardingPresetOutcome) {
+    private suspend fun finish(id: String, outcome: OnboardingPresetOutcome) {
         when (outcome) {
             OnboardingPresetOutcome.Applied, OnboardingPresetOutcome.NoRadioToConfigure -> {
                 retryCount = 0
-                mutable.update { it.copy(isApplying = false, retryAlert = null, commitTick = it.commitTick + 1) }
-                onCompleted()
+                presetApplied = true
+                persistCompletion()
             }
             OnboardingPresetOutcome.NotConnected -> mutable.update {
                 it.copy(isApplying = false, error = UiText.Resource(O.presetErrorNotConnected))
@@ -80,7 +86,27 @@ class PresetStepCoordinator(
         }
     }
 
+    private suspend fun persistCompletion() {
+        mutable.update { it.copy(isApplying = true, error = null, retryAlert = null) }
+        try {
+            onCompleted()
+            presetApplied = false
+            mutable.update { it.copy(isApplying = false, completionNeedsRetry = false, commitTick = it.commitTick + 1) }
+        } catch (cancelled: CancellationException) {
+            mutable.update { it.copy(isApplying = false) }
+            throw cancelled
+        } catch (_: Exception) {
+            mutable.update {
+                it.copy(isApplying = false, error = UiText.Resource(S.alertRetryUnableToSave), completionNeedsRetry = true)
+            }
+        }
+    }
+
     fun retry() {
+        if (presetApplied && mutable.value.completionNeedsRetry) {
+            scope.launch { persistCompletion() }
+            return
+        }
         val alert = mutable.value.retryAlert ?: return
         mutable.update { it.copy(retryAlert = null) }
         apply(alert.presetId)

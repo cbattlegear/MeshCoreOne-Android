@@ -3,6 +3,38 @@
 **Status: UNVERIFIED, NOT INTEGRATED.** This candidate is an independently attributable
 primitive and deterministic test source, not a completed #524/#530 repair or feature acceptance.
 
+## Scoped persistence successor
+
+The follow-up integrates the actual persistence producer commits `1b6fb60`, `d2dd804`,
+`d63833e`, `728fe2e`, `2641346` and `8e23d59` unchanged, preserving their attribution.
+They provide durable intent identity, real Room epochs, enforced outer-to-inner direct writers
+and a gate-minted active exact-Job scoped repository facade. These are coordinated prerequisites,
+not independent WP-209 implementation or acceptance of that foundation.
+
+`withScopedMutation(lease, scope, operation)` validates the private gate proof before and after
+the operation without reacquiring outer or switching Jobs. This is the ChannelService integration
+entry point inside `store.withChannelOperation { scopedChannels, scope -> ... }`; callers must
+use that facade for every authority write. Three additional test methods cover valid scoped writes
+and lock release, forged/wrong-gate/child/expired rejection, and exceptional expiry with original
+failure preservation: **20 authored fence methods, execution not yet established**.
+
+New coordinator assignment `call_qSxq01S0EpCXrIwfIUKN3kPD` explicitly assigns serialized
+ChannelService integration. A local-only separately attributable overlay atop frozen WP-405
+`3b2eb448` is authorized, but cannot be published before #508 lands or the hold changes.
+No frozen cohort has yet been imported. The independent primitive was pushed at `e1b482e9a`;
+the authorized existing hosted diagnostic is
+[run 41597887097](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41597887097),
+bound to exact `e1b482e9a626be666061a7acb53a479c726c9e88`, not the successor.
+
+The old post-release invalidation proposal is rejected: process death between ambiguous SET
+and cleanup would preserve old authority, and delayed cleanup could invalidate a successor.
+The persistence producer is supplying a durable pre-SET unresolved marker retaining the opaque
+epoch, so successful same-key reconciliation preserves identity while unknown outcomes stay blocked
+across restart. That prerequisite and the actual channel integration are still pending.
+
+The sections below describe the initial primitive snapshot and checks, not a claim that later
+prerequisites or integration have already passed.
+
 ## Identity, scope and ownership
 
 - Repository: `cbattlegear/MeshCoreOne-Android`; WP-209 / services-porter.

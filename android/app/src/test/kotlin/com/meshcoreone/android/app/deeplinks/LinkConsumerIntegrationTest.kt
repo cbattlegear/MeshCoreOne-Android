@@ -40,6 +40,44 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
     private val sanFrancisco = "meshcore://map?lat=37.7749&lon=-122.4194"
     private val focus = MapFocusRequest(37.7749, -122.4194)
 
+    @Test fun externalContactAdapterReadsCapturedRadioWithoutLastConnectionPreference() = runTest {
+        val radio = RadioId(java.util.UUID.fromString("447175B7-557D-4F48-B671-4B2CEE2DC932"))
+        val foreignRadio = RadioId(java.util.UUID.fromString("547175B7-557D-4F48-B671-4B2CEE2DC932"))
+        store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Restored"))
+        store.saveDevice(DeviceDTO(radioId = foreignRadio, publicKey = key(8), nodeName = "Other"))
+        val saved = ContactDTO(radioId = radio, publicKey = key(20), name = "Restored peer", lastHeardTimestamp = null)
+        val foreign = ContactDTO(radioId = foreignRadio, publicKey = key(21), name = "Other peer", lastHeardTimestamp = null)
+        store.saveContact(saved)
+        store.saveContact(foreign)
+        val h = ContainerHarness(this, store)
+        try {
+            assertNull(h.container.appState.offlineDataStore)
+            val adapter = ContainerDeepLinkEnvironment(h.container, h.container.navigation)
+            assertEquals(saved, adapter.fetchContact(radio, saved.publicKey))
+            assertNull(adapter.fetchContact(radio, foreign.publicKey))
+            assertEquals(foreign, adapter.fetchContact(foreignRadio, foreign.publicKey))
+            assertNull(adapter.fetchContact(radio, key(22)))
+            assertNull(h.sessions.current)
+            assertTrue(h.links.radios.isEmpty())
+        } finally { h.container.close() }
+    }
+
+    @Test fun externalContactAdapterDoesNotTurnProcessStoreFailureIntoAbsence() = runTest {
+        val radio = RadioId(java.util.UUID.fromString("447175B7-557D-4F48-B671-4B2CEE2DC932"))
+        val failure = IllegalStateException("contact lookup failed")
+        val failingStore = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? = throw failure
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = failingStore)
+        try {
+            assertNull(h.container.appState.offlineDataStore)
+            val adapter = ContainerDeepLinkEnvironment(h.container, h.container.navigation)
+            assertSame(failure, assertFailsWith<IllegalStateException> { adapter.fetchContact(radio, key(20)) })
+            assertNull(h.sessions.current)
+            assertTrue(h.links.radios.isEmpty())
+        } finally { h.container.close() }
+    }
+
     @Test fun initialViewIntentIsHeldUntilActualContainerBinding() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val h = ContainerHarness(this, store)

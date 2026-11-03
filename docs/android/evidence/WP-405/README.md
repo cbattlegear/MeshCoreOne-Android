@@ -1,5 +1,28 @@
 # WP-405 evidence
 
+## Issue #544: first-graph process-store contact lookup
+
+The external adapter now calls `container.processStore.fetchContact` with the
+captured radio and public key, rather than the last-device-preference-gated
+`offlineDataStore`. This removes a source-derived false-absence window before
+the first graph's device/last-connection persistence completes. Typed capture,
+completion, revision and session/generation fencing remain unchanged.
+
+Existing reservation revision 20 covers both changed Kotlin paths; trusted
+`reserve.py admit --wp WP-405 --path <path> --operation modify` accepted each.
+Two authored Room-backed adapter methods cover an absent last-connection
+preference, restored contact lookup, foreign-radio isolation, genuine absence,
+and exact exception propagation without creating a radio graph. They are
+**uncompiled and unexecuted**; WP-302 owns the separate first-graph route
+regression. This is not a reproduced or verified runtime fix. The retained
+execution-owner and combined-local-test-before-publication holds remain intact.
+No channel/service cohort, producer lifecycle source or foreign worktree changed.
+Source checks passed: `python tools\android-port\controller\validate.py`
+(valid manifest, 1,866 tracked reference files),
+`python tools\android-port\portmap.py` (2,003 implementation records), and
+`git diff --check` (no whitespace errors). None establishes Kotlin compilation
+or product-test discovery.
+
 ## Dependent external adapter for producer 208dad904
 
 Exact producer commits `3a372fd709bd266bc987296b5338d7e78186c41a` and

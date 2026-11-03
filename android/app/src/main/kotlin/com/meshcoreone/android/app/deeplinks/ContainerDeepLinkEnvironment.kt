@@ -54,7 +54,7 @@ class ContainerDeepLinkEnvironment(
         navigation.stageHashtag(HashtagJoinRequest(link.fullName), selectChats)
 
     override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? =
-        container.appState.offlineDataStore?.fetchContact(radioId, publicKey)
+        container.processStore.fetchContact(radioId, publicKey)
 
     override suspend fun fetchChannels(radioId: RadioId): List<ChannelDTO> =
         container.appState.offlineDataStore?.fetchChannels(radioId).orEmpty()

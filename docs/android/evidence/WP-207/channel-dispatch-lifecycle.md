@@ -11,9 +11,10 @@ identities and canonical workflow run, not a second retained CI-result bundle.
 Before editing, the live #495 producer `a85352c6-96c7-44eb-806d-de7ad856974d`
 explicitly serialized prospective runtime channel-revocation hunks to this stream,
 then attributed the narrow factory registry-publication guard and graph lease
-binding/early-revocation hunks here. Its manager lifecycle stamps and
-manager -> registry -> graph -> app ordering are preserved as additive integration;
-its AppContainer/AppState/navigation drafts are not imported, edited or published.
+binding/early-revocation hunks here. The narrow additions retain the
+manager -> registry -> graph -> app ordering. Separately committed #495 manager
+lifecycle-stamp changes still require composition; its AppContainer/AppState/
+navigation drafts are not imported, edited or published.
 
 Current #529 producer `b33644ad-3a9a-4a37-af40-9a50b34ced2a` confirmed its work is
 tests/evidence only and retains no overlapping production hunks. The merged #475
@@ -109,9 +110,18 @@ were corrected to unsigned typed port literals, without widening the API or
 casting away type safety. App scheduling assertions now require actual READY,
 not the earlier SYNCING-or-READY operational state.
 
+The identity producer's standalone `c590e7e1c` correction is composed unchanged:
+DTO saves retain existing and pending history while occupant epochs still rotate;
+authoritative replacement remains separately discriminated. Existing reopen
+assertions use the actual schema version. This is not a schema-3/journal import
+and has no Kotlin execution credit until a fresh exact-candidate run.
+
 Full production ChannelService wiring is blocked by its owner's frozen WP-405
 dispatch/UUID-receipt/uncertainty cohort; MessageService wiring remains its current
 producer's work. No interface-only or fake-only result completes that integration.
+The in-memory admission handle is not an exact-owner retirement/absence receipt
+or a crash-safe transition ticket. Durable route supersession and transition
+publication ordering remain separate, unimplemented prerequisites for #495.
 Physical noncooperative late-write drain, actual Android/radio behavior, signing,
 release and merge acceptance are not established. Revocation/accounting never
 clears uncertainty; no quarantine-reset or success-shaped fallback is introduced.

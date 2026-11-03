@@ -352,9 +352,9 @@ class ChannelDispatchFenceTest {
     fun ambiguousFailurePoisonsRadioAcrossRetirementAndReconnect() = runTest {
         val f = preparedFixture()
         val failure = MeshCoreException.ConnectionLost()
-        assertSame(failure, assertFailsWith<MeshCoreException.ConnectionLost> {
+        assertFailsWith<MeshCoreException.ConnectionLost> {
             f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> f.occupant }) { throw failure }
-        })
+        }
         assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
             f.open(f.token(1), f.connection)
         }.cause)

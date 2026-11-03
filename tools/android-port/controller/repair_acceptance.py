@@ -1065,9 +1065,10 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         raise PortError("Unbalanced Kotlin scope in hosted test source")
 
     inherited_bodies, inherited_companions, companion_bodies, header_bodies = set(), set(), {}, []
+    anonymous_bodies = set()
     bodyless_roots = []
     inherited_header_annotations = set()
-    inherited_scope, unresolved_scope, bodyless_inheritance = False, False, False
+    unresolved_scope, bodyless_inheritance = False, False
     for start, value in enumerate(tokens):
         if value not in ("class", "interface", "object") or (
             start and tokens[start - 1] in (".", ":")
@@ -1122,6 +1123,10 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                         header_bodies.append((start, index))
                     if inherited:
                         inherited_bodies.add(index)
+                        if value == "object" and tokens[start + 1] == ":" and not (
+                            start and tokens[start - 1] == "companion"
+                        ):
+                            anonymous_bodies.add(index)
                     if value == "object" and start and tokens[start - 1] == "companion":
                         companion_bodies.setdefault(scopes[start], set()).add(index)
                     break
@@ -1142,7 +1147,6 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     break
             index += 1
         unresolved_scope |= bool(nesting)
-        inherited_scope |= inherited
         bodyless_inheritance |= inherited and declaration_body is None
         if (
             value == "class" and declaration_body is None and not inherited
@@ -1177,14 +1181,16 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     if source_declarations is not None:
         source_declarations.update(declarations)
         return {}
-    if reject_inherited and (inherited_scope or unresolved_scope):
+    # Object-expression collaborators retain lexical inheritance, but are not discoverable suites.
+    inherited_suites = inherited_bodies - anonymous_bodies
+    if reject_inherited and (inherited_suites or bodyless_inheritance or unresolved_scope):
         if (
-            inheritance is None or unresolved_scope or bodyless_inheritance or not inherited_bodies
-            or any(body not in declarations for body in inherited_bodies)
+            inheritance is None or unresolved_scope or bodyless_inheritance or not inherited_suites
+            or any(body not in declarations for body in inherited_suites)
             or inherited_header_annotations
         ):
             raise PortError("Cannot establish all inherited Kotlin JUnit declarations for changed test source")
-        for body in inherited_bodies:
+        for body in inherited_suites:
             try:
                 inheritance(declarations[body], True)
             except PortError as error:

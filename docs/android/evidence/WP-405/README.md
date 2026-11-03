@@ -1,5 +1,30 @@
 # WP-405 evidence
 
+## Terminal-ID producer seam: source-only follow-up
+
+The existing coordinator assigned the exact-ID restoration support seam
+to this producer. Actual trusted admissions passed:
+
+```powershell
+python .\tools\android-port\local\reserve.py admit --wp WP-405 --path android/app/src/main/kotlin/com/meshcoreone/android/app/deeplinks/PendingExternalRoute.kt --operation modify
+python .\tools\android-port\local\reserve.py admit --wp WP-405 --path android/app/src/test/kotlin/com/meshcoreone/android/app/deeplinks/PendingExternalRouteTest.kt --operation add-or-update-related-test
+```
+
+Same advisory reservation revision 18 already covers these paths/operations.
+The narrow accessor returns an immutable copied `SnapshotSet<String>` from
+the actual bounded terminal-consumed history under its existing mutex.
+Supersession, rejection and commit-then-cancellation are not success receipts.
+No callbacks or routing effects are added; WP-302 activity restoration is not
+implemented in this branch.
+
+Four additional test methods and new assertions in three retained methods
+cover exact IDs through actual drain cleanup, cold/in-flight identical
+replacement, rejected routing, retryable cancellation/failure and bounded
+snapshot detachment. They are source definitions, not discovered/executed
+tests. Product compilation/runtime evidence for this new seam is absent.
+The interrupted invocation and retained execution owner below are preserved;
+no retry, lock release, unmerged consumer import or publication occurred.
+
 ## Resumed source candidate: verification pending
 
 The user approved resumption, removing the earlier administrative pause/local

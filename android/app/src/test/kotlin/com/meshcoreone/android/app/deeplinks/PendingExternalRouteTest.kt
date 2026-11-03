@@ -31,9 +31,11 @@ class PendingExternalRouteTest {
         assertIs<PendingExternalRoute.SubmitOutcome.Staged>(pending.submit(PendingExternalRoute.Delivery("1", "meshcore://map?lat=1&lon=2")))
         assertNotNull(pending.snapshot())
         assertEquals(emptyList(), routed)
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
         assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.markReady())
         assertEquals(listOf("meshcore://map?lat=1&lon=2"), routed)
         assertNull(pending.snapshot())
+        assertEquals(setOf("1"), pending.consumedDeliveryIds())
     }
 
     @Test
@@ -77,10 +79,12 @@ class PendingExternalRouteTest {
         started.await()
         job.cancelAndJoin()
         assertNotNull(pending.snapshot())
+        assertTrue(pending.consumedDeliveryIds().isEmpty(), "Precommit cancellation must remain retryable")
         gate.complete(Unit)
         assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.retry())
         assertNull(pending.snapshot())
         assertEquals(2, calls)
+        assertEquals(setOf("cancel"), pending.consumedDeliveryIds())
     }
 
     @Test
@@ -107,9 +111,94 @@ class PendingExternalRouteTest {
         assertEquals(failure.message, caught.message)
         assertTrue(generateSequence<Throwable>(caught) { it.cause }.any { it === failure })
         assertEquals(delivery, pending.snapshot())
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
         assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.retry())
         assertEquals(2, calls)
         assertNull(pending.snapshot())
+        assertEquals(setOf("failure"), pending.consumedDeliveryIds())
+    }
+
+    @Test
+    fun terminalSnapshotDistinguishesIdenticalReplacementIdsWithoutClaimingRouteSuccess() = runTest {
+        val routed = mutableListOf<String>()
+        val pending = PendingExternalRoute { routed += it; DeepLinkRouteOutcome.Rejected }
+        val uri = "meshcore://contact/add"
+        pending.submit(PendingExternalRoute.Delivery("old", uri))
+        val before = pending.consumedDeliveryIds()
+        pending.submit(PendingExternalRoute.Delivery("replacement", uri))
+        val superseded = pending.consumedDeliveryIds()
+        assertEquals(setOf("old"), superseded)
+        assertEquals("replacement", pending.snapshot()?.id)
+        assertTrue(routed.isEmpty(), "A superseded ID can be terminal without ever routing")
+        val result = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.markReady())
+        assertEquals(DeepLinkRouteOutcome.Rejected, result.outcome)
+        assertEquals(setOf("old", "replacement"), pending.consumedDeliveryIds())
+        assertTrue(before.isEmpty(), "Earlier snapshots must not observe later mutations")
+        assertEquals(setOf("old"), superseded)
+        assertEquals(listOf(uri), routed)
+        assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(
+            pending.submit(PendingExternalRoute.Delivery("old", uri)),
+        )
+    }
+
+    @Test
+    fun terminalSnapshotRetainsCommittedIdWhenCallerCancellationPreventsRoutedOutcome() = runTest {
+        val committed = CompletableDeferred<Unit>()
+        val pending = PendingExternalRoute {
+            val guard = assertNotNull(currentCoroutineContext()[PendingExternalRoute.CommitGuard])
+            guard.commitOutcome { DeepLinkRouteOutcome.ConfirmationStaged }
+            committed.complete(Unit)
+            awaitCancellation()
+        }
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("committed", "meshcore://contact/add")
+        val caller = launch { pending.submit(delivery) }
+        committed.await()
+        assertTrue(pending.consumedDeliveryIds().isEmpty(), "The drain has not completed cleanup yet")
+        caller.cancelAndJoin()
+        assertTrue(caller.isCancelled)
+        assertNull(pending.snapshot())
+        assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
+        assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(pending.submit(delivery))
+    }
+
+    @Test
+    fun terminalSnapshotKeepsActualInflightAndReplacementIdsSeparate() = runTest {
+        val started = CompletableDeferred<Unit>()
+        var calls = 0
+        val pending = PendingExternalRoute {
+            if (++calls == 1) {
+                started.complete(Unit)
+                awaitCancellation()
+            }
+            DeepLinkRouteOutcome.ConfirmationStaged
+        }
+        pending.markReady()
+        val uri = "meshcore://contact/add"
+        val first = async { pending.submit(PendingExternalRoute.Delivery("first", uri)) }
+        started.await()
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
+        assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
+            pending.submit(PendingExternalRoute.Delivery("second", uri)),
+        )
+        assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(first.await())
+        assertEquals(setOf("first", "second"), pending.consumedDeliveryIds())
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun terminalSnapshotIsBoundedAndDetachedFromTheMutableHistory() = runTest {
+        val pending = PendingExternalRoute { DeepLinkRouteOutcome.Navigated }
+        repeat(65) { pending.submit(PendingExternalRoute.Delivery("id-$it", "same-uri")) }
+        val retained = pending.consumedDeliveryIds()
+        assertEquals((0 until 64).map { "id-$it" }.toSet(), retained)
+        pending.submit(PendingExternalRoute.Delivery("id-65", "same-uri"))
+        assertEquals((1..64).map { "id-$it" }.toSet(), pending.consumedDeliveryIds())
+        assertEquals((0 until 64).map { "id-$it" }.toSet(), retained)
+        assertEquals("id-65", pending.snapshot()?.id, "Current pending ID is not yet terminal")
+        assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(
+            pending.submit(PendingExternalRoute.Delivery("id-64", "same-uri")),
+        )
     }
 
     @Test

@@ -1,6 +1,8 @@
 // PortedFrom: MC1/State/PendingExternalURL.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.deeplinks
 
+import com.meshcoreone.android.core.model.SnapshotSet
+import com.meshcoreone.android.core.model.snapshotSet
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
@@ -38,6 +40,12 @@ class PendingExternalRoute(
     suspend fun retry(): SubmitOutcome = drain()
 
     suspend fun snapshot(): Delivery? = mutex.withLock { pending }
+
+    /**
+     * Bounded deduplication history, including superseded deliveries, not successful routing or consent.
+     * Read after drain cleanup, including cancellation, and match the exact saved delivery ID.
+     */
+    suspend fun consumedDeliveryIds(): SnapshotSet<String> = mutex.withLock { consumed.snapshotSet() }
 
     private suspend fun drain(delivery: Delivery? = null, becomeReady: Boolean = false): SubmitOutcome = coroutineScope {
         val routing = mutex.withLock {

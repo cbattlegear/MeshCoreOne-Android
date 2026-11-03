@@ -66,6 +66,7 @@ data class MessageEntity(
     val routeTypeRawValue: Long,
     val regionScope: String?,
     val regionScopeMatches: SnapshotList<String>,
+    val channelOccupantID: UUID? = null,
 )
 
 @Entity(
@@ -115,4 +116,5 @@ data class PendingSendEntity(
     val contactID: UUID?, val channelIndex: Long?, val isResend: Boolean, val messageText: String,
     val messageTimestamp: Long, val localNodeName: String?, val sequence: Long,
     @Embedded(prefix = "enqueuedAt_") val enqueuedAt: StoredInstant, val attemptCount: Long?,
+    val channelOccupantID: UUID? = null,
 )

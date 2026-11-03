@@ -17,7 +17,7 @@ fun MessageDTO.toEntity(): MessageEntity = MessageEntity(
     ackCode?.toLong(), pathLength.toLong(), snr, pathNodes, senderKeyPrefix, senderNodeName, isRead, replyToID, roundTripTime?.toLong(),
     heardRepeats, sendCount, retryAttempt, maxRetryAttempts, deduplicationKey, linkPreviewURL, linkPreviewTitle,
     null, null, false, containsSelfMention, mentionSeen, failureSeen, timestampCorrected, senderTimestamp?.toLong(),
-    reactionSummary, routeType?.rawValue?.toLong() ?: -1, regionScope, regionScopeMatches,
+    reactionSummary, routeType?.rawValue?.toLong() ?: -1, regionScope, regionScopeMatches, channelOccupantID,
 )
 
 private fun Instant.truncatedUnixSeconds(): Long =
@@ -34,7 +34,7 @@ fun MessageEntity.toDTO(includeLinkPreviewBlobs: Boolean = true): MessageDTO = M
     deduplicationKey, linkPreviewURL, linkPreviewTitle, if (includeLinkPreviewBlobs) linkPreviewImageData else null,
     if (includeLinkPreviewBlobs) linkPreviewIconData else null, includeLinkPreviewBlobs && linkPreviewFetched,
     containsSelfMention, mentionSeen, failureSeen, timestampCorrected, senderTimestamp?.uint("message.senderTimestamp"), reactionSummary,
-    routeTypeRawValue.takeIf { it in 0L..255L }?.let { RouteType.fromRawValue(it.toUByte()) }, regionScope, regionScopeMatches,
+    routeTypeRawValue.takeIf { it in 0L..255L }?.let { RouteType.fromRawValue(it.toUByte()) }, regionScope, regionScopeMatches, channelOccupantID,
 )
 
 fun MessageRepeatDTO.toEntity(radioId: RadioId, parentMessageID: UUID?): MessageRepeatEntity {
@@ -53,11 +53,11 @@ fun ReactionEntity.toDTO(): ReactionDTO =
 
 fun PendingSendDTO.toEntity(): PendingSendEntity = PendingSendEntity(
     radioId.value, id, messageID, kind.rawValue, contactID, channelIndex?.toLong(), isResend, messageText,
-    messageTimestamp.toLong(), localNodeName, sequence, StoredInstant.from(enqueuedAt), attemptCount,
+    messageTimestamp.toLong(), localNodeName, sequence, StoredInstant.from(enqueuedAt), attemptCount, channelOccupantID,
 )
 fun PendingSendEntity.toDTO(): PendingSendDTO = PendingSendDTO(
     id, RadioId(radioId), messageID,
     PendingSendKind.fromRawValue(kindRawValue) ?: throw DatabaseValueException("pendingSend.kind", "Unknown raw value $kindRawValue"),
     contactID, channelIndex?.ubyte("pendingSend.channelIndex"), isResend, messageText, messageTimestamp.uint("pendingSend.messageTimestamp"),
-    localNodeName, sequence, enqueuedAt.toInstant(), attemptCount,
+    localNodeName, sequence, enqueuedAt.toInstant(), attemptCount, channelOccupantID,
 )

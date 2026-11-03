@@ -112,3 +112,19 @@ and production ordering are unchanged.
 Hosted job/logs, not a second result bundle, remain the authoritative exact-commit
 execution record. Subsequent candidate results must be read from their own run;
 the failed run is not passing evidence for the corrected fixture.
+
+The corrected Kotlin candidate
+`c0133bfebd4e683113aa1d5926935223191c6726` passed
+[exact-commit Android candidate CI](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41596431177).
+The authoritative Android job reports `:app:testDebugUnitTest`: 1,856 discovered,
+run and passed; zero failures, errors or skips, including all nine new replay
+methods. Its full declared build/verification completed successfully, as did
+controller/source checks. This final evidence-only update does not alter those
+tested Kotlin bytes. No whole-WP, physical radio/device or product-specific iOS
+reaction execution acceptance is inferred from the workflow's other oracle jobs.
+
+Local `git diff --check`, `python tools\android-port\controller\validate.py` and
+`python tools\android-port\portmap.py` passed on the corrected candidate. Native
+local Gradle remains blocked by the retained execution owner; hosted success
+does not authorize clearing that owner. Review/merge and the other #406 concerns
+remain separate; no PR was opened by this assignment.

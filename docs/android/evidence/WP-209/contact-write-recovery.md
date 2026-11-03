@@ -35,9 +35,19 @@ Owner: `services-porter`, directly assigned Project child
   marker clearing. The messaging additions do not change contact request bytes,
   ACK correlation or caller cancellation behavior. The merge had no conflict
   markers or discarded edits.
-- All 17 WP-209 changed paths below were re-admitted against current main with
-  their actual operation and trusted capability. The inherited WP-107 additions
-  are base content, not new WP-209 changed paths.
+- Main subsequently advanced from `796a872a3565a66c74f782b738a9ecb3c273fb25`
+  to `99479711bfdb7c621765f09d671068ca8b8318ce` through PR #529. The intervening
+  diff only added the WP-303 BLE integration test and its evidence document;
+  neither path overlaps the 17 WP-209 producer paths. They were integrated
+  without rewriting at merge commit `d8c51c74d0a084beaa53365c587aea9c04fa3a3d`.
+  The prior successful run below remains evidence for its exact `ce21ba518`
+  candidate; a new exact-head run is required for the current-main integration.
+- All 17 WP-209 changed paths below were re-admitted against main
+  `796a872a3565a66c74f782b738a9ecb3c273fb25` with their actual operation and
+  trusted capability. The later `99479711bfdb7c621765f09d671068ca8b8318ce`
+  advance is disjoint from those paths, so the existing admission cohort remains
+  unchanged. The inherited WP-107 additions are base content, not new WP-209
+  changed paths.
 
 The supported `reserve.py admit --wp WP-209 --path <path> --operation <operation>`
 matched each actual edit before authoring:
@@ -137,7 +147,7 @@ WP-302 owns mounted confirmation cancellation/re-entry evidence. No physical
 radio, Android device, signing or hardware execution is claimed here. The
 passing SwiftData restore/export oracle is not an iOS-device run.
 
-### Exact current-base candidate diagnostics
+### Exact candidate diagnostics
 
 - Candidate `ce21ba5185d46c036949e0ceb078090cbe37beac`, run
   [41608021764, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41608021764),

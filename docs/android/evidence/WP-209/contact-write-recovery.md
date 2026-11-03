@@ -91,7 +91,7 @@ ContactService/service-test overlap; its UI stays with its existing owner.
 
 ## Behavioral evidence to execute
 
-`ContactWriteRecoveryTests` contains 28 deterministic methods using an actual
+`ContactWriteRecoveryTests` contains 32 deterministic methods using an actual
 `MeshCoreSession` and controlled raw frames, not a fake contact session:
 queued-before-send cancellation; retired caller plus late successful ACK;
 identical/different replacement delivery correlation; active and late rejection;
@@ -123,6 +123,21 @@ per-radio `syncMutex`, ordering mutation and cleanup against snapshot
 fetch/application without adding a non-reentrant mutex or serializing unrelated
 channel/message work. V-contact protection, device `NOT_FOUND` mapping, and
 local-only recovery behavior remain unchanged.
+
+The ordering tests pause `batchSaveContacts` only after a complete contact-stream
+response, and pause local `deleteContact` only after the device remove response,
+so they prove the service fence rather than protocol request serialization.
+Another test holds cleanup after the acknowledged device removal and local delete,
+then verifies a new snapshot cannot start and `NodeDeleted` is emitted only after
+the production `ContactCleanupCoordinator` finishes; its callback seam suspends
+at notification cleanup and sync-notification order is asserted. Cancellation
+through that coordinator after acknowledgement is asserted to keep the recovery
+marker and block a subsequent contact write. Protected V-contact
+remote and local removals are exercised while an Add is active and another Add
+is queued; both remain true no-ops, with no remove command, local deletion,
+event, recovery marker or queued-write invalidation.
+Protected V-contact no-ops also return while an unrelated snapshot is paused in
+persistence, without waiting for or mutating that sync fence.
 
 `ContactWriteCompletionRoomTest` has three real-Room methods for transactional
 radio isolation, complete local metadata preservation, stale/equal-time CAS

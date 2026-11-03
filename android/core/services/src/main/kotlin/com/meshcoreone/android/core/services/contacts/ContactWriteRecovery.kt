@@ -81,13 +81,16 @@ internal object ContactWriteRecovery {
         }
     }
 
-    suspend fun <T> withContactMutationFence(
+    suspend fun withContactMutationFence(
         preferences: ContactPreferenceFlags,
         radioId: RadioId,
-        operation: suspend () -> T,
-    ): T {
+        shouldMutate: suspend () -> Boolean,
+        operation: suspend () -> Unit,
+    ) {
         val state = synchronized(this) { state(preferences, radioId) }
-        return state.syncMutex.withLock {
+        state.syncMutex.withLock {
+            // Protected-contact no-ops must not invalidate queued writes or claim the sync fence.
+            if (!shouldMutate()) return@withLock
             synchronized(this) {
                 loadEpoch(preferences, radioId, state)
                 if (state.dispatchingWrites.isNotEmpty()) throw ContactServiceError.SyncInterrupted()

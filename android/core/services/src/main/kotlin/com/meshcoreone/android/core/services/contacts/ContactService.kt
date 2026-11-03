@@ -367,6 +367,7 @@ class ContactService(
                 throw error
             }
         }
+    }
 
     /**
      * Remove a contact's local data and run the full cleanup chain without contacting the device.
@@ -374,19 +375,30 @@ class ContactService(
      * mutation fence orders this deletion with a fetched contact snapshot.
      * ZephCore V-contact remove is disabled (same policy as [removeContact]).
      */
-    suspend fun removeLocalContact(contact: EntityKey, publicKey: Bytes) =
-        ContactWriteRecovery.withContactMutationFence(preferences, contact.radioId) {
-            val stored = contactTryOptional { contacts.fetchContact(contact) }
-            if (stored != null && isProtectedVContact(stored.radioId, publicKey)) {
-                logger.log(ContactLogLevel.INFO, "removeLocalContact ignored for ZephCore V-contact (remove disabled)")
-                return@withContactMutationFence
-            }
+    suspend fun removeLocalContact(contact: EntityKey, publicKey: Bytes) {
+        val stored = contactTryOptional { contacts.fetchContact(contact) }
+        if (stored != null && isProtectedVContact(stored.radioId, publicKey)) {
+            logger.log(ContactLogLevel.INFO, "removeLocalContact ignored for ZephCore V-contact (remove disabled)")
+            return
+        }
 
+        ContactWriteRecovery.withContactMutationFence(
+            preferences,
+            contact.radioId,
+            shouldMutate = {
+                val current = contactTryOptional { contacts.fetchContact(contact) }
+                if (current != null && isProtectedVContact(current.radioId, publicKey)) {
+                    logger.log(ContactLogLevel.INFO, "removeLocalContact ignored for ZephCore V-contact (remove disabled)")
+                    false
+                } else true
+            },
+        ) {
             contacts.deleteContact(contact)
             cleanupCoordinator?.handleCleanup(contact, ContactCleanupReason.DELETED, publicKey)
             eventBroadcaster.yield(ContactServiceEvent.NodeDeleted)
             syncCoordinator?.notifyContactsChanged()
         }
+    }
 
     /** Whether [publicKey] is the ZephCore V-contact for this radio (remove/prune protected). */
     private suspend fun isProtectedVContact(radioId: RadioId, publicKey: Bytes): Boolean {

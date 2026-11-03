@@ -70,7 +70,7 @@ original Swift family. Existing original correlation cases for serialization,
 device errors, orphan replies and queued cancellation remain relevant; original
 messaging tests and the #525 monitor-contention/negative controls remain intact.
 
-`MessageWriteDispatchTest` adds 20 supplementary real-session/role cases:
+`MessageWriteDispatchTest` adds 21 supplementary real-session/role cases:
 
 | Cases | Measurable control |
 | --- | --- |
@@ -83,6 +83,7 @@ messaging tests and the #525 monitor-contention/negative controls remain intact.
 | 2 retirement | Old queued task cannot dispatch after actual stop/start; a sent cancellation never upgrades to unsent. |
 | 2 unsupported role | Original cancellation preserved, unknown default, fresh-handle requirement enforced. |
 | 2 exact-wire controls | Independent direct/channel byte literals include timestamp, UTF-8 and high-bit attempt; existing overload emits identical bytes and preserves return semantics. |
+| 1 additive unicast/status correlation | Active status exchange retains the actual serializer through its messageSent metadata; a queued dispatch-overload send remains incomplete until its own distinct metadata arrives. Exact status/message packets, status result and returned ACK metadata are independently asserted. |
 | 1 cross-path reuse | A direct call's old unsent handle cannot be reused for a channel attempt. |
 | 1 typed-error matrix | Short direct prefix remains invalid without sending; both device-error paths retain raw code 42, without unsent inference. |
 
@@ -96,6 +97,14 @@ Unlike the shared mock's cooperative activity check, it can record the exact
 packet after the suspended send resumes despite cancellation. The test asserts
 one handshake packet before resume and two actual packets afterward, without
 using `NonCancellable` or changing the production fence.
+The subsequent exact-scope supplement identified that the original
+unicast-versus-binary family still invoked only the legacy overload. The added
+dispatch-overload regression retains the original case and holds a real status
+exchange active while the additive message queues. Separate scheduler steps
+prove neither its messageSent metadata nor the proper status response
+prematurely completes the message; only the distinct later messageSent returns
+the expected ACK bytes and timeout. This is correlation evidence, not proof
+that a remote recipient acknowledged or delivered a message.
 
 ## Verification
 

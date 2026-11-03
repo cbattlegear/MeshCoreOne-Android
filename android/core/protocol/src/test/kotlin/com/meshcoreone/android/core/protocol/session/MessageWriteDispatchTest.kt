@@ -5,6 +5,8 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
+import com.meshcoreone.android.core.protocol.event.StatusResponse
+import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import java.time.Instant
@@ -226,6 +228,43 @@ class MessageWriteDispatchTest {
 
     @TestFactory
     fun wireAndHandleCases() = listOf(
+        nativeCase("additive direct send cannot share a messageSent with an active status exchange") {
+            val f = fixture(); start(f)
+            val key = filled(0x31, 32)
+            val statusCommand = hex("1b") + key
+            val messagePacket = hex("02008080009265") + filled(0x44, 6) + hex("68656c6c6f")
+            val status = checkedRequest { f.session.requestStatus(key, ContactType.ROOM) }; runCurrent()
+            assertEquals(statusCommand, f.transport.sent.last())
+            val dispatch = MessageWriteDispatch()
+            val role: MessagingSessionOps = f.session
+            val message = checkedRequest {
+                role.sendMessage(filled(0x44, 32), "hello", testEpoch, 0x80u, dispatch = dispatch)
+            }; runCurrent()
+            assertEquals(2, f.transport.sent.size)
+            assertFalse(status.isCompleted)
+            assertFalse(message.isCompleted)
+            f.transport.receive(sentPacket(hex("deadbeef"), 1111)); runCurrent()
+            assertFalse(status.isCompleted, "MessageSent metadata is not the requested status response")
+            assertFalse(message.isCompleted, "The queued additive call cannot consume another exchange's metadata")
+            assertEquals(2, f.transport.sent.size, "The status exchange must retain the real serializer")
+            f.transport.receive(statusPacket(key, 1234, 5, 2)); runCurrent()
+            val result = status.await()
+            assertEquals(StatusResponse.Layout.ROOM_SERVER, result.layout)
+            assertEquals(1234L, result.battery)
+            assertEquals(5u.toUShort(), result.roomServerPostedCount)
+            assertEquals(2u.toUShort(), result.roomServerPostPushCount)
+            assertEquals(
+                listOf(hex("01032020202020204d436f7265"), statusCommand, messagePacket),
+                f.transport.sent,
+            )
+            assertFalse(message.isCompleted, "The earlier MessageSent must not complete the newly dispatched call")
+            f.transport.receive(sentPacket(hex("11223344"), 3456)); runCurrent()
+            assertEquals(MessageSentInfo(0u, hex("11223344"), 3456u), message.await())
+            assertEquals(3, f.transport.sent.size)
+            assertEquals(ChannelWriteCancellationDisposition.UNKNOWN, dispatch.cancellationDisposition)
+            assertEquals(0, f.session.core.generation().pending.size)
+            f.session.stop()
+        },
         nativeCase("direct additive call preserves prefix timestamp attempt UTF8 bytes and MessageSentInfo") {
             val f = fixture(); start(f)
             val dispatch = MessageWriteDispatch()

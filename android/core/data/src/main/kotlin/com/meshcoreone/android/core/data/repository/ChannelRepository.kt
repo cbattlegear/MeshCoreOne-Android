@@ -150,7 +150,7 @@ internal class ChannelRepository(
 
     override suspend fun deleteMessagesForChannel(radioId: RadioId, channelIndex: UByte) =
         metadataWrite("deleteMessagesForChannel", flushBeforeRollback = true) {
-            deleteChannelMessages(radioId, channelIndex)
+            deleteChannelMessages(radioId, channelIndex, preserveUnresolved = identityScope != null)
             save()
         }
 

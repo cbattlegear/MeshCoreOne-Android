@@ -10,12 +10,20 @@ base and head, and the complete changed-path set. Its finite path map assigns
 workflow changes to `trusted-workflows`, controller/tests/docs to WP-owned
 capabilities, and oracle validators/tests to `traceability-validation`. Unknown
 paths and operations fail closed. The declaration fixes the Android CI workflow,
-the controller-and-policy job, its controller test step, and all four test roots:
+the controller-and-policy job, its controller test step, and four mandatory test roots:
 controller tests, local tests, Android parity tests, and oracle tests.
 The workflow validator admits this exact four-root command in addition to its
 existing commands. It still rejects duplicate or unknown roots, missing event
 bindings, ignored failures and multiple controller invocations. Its validator
 and regression-test paths are explicitly included in the finite path map.
+The accessibility-test root is additionally mandatory when the shared native
+suite selector selects it from the exact immutable base/head and changed paths.
+Acceptance uses that same selection logic without consulting the local checkout;
+a removed selected suite, missing/zero selected root or unknown extra root fails.
+Production readers and regression tests are classified by their declared
+operations, not filename substrings. The scope's admitted path operations are
+passed unchanged through data-only staging and receipt revalidation, including
+oracle paths outside WP-003's ordinary manifest write paths.
 
 The publisher independently stages the exact candidate diff, requires the
 authenticated exact-head read-only source review and WP-003's existing human

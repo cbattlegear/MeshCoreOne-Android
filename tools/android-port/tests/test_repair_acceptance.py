@@ -114,11 +114,19 @@ def infrastructure_fixture():
     paths = sorted((
         ".github/workflows/android-ci.yml",
         "docs/android/ci/bounded-infrastructure-review.md",
+        "tools/android-port/controller/authority.py",
+        "tools/android-port/controller/gates.py",
+        "tools/android-port/controller/merged_acceptance.py",
         "tools/android-port/controller/native_review.py",
-        "tools/android-port/oracle/test_ci.py",
-        "tools/android-port/oracle/test_workflow_scope.py",
-        "tools/android-port/oracle/workflow_scope.py",
+        "tools/android-port/controller/repair_acceptance.py",
+        "tools/android-port/controller/runtime_inputs.py",
+        "tools/android-port/controller/test_runner.py",
+        "tools/android-port/controller/workflows.py",
+        "tools/android-port/tests/test_merged_acceptance.py",
         "tools/android-port/tests/test_native_review.py",
+        "tools/android-port/tests/test_repair_acceptance.py",
+        "tools/android-port/tests/test_runner.py",
+        "tools/android-port/tests/test_workflows.py",
     ))
     value = bundle(manifest, rules, "WP-003", changed_paths=paths, merged=False)
     scope = {
@@ -164,7 +172,7 @@ class RepairContractTests(unittest.TestCase):
         manifest, rules, value, scope = infrastructure_fixture()
         self.assertEqual(
             validate_infrastructure_scope(scope, value.binding, manifest, rules, value.pr["changed_paths"]),
-            tuple(scope["paths"]),
+            {path: INFRASTRUCTURE_PATH_OPERATIONS[path][0] for path in scope["paths"]},
         )
         self.assertEqual(
             INFRASTRUCTURE_PATH_OPERATIONS["tools/android-port/oracle/workflow_scope.py"],
@@ -177,14 +185,34 @@ class RepairContractTests(unittest.TestCase):
         for path in (
             "tools/android-port/controller/workflows.py",
             "tools/android-port/tests/test_workflows.py",
+            "tools/android-port/tests/test_runner.py",
+            "tools/android-port/oracle/test_ci.py",
+            "tools/android-port/oracle/test_workflow_scope.py",
+            "tools/android-port/oracle/workflow_scope.py",
         ):
             manifest, rules, value, scope = infrastructure_fixture()
-            scope["paths"].append(path)
-            scope["paths"].sort()
+            scope["paths"] = sorted(set(scope["paths"]) | {path})
             self.assertEqual(
                 validate_infrastructure_scope(scope, value.binding, manifest, rules, scope["paths"]),
-                tuple(scope["paths"]),
+                {item: INFRASTRUCTURE_PATH_OPERATIONS[item][0] for item in scope["paths"]},
             )
+
+    def test_infrastructure_reader_and_test_roles_follow_declared_operations(self):
+        for paths, allowed in (
+            (["tools/android-port/controller/native_review.py", "tools/android-port/controller/test_runner.py"], False),
+            (["tools/android-port/controller/test_runner.py", "tools/android-port/tests/test_runner.py"], True),
+        ):
+            manifest, rules, value, scope = infrastructure_fixture()
+            scope["paths"] = sorted(paths)
+            with self.subTest(paths=paths):
+                if allowed:
+                    self.assertEqual(
+                        set(validate_infrastructure_scope(scope, value.binding, manifest, rules, scope["paths"])),
+                        set(paths),
+                    )
+                else:
+                    with self.assertRaises(PortError):
+                        validate_infrastructure_scope(scope, value.binding, manifest, rules, scope["paths"])
 
     def test_infrastructure_scope_rejects_unknown_stale_or_untested_contracts(self):
         for mutation in ("scope-id", "scope-kind", "unknown-path", "missing-test", "stale-head", "unknown-verification"):
@@ -199,7 +227,10 @@ class RepairContractTests(unittest.TestCase):
                 paths.sort()
                 scope["paths"] = paths
             elif mutation == "missing-test":
-                paths = [path for path in paths if path not in INFRASTRUCTURE_PATH_OPERATIONS or "/test_" not in path]
+                paths = [
+                    path for path in paths
+                    if INFRASTRUCTURE_PATH_OPERATIONS[path][0] not in ("test", "add-regression-fixture-or-test")
+                ]
                 scope["paths"] = paths
             elif mutation == "stale-head":
                 scope["binding"]["head_sha"] = BASE

@@ -14,6 +14,26 @@ from controller.test_runner import discover_suites, run_suite
 
 
 class RunnerDiscoveryTests(unittest.TestCase):
+    def test_immutable_native_selection_uses_exact_base_head_not_worktree(self):
+        from controller.test_runner import immutable_candidate_suite
+
+        native = "android/accessibility-tests/test_fixture.py"
+        for before, after, changed, selected in (
+            ({}, {}, [], False),
+            ({}, {native: "a" * 40}, [native], True),
+            ({native: "a" * 40}, {}, [native], True),
+            ({}, {}, ["docs/android/accessibility/flow.json"], True),
+        ):
+            with self.subTest(before=before, after=after), patch(
+                "controller.model.tree", side_effect=[before, after],
+            ) as trees, patch("oracle.workflow_scope.changed_paths", return_value=changed) as diff:
+                committed, actual = immutable_candidate_suite(REPO, "b" * 40, "c" * 40)
+                self.assertEqual(committed, after)
+                self.assertEqual(actual, selected)
+                self.assertEqual(trees.call_args_list[0].args, (REPO, "b" * 40))
+                self.assertEqual(trees.call_args_list[1].args, (REPO, "c" * 40))
+                diff.assert_called_once_with(REPO, "b" * 40, "c" * 40)
+
     def test_real_installed_runtime_suite_is_discoverable(self):
         suite = discover_suites([REPO / "tools/android-port/local"])
         self.assertGreaterEqual(suite.countTestCases(), 3)

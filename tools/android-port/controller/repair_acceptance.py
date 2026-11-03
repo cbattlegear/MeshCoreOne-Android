@@ -65,15 +65,17 @@ INFRASTRUCTURE_PATH_OPERATIONS = {
     "tools/android-port/tests/test_merged_acceptance.py": ("test", "wp-owned"),
     "tools/android-port/tests/test_native_review.py": ("test", "wp-owned"),
     "tools/android-port/tests/test_repair_acceptance.py": ("test", "wp-owned"),
+    "tools/android-port/tests/test_runner.py": ("test", "wp-owned"),
     "tools/android-port/tests/test_workflows.py": ("test", "wp-owned"),
 }
 INFRASTRUCTURE_READER_PATHS = frozenset({
-    path for path in INFRASTRUCTURE_PATH_OPERATIONS
+    path for path, (operation, _) in INFRASTRUCTURE_PATH_OPERATIONS.items()
     if path.startswith((".github/workflows/", "tools/android-port/controller/", "tools/android-port/oracle/"))
-    and not "/test_" in path
+    and operation not in ("test", "add-regression-fixture-or-test")
 })
 INFRASTRUCTURE_TEST_PATHS = frozenset({
-    path for path in INFRASTRUCTURE_PATH_OPERATIONS if "/test_" in path
+    path for path, (operation, _) in INFRASTRUCTURE_PATH_OPERATIONS.items()
+    if operation in ("test", "add-regression-fixture-or-test")
 })
 MAX_LOG_BYTES = 64 * 1024 * 1024
 ANDROID_MODULE = r"android/((?:core|feature|platform)/[a-z0-9-]+|app)/"
@@ -124,7 +126,7 @@ def validate_infrastructure_scope(scope, binding, manifest, policy, changed_path
             <= set(admission.validation)
         ):
             raise PortError("Infrastructure validator path lacks its required capability invariants")
-    return tuple(paths)
+    return {path: INFRASTRUCTURE_PATH_OPERATIONS[path][0] for path in paths}
 
 
 def verify_infrastructure_acceptance(value, scope, manifest, policy):
@@ -210,6 +212,15 @@ def verify_infrastructure_execution(native, value, scope, run):
     discovered = result.get("discovered")
     root_counts = result.get("discovered_by_root")
     roots = set(INFRASTRUCTURE_VERIFICATION["test_roots"])
+    from .test_runner import NATIVE_SUITE, immutable_candidate_suite
+
+    committed, selected = immutable_candidate_suite(
+        native.manifest.repo, value.binding.base_sha, value.binding.head_sha,
+    )
+    if selected:
+        if not committed:
+            raise PortError("Selected native suite is missing from the immutable candidate")
+        roots.add(NATIVE_SUITE)
     if (
         type(discovered) is not int or discovered <= 0
         or result.get("run") != discovered or result.get("passed") != discovered

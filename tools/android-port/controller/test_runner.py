@@ -12,10 +12,28 @@ NATIVE_SUITE = "android/accessibility-tests"
 NATIVE_INPUTS = (NATIVE_SUITE + "/", "docs/android/accessibility/", "docs/android/evidence/WP-503/")
 
 
+def immutable_candidate_suite(repo, base, head):
+    from controller.model import tree
+    from oracle.workflow_scope import changed_paths
+
+    before, after = (tree(repo, base) if base is not None else {}), tree(repo, head)
+
+    def family(path):
+        return path == NATIVE_SUITE or path.startswith(NATIVE_SUITE + "/")
+
+    committed = {path: blob for path, blob in after.items() if family(path)}
+    relevant = any(
+        family(path) or path == "docs/android/deviations/WP-503.md"
+        or path.startswith(NATIVE_INPUTS)
+        for path in (changed_paths(repo, base, head) if base is not None else ())
+    )
+    return committed, bool(committed) or any(family(path) for path in before) or relevant
+
+
 def candidate_suite(repo, event_name, event):
     from controller.errors import PortError
-    from controller.model import SHA, git, tree
-    from oracle.workflow_scope import changed_paths, endpoints
+    from controller.model import SHA, git
+    from oracle.workflow_scope import endpoints
 
     pair = endpoints(event_name, event)
     if pair is None:
@@ -35,17 +53,7 @@ def candidate_suite(repo, event_name, event):
         raise PortError("Native suite selection head differs from the actual checkout")
     if base is None and git(repo, "cat-file", "-t", head).decode().strip() != "commit":
         raise PortError("Manual suite selection requires a commit object")
-    before, after = (tree(repo, base) if base is not None else {}), tree(repo, head)
-    def family(path):
-        return path == NATIVE_SUITE or path.startswith(NATIVE_SUITE + "/")
-
-    committed = {path: blob for path, blob in after.items() if family(path)}
-    relevant = any(
-        family(path) or path == "docs/android/deviations/WP-503.md"
-        or path.startswith(NATIVE_INPUTS)
-        for path in (changed_paths(repo, base, head) if base is not None else ())
-    )
-    selected = bool(committed) or any(family(path) for path in before) or relevant
+    committed, selected = immutable_candidate_suite(repo, base, head)
     root = repo.resolve() / NATIVE_SUITE
     if selected:
         if not committed or not root.is_dir() or root.is_symlink() or root.resolve() != root:

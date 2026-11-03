@@ -124,8 +124,8 @@ class NativeReview:
                 if not isinstance(previous, str) or not previous:
                     raise PortError("Infrastructure PR rename has no previous path")
                 changed.add(previous)
-        validate_infrastructure_scope(scope, binding, self.manifest, self.policy, sorted(changed))
-        staged = stage_review(self.manifest.repo, wp_id, base, binding.head_sha)
+        operations = validate_infrastructure_scope(scope, binding, self.manifest, self.policy, sorted(changed))
+        staged = stage_review(self.manifest.repo, wp_id, base, binding.head_sha, path_operations=operations)
         return {
             "staging": staged, "staging_sha256": digest(staged),
             "verification_scope": scope, "state": "staged-data-only", "authoritative": False,
@@ -352,10 +352,10 @@ class NativeReview:
             from .repair_acceptance import validate_infrastructure_scope
 
             scope = receipt["evidence"].get("verification_scope")
-            validate_infrastructure_scope(
+            operations = validate_infrastructure_scope(
                 scope, binding, self.manifest, self.policy, receipt["evidence"].get("changed_paths"),
             )
-            staged = stage_review(self.manifest.repo, wp_id, base, binding.head_sha)
+            staged = stage_review(self.manifest.repo, wp_id, base, binding.head_sha, path_operations=operations)
         else:
             staged = stage_review(self.manifest.repo, wp_id, base, binding.head_sha)
         if receipt["staging_sha256"] != digest(staged):

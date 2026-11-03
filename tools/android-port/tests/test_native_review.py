@@ -87,12 +87,15 @@ print("file/module deferred imports reached; no authority or network")
         self.assertIn("file/module deferred imports reached", result.stdout)
 
     def setUp(self):
-        stage = patch("controller.native_review.stage_review", side_effect=lambda *args: self.staged)
+        stage = patch("controller.native_review.stage_review", side_effect=lambda *args, **kwargs: self.staged)
         stage.start()
         self.addCleanup(stage.stop)
         candidate_tree = patch("controller.native_review.tree", return_value={})
         candidate_tree.start()
         self.addCleanup(candidate_tree.stop)
+        native_suite = patch("controller.test_runner.immutable_candidate_suite", return_value=({}, False))
+        native_suite.start()
+        self.addCleanup(native_suite.stop)
 
     def fixture(self, *, current=False):
         manifest = test_manifest("WP-003")
@@ -182,11 +185,20 @@ print("file/module deferred imports reached; no authority or network")
         native, api, prefix, original = self.fixture(current=True)
         paths = sorted((
             ".github/workflows/android-ci.yml",
+            "docs/android/ci/bounded-infrastructure-review.md",
+            "tools/android-port/controller/authority.py",
+            "tools/android-port/controller/gates.py",
+            "tools/android-port/controller/merged_acceptance.py",
             "tools/android-port/controller/native_review.py",
-            "tools/android-port/oracle/test_ci.py",
-            "tools/android-port/oracle/test_workflow_scope.py",
-            "tools/android-port/oracle/workflow_scope.py",
+            "tools/android-port/controller/repair_acceptance.py",
+            "tools/android-port/controller/runtime_inputs.py",
+            "tools/android-port/controller/test_runner.py",
+            "tools/android-port/controller/workflows.py",
+            "tools/android-port/tests/test_merged_acceptance.py",
             "tools/android-port/tests/test_native_review.py",
+            "tools/android-port/tests/test_repair_acceptance.py",
+            "tools/android-port/tests/test_runner.py",
+            "tools/android-port/tests/test_workflows.py",
         ))
         scope = {
             "schema_version": 1, "kind": INFRASTRUCTURE_SCOPE_KIND, "scope_id": INFRASTRUCTURE_SCOPE_ID,
@@ -406,6 +418,89 @@ print("file/module deferred imports reached; no authority or network")
         scope["paths"].sort()
         with self.assertRaises(PortError):
             native.stage_infrastructure("WP-003", 123, scope)
+
+    def test_infrastructure_staging_and_revalidation_use_real_capability_admission(self):
+        from fixtures import REPO
+        from controller import staging
+        from controller.model import REFERENCE_SHA, git, tree
+
+        native, api, prefix, _, scope = self.infrastructure_fixture()
+        original = tree(REPO, git(REPO, "rev-parse", "HEAD").decode().strip())
+        candidate = dict(original)
+        paths = ["tools/android-port/oracle/test_ci.py", "tools/android-port/oracle/workflow_scope.py"]
+        for path in paths:
+            candidate[path] = original["tools/android-port/controller/gates.py"]
+        scope["paths"] = sorted(paths)
+        api.routes[("GET", prefix + "/pulls/123/files?per_page=100&page=1")] = [
+            {"filename": path} for path in paths
+        ]
+        reference = tree(REPO, REFERENCE_SHA)
+        reader = staging.bounded_git
+
+        def read(repo, maximum, *arguments):
+            return b"fixture-only complete diff\n" if arguments[0] == "diff" else reader(repo, maximum, *arguments)
+
+        def actual_stage(*args, **kwargs):
+            with patch("controller.staging.tree", side_effect=[original, candidate, reference]), patch(
+                "controller.staging.bounded_git", side_effect=read,
+            ):
+                return staging.stage_review(*args, **kwargs)
+
+        with patch("controller.native_review.stage_review", side_effect=actual_stage) as stage:
+            staged = native.stage_infrastructure("WP-003", 123, scope)
+            self.assertEqual(staged["staging"]["changed_paths"], sorted(paths))
+            self.assertFalse(staged["authoritative"])
+            self.mutate_receipt(api, prefix, lambda receipt: receipt.update(
+                staging_sha256=staged["staging_sha256"],
+            ))
+            self.mutate_receipt(api, prefix, lambda receipt: receipt["evidence"].update(
+                changed_paths=sorted(paths), verification_scope=scope,
+            ))
+            with patch(
+                "controller.repair_acceptance.read_job_log", return_value=self.infrastructure_controller_log(),
+            ):
+                native.evaluate("WP-003", 123, 90)
+            expected = {
+                paths[0]: "add-regression-fixture-or-test", paths[1]: "add-or-update-validator-rule",
+            }
+            self.assertEqual(stage.call_count, 2)
+            for call in stage.call_args_list:
+                self.assertEqual(call.kwargs["path_operations"], expected)
+        with patch("controller.staging.tree", side_effect=[original, candidate, reference]), self.assertRaises(PortError):
+            staging.stage_review(REPO, "WP-003", BASE, HEAD)
+
+    def test_infrastructure_report_requires_every_immutable_selected_suite(self):
+        for selected in (False, True):
+            for mutation in ("valid", "missing-native", "extra-root", "zero-native", "deleted-native"):
+                native, _, _, _, _ = self.infrastructure_fixture()
+                roots = {
+                    "tools/android-port/tests": 3, "tools/android-port/local": 2,
+                    "android/parity-tests": 1, "tools/android-port/oracle": 3,
+                }
+                if selected:
+                    roots["android/accessibility-tests"] = 4
+                if mutation == "missing-native":
+                    roots.pop("android/accessibility-tests", None)
+                elif mutation == "extra-root":
+                    roots["unknown/tests"] = 1
+                elif mutation == "zero-native":
+                    roots["android/accessibility-tests"] = 0
+                count = sum(roots.values())
+                log = self.infrastructure_controller_log(
+                    discovered=count, run=count, passed=count, discovered_by_root=roots,
+                )
+                committed = {"android/accessibility-tests/test_fixture.py": "a" * 40} if selected else {}
+                if mutation == "deleted-native":
+                    committed = {}
+                allowed = mutation == "valid" or not selected and mutation in ("missing-native", "deleted-native")
+                with self.subTest(selected=selected, mutation=mutation), patch(
+                    "controller.test_runner.immutable_candidate_suite", return_value=(committed, selected),
+                ), patch("controller.repair_acceptance.read_job_log", return_value=log):
+                    if allowed:
+                        native.evaluate("WP-003", 123, 90)
+                    else:
+                        with self.assertRaises(PortError):
+                            native.evaluate("WP-003", 123, 90)
 
     def test_bounded_infrastructure_route_rejects_stale_runs_unauthorized_apps_and_bad_logs(self):
         for mutation in (

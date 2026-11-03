@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
@@ -346,5 +347,64 @@ class ChannelDispatchFenceTest {
             UUID(0, 50)
         }) { f.effects += "other radio" }
         assertEquals(listOf("other radio"), f.effects)
+    }
+
+    @Test
+    fun storeOwnedScopeValidatesWithoutRecursivelyAcquiringOperationLane() = runTest {
+        val f = Fixture()
+        f.gate.withChannelOperationScope { scope ->
+            f.fence.withScopedMutation(f.lease, scope) {
+                scope.withChannelIdentityMutation { f.effects += "persist" }
+            }
+        }
+        f.gate.withChannelIdentityRestore { f.effects += "callback after release" }
+        assertEquals(listOf("persist", "callback after release"), f.effects)
+    }
+
+    @Test
+    fun mutationScopeRejectsForgeryWrongGateChildAndExpiredUse() = runTest {
+        val f = Fixture()
+        val forged = object : ChannelIdentityWriteScope {
+            override suspend fun <T> withChannelIdentityMutation(block: suspend () -> T): T = block()
+        }
+        assertFailsWith<IllegalStateException> {
+            f.fence.withScopedMutation(f.lease, forged) { error("must not enter") }
+        }
+        ChannelIdentityMutex().withChannelOperationScope { wrongGate ->
+            assertFailsWith<IllegalStateException> {
+                f.fence.withScopedMutation(f.lease, wrongGate) { error("must not enter") }
+            }
+        }
+        lateinit var leaked: ChannelIdentityWriteScope
+        f.gate.withChannelOperationScope { scope ->
+            leaked = scope
+            async {
+                assertFailsWith<IllegalStateException> {
+                    f.fence.withScopedMutation(f.lease, scope) { error("must not enter") }
+                }
+            }.await()
+        }
+        assertFailsWith<IllegalStateException> {
+            f.fence.withScopedMutation(f.lease, leaked) { error("must not enter") }
+        }
+        assertTrue(f.effects.isEmpty())
+    }
+
+    @Test
+    fun failedScopedMutationPreservesFailureAndScopeExpiresBeforePublication() = runTest {
+        val f = Fixture()
+        val failure = IllegalArgumentException("write failed")
+        lateinit var leaked: ChannelIdentityWriteScope
+        assertSame(failure, assertFailsWith<IllegalArgumentException> {
+            f.gate.withChannelOperationScope { scope ->
+                leaked = scope
+                f.fence.withScopedMutation(f.lease, scope) { throw failure }
+            }
+        })
+        assertFailsWith<IllegalStateException> {
+            f.fence.withScopedMutation(f.lease, leaked) { error("must not enter") }
+        }
+        f.gate.withChannelIdentityRestore { f.effects += "outside" }
+        assertEquals(listOf("outside"), f.effects)
     }
 }

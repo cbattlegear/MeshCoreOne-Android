@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutation
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.RadioId
@@ -88,6 +89,26 @@ class ChannelDispatchFence(
             requireCurrent(lease)
             operation()
         }
+
+    /**
+     * The persistence producer already owns the outer lane and supplies its scoped facade.
+     * Validate the gate-minted proof instead of recursively acquiring the non-reentrant lane.
+     * Do not change Jobs inside [operation]; post-ACK cancellation remains the channel
+     * producer's existing uncertainty/receipt contract, not guaranteed persistence.
+     */
+    suspend fun <T> withScopedMutation(
+        lease: Lease,
+        scope: ChannelIdentityWriteScope,
+        operation: suspend () -> T,
+    ): T {
+        identity.requireChannelOperationScope(scope)
+        requireCurrent(lease)
+        try {
+            return operation()
+        } finally {
+            identity.requireChannelOperationScope(scope)
+        }
+    }
 
     fun quarantine(lease: Lease, failure: Throwable) = synchronized(stateLock) {
         require(lease.owner === this) { "A channel lease belongs to its issuing fence" }

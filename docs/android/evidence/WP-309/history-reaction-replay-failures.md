@@ -403,3 +403,15 @@ assertions remain; no original method is removed. Total affected inventory is
 These are source candidates until their own exact normal PR execution and
 independent review. The previous 51-method pass is not successor evidence;
 the local execution hold and source pin remain unchanged.
+
+Independent source review of initial idempotence candidate `73cae8cd5` found a
+test-only timestamp oracle mismatch before any successor pass was claimed.
+Frozen Swift and existing App history create the persisted ReactionDTO with
+its default creation time, not the pending queue's `receivedAt`. The new race
+test must therefore retain and compare the actual first committed DTO, not
+expect its date to equal the fixture's queue date. Production timestamp mapping
+is deliberately unchanged. Distinct-emoji counts are checked independently of
+tie ordering when DTO creation dates share store precision; the exact resulting
+summary must still agree between Room, mounted history and subsequent refresh.
+Existing pending-object restoration tests continue to compare original queue
+arrival metadata exactly.

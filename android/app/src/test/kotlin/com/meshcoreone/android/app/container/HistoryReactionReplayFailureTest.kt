@@ -248,7 +248,6 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             val first = store.fetchReactions(message).single()
             assertEquals(1, saves)
             if (historyFirst) {
-                assertEquals(EPOCH, first.receivedAt)
                 releaseLiveCheck.complete(Unit)
             } else releaseHistoryCheck.complete(Unit)
             releaseSnapshot.complete(Unit)
@@ -268,8 +267,9 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             assertEquals(first, rows.single { it.id == first.id })
             assertTrue(rows.all { it.radioId == radio && it.messageID == target.id && it.senderName == "Bob" })
             assertEquals(4, synchronized(checkLock) { checks }, "Both stale callers must recheck inside the shared boundary")
-            val summary = if (distinctEmoji) "$emoji:1,$liveEmoji:1" else "$emoji:1"
-            assertEquals(summary, assertNotNull(store.fetchMessage(message)).reactionSummary)
+            val summary = assertNotNull(assertNotNull(store.fetchMessage(message)).reactionSummary)
+            val expectedCounts = if (distinctEmoji) setOf("$emoji:1", "$liveEmoji:1") else setOf("$emoji:1")
+            assertEquals(expectedCounts, summary.split(",").toSet())
             assertEquals(summary, viewModel.state.value.messages.single().reactionSummary)
             viewModel.refresh()
             assertEquals(rows, store.fetchReactions(message))

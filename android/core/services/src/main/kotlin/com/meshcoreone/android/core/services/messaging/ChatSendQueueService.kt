@@ -97,6 +97,8 @@ class ChatSendQueueService(
                     previousReady = ready
                     if (snapshot.token != null && snapshot.token != token) {
                         ownership.reporter.report(MessagingDiagnostic.StaleResult(token, "queueConnection"))
+                        dmQueue.stopAfterCurrent()
+                        channelQueue.stopAfterCurrent()
                         ownership.invalidate()
                         channelProgress.retire()
                         cancelQueryAccounting()

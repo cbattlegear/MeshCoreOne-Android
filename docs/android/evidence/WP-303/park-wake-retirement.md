@@ -146,3 +146,56 @@ The retained local `gradle-execution` owner remains untouched. No local Kotlin
 compile/tests, physical/OEM radio, AppState collector, notification delivery,
 whole-WP completion or #383 closure is claimed. Exact hosted execution and
 independently attributable source review are still required.
+
+## Separate replacement-retirement repair (review 5751190186)
+
+The successful exact-head hosted run
+[41624643879](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41624643879)
+belongs to `dbcc51df72eb7b7412bf6d10123f03274f0eb64e` on base
+`99479711bfdb7c621765f09d671068ca8b8318ce`. Its shutdown controls remain intact.
+It does not accept a replacement-retirement successor. The later source review
+identified a separate P2 scheduling window, withdrawing the earlier broad
+no-blocker conclusion without invalidating the executed shutdown controls.
+
+The foreign-token observer invalidated ownership before halting either drain.
+Its coroutine and the sender are separate children, with no shared critical
+section across invalidation and cancellation. A selected readiness sender can
+throw retirement cancellation, requeue its envelope, and return normally.
+`SendQueue` then permits its completion handler to restart that lane before
+`cancelDrain` sets `halted`. This is avoidable scheduling/diagnostic churn;
+executed endless looping, duplicate transmissions, data loss and deadlock are
+not claimed. The narrow repair calls both existing `stopAfterCurrent` methods
+before replacement invalidation. It adds no nested locks or suspension and
+changes neither `SendQueue` nor awaitReady/park/shutdown.
+
+New DM and channel controls use actual persisted envelopes and the real token
+transition observer. A manual coroutine dispatcher selects the primary readiness
+wake and holds its cancelled timer cleanup. A genuinely waiting opposite lane
+causes `triggers.finish()` to dispatch cancellation before either `cancelDrain`.
+At that dispatch boundary the test holds the observer, releases the primary's
+timer cleanup, and runs its continuations to quiescence or one observed restart.
+The primary's signal waiter has already completed and left the signal lock;
+its completion does not depend on running the held cancellation continuation.
+This models the independent sender's permitted progress while the observer is
+delayed, without sleeps, reflection or an added production lifecycle hook.
+Assertions require the exact old-token `queueReadiness.woke` diagnostic before
+lane cancellation and prohibit the subsequent `queueReadiness` restart.
+Both pending IDs, zero attempts, PENDING statuses, no terminal/callback failure,
+no query accounting, no fake-transport send commands and the new snapshot token
+are checked. These controls are not yet claimed to have executed.
+
+Integration producer is session `5143af9b-d73a-400e-9eb4-3ac0bf879b14`.
+Both b336 and current WP-208 journal owner bef explicitly confirmed the observer
+hunk and new replacement cases are disjoint from their held work. Existing
+readiness helpers and journal cases remain untouched. A real saved channel
+occupant is established, but the current baseline envelope has no occupant-ID
+field: future journal composition must pass that captured ID through its API,
+not manufacture one or omit the discriminator. No journal/model API is imported.
+Trusted production/test/evidence path-operation admissions passed. The automatic
+claim still reports the historical WP-303 lease binding mismatch; its identity,
+authorization and revisions are not rewritten. Advisory producer attribution
+does not constitute a lease or verdict.
+
+The local Gradle execution hold remains in force. Fresh exact-successor hosted
+execution, independently attributed source review, scope/staging and all normal
+protected gates remain required; no acceptance receipt or merge is authorized.

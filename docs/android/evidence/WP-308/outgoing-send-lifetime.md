@@ -4,6 +4,8 @@
 
 Source pin: `db14559b39d32322b06477c6ae676112f583db50`.
 Consumer start base: `1e1ff70345f203b41f9a8b04836c2cc4640500c9`.
+Current integration base: `796a872a3565a66c74f782b738a9ecb3c273fb25`,
+including protected #531's protocol dispatch-proof prerequisite.
 Session: `aa4b9d95-ca8d-4023-bb04-049e969e6d6c`, existing managed
 `cbattlegear-literate-waffle` worktree. The historical advisory claim failed
 `Existing WP lease is bound to different source/base/manifest/backend`;
@@ -15,6 +17,11 @@ The separately assigned WP-208 producer subsequently supplied
 with WP-215 receipt prerequisite `bfd2418d9`, integrated unchanged as `6707ed391`.
 These are coordinated producer commits, not WP-308 edits to MessageService.
 Producer tests and claims are not consumer test results.
+The revised producer `0d7c139228679d88c51ad38539819ef81d060cb5` is integrated
+unchanged as `786d4c538`, with receipt prerequisite `1cb2b9ae` as `1b746ca48`.
+It distinguishes settled protocol-proven unsent cancellation from uncertain
+dispatch. This corrects the earlier e98 inline-acceptance classification; it
+does not turn creation commitment into queue acceptance or wire delivery.
 
 Fresh support admissions: AppChatsFeature and the new App test under
 `app-build-launcher/add-direct-support-wiring`; AppChatsContent under
@@ -94,7 +101,8 @@ drafts/explicit clears, restore definitely-unsaved text, throw after committed
 creation, fail reconciliation reads, and throw after durable queue insertion
 before return (then reconnect to drain the one retained operation).
 Two controls retain the former screen-owned holder wiring to demonstrate the
-original pre-commit loss schedule. APIs31/37 are configured, not yet observed.
+original pre-commit loss schedule. APIs31/37 are configured; exact-head mounted
+discovery and outcomes are recorded in the PR's authoritative hosted references.
 An additional feature test covers typing then clearing before creation fails.
 Mounted retained-route cases check that committed-before-return failures actually
 appear as retryable rows without reopening. Same-session slot-replacement cases
@@ -120,11 +128,17 @@ PR328 evidence remains separate.
 
 ## Verification
 
-**Compiler UNVERIFIED; new Android/JVM tests UNEXECUTED at authoring.**
+The initial draft was compiler-unverified and its tests unexecuted.
+Historical head `5fb559fc5` subsequently passed automatic hosted run41589333033,
+including the mounted consumer matrix and the unchanged original failed-send
+two-refresh assertion. That result predates the current-base/producer integration
+and does not verify its new bytes. Exact-candidate results remain in PR530 and
+the hosted logs, not a second retained CI-result bundle.
+
 The coordinator reports a retained shared Gradle execution owner without safe
 cleanup proof. No competing Android/Gradle/JVM launch, lock/cache cleanup,
 runtime deployment, emulator or hardware operation is performed.
 Only documented source-light provenance, ownership and whitespace checks run
 locally. Exact-candidate hosted CI must establish compilation, discovery,
-method outcomes and existing-regression preservation; declarations/counts above
-are not passing tests. No hosted dispatch, rerun or budget change is requested.
+method outcomes and existing-regression preservation for each new candidate.
+No hosted dispatch, rerun or budget change is requested.

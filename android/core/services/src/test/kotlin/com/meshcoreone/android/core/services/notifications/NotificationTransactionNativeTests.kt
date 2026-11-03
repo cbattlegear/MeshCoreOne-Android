@@ -19,6 +19,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
@@ -227,14 +228,20 @@ class NotificationTransactionNativeTests {
             val contact = EntityKey(RADIO_A, UUID.randomUUID())
             h.delivery.show("AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", NotificationPayload.DirectMessage(contact, messageID))
             h.journal.cancelCallerAt = "clearUnreadCount"
-            val caller = launch { h.handler.handleMarkAsRead(contact, messageID) }
+            val caller = launch(start = CoroutineStart.LAZY) { h.handler.handleMarkAsRead(contact, messageID) }
+            h.journal.cancellationTarget = caller
+            caller.start()
             caller.join()
             assertTrue(caller.isCancelled)
             assertEquals(MARK_READ_STEPS, h.journal.events)
             val room = NotificationHarness(this)
             room.delivery.show("AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", NotificationPayload.RoomMessage("R", contact, messageID))
             room.journal.cancelCallerAt = "roomMarkAsRead"
-            launch { room.handler.handleRoomMarkAsRead(contact, messageID) }.join()
+            val roomCaller = launch(start = CoroutineStart.LAZY) { room.handler.handleRoomMarkAsRead(contact, messageID) }
+            room.journal.cancellationTarget = roomCaller
+            roomCaller.start()
+            roomCaller.join()
+            assertTrue(roomCaller.isCancelled)
             assertEquals(listOf("roomMarkAsRead", "removeDelivered", "setBadgeCount", "notifyConversationsChanged"), room.journal.events)
         },
         nativeCase("stale radio: mark-read from another radio writes only that radio's rows") {

@@ -36,6 +36,7 @@ import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,6 +85,7 @@ internal class Journal {
     private val lock = Any()
     private val entries = ArrayList<String>()
     @Volatile var cancelCallerAt: String? = null
+    var cancellationTarget: Job? = null
     val events: List<String> get() = synchronized(lock) { entries.toList() }
 
     fun note(event: String) {
@@ -92,7 +94,10 @@ internal class Journal {
 
     suspend fun record(event: String) {
         note(event)
-        if (event == cancelCallerAt) currentCoroutineContext().cancel()
+        if (event == cancelCallerAt) {
+            val target = cancellationTarget
+            if (target != null) target.cancel() else currentCoroutineContext().cancel()
+        }
     }
 }
 

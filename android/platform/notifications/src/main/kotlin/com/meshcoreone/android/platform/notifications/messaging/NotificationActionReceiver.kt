@@ -1,4 +1,5 @@
 // AndroidOnly: WP-401 Cold-start-safe notification action receiver and bounded process dispatcher.
+// AndroidOnly: WP-215 Acceptance-aware cancellation and serialized dispatcher replacement.
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.app.RemoteInput
@@ -6,13 +7,18 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import java.util.ArrayDeque
 import java.util.logging.Logger
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class NotificationActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -49,7 +55,9 @@ internal object NotificationActionDispatcher {
 
     private val logger = Logger.getLogger("com.mc1.NotificationActions")
     private val lock = Any()
-    private val pending = ArrayDeque<NotificationResponse>()
+    private class PendingAction(val response: NotificationResponse, val receipt: NotificationActionReceipt = NotificationActionReceipt())
+    private val pending = ArrayDeque<PendingAction>()
+    private val delivery = Mutex()
     private var scope: CoroutineScope? = null
     private var router: (suspend (NotificationResponse) -> Boolean)? = null
     private var drainJob: Job? = null
@@ -58,6 +66,8 @@ internal object NotificationActionDispatcher {
         synchronized(lock) {
             this.scope = scope
             this.router = router
+            drainJob?.cancel()
+            drainJob = null
         }
         retry()
     }
@@ -65,7 +75,7 @@ internal object NotificationActionDispatcher {
     fun enqueue(response: NotificationResponse): EnqueueResult {
         val accepted = synchronized(lock) {
             if (pending.size >= MAX_PENDING) false else {
-                pending.addLast(response)
+                pending.addLast(PendingAction(response))
                 true
             }
         }
@@ -78,28 +88,42 @@ internal object NotificationActionDispatcher {
     }
 
     fun retry() {
-        val owner = synchronized(lock) {
+        synchronized(lock) {
             if (drainJob?.isActive == true) return
-            scope
-        } ?: return
-        val job = owner.launch {
-            repeat(RETRY_COUNT) {
-                if (drainOnce()) return@launch
-                delay(RETRY_DELAY_MILLIS)
-            }
+            val owner = scope ?: return
+            drainJob = owner.launch(start = CoroutineStart.LAZY) {
+                repeat(RETRY_COUNT) {
+                    if (drainOnce()) return@launch
+                    delay(RETRY_DELAY_MILLIS)
+                }
+            }.also { it.start() }
         }
-        synchronized(lock) { drainJob = job }
     }
 
-    internal suspend fun drainOnce(): Boolean {
+    internal suspend fun drainOnce(): Boolean = delivery.withLock {
         while (true) {
-            val next = synchronized(lock) { pending.firstOrNull() } ?: return true
-            val target = synchronized(lock) { router } ?: return false
-            if (!target(next)) return false
-            synchronized(lock) {
-                if (pending.firstOrNull() === next) pending.removeFirst()
+            val next = synchronized(lock) { pending.firstOrNull() } ?: return@withLock true
+            val target = synchronized(lock) { router } ?: return@withLock false
+            var handled = false
+            try {
+                if (!next.receipt.preventsReplay) {
+                    handled = withContext(next.receipt) { target(next.response) }
+                }
+            } finally {
+                // This executes even if cancellation hides a successful router result.
+                if (handled || next.receipt.preventsReplay) {
+                    if (next.receipt.state == NotificationActionReceipt.State.UNCERTAIN ||
+                        next.receipt.state == NotificationActionReceipt.State.IN_FLIGHT
+                    ) logger.warning("Notification reply outcome is uncertain; automatic replay suppressed")
+                    synchronized(lock) {
+                        if (pending.firstOrNull() === next) pending.removeFirst()
+                    }
+                }
             }
+            if (!handled && !next.receipt.preventsReplay) return@withLock false
         }
+        @Suppress("UNREACHABLE_CODE")
+        true
     }
 
     internal fun resetForTesting() {

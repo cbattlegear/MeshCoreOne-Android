@@ -74,6 +74,9 @@ FIXED_INPUTS = (
     "tools/android-port/tests/test_disposable.py",
     "tools/android-port/tests/test_windows_guest.py",
     "tools/android-port/tests/test_runner.py",
+    "tools/android-port/oracle/test_ci.py",
+    "tools/android-port/oracle/test_workflow_scope.py",
+    "docs/android/ci/bounded-infrastructure-review.md",
 )
 
 

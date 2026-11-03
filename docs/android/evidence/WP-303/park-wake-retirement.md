@@ -146,3 +146,103 @@ The retained local `gradle-execution` owner remains untouched. No local Kotlin
 compile/tests, physical/OEM radio, AppState collector, notification delivery,
 whole-WP completion or #383 closure is claimed. Exact hosted execution and
 independently attributable source review are still required.
+
+## Separate replacement-retirement repair (review 5751190186)
+
+The successful exact-head hosted run
+[41624643879](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41624643879)
+belongs to `dbcc51df72eb7b7412bf6d10123f03274f0eb64e` on base
+`99479711bfdb7c621765f09d671068ca8b8318ce`. Its shutdown controls remain intact.
+It does not accept a replacement-retirement successor. The later source review
+identified a separate P2 scheduling window, withdrawing the earlier broad
+no-blocker conclusion without invalidating the executed shutdown controls.
+
+The foreign-token observer invalidated ownership before halting either drain.
+Its coroutine and the sender are separate children, with no shared critical
+section across invalidation and cancellation. A selected readiness sender can
+throw retirement cancellation, requeue its envelope, and return normally.
+`SendQueue` then permits its completion handler to restart that lane before
+`cancelDrain` sets `halted`. This is avoidable scheduling/diagnostic churn;
+executed endless looping, duplicate transmissions, data loss and deadlock are
+not claimed. The narrow repair calls both existing `stopAfterCurrent` methods
+before replacement invalidation. It adds no nested locks or suspension and
+changes neither `SendQueue` nor awaitReady/park/shutdown.
+
+New DM and channel controls use actual persisted envelopes and the real token
+transition observer. A manual coroutine dispatcher selects the primary readiness
+wake and holds its cancelled timer cleanup. A genuinely waiting opposite lane
+causes `triggers.finish()` to dispatch cancellation before either `cancelDrain`.
+At that dispatch boundary the test holds the observer, releases the primary's
+timer cleanup, and runs its continuations to quiescence or one observed restart.
+The primary's signal waiter has already completed and left the signal lock;
+its completion does not depend on running the held cancellation continuation.
+This models the independent sender's permitted progress while the observer is
+delayed, without sleeps, reflection or an added production lifecycle hook.
+Assertions require the exact old-token `queueReadiness.woke` diagnostic before
+lane cancellation and prohibit the subsequent `queueReadiness` restart.
+Both pending IDs, zero attempts, PENDING statuses, no terminal/callback failure,
+no query accounting, no fake-transport send commands and the new snapshot token
+are checked. These controls are not yet claimed to have executed.
+
+Integration producer is session `5143af9b-d73a-400e-9eb4-3ac0bf879b14`.
+Both b336 and current WP-208 journal owner bef explicitly confirmed the observer
+hunk and new replacement cases are disjoint from their held work. Existing
+readiness helpers and journal cases remain untouched. A real saved channel
+occupant is established, but the current baseline envelope has no occupant-ID
+field: future journal composition must pass that captured ID through its API,
+not manufacture one or omit the discriminator. No journal/model API is imported.
+Trusted production/test/evidence path-operation admissions passed. The automatic
+claim still reports the historical WP-303 lease binding mismatch; its identity,
+authorization and revisions are not rewritten. Advisory producer attribution
+does not constitute a lease or verdict.
+
+The local Gradle execution hold remains in force. Fresh exact-successor hosted
+execution, independently attributed source review, scope/staging and all normal
+protected gates remain required; no acceptance receipt or merge is authorized.
+
+## Initial readiness preemption controls (thread 4454516878)
+
+The exact predecessor `a7813c38b48f8351b9a35c17646aa635c510a96b` passed
+[hosted run 41632534206](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41632534206):
+Services 2807 and App 1850 discovered/run/passed, zero failures/errors/skips.
+Its selected-wake controls do not prove retirement before the initial check.
+There is no existing injected callback or suspension between real dequeue and
+the initial lifetime check. Real CPU preemption is reachable there, but sleeps
+or a dispatcher gate before dequeue would not faithfully control that interval.
+
+The independently reviewed design adds one internal, non-suspending nullable
+checkpoint as the first `awaitReady` statement, after actual dequeue and outside
+the queue lock. It defaults to null and production composition never configures
+it. The default adds only a null check: no suspension, lock, new job, exception
+conversion or public constructor/API is introduced. Instrumentation in production
+source is an explicit tradeoff; instruction timing is not literally identical.
+`SendQueue`, existing readiness conversion and every prior control are unchanged.
+
+Separate DM/channel controls enqueue real persisted envelopes. The one-shot
+checkpoint clears itself BEFORE starting actual shutdown with `UNDISPATCHED`,
+then returns without waiting. Shutdown seals and invalidates ownership, but its
+connection observer's independently held non-cancellable finally blocks the join
+before either drain shutdown/cancellation. The test advances the scheduler before
+asserting that gate. The active real sender must emit exactly one old-token
+initial `queueReadiness` stale result, with no `queueReadiness.woke`, clock wait,
+send command, terminal diagnostic, callback failure or query accounting. The
+original persisted ID, zero attempts and PENDING status are asserted before and
+after observer release and completed teardown. Unexpected checkpoint errors are
+recorded and rethrown, then explicitly rejected by the test so they cannot
+masquerade as valid sender cancellation.
+
+Source-only mutation argument: reverting ONLY the initial check to raw
+`ownership.checkLifetime` throws typed NotConnected rather than cancellation.
+Real `SendQueue` then invokes its real terminal callback, which records
+`terminal.<id>` and fails its retired lifetime check; the new terminal and
+teardown assertions reject that path even if the row remains PENDING. No executed
+mutation result or direct assertion of the swallowed cancellation's cause is
+claimed. Existing exact retained-cause controls remain intact.
+
+All three production/test/evidence path-operation admissions were rechecked.
+b336 and bef confirmed this checkpoint adjacency is disjoint from their held
+work. The channel fixture establishes a genuine saved occupant; future journal
+composition must pass that captured ID through its then-available envelope API
+and genuine admission, not import or bypass held journal work here. The local
+Gradle hold remains untouched. This successor requires independent exact-source
+review before publication and fresh exact-head hosted execution afterward.

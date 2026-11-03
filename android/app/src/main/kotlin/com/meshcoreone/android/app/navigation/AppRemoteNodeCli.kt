@@ -16,8 +16,12 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
@@ -56,6 +60,7 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
     val historyUp = stringResource(AppToolsStrings.toolsCliHistoryUp)
     val historyDown = stringResource(AppToolsStrings.toolsCliHistoryDown)
     val tabComplete = stringResource(AppToolsStrings.toolsCliTabComplete)
+    val success = stringResource(L.remoteNodesSettingsSuccess)
     LaunchedEffect(holder) {
         holder.configure(session.name) { command, timeout ->
             check(canSend) { noService }
@@ -70,7 +75,25 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
         SelectionContainer(Modifier.weight(1f)) {
             LazyColumn(Modifier.fillMaxSize()) {
                 items(state.terminal.outputLines, key = { it.id }) { line ->
-                    Text(line.text, fontFamily = FontFamily.Monospace)
+                    Text(
+                        line.text,
+                        modifier = Modifier.semantics {
+                            when (line.type) {
+                                CliOutputType.SUCCESS -> stateDescription = success
+                                CliOutputType.ERROR -> error(line.text)
+                                CliOutputType.COMMAND, CliOutputType.RESPONSE -> Unit
+                            }
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (line.type == CliOutputType.SUCCESS) FontWeight.Bold else FontWeight.Normal,
+                        fontStyle = if (line.type == CliOutputType.ERROR) FontStyle.Italic else FontStyle.Normal,
+                        color = when (line.type) {
+                            CliOutputType.COMMAND -> MaterialTheme.colorScheme.onSurfaceVariant
+                            CliOutputType.SUCCESS -> MaterialTheme.colorScheme.primary
+                            CliOutputType.ERROR -> MaterialTheme.colorScheme.error
+                            CliOutputType.RESPONSE -> MaterialTheme.colorScheme.onSurface
+                        },
+                    )
                 }
             }
         }

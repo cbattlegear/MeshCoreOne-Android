@@ -13,10 +13,12 @@ import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.contacts.ChannelServiceClock
 import com.meshcoreone.android.core.services.contacts.ChannelServiceError
 import java.util.UUID
+import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 import kotlin.test.*
 import kotlin.time.Duration
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.test.*
@@ -25,6 +27,18 @@ import org.junit.jupiter.api.TestFactory
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelQueryAccountingTest {
     @TestFactory fun recovery() = listOf(
+        native("direct-message retirement before initial readiness retains its pending identity") {
+            assertInitialReadinessRetirement(channel = false)
+        },
+        native("channel retirement before initial readiness retains its pending identity") {
+            assertInitialReadinessRetirement(channel = true)
+        },
+        native("direct-message selected readiness wake cannot restart during token replacement") {
+            assertReplacementRetirement(channel = false)
+        },
+        native("channel selected readiness wake cannot restart during token replacement") {
+            assertReplacementRetirement(channel = true)
+        },
         native("direct-message readiness wake racing shutdown retains its pending identity") {
             assertReadinessRetirement(channel = false)
         },
@@ -683,6 +697,260 @@ class ChannelQueryAccountingTest {
         h.signals.set(h.token, DeviceConnectionState.CONNECTED)
         queue.hydrate(); runCurrent()
         h.signals.set(h.token, DeviceConnectionState.READY); runCurrent()
+    }
+
+    private suspend fun TestScope.assertInitialReadinessRetirement(channel: Boolean) {
+        val h = connection()
+        val subscriptionCancelled = CompletableDeferred<Unit>()
+        val releaseSubscription = CompletableDeferred<Unit>()
+        val accounting = mutableListOf<ChannelQueryAccountingEvent>()
+        var clockWaits = 0
+        val clock = object : SessionClock by h.clock {
+            override suspend fun sleepFor(duration: Duration) {
+                clockWaits++
+                h.clock.sleepFor(duration)
+            }
+        }
+        val signals = object : ConnectionSignals by h.signals {
+            override suspend fun subscribeTransitions(): ConnectionSubscription {
+                val source = h.signals.subscribeTransitions()
+                return object : ConnectionSubscription {
+                    override val initial = source.initial
+                    override val transitions = flow {
+                        try { emitAll(source.transitions) }
+                        finally {
+                            withContext(NonCancellable) {
+                                subscriptionCancelled.complete(Unit)
+                                releaseSubscription.await()
+                            }
+                        }
+                    }
+                    override fun close() = source.close()
+                }
+            }
+        }
+        val queue = ChatSendQueueService(
+            h.token, h.store, h.service, MessagingChannelQuery { null },
+            OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, h.scope,
+            ChatSendQueueConfig(), clock, MessagingIssueReporter { h.diagnostics += it },
+            onQueryAccounting = accounting::add,
+        )
+        var stopping: Deferred<TeardownReport>? = null
+        var checkpointEntries = 0
+        var checkpointFailure: Throwable? = null
+        var originalPendingID: UUID? = null
+        try {
+            val occupant = ChannelDTO(radioId = RADIO, index = 0u, name = "Test")
+            h.store.channels[EntityKey(RADIO, occupant.id)] = occupant
+            assertEquals(occupant.id, h.store.fetchChannel(RADIO, 0u)?.id)
+            h.signals.set(h.token, DeviceConnectionState.CONNECTED)
+            assertEquals(h.token, signals.snapshot.value.token)
+            assertFalse(signals.snapshot.value.state.canDrainSendQueue)
+            queue.observeConnectionState()
+            queue.hydrate()
+            runCurrent()
+            val message = h.message(MessageStatus.PENDING, if (channel) 0u else null)
+            queue.beforeInitialReadinessCheck = {
+                queue.beforeInitialReadinessCheck = null
+                checkpointEntries++
+                try {
+                    val receipt = h.store.pending.values.single { it.messageID == message.id }
+                    originalPendingID = receipt.id
+                    assertEquals(0L, receipt.attemptCount)
+                    assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                    stopping = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { queue.shutdown() }
+                } catch (failure: Throwable) {
+                    checkpointFailure = failure
+                    throw failure
+                }
+            }
+            if (channel) {
+                queue.enqueueChannel(ChannelMessageEnvelope(message.id, 0u, false,
+                    message.text, message.timestamp, "Test"))
+            } else {
+                queue.enqueueDM(DirectMessageEnvelope(message.id, CONTACT, false))
+            }
+            runCurrent()
+            assertNull(checkpointFailure, "A checkpoint error cannot masquerade as sender retirement")
+            assertEquals(1, checkpointEntries, "The real dequeued sender must reach initial readiness exactly once")
+            assertNull(queue.beforeInitialReadinessCheck)
+            val shutdown = assertNotNull(stopping)
+            assertTrue(subscriptionCancelled.isCompleted, "Advance the observer finally before checking its gate")
+            assertFalse(shutdown.isCompleted, "Observer cleanup must hold shutdown before either drain is cancelled")
+            val stale = h.diagnostics.filterIsInstance<MessagingDiagnostic.StaleResult>()
+            assertEquals(1, stale.count { it.token == h.token && it.operation == "queueReadiness" })
+            assertTrue(stale.none { it.operation == "queueReadiness.woke" })
+            assertEquals(0, clockWaits, "Initial retirement must not enter the readiness wait")
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            assertTrue(accounting.isEmpty())
+            assertEquals(1, queue.queuedEnvelopeCount)
+            fun assertRetained() {
+                val retained = h.store.pending.values.single { it.messageID == message.id }
+                assertEquals(assertNotNull(originalPendingID), retained.id)
+                assertEquals(0L, retained.attemptCount)
+                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                val failures = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                assertTrue(failures.none {
+                    it.operation == "terminal.${message.id}" || it.operation == "dmQueueCallback" ||
+                        it.operation == "channelQueueCallback" || it.operation == "sendQueueDrain"
+                }, "Initial retirement must not enter real terminal handling or fail its callback: $failures")
+            }
+            assertRetained()
+            releaseSubscription.complete(Unit)
+            runCurrent()
+            val report = shutdown.await()
+            assertTrue(report.issues.isEmpty(), "Initial retirement must not retain callback failure: ${report.issues}")
+            assertRetained()
+        } finally {
+            queue.beforeInitialReadinessCheck = null
+            releaseSubscription.complete(Unit)
+            queue.shutdown()
+            h.close()
+        }
+    }
+
+    private suspend fun TestScope.assertReplacementRetirement(channel: Boolean) {
+        val h = connection()
+        val releaseTimer = CompletableDeferred<Unit>()
+        val timerCancelled = CompletableDeferred<Unit>()
+        var timers = 0
+        var replacing = false
+        var checkpointReached = false
+        var wokeBeforeCancellation = false
+        var restartedBeforeCancellation = false
+        fun stale(operation: String) = h.diagnostics.filterIsInstance<MessagingDiagnostic.StaleResult>()
+            .count { it.token == h.token && it.operation == operation }
+        val dispatcher = object : CoroutineDispatcher() {
+            val ready = ArrayDeque<Runnable>()
+            var checkpoint: (() -> Unit)? = null
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                if (replacing) checkpoint?.also { checkpoint = null }?.invoke()
+                ready.addLast(block)
+            }
+            fun runReady(until: () -> Boolean = { false }) {
+                var steps = 0
+                while (ready.isNotEmpty() && !until()) {
+                    check(++steps <= 100) { "Replacement dispatcher did not quiesce within 100 continuations" }
+                    ready.removeFirst().run()
+                }
+            }
+        }
+        val clock = object : SessionClock by h.clock {
+            override suspend fun sleepFor(duration: Duration) {
+                val selected = ++timers == 1
+                try { awaitCancellation() }
+                finally {
+                    if (selected) withContext(NonCancellable) {
+                        timerCancelled.complete(Unit)
+                        releaseTimer.await()
+                    }
+                }
+            }
+        }
+        val signals = object : ConnectionSignals by h.signals {
+            override suspend fun subscribeTransitions(): ConnectionSubscription {
+                val source = h.signals.subscribeTransitions()
+                return object : ConnectionSubscription {
+                    override val initial = source.initial
+                    override val transitions = flow {
+                        try {
+                            source.transitions.collect { snapshot ->
+                                replacing = snapshot.token != null && snapshot.token != h.token
+                                try { emit(snapshot) }
+                                finally { replacing = false }
+                            }
+                        } finally { source.close() }
+                    }
+                    override fun close() = source.close()
+                }
+            }
+        }
+        val accounting = mutableListOf<ChannelQueryAccountingEvent>()
+        val queue = ChatSendQueueService(
+            h.token, h.store, h.service, MessagingChannelQuery { null },
+            OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals,
+            CoroutineScope(h.scope.coroutineContext + dispatcher), ChatSendQueueConfig(), clock,
+            MessagingIssueReporter { h.diagnostics += it }, onQueryAccounting = accounting::add,
+        )
+        suspend fun dispatched(action: suspend () -> Unit) {
+            val work = backgroundScope.async(dispatcher, start = CoroutineStart.LAZY) { action() }
+            work.start()
+            dispatcher.runReady()
+            work.await()
+        }
+        suspend fun enqueue(message: MessageDTO) = dispatched {
+            val channelIndex = message.channelIndex
+            if (channelIndex != null) {
+                queue.enqueueChannel(ChannelMessageEnvelope(message.id, channelIndex, false,
+                    message.text, message.timestamp, "Test"))
+            } else {
+                queue.enqueueDM(DirectMessageEnvelope(message.id, CONTACT, false))
+            }
+        }
+        try {
+            val occupant = ChannelDTO(radioId = RADIO, index = 0u, name = "Test")
+            h.store.channels[EntityKey(RADIO, occupant.id)] = occupant
+            assertEquals(occupant.id, h.store.fetchChannel(RADIO, 0u)?.id)
+            h.signals.set(h.token, DeviceConnectionState.CONNECTED)
+            assertFalse(signals.snapshot.value.state.canDrainSendQueue)
+            queue.observeConnectionState()
+            dispatched { queue.hydrate() }
+            val primary = h.message(MessageStatus.PENDING, if (channel) 0u else null)
+            enqueue(primary)
+            assertEquals(1, timers, "The real persisted primary must wait for readiness")
+            val pending = h.store.fetchPendingSendsForMessage(EntityKey(RADIO, primary.id)).single()
+            assertEquals(0L, pending.attemptCount)
+
+            h.signals.set(h.token, DeviceConnectionState.READY)
+            dispatcher.runReady()
+            assertTrue(timerCancelled.isCompleted, "Select the primary wake and hold its timer cleanup")
+            h.signals.set(h.token, DeviceConnectionState.CONNECTED)
+            dispatcher.runReady()
+            val sentinel = h.message(MessageStatus.PENDING, if (channel) null else 0u)
+            enqueue(sentinel)
+            assertEquals(2, timers, "The opposite lane must really wait on the transport signal")
+            val sentinelPending = h.store.fetchPendingSendsForMessage(EntityKey(RADIO, sentinel.id)).single()
+
+            dispatcher.checkpoint = {
+                // finish() dispatches the other waiter's cancellation before either cancelDrain().
+                // Run only the already-selected sender while that observer dispatch is held.
+                checkpointReached = true
+                releaseTimer.complete(Unit)
+                dispatcher.runReady { stale("queueReadiness") != 0 }
+                wokeBeforeCancellation = stale("queueReadiness.woke") == 1
+                restartedBeforeCancellation = stale("queueReadiness") != 0
+            }
+            val replacement = token(generation = 2)
+            h.signals.set(replacement, DeviceConnectionState.CONNECTED)
+            dispatcher.runReady()
+            assertTrue(checkpointReached, "The actual replacement observer must reach finish before cancelDrain")
+            assertTrue(wokeBeforeCancellation, "The selected sender must check its retired lifetime before drain cancellation")
+            assertFalse(restartedBeforeCancellation, "A normally completed retirement cancellation must not restart the old drain")
+            assertEquals(1, stale("queueConnection"))
+            assertEquals(replacement, signals.snapshot.value.token)
+            assertEquals(2, timers)
+            assertTrue(accounting.isEmpty())
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            val failures = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+            assertTrue(failures.none {
+                it.operation.startsWith("terminal.") || it.operation == "dmQueueCallback" ||
+                    it.operation == "channelQueueCallback" || it.operation == "sendQueueDrain"
+            }, "Replacement must not terminalize or fail either lane: $failures")
+            for ((message, receipt) in listOf(primary to pending, sentinel to sentinelPending)) {
+                val retained = h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)).single()
+                assertEquals(receipt.id, retained.id)
+                assertEquals(0L, retained.attemptCount)
+                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+            }
+        } finally {
+            replacing = false
+            dispatcher.checkpoint = null
+            releaseTimer.complete(Unit)
+            dispatched { queue.shutdown() }
+            h.close()
+        }
     }
 
     private suspend fun TestScope.assertReadinessRetirement(channel: Boolean) {

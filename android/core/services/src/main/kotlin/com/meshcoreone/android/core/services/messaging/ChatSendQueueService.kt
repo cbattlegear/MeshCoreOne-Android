@@ -61,6 +61,8 @@ class ChatSendQueueService(
     private var teardown: CompletableDeferred<TeardownReport>? = null
     private val dmQueue = SendQueue(ownership.scope, ::sendDM, ::terminalDM, ::drained)
     private val channelQueue = SendQueue(ownership.scope, ::sendChannel, ::terminalChannel, ::drained)
+    // Test-only preemption point after dequeue; production composition leaves this unset.
+    internal var beforeInitialReadinessCheck: (() -> Unit)? = null
     val queuedEnvelopeCount: Int get() = synchronized(lock) { queued.size }
     val isObservingConnection: Boolean get() = synchronized(lock) { connectionTask?.isActive == true }
     private fun key(id: UUID) = EntityKey(token.radioId, id)
@@ -97,6 +99,8 @@ class ChatSendQueueService(
                     previousReady = ready
                     if (snapshot.token != null && snapshot.token != token) {
                         ownership.reporter.report(MessagingDiagnostic.StaleResult(token, "queueConnection"))
+                        dmQueue.stopAfterCurrent()
+                        channelQueue.stopAfterCurrent()
                         ownership.invalidate()
                         channelProgress.retire()
                         cancelQueryAccounting()
@@ -205,6 +209,7 @@ class ChatSendQueueService(
     }
 
     private suspend fun awaitReady() {
+        beforeInitialReadinessCheck?.invoke()
         checkQueueReadinessLifetime("queueReadiness")
         while (!ownership.isReady) {
             clock.messagingDeadline(config.transportWaitTimeout) { triggers.wait() }

@@ -262,6 +262,8 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         var leaked: ChannelPersisting? = null
         store.withChannelOperation { scoped, _ ->
             leaked = scoped
+            assertFailsWith<IllegalStateException> { scoped.withChannelOperation { _, _ -> Unit } }
+            assertFailsWith<IllegalStateException> { store.saveChannel(RADIO_A, info(byte = 3)) }
             supervisorScope {
                 val child = async { scoped.saveChannel(RADIO_A, info()) }
                 assertFailsWith<IllegalStateException> { child.await() }

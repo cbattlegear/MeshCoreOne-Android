@@ -30,17 +30,17 @@ class ChannelIdentityMutex : ChannelIdentityMutation {
     private val identity = Mutex()
 
     override suspend fun <T> withChannelOperation(block: suspend () -> T): T =
-        operation.withLock { block() }
+        operationLock(block)
 
     override suspend fun <T> withChannelIdentityMutation(block: suspend () -> T): T =
-        identity.withLock { block() }
+        identity.withLock(currentJob()) { block() }
 
     override suspend fun <T> withChannelIdentityRestore(block: suspend () -> T): T =
-        operation.withLock { identity.withLock { block() } }
+        operationLock { identity.withLock(currentJob()) { block() } }
 
     override suspend fun <T> withChannelOperationScope(block: suspend (ChannelIdentityWriteScope) -> T): T =
-        operation.withLock {
-            val owner = checkNotNull(currentCoroutineContext()[Job]) { "Channel operation requires an owned Job" }
+        operationLock {
+            val owner = currentJob()
             val scope = OwnedIdentityScope(this, identity, owner)
             try {
                 block(scope)
@@ -53,6 +53,12 @@ class ChannelIdentityMutex : ChannelIdentityMutation {
         check(scope is OwnedIdentityScope) { "Channel operation scope was not minted by this gate" }
         scope.requireOwner(this)
     }
+
+    private suspend fun <T> operationLock(block: suspend () -> T): T =
+        operation.withLock(currentJob()) { block() }
+
+    private suspend fun currentJob(): Job =
+        checkNotNull(currentCoroutineContext()[Job]) { "Channel operation requires an owned Job" }
 
     companion object {
         val PROCESS = ChannelIdentityMutex()
@@ -68,7 +74,7 @@ private class OwnedIdentityScope(
 
     override suspend fun <T> withChannelIdentityMutation(block: suspend () -> T): T {
         requireOwner(gate)
-        return identity.withLock {
+        return identity.withLock(owner) {
             requireOwner(gate)
             block()
         }

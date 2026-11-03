@@ -72,7 +72,9 @@ only inner on each write, using a private gate-minted capability. The exact gate
 can validate it through `requireChannelOperationScope`; caller-implemented/foreign
 capabilities, child Jobs and expired scopes are rejected. Scope activity closes in
 `finally` before outer release, including exception/cancellation. The service must
-not nest another ordinary outer acquisition. Its order is scoped operation, service
+not nest another ordinary outer acquisition. Mutex owner tokens reject same-Job
+recursive ordinary writes, and the scoped facade explicitly rejects operation
+reentry; neither hangs nor becomes implicit reentrancy. Its order is scoped operation, service
 mutation lock, protocol work, then scoped persistence; observer callbacks follow
 outside the scope. Protocol serializer callbacks and `NonCancellable` use different
 Jobs: a producer must acquire/consume its scope in the actual admitted Job, not

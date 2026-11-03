@@ -527,13 +527,20 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
     preflight_tasks, build_tasks = split_preflight_tasks(tasks)
     split_preflight = bool(preflight_tasks and build_tasks)
     preflight_graph = output / f"gradle-{stage}-preflight-task-graph.json"
+    build_options = options
+    if stage == "benchmark" and not local:
+        # Avoid concurrent R8 and in-process Kotlin heap pressure in the full benchmark build.
+        build_options = [
+            option for option in options
+            if option != "--parallel" and not option.startswith("--max-workers=")
+        ] + ["--max-workers=1"]
     if split_preflight:
         phases = [
             ("preflight", preflight_tasks, preflight_graph, validation_preflight_options(options)),
-            ("build", build_tasks, task_graph, options),
+            ("build", build_tasks, task_graph, build_options),
         ]
     else:
-        phases = [("build", tasks, task_graph, options)]
+        phases = [("build", tasks, task_graph, build_options)]
     for _, _, graph_path, _ in phases:
         if graph_path.is_symlink():
             raise PortError("Linked resolved task graph")

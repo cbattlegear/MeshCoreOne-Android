@@ -252,6 +252,80 @@ class EnvironmentTests(unittest.TestCase):
                 "verify_candidate_task_graph.gradle"
             ))
 
+    def test_only_hosted_full_benchmark_build_serializes_gradle_workers(self):
+        from controller import ci
+
+        cases = (
+            ("benchmark", None, False),
+            ("benchmark", None, True),
+            ("scaffold", [ci.BENCHMARK_CONSUMER_SCOPE], False),
+        )
+        for host in ("linux", "windows"):
+            for stage, scopes, local in cases:
+                with self.subTest(host=host, stage=stage, scopes=scopes, local=local), \
+                        tempfile.TemporaryDirectory() as temporary:
+                    directory = Path(temporary)
+                    output = directory / "output"
+                    calls = []
+
+                    def execute(command, environment, log, **kwargs):
+                        calls.append((command, log))
+                        if log.name == f"gradle-{stage}-preflight.log":
+                            graph = Path(environment["ANDROID_CI_TASK_GRAPH"])
+                            graph.parent.mkdir(parents=True, exist_ok=True)
+                            graph.write_text(json.dumps({
+                                "schema_version": 1,
+                                "tasks": [{"path": ":validateModuleGraph", "type": "fixture", "command": []}],
+                            }), encoding="utf-8")
+                        elif log.name == f"gradle-{stage}.log":
+                            raise PortError("Stopped before fixture build execution")
+
+                    with (
+                        patch.object(ci, "load_manifest", return_value=None),
+                        patch.object(ci, "port_map", return_value={}),
+                        patch.object(ci, "candidate_environment", return_value={}),
+                        patch.object(ci, "verify_wrapper"),
+                        patch.object(ci.shutil, "which", return_value="fixture-pwsh"),
+                        patch.object(ci, "execute", side_effect=execute),
+                        patch.dict(os.environ, {"GITHUB_OUTPUT": ""}),
+                        self.assertRaisesRegex(PortError, "Stopped before fixture build execution"),
+                    ):
+                        ci.run_stage(
+                            stage, {**self.state(directory), "host": host}, output,
+                            local=local, scopes=scopes,
+                        )
+
+                    self.assertEqual(len(calls), 3)
+                    if host == "windows":
+                        preflight = load_json(output / f"gradle-{stage}-preflight-invocation.json")["arguments"]
+                        build = load_json(output / f"gradle-{stage}-invocation.json")["arguments"]
+                    else:
+                        preflight, build = calls[1][0][3:], calls[2][0][3:]
+                    self.assertEqual(preflight[:preflight.index("--no-daemon")], ["validateModuleGraph"])
+                    expected_tasks = (
+                        [":benchmark:verifyBenchmarkHarness"] if stage == "benchmark"
+                        else list(ci.BENCHMARK_CONSUMER_TASKS[1:])
+                    )
+                    self.assertEqual(build[:build.index("--no-daemon")], expected_tasks)
+                    for arguments in (preflight, build):
+                        self.assertIn("--dependency-verification", arguments)
+                        self.assertEqual(arguments[arguments.index("--dependency-verification") + 1], "strict")
+                        self.assertIn("--init-script", arguments)
+                    if local:
+                        self.assertNotIn("--max-workers=1", build)
+                        self.assertNotIn("--parallel", build)
+                    else:
+                        self.assertIn("--parallel", preflight)
+                        self.assertIn("--max-workers=8", preflight)
+                        self.assertIn("--build-cache", build)
+                        if stage == "benchmark":
+                            self.assertIn("--max-workers=1", build)
+                            self.assertNotIn("--max-workers=8", build)
+                            self.assertNotIn("--parallel", build)
+                        else:
+                            self.assertIn("--max-workers=8", build)
+                            self.assertIn("--parallel", build)
+
     def test_only_wp203_test_task_is_cacheable_and_its_side_effects_are_declared(self):
         script = (REPO / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_text(
             encoding="utf-8",

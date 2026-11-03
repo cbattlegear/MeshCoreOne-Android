@@ -35,9 +35,11 @@ APK handoff. Configuration-resolving tasks (`validateModuleGraph`,
 full-scaffold `resolveScaffoldDependencies`) run in a parallel Gradle preflight
 before the selected build, test and lint tasks. A preflight failure therefore
 prevents that expensive task graph from starting. The remaining tasks run in a
-separate Gradle invocation. Both hosted phases and dependency-only `prepare`
-use `--parallel --max-workers=8`. WP-002 now resolves dependencies in
-project-owned tasks, so the former forced one-worker workaround is removed.
+separate Gradle invocation. Hosted preflight, dependency-only `prepare` and
+ordinary build/test phases use `--parallel --max-workers=8`. The full benchmark
+build phase instead uses `--max-workers=1` without `--parallel`, avoiding
+concurrent R8 and in-process Kotlin heap pressure while retaining every requested
+task and verification. WP-002 resolves dependencies in project-owned tasks.
 Validation still precedes build/test work to limit wasted work on failures.
 Local invocations retain their caller-selected worker and parallelism options.
 Each invocation streams
@@ -100,16 +102,16 @@ The Gradle task-observation guard itself also selects this route.
 This does not add a scope to historical five- or six-key reports and does not
 run the full benchmark stage for ordinary product changes. The selected Linux
 step executes `validateModuleGraph` and the benchmark/profile Kotlin and Java
-compile tasks. The two Kotlin compiler tasks must actually execute rather than
-use a task-output cache or up-to-date shortcut; their successful actions record
-the committed `WorkloadActivity.kt` and `Workload.kt` Git blobs in their source
-sets. Incremental Kotlin compilation may still reuse unchanged compiler work.
-The exact-head hosted log must contain both records and the fixed task-graph
-report. The historical reader parses the immutable base/head workflow as data:
-it requires this additional output and proof when either declares the new
-contract, rejects removal from a newer base, and leaves older workflows'
-existing acceptance unchanged. The compile-only result does not establish a
-full benchmark build, performance, device behavior or WP-504 acceptance.
+compile tasks. The guard disables task-output caching and up-to-date shortcuts
+for the two Kotlin tasks and records the committed `WorkloadActivity.kt` and
+`Workload.kt` Git blobs observed by their actions. Incremental Kotlin work may
+still be reused. Independent review found that candidate-controlled Gradle
+configuration can disable the compilers and forge those records, so the current
+records do not independently prove execution. Trusted acceptance remains blocked
+pending a hardened observer and execution-input closure. The historical reader
+detects the new declaration from immutable base/head workflows while preserving
+older workflows' existing acceptance. The compile-only result does not establish
+a full benchmark build, performance, device behavior or WP-504 acceptance.
 
 Hosted Gradle task-output caching is enabled. Only `:core:data:testDebugUnitTest`
 is explicitly eligible for test-result caching; all other Gradle `Test` tasks

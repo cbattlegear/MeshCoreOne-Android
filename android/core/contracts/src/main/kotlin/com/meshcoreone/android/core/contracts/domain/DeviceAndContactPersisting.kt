@@ -69,13 +69,13 @@ interface ContactPersisting {
 }
 
 interface ChannelPersisting {
-    suspend fun <T> withChannelOperation(block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T): T =
-        throw UnsupportedOperationException("Owned channel operations are not implemented by this store")
+    suspend fun <T> withChannelOperation(block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T): T
     // Unknown/legacy/ambiguous slots have no proof. This read is not an atomic dispatch fence.
-    suspend fun fetchChannelOccupantID(radioId: RadioId, index: UByte): UUID? = null
-    suspend fun fetchChannelOccupantSnapshot(radioId: RadioId, index: UByte): ChannelOccupantSnapshot? = null
-    suspend fun invalidateChannelOccupant(radioId: RadioId, index: UByte): Unit =
-        throw UnsupportedOperationException("Channel occupant invalidation is not implemented by this store")
+    suspend fun fetchChannelOccupantID(radioId: RadioId, index: UByte): UUID?
+    suspend fun fetchChannelOccupantSnapshot(radioId: RadioId, index: UByte): ChannelOccupantSnapshot?
+    suspend fun invalidateChannelOccupant(radioId: RadioId, index: UByte)
+    /** Scoped facade only: commit unresolved authority before SET; only authoritative radio reconciliation clears it. */
+    suspend fun beginChannelMutation(radioId: RadioId, index: UByte)
     suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO>
     suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO?
     suspend fun fetchChannel(key: EntityKey): ChannelDTO?

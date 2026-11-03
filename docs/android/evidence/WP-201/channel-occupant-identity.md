@@ -18,7 +18,7 @@ the current channel. A late save can therefore retain its original text and epoc
 after a replacement without becoming a send to the new occupant.
 
 Room v2 adds nullable columns to `messages` and `pending_sends`, plus a separate
-`channel_occupants(radioId,index,occupantID)` authority table. The registered v1-to-v2
+`channel_occupants(radioId,index,occupantID,unresolved)` authority table. The registered v1-to-v2
 migration neither deletes data nor backfills legacy outgoing intent from current
 slots. The historical KSP v1 export remains unchanged. The v2 KSP export must be
 generated and its Room validation executed by the real hosted build; no handwritten
@@ -35,8 +35,9 @@ The real repository establishes a fresh opaque UUID on first authoritative save,
 secret change, re-enabling or reconciliation after invalidation. Same-secret rename
 preserves an existing epoch. Clear/delete and device-data deletion invalidate it;
 recreation and observed ABA transitions do not reuse it. All these changes commit
-with their channel mutation. Explicit invalidation throws when unsupported by a
-store rather than claiming success. No channel secret is duplicated into message
+with their channel mutation. Repository interface methods remain abstract, preserving
+the existing contract assertion rather than adding success-shaped defaults.
+No channel secret is duplicated into message
 or queue rows, and channel DTO / portable backup wire shapes remain unchanged.
 
 Replacement/clear retains unresolved outgoing rows and their queued intent with
@@ -81,6 +82,19 @@ Jobs: a producer must acquire/consume its scope in the actual admitted Job, not
 silently widen ownership after radio acceptance. Concrete post-ACK cancellation
 integration remains the radio producer's verification obligation.
 
+Before any actual SET, the service must call the scoped facade's
+`beginChannelMutation(radioId,index)`. It durably marks the slot unresolved while
+retaining its opaque UUID, so process death after SET cannot restore stale proof.
+Both identity reads return null until authoritative `saveChannel(radioId,info)` or
+configured batch reconciliation commits. A same-secret authoritative reconciliation
+preserves the original UUID; replacement rotates it. Ordinary `saveChannel(dto)`
+cannot clear the marker. Definite-unsent, rejected, ambiguous or cancelled operations
+may retain uncertainty until actual radio reconciliation, never fabricate rollback
+proof. Calling begin on an ordinary store or expired facade fails explicitly.
+All scoped facade writes, including metadata writes, enforce active exact-Job scope.
+No delayed slot-only invalidation is required. This evolves the unreleased v2
+candidate schema; it does not claim migration from an earlier development v2 file.
+
 The independent shared-fence producer (`3008e9f0-6e96-40ab-b810-8feee639494b`)
 owns service/protocol operation exclusion, connection retirement and dispatch.
 WP-208 (`13a03908-afb8-42bd-9c96-57a27920076e`) owns queue and inline propagation.
@@ -95,7 +109,10 @@ prove radio identity, unobserved external ABA, reconnect continuity or transport
 drain after an ambiguous write. Restore must invalidate affected/remapped authority
 in its transaction and never import a local epoch or stamp imported messages from
 the destination slot. Those integrations require their actual producer commits.
-Keep #535's independently bounded producer candidate separate.
+Keep #535's independently bounded producer candidate separate. Durable accepted-send
+attempt/cleanup replay across service restart remains a separate WP-208 contract:
+an epoch, SENT row or process-local ACCEPTED marker alone does not establish that
+an explicit retry attempt was accepted.
 
 ## Admission and verification
 
@@ -122,12 +139,14 @@ Executed with pinned native Windows Python 3.12.4:
 
 Declared new product regressions, not passing executions:
 
-- Fourteen `ChannelOccupantPersistenceTest` methods: rename/replacement/recreation,
+- Seventeen `ChannelOccupantPersistenceTest` methods: rename/replacement/recreation,
   DTO/batch/radio partition, late successful save, retained unresolved text/queue,
   unknown legacy/ambiguous slot, actual disk reopen/hydration, independent-context
   exclusion, whole-operation restore/callback ordering, model equality, invalidation,
   direct-writer SET/save-gap exclusion, scoped success/child/expired rejection,
-  forged/foreign/exact-Job capability validation, and exception/cancellation expiry.
+  forged/foreign/exact-Job capability validation, exception/cancellation expiry,
+  actual restart with an unresolved pre-SET marker and no DTO clear, atomic failed
+  reconciliation rollback, and cancelled/escaped marker and metadata-write rejection.
 - One `ChannelOccupantMigrationTest` method creates a real v1 SQLite database from
   the retained KSP export, opens it through the registered production migration,
   checks retained legacy text/queue/null intent, and reopens the upgraded file.
@@ -138,3 +157,12 @@ No local Gradle/JVM/WSL execution occurred. Retained execution owner
 verification was separately authorized against this candidate; the exact run and
 log remain authoritative, not a committed second CI-result bundle. No iOS,
 bidirectional codec, device, hardware, signing or merge acceptance is claimed.
+
+Hosted diagnostic [41598097110](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41598097110)
+at exact candidate `2641346c6e98d237704912fd97200fafc8f1f282` failed the original
+`DomainContractTest.repositorySurfaceIsAbstractTypedAndIncludesEveryPersistenceRoleRatherThanSuccessShapedDefaults`.
+New default repository methods were corrected to abstract declarations; the assertion
+was not weakened. Separately, misplaced local `channelWrite`/`channelOperation`
+functions were corrected to actual context members. The run did not execute the
+Room persistence/migration tests; its canonical log is authoritative, not acceptance
+of these corrections or the new marker tests.

@@ -48,7 +48,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN channelOccupantID TEXT")
                 db.execSQL("ALTER TABLE pending_sends ADD COLUMN channelOccupantID TEXT")
-                db.execSQL("CREATE TABLE IF NOT EXISTS channel_occupants (radioId TEXT NOT NULL, `index` INTEGER NOT NULL, occupantID TEXT NOT NULL, PRIMARY KEY(radioId, `index`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS channel_occupants (radioId TEXT NOT NULL, `index` INTEGER NOT NULL, occupantID TEXT NOT NULL, unresolved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(radioId, `index`))")
             }
         }
         fun open(context: Context, name: String = "meshcoreone.db"): MeshCoreDatabase =

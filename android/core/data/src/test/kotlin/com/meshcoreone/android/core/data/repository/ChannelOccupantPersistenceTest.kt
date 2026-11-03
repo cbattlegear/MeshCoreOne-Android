@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
 import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.model.*
@@ -325,5 +326,77 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         } finally {
             writer.close()
         }
+    }
+
+    @Test fun preRadioMutationMarkerSurvivesActualRestartAndDtoMetadataCannotClearIt() = runTest {
+        val name = "channel-unresolved-${UUID.randomUUID()}.db"
+        var disk = MeshCoreDatabase.open(context, name)
+        var persisted = RoomPersistenceStore(disk, owner, clock)
+        try {
+            persisted.saveChannel(RADIO_A, info())
+            val original = assertNotNull(persisted.fetchChannelOccupantSnapshot(RADIO_A, 5u))
+            persisted.withChannelOperation { scoped, _ -> scoped.beginChannelMutation(RADIO_A, 5u) }
+            assertNull(persisted.fetchChannelOccupantID(RADIO_A, 5u))
+            assertTrue(assertNotNull(disk.channelOccupants().stateForIndex(RADIO_A.value, 5)).unresolved)
+            persisted.close()
+            disk.close()
+            disk = MeshCoreDatabase.open(context, name)
+            persisted = RoomPersistenceStore(disk, owner, clock)
+            assertNull(persisted.fetchChannelOccupantSnapshot(RADIO_A, 5u))
+            persisted.saveChannel(original.channel.copy(name = "metadata only"))
+            assertNull(persisted.fetchChannelOccupantID(RADIO_A, 5u))
+            assertEquals(original.occupantID, disk.channelOccupants().stateForIndex(RADIO_A.value, 5)?.occupantID)
+            persisted.saveChannel(RADIO_A, info("reconciled rename"))
+            assertEquals(original.occupantID, persisted.fetchChannelOccupantID(RADIO_A, 5u))
+            assertFalse(assertNotNull(disk.channelOccupants().stateForIndex(RADIO_A.value, 5)).unresolved)
+        } finally {
+            persisted.close()
+            disk.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test fun failedReconciliationRollsBackChannelReplacementAndRetainsTheDurableMarker() = runTest {
+        store.saveChannel(RADIO_A, info())
+        val original = assertNotNull(store.fetchChannelOccupantSnapshot(RADIO_A, 5u))
+        store.withChannelOperation { scoped, _ -> scoped.beginChannelMutation(RADIO_A, 5u) }
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_occupant_reconcile BEFORE UPDATE ON channel_occupants " +
+                "WHEN NEW.unresolved = 0 BEGIN SELECT RAISE(ABORT, 'controlled occupant commit failure'); END",
+        )
+        try {
+            assertFailsWith<PersistenceStoreException> { store.saveChannel(RADIO_A, info(byte = 2)) }
+            assertEquals(original.channel, store.fetchChannel(RADIO_A, 5u))
+            assertNull(store.fetchChannelOccupantID(RADIO_A, 5u))
+            val authority = assertNotNull(db.channelOccupants().stateForIndex(RADIO_A.value, 5))
+            assertTrue(authority.unresolved)
+            assertEquals(original.occupantID, authority.occupantID)
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_occupant_reconcile")
+        }
+        store.saveChannel(RADIO_A, info(byte = 2))
+        assertNotEquals(original.occupantID, assertNotNull(store.fetchChannelOccupantID(RADIO_A, 5u)))
+    }
+
+    @Test fun markingRequiresAnActiveScopedOperationAndCancellationDoesNotUndoCommittedUncertainty() = runTest {
+        assertFailsWith<IllegalStateException> { store.beginChannelMutation(RADIO_A, 5u) }
+        store.saveChannel(RADIO_A, info())
+        val original = assertNotNull(store.fetchChannelOccupantID(RADIO_A, 5u))
+        var escaped: ChannelPersisting? = null
+        assertFailsWith<CancellationException> {
+            store.withChannelOperation { scoped, _ ->
+                escaped = scoped
+                scoped.beginChannelMutation(RADIO_A, 5u)
+                throw CancellationException("Controlled cancellation after durable marker, before radio/save")
+            }
+        }
+        assertNull(store.fetchChannelOccupantID(RADIO_A, 5u))
+        assertEquals(original, db.channelOccupants().stateForIndex(RADIO_A.value, 5)?.occupantID)
+        assertFailsWith<IllegalStateException> { assertNotNull(escaped).beginChannelMutation(RADIO_A, 5u) }
+        val channel = assertNotNull(store.fetchChannel(RADIO_A, 5u))
+        assertFailsWith<IllegalStateException> { assertNotNull(escaped).setChannelFavorite(EntityKey(RADIO_A, channel.id), true) }
+        assertEquals(channel, store.fetchChannel(RADIO_A, 5u))
+        store.batchSaveChannels(RADIO_A, listOf(info()).snapshot(), SnapshotList.empty(), null)
+        assertEquals(original, store.fetchChannelOccupantID(RADIO_A, 5u))
     }
 }

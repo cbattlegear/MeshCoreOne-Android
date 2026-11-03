@@ -117,22 +117,22 @@ internal class RoomRepositoryContext(
                 if (transaction.saves) database.rxLogs().upsert(transaction.pendingRx.values.toList())
                 value
             }
-
-            suspend fun <T> channelWrite(
-                operation: String,
-                flushBeforeRollback: Boolean = false,
-                identityScope: ChannelIdentityWriteScope? = null,
-                block: suspend RepositoryTransaction.() -> T,
-            ): T = if (identityScope == null) {
-                channelIdentityMutation.withChannelIdentityRestore { write(operation, flushBeforeRollback, block) }
-            } else {
-                identityScope.withChannelIdentityMutation { write(operation, flushBeforeRollback, block) }
-            }
-
-            suspend fun <T> channelOperation(block: suspend (ChannelIdentityWriteScope) -> T): T =
-                channelIdentityMutation.withChannelOperationScope(block)
         }
     }
+
+    suspend fun <T> channelWrite(
+        operation: String,
+        flushBeforeRollback: Boolean = false,
+        identityScope: ChannelIdentityWriteScope? = null,
+        block: suspend RepositoryTransaction.() -> T,
+    ): T = if (identityScope == null) {
+        channelIdentityMutation.withChannelIdentityRestore { write(operation, flushBeforeRollback, block) }
+    } else {
+        identityScope.withChannelIdentityMutation { write(operation, flushBeforeRollback, block) }
+    }
+
+    suspend fun <T> channelOperation(block: suspend (ChannelIdentityWriteScope) -> T): T =
+        channelIdentityMutation.withChannelOperationScope(block)
 
     suspend fun <T> guardedWrite(
         operation: String,

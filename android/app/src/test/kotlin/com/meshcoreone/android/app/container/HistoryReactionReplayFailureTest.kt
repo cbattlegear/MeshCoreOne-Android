@@ -33,6 +33,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
@@ -77,6 +80,140 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
     @Test fun channelSummaryCancellationReconcilesWithoutAnotherRow() = runTest { recover(this, false, Fault.SUMMARY_BEFORE, true) }
     @Test fun directCommittedSummaryCancellationReconcilesWithoutAnotherRow() = runTest { recover(this, true, Fault.SUMMARY_AFTER, true) }
     @Test fun channelCommittedSummaryCancellationReconcilesWithoutAnotherRow() = runTest { recover(this, false, Fault.SUMMARY_AFTER, true) }
+
+    @Test fun directDuplicateReplaySerializesALiveReaction() = runTest { interleave(this, true, true) }
+    @Test fun channelDuplicateReplaySerializesALiveReaction() = runTest { interleave(this, false, true) }
+    @Test fun directLiveReactionSerializesDuplicateReplay() = runTest { interleave(this, true, false) }
+    @Test fun channelLiveReactionSerializesDuplicateReplay() = runTest { interleave(this, false, false) }
+    @Test fun directCancelledDuplicateWaiterRetainsItsPendingReaction() = runTest { interleave(this, true, false, true) }
+    @Test fun channelCancelledDuplicateWaiterRetainsItsPendingReaction() = runTest { interleave(this, false, false, true) }
+
+    private suspend fun interleave(test: TestScope, direct: Boolean, historyFirst: Boolean, cancelWaiter: Boolean = false) {
+        val snapshotReady = CompletableDeferred<Unit>()
+        val releaseSnapshot = CompletableDeferred<Unit>()
+        val duplicateChecked = CompletableDeferred<Unit>()
+        val liveSaveStarted = CompletableDeferred<Unit>()
+        var fetches = 0
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchReactions(message: EntityKey, limit: Long): SnapshotList<ReactionDTO> {
+                val first = ++fetches == 1
+                val result = store.fetchReactions(message, limit)
+                if (first) {
+                    snapshotReady.complete(Unit)
+                    releaseSnapshot.await()
+                }
+                return result
+            }
+
+            override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
+                val result = store.reactionExists(message, senderName, emoji)
+                duplicateChecked.complete(Unit)
+                return result
+            }
+
+            override suspend fun saveReaction(dto: ReactionDTO) {
+                liveSaveStarted.complete(Unit)
+                store.saveReaction(dto)
+            }
+        }
+        val harness = ContainerHarness(test, store, persistenceOverride = persistence)
+        val jobs = mutableListOf<Job>()
+        var mounted: ChatViewModel? = null
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("concurrent reaction session ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY
+            }
+            val live = assertNotNull(harness.sessions.current)
+            val radio = live.token.radioId
+            val contact = ContactDTO(radioId = radio, publicKey = key(3), name = "Alice", lastHeardTimestamp = null)
+            store.saveContact(contact)
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val channel = assertNotNull(store.fetchChannel(radio, 3u))
+            val target = MessageDTO(
+                radioId = radio, contactID = if (direct) contact.id else null,
+                channelIndex = if (direct) null else channel.index, text = "Hello", timestamp = stamp,
+                createdAt = EPOCH, sortDate = EPOCH, senderNodeName = if (direct) null else "Alice",
+                direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED, reactionSummary = "$emoji:1",
+            )
+            store.saveMessage(target)
+            val key = EntityKey(radio, target.id)
+            val wire = if (direct) "$emoji\nb45pc4ek" else "@[Alice]$emoji\nb45pc4ek"
+            val bob = ReactionDTO(
+                messageID = target.id, emoji = emoji, senderName = "Bob", messageHash = "b45pc4ek", rawText = wire,
+                contactID = if (direct) contact.id else null, channelIndex = if (direct) null else channel.index,
+                radioId = radio, receivedAt = EPOCH,
+            )
+            store.saveReaction(bob)
+            val carol = bob.copy(id = UUID.randomUUID(), senderName = "Carol", receivedAt = EPOCH.plusSeconds(1))
+            val service = live.reactionService
+            if (direct) service.queuePendingDMReaction(
+                assertNotNull(ReactionParser.parseDM(wire)), contact.id, "Bob", wire, radio,
+            ) else service.queuePendingReaction(
+                assertNotNull(ReactionParser.parse(wire)), channel.index, "Bob", wire, radio,
+            )
+            val conversation = if (direct) TimelineConversation.Direct(contact) else TimelineConversation.Channel(channel)
+            val viewModel = ChatViewModel(
+                conversation, harness.container.chatsFeature.timeline(conversation), CoroutineScope(currentCoroutineContext()),
+            )
+            mounted = viewModel
+            // The actual sync adapter and history consumer share this session's service and real Room store.
+            val adapter = SyncReactionAdapter(service)
+            if (historyFirst) {
+                val history = test.async(start = CoroutineStart.UNDISPATCHED) { viewModel.open() }.also(jobs::add)
+                snapshotReady.await()
+                val arrival = test.async(start = CoroutineStart.UNDISPATCHED) {
+                    adapter.persistReactionAndUpdateSummary(carol, persistence)
+                }.also(jobs::add)
+                assertFalse(liveSaveStarted.isCompleted, "Live persistence must wait before saving, not only before summary write")
+                assertFalse(arrival.isCompleted)
+                assertEquals(listOf(bob), store.fetchReactions(key))
+                releaseSnapshot.complete(Unit)
+                history.await()
+                assertEquals("$emoji:2", assertNotNull(arrival.await()).summary)
+            } else {
+                val arrival = test.async(start = CoroutineStart.UNDISPATCHED) {
+                    adapter.persistReactionAndUpdateSummary(carol, persistence)
+                }.also(jobs::add)
+                snapshotReady.await()
+                val history = test.async(start = CoroutineStart.UNDISPATCHED) { viewModel.open() }.also(jobs::add)
+                duplicateChecked.await()
+                assertEquals(1, fetches, "Duplicate reconciliation must wait for the complete live persistence operation")
+                assertFalse(history.isCompleted)
+                if (cancelWaiter) {
+                    history.cancelAndJoin()
+                    assertTrue(history.isCancelled)
+                    val retained = if (direct) {
+                        val pending = service.indexDMMessage(target.id, contact.id, "Hello", stamp)
+                        pending.forEach(service::requeuePendingDMReaction)
+                        pending.map { it.senderName }
+                    } else {
+                        val pending = service.indexMessage(target.id, channel.index, "Alice", "Hello", stamp)
+                        pending.forEach(service::requeuePendingReaction)
+                        pending.map { it.senderNodeName }
+                    }
+                    assertEquals(listOf("Bob"), retained, "A cancelled mutex waiter must restore its drained batch")
+                }
+                releaseSnapshot.complete(Unit)
+                assertEquals("$emoji:2", assertNotNull(arrival.await()).summary)
+                if (!cancelWaiter) history.await()
+            }
+            viewModel.open()
+            assertNull(viewModel.state.value.loadError)
+            assertEquals("$emoji:2", assertNotNull(store.fetchMessage(key)).reactionSummary)
+            assertEquals("$emoji:2", viewModel.state.value.messages.single().reactionSummary)
+            val saved = store.fetchReactions(key)
+            assertEquals(setOf(bob, carol), saved.toSet(), "Neither path may replace committed reaction identities")
+            viewModel.refresh()
+            assertEquals(saved, store.fetchReactions(key))
+            assertEquals("$emoji:2", viewModel.state.value.messages.single().reactionSummary)
+        } finally {
+            releaseSnapshot.complete(Unit)
+            jobs.forEach { it.cancelAndJoin() }
+            mounted?.close()
+            harness.container.close()
+        }
+    }
 
     @Test fun restoredChannelMatchesKeepTheirMetadataAndTheExistingQueueBound() {
         val service = ReactionService(Clock.fixed(EPOCH, ZoneOffset.UTC))

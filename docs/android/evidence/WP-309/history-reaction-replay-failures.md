@@ -233,3 +233,50 @@ was `workflow_dispatch`, attempt 1, for parent
 `0ee2a57a900d622e1e1768a2c2c27b076720bf59`, not a pass for evidence-only
 `446ba8da0` or this current-main composition. Subsequent PR metadata and its
 authenticated bounded scope must identify their own exact base/head/run.
+
+## PR-triggered result and coupled live-summary race
+
+Ready PR #540, head `0e923491842e62364ccba5da625f0c71b8748075` on current
+base `99479711bfdb7c621765f09d671068ca8b8318ce`, passed normal
+`pull_request` run
+[41610686548](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41610686548),
+attempt 1. Its authoritative Android job `125831590386` reports App 1,889,
+services 2,801 and chats 443 discovered/run/passed, zero failures/errors/skips.
+All nine history and 30 failure methods appear in that job's actual inventory;
+both suites end successfully. Controller policy, declared build and `android-ci`
+passed. The two Swift oracle jobs were scope-skipped, not iOS reaction evidence.
+Authenticated bounded scope comment `6599922628` staged as data only with digest
+`fe4ce77a8282a60cf7bd1b0d24860bb6e258e0ab1fb3136b48785132375c9edc`.
+This is not an independent-review verdict or successor acceptance.
+
+Inline review `4452915365` identifies a real race in that candidate's new
+duplicate-summary branch: history fetches Bob's row and suspends; live sync saves
+Carol and writes count two; history resumes and writes its captured count one,
+then acknowledges Bob's pending entry. Later history has no pending entry to
+repair that stale summary. The underlying save/fetch/write helper was already
+non-atomic, but exposing duplicate-only reconciliation adds this concrete
+interleaving; the correction does not dismiss it as unrelated or fake success.
+
+The bounded correction serializes both complete operations through the same
+session-owned `ReactionService` mutex. Normal persistence holds it across save,
+fetch and summary update; duplicate reconciliation holds it across fetch and
+summary update. A private helper avoids nested acquisition. The live sync's
+existing `SyncReactionAdapter` already delegates to this exact service instance;
+no sync producer, query/origin API, event route or runtime ownership is changed.
+
+Six additional methods in `HistoryReactionReplayFailureTest` use actual Room,
+the mounted App history consumer and that real live persistence adapter. Both
+DM and channel schedules gate the first actual fetched snapshot, then start the
+other operation. History-first requires live persistence to wait before its save;
+live-first requires duplicate retry to wait before its fetch. The controls use
+undispatched coroutine entry and explicit operation signals, not timing sleeps.
+Two cases cancel the waiting duplicate operation, require its pending Bob object
+to remain queued, then release the live writer and explicitly retry. Final stored
+rows retain Bob/Carol identities and the store/mounted history summary is two
+after a real refresh, with later refresh idempotent.
+
+These six are adapter-boundary concurrency controls, not a claim of new radio
+polling/device evidence. Their pre-fix failure has not been executed locally
+under the retained hard lock. The original 30 controls remain intact; the
+successor requires new exact-head PR execution and independent review, not credit
+from the passing `0e9234918` run.

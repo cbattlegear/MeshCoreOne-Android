@@ -15,6 +15,8 @@ import java.util.UUID
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A reaction waiting for its target message to be indexed. */
 data class PendingReaction(
@@ -44,8 +46,9 @@ data class ReactionPersistResult(val messageID: UUID, val summary: String)
  * shared [MessageLRUCache] and a session-lifetime queue of reactions whose target has not arrived yet.
  *
  * Swift isolates this in an actor. Here the pending queues are immutable values swapped under one lock that
- * is never held across a suspension; [MessageLRUCache] has its own lock. Nothing is scheduled, so no
- * coroutine scope is needed; [clock] stamps `receivedAt` on queued reactions.
+ * is never held across a suspension; [MessageLRUCache] has its own lock. A separate mutex serializes
+ * complete persistence/summary operations across suspension. Nothing is scheduled, so no coroutine
+ * scope is needed; [clock] stamps `receivedAt` on queued reactions.
  */
 class ReactionService internal constructor(
     private val messageCache: MessageLRUCache,
@@ -56,6 +59,7 @@ class ReactionService internal constructor(
 
     private val logger: Logger = Logger.getLogger("ReactionService")
     private val lock = Any()
+    private val persistenceMutex = Mutex()
 
     // Pending reactions queues: no TTL, session lifetime. Guarded by [lock].
     private var pendingReactions = PendingQueue.empty<PendingReactionKey, PendingReaction>()
@@ -138,7 +142,10 @@ class ReactionService internal constructor(
      * Persists a reaction and updates the message's reaction summary (built from the newest 100 reactions, the
      * store's default fetch limit). Store failures are logged and yield null; cancellation propagates.
      */
-    suspend fun persistReactionAndUpdateSummary(reaction: ReactionDTO, dataStore: ReactionPersisting): ReactionPersistResult? {
+    suspend fun persistReactionAndUpdateSummary(
+        reaction: ReactionDTO,
+        dataStore: ReactionPersisting,
+    ): ReactionPersistResult? = persistenceMutex.withLock {
         val message = EntityKey(reaction.radioId, reaction.messageID)
         try {
             dataStore.saveReaction(reaction)
@@ -146,13 +153,16 @@ class ReactionService internal constructor(
             throw error
         } catch (error: Exception) {
             logger.log(Level.SEVERE, "Failed to save reaction for message ${reaction.messageID}: ${error.message}", error)
-            return null
+            return@withLock null
         }
-        return reconcileSummary(message, dataStore)
+        reconcileSummaryLocked(message, dataStore)
     }
 
     /** Rebuilds a committed reaction's summary without saving or replacing the reaction row again. */
-    suspend fun reconcileSummary(message: EntityKey, dataStore: ReactionPersisting): ReactionPersistResult? {
+    suspend fun reconcileSummary(message: EntityKey, dataStore: ReactionPersisting): ReactionPersistResult? =
+        persistenceMutex.withLock { reconcileSummaryLocked(message, dataStore) }
+
+    private suspend fun reconcileSummaryLocked(message: EntityKey, dataStore: ReactionPersisting): ReactionPersistResult? {
         val reactions = try {
             dataStore.fetchReactions(message)
         } catch (error: CancellationException) {

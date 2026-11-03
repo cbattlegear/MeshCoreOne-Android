@@ -421,3 +421,14 @@ with the stage assertion suppressed, retaining both failures without swallowing
 cancellation. Added controls exercise reflection failure, assertion failure and
 cancellation preservation. These controls are source-only until actual hosted
 execution; no static check is represented as their runtime result.
+
+Bounded re-review then identified the actual `Method.invoke` boundary: a target's
+cancellation or VM/thread termination is wrapped in `InvocationTargetException`.
+The helper now inspects only that specific outer wrapper, rethrowing its actual
+target by identity when it is cancellation, `VirtualMachineError` or `ThreadDeath`,
+with the original stage/timeout assertion suppressed. Ordinary reflection
+failures and ordinary target exceptions retain their actual wrapper as a
+suppressed diagnostic failure. Arbitrary cause chains are not unwrapped.
+Additional source-only controls call a real reflected throwing target for all
+three propagated categories and an ordinary target exception; existing direct
+collector/cancellation controls remain. No wait budget or product assertion changed.

@@ -47,6 +47,7 @@ import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.lang.reflect.InvocationTargetException
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -93,6 +94,36 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         }
         assertSame(cancellation, propagated)
         assertSame(timeout, propagated.suppressed.single().cause)
+    }
+
+    class ThrowingDiagnosticTarget(val failure: Throwable) {
+        fun collect(): String = throw failure
+    }
+
+    @Test
+    fun reflectedDiagnosticCancellationAndFatalTargetsPropagateByIdentity() {
+        val method = ThrowingDiagnosticTarget::class.java.getMethod("collect")
+        val timeout = IllegalStateException("original timeout")
+        for (target in listOf(CancellationException("reflected cancellation"), StackOverflowError("synthetic fatal"), ThreadDeath())) {
+            val propagated = assertFailsWith<Throwable> {
+                failWithDiagnostics("actual stage timed out", timeout) {
+                    method.invoke(ThrowingDiagnosticTarget(target)) as String
+                }
+            }
+            assertSame(target, propagated)
+            assertEquals("actual stage timed out", propagated.suppressed.single().message)
+            assertSame(timeout, propagated.suppressed.single().cause)
+        }
+        val ordinary = IllegalStateException("ordinary reflected target")
+        val failure = assertFailsWith<AssertionError> {
+            failWithDiagnostics("actual stage timed out", timeout) {
+                method.invoke(ThrowingDiagnosticTarget(ordinary)) as String
+            }
+        }
+        assertSame(timeout, failure.cause)
+        val wrapper = failure.suppressed.single()
+        assertTrue(wrapper is InvocationTargetException)
+        assertSame(ordinary, wrapper.targetException)
     }
 
     @Test
@@ -440,9 +471,10 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             cancelled.addSuppressed(failure)
             throw cancelled
         } catch (diagnosticFailure: Throwable) {
-            if (diagnosticFailure is VirtualMachineError || diagnosticFailure is ThreadDeath) {
-                diagnosticFailure.addSuppressed(failure)
-                throw diagnosticFailure
+            val target = if (diagnosticFailure is InvocationTargetException) diagnosticFailure.targetException else diagnosticFailure
+            if (target is CancellationException || target is VirtualMachineError || target is ThreadDeath) {
+                target.addSuppressed(failure)
+                throw target
             }
             failure.addSuppressed(diagnosticFailure)
         }

@@ -142,7 +142,7 @@ persistence, without waiting for or mutating that sync fence.
 
 The 32 test methods are authored source controls, not test-discovery or execution
 evidence; they remain unexecuted while the shared Gradle reservation is held.
-The cleanup-cancellation control injects `CancellationException` from a suspended
+The cleanup-cancellation control injects `CancellationException` from a suspend
 cleanup callback rather than cancelling a suspended caller job. No post-failure
 recovery-fence reuse control or general callback-deadlock proof is claimed.
 Unknown-send injection does not establish a device-committed removal with a lost

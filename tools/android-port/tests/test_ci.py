@@ -2,6 +2,7 @@
 
 import contextlib
 from dataclasses import replace
+import hashlib
 import io
 import json
 import os
@@ -27,6 +28,93 @@ MIXED = PORTED + (
     "// AndroidOnly: WP-109 Public localhost transport/parser/dispatcher regressions "
     "with source two-second phase deadlines.\n"
 )
+
+
+class BenchmarkConsumerTests(unittest.TestCase):
+    def test_compile_scope_is_exclusive_and_does_not_change_existing_task_plans(self):
+        selected = [ci.BENCHMARK_CONSUMER_SCOPE]
+        self.assertEqual(ci.stage_tasks("scaffold", selected), list(ci.BENCHMARK_CONSUMER_TASKS))
+        self.assertNotIn(ci.BENCHMARK_CONSUMER_SCOPE, ci.SCOPED_TASKS)
+        self.assertNotEqual(list(ci.BENCHMARK_CONSUMER_TASKS), ci.TASKS["benchmark"])
+        self.assertEqual(
+            ci.stage_tasks("scaffold", ["scaffold"]),
+            list(dict.fromkeys(ci.SCOPED_TASKS["scaffold"])),
+        )
+        for stage, scopes, affected in (
+            ("benchmark", selected, False),
+            ("protocol", selected, False),
+            ("scaffold", selected + ["scaffold"], False),
+            ("scaffold", selected + selected, False),
+            ("scaffold", selected, True),
+        ):
+            with self.subTest(stage=stage, scopes=scopes, affected=affected), self.assertRaises(PortError):
+                ci.stage_tasks(stage, scopes, affected_candidate=affected)
+
+    def test_gradle_guard_requires_executed_compilers_and_committed_fixture_sources(self):
+        guard = ci.TASK_GRAPH_GUARD.read_text(encoding="utf-8")
+        for required in (
+            "ANDROID_CI_BENCHMARK_CONSUMER",
+            *ci.BENCHMARK_CONSUMER_KOTLIN_TASKS,
+            "task.outputs.upToDateWhen { false }",
+            'task.outputs.cacheIf("Benchmark consumer source observation requires task execution") { false }',
+            "task.sources.files",
+            "task.doFirst { observed = identify() }",
+            "task.doLast {",
+            "identify() != observed",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, guard)
+        for path in ci.BENCHMARK_CONSUMER_SOURCES:
+            self.assertIn(path.removeprefix("android/"), guard)
+
+    def test_source_evidence_requires_each_exact_task_and_committed_blob(self):
+        snapshot = {path: str(index + 1) * 40 for index, path in enumerate(ci.BENCHMARK_CONSUMER_SOURCES)}
+        sources = ci.benchmark_consumer_sources(snapshot)
+        valid = [{"task": task, "sources": sources.copy()} for task in ci.BENCHMARK_CONSUMER_KOTLIN_TASKS]
+        self.assertEqual(ci.validate_benchmark_consumer_compilation(valid[::-1], snapshot), valid)
+        invalid = (
+            [],
+            valid[:1],
+            valid + valid[:1],
+            [valid[0], valid[0]],
+            [{"task": ":app:compileDebugKotlin", "sources": sources}, valid[1]],
+            [{"task": valid[0]["task"], "sources": {}}, valid[1]],
+            [{"task": valid[0]["task"], "sources": {**sources, next(iter(sources)): "f" * 40}}, valid[1]],
+            [{"task": valid[0]["task"], "sources": sources, "result": "success"}, valid[1]],
+            [None, valid[1]],
+        )
+        for records in invalid:
+            with self.subTest(records=records), self.assertRaises(PortError):
+                ci.validate_benchmark_consumer_compilation(records, snapshot)
+        with self.assertRaises(PortError):
+            ci.benchmark_consumer_sources({})
+
+    def test_evidence_reader_rejects_malformed_and_dirty_source_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = {}
+            for index, relative in enumerate(ci.BENCHMARK_CONSUMER_SOURCES):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                data = f"fixture {index}\n".encode()
+                path.write_bytes(data)
+                snapshot[relative] = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+            records = [
+                {"task": task, "sources": snapshot.copy()}
+                for task in ci.BENCHMARK_CONSUMER_KOTLIN_TASKS
+            ]
+            evidence = root / "consumer.jsonl"
+            evidence.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+            with patch.object(ci, "git", return_value=("a" * 40).encode()), \
+                    patch.object(ci, "tree", return_value=snapshot):
+                self.assertEqual(ci.read_benchmark_consumer_compilation(evidence, root), records)
+                evidence.write_text("{bad-json}\n", encoding="utf-8")
+                with self.assertRaises(PortError):
+                    ci.read_benchmark_consumer_compilation(evidence, root)
+                evidence.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+                (root / ci.BENCHMARK_CONSUMER_SOURCES[0]).write_text("dirty", encoding="utf-8")
+                with self.assertRaisesRegex(PortError, "differs from the committed head"):
+                    ci.read_benchmark_consumer_compilation(evidence, root)
 
 
 class SourceDispositionTests(unittest.TestCase):

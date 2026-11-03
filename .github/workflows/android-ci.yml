@@ -28,6 +28,7 @@ jobs:
       protocol: ${{ steps.changed.outputs.protocol }}
       backup: ${{ steps.changed.outputs.backup }}
       benchmark: ${{ steps.changed.outputs.benchmark }}
+      benchmark-consumer: ${{ steps.changed.outputs.benchmark-consumer }}
       external-oracle: ${{ steps.changed.outputs['external-oracle'] }}
     steps:
       - name: Read-only exact candidate and immutable diff endpoints
@@ -87,7 +88,8 @@ jobs:
         needs.scope.outputs.scaffold == 'true' ||
         needs.scope.outputs.protocol == 'true' ||
         needs.scope.outputs.backup == 'true' ||
-        needs.scope.outputs.benchmark == 'true'
+        needs.scope.outputs.benchmark == 'true' ||
+        needs.scope.outputs['benchmark-consumer'] == 'true'
       }}
     runs-on: ubuntu-24.04
     timeout-minutes: 75
@@ -135,6 +137,11 @@ jobs:
         run: python tools/android-port/controller/ci.py provision --root (Split-Path $env:ANDROID_CI_STATE -Parent) --accept-sdk-license
       - name: Check worker readiness
         run: python tools/android-port/controller/ci.py preflight
+      - name: Compile benchmark consumer
+        if: ${{ needs.scope.outputs['benchmark-consumer'] == 'true' }}
+        run: >-
+          python tools/android-port/controller/ci.py run --stage scaffold --scope benchmark-consumer
+          --output (Join-Path $env:ANDROID_CI_WORK 'benchmark-consumer')
       - id: gradle
         name: Run parallel Gradle validation and Android tasks
         env:
@@ -247,6 +254,7 @@ jobs:
           PROTOCOL_SELECTED: ${{ needs.scope.outputs.protocol }}
           BACKUP_SELECTED: ${{ needs.scope.outputs.backup }}
           BENCHMARK_SELECTED: ${{ needs.scope.outputs.benchmark }}
+          BENCHMARK_CONSUMER_SELECTED: ${{ needs.scope.outputs['benchmark-consumer'] }}
           EXTERNAL_SELECTED: ${{ needs.scope.outputs['external-oracle'] }}
           CONTROLLER_RESULT: ${{ needs.controller.result }}
           BUILD_RESULT: ${{ needs.build.result }}
@@ -254,7 +262,7 @@ jobs:
           BACKUP_RESULT: ${{ needs.backup-oracle.result }}
         run: |
           test "$CONTROLLER_RESULT" = "success"
-          if [ "$SCAFFOLD_SELECTED" = "true" ] || [ "$PROTOCOL_SELECTED" = "true" ] || [ "$BACKUP_SELECTED" = "true" ] || [ "$BENCHMARK_SELECTED" = "true" ]; then
+          if [ "$SCAFFOLD_SELECTED" = "true" ] || [ "$PROTOCOL_SELECTED" = "true" ] || [ "$BACKUP_SELECTED" = "true" ] || [ "$BENCHMARK_SELECTED" = "true" ] || [ "$BENCHMARK_CONSUMER_SELECTED" = "true" ]; then
             test "$BUILD_RESULT" = "success"
           else
             test "$BUILD_RESULT" = "skipped"

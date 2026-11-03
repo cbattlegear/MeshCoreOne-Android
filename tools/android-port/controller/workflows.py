@@ -168,6 +168,14 @@ def validate_build_setup(steps):
             "name": "Check worker readiness",
             "run": ["python tools/android-port/controller/ci.py preflight"],
         },
+        {
+            "name": "Compile benchmark consumer",
+            "if": "${{ needs.scope.outputs['benchmark-consumer'] == 'true' }}",
+            "run": [
+                "python tools/android-port/controller/ci.py run --stage scaffold --scope benchmark-consumer "
+                "--output (Join-Path $env:ANDROID_CI_WORK 'benchmark-consumer')",
+            ],
+        },
     ], "Linux build setup")
 
 
@@ -224,6 +232,7 @@ def validate_candidate(value: dict, text: str):
         "protocol": "${{ steps.changed.outputs.protocol }}",
         "backup": "${{ steps.changed.outputs.backup }}",
         "benchmark": "${{ steps.changed.outputs.benchmark }}",
+        "benchmark-consumer": "${{ steps.changed.outputs.benchmark-consumer }}",
         "external-oracle": "${{ steps.changed.outputs['external-oracle'] }}",
     }
     scope_steps = scope.get("steps")
@@ -263,7 +272,8 @@ def validate_candidate(value: dict, text: str):
         "${{ needs.scope.outputs.scaffold == 'true' || "
         "needs.scope.outputs.protocol == 'true' || "
         "needs.scope.outputs.backup == 'true' || "
-        "needs.scope.outputs.benchmark == 'true' }}"
+        "needs.scope.outputs.benchmark == 'true' || "
+        "needs.scope.outputs['benchmark-consumer'] == 'true' }}"
     )
     condition = workflow_text(build.get("if"), "Linux build condition")
     if (set(build) != {"name", "needs", "if", "runs-on", "timeout-minutes", "defaults", "steps"}
@@ -389,7 +399,8 @@ def validate_candidate(value: dict, text: str):
         raise PortError("Candidate requires one localization check and one inspected debug APK handoff")
     selected_build_gate = (
         'if [ "$SCAFFOLD_SELECTED" = "true" ] || [ "$PROTOCOL_SELECTED" = "true" ] '
-        '|| [ "$BACKUP_SELECTED" = "true" ] || [ "$BENCHMARK_SELECTED" = "true" ]; then'
+        '|| [ "$BACKUP_SELECTED" = "true" ] || [ "$BENCHMARK_SELECTED" = "true" ] '
+        '|| [ "$BENCHMARK_CONSUMER_SELECTED" = "true" ]; then'
     )
     gate_steps = gate.get("steps")
     gate_environment = {
@@ -398,6 +409,7 @@ def validate_candidate(value: dict, text: str):
         "PROTOCOL_SELECTED": "${{ needs.scope.outputs.protocol }}",
         "BACKUP_SELECTED": "${{ needs.scope.outputs.backup }}",
         "BENCHMARK_SELECTED": "${{ needs.scope.outputs.benchmark }}",
+        "BENCHMARK_CONSUMER_SELECTED": "${{ needs.scope.outputs['benchmark-consumer'] }}",
         "EXTERNAL_SELECTED": "${{ needs.scope.outputs['external-oracle'] }}",
         "CONTROLLER_RESULT": "${{ needs.controller.result }}",
         "BUILD_RESULT": "${{ needs.build.result }}",

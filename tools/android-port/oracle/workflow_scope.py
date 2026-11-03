@@ -41,6 +41,12 @@ ANDROID_DOCUMENTATION_INPUTS = {
     "android/scaffold/README.md",
     "android/tools/meshcli/README.md",
 }
+BENCHMARK_CONSUMER_MODULE = re.compile(
+    r"^android/(?:app|(?:core|feature|platform)/[^/]+)/(.+)$"
+)
+BENCHMARK_CONSUMER_VERIFICATION_INPUTS = {
+    "tools/android-port/controller/verify_candidate_task_graph.gradle",
+}
 
 
 def codec_inputs():
@@ -152,6 +158,7 @@ RULES = {
 def all_scopes(reason, *, fail_safe=True):
     return {
         "scopes": {scope: True for scope in SCOPES},
+        "benchmark_consumer": True,
         "reason": reason,
         "fail_safe": fail_safe,
     }
@@ -212,6 +219,25 @@ def classify(paths):
     return result
 
 
+def benchmark_consumer_input(path):
+    match = BENCHMARK_CONSUMER_MODULE.fullmatch(path)
+    if match is None:
+        return False
+    relative = match.group(1)
+    source = re.match(r"^src/([^/]+)/.+", relative)
+    if source is not None:
+        return source.group(1) not in {"debug", "test", "androidTest"}
+    return relative not in {"README.md", "LICENSE", "NOTICE"}
+
+
+def requires_benchmark_consumer(paths):
+    return bool(set(paths) & (
+        ALL_SCOPE_INPUTS | SHARED_GRADLE_INPUTS | BENCHMARK_CONSUMER_VERIFICATION_INPUTS
+    )) or any(
+        benchmark_consumer_input(path) for path in paths
+    )
+
+
 def changed_paths(repo: Path, base: str, head: str):
     completed = subprocess.run(
         ["git", "-C", str(repo), "diff", "--name-only", "--no-renames", base, head, "--"],
@@ -241,6 +267,7 @@ def evaluate(repo: Path, event_name: str, event: dict):
         paths = changed_paths(repo, diff_base, head)
         return {
             "scopes": classify(paths), "reason": "changed-input-classification",
+            "benchmark_consumer": requires_benchmark_consumer(paths),
             "fail_safe": False, "base": base, "head": head,
             "diff_base": diff_base, "paths": paths,
         }
@@ -264,6 +291,7 @@ def main(argv=None):
     with args.output.open("a", encoding="utf-8", newline="\n") as stream:
         for scope in SCOPES:
             stream.write(f"{scope}={'true' if result['scopes'][scope] else 'false'}\n")
+        stream.write(f"benchmark-consumer={'true' if result['benchmark_consumer'] else 'false'}\n")
     print(json.dumps(result, indent=2))
     return 0
 

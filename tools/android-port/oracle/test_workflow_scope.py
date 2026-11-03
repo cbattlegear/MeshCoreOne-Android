@@ -6,7 +6,11 @@ from unittest.mock import patch
 
 from controller.errors import PortError
 from controller.local_scope import select_paths
-from oracle.workflow_scope import ALL_SCOPE_INPUTS, SCOPES, ZERO, classify, endpoints, evaluate
+from oracle import workflow_scope
+from oracle.workflow_scope import (
+    ALL_SCOPE_INPUTS, SCOPES, SHARED_GRADLE_INPUTS, ZERO, benchmark_consumer_input,
+    classify, endpoints, evaluate, requires_benchmark_consumer,
+)
 
 BASE = "a" * 40
 HEAD = "b" * 40
@@ -92,6 +96,93 @@ class WorkflowScopeTests(unittest.TestCase):
                 self.assertEqual(classify([path]), {
                     scope: scope in ("benchmark", "scaffold") for scope in SCOPES
                 })
+
+    def test_upstream_timeline_contract_selects_consumer_without_full_benchmark(self):
+        paths = [
+            "android/feature/chats/src/main/kotlin/com/meshcoreone/android/feature/chats/timeline/TimelineContracts.kt",
+            "android/feature/chats/src/main/kotlin/com/meshcoreone/android/feature/chats/timeline/ChatViewModel.kt",
+            "android/app/src/main/kotlin/com/meshcoreone/android/app/container/AppChatsFeature.kt",
+            "android/feature/chats/src/test/kotlin/com/meshcoreone/android/feature/chats/timeline/ChatViewModelTest.kt",
+        ]
+        with patch("oracle.workflow_scope.changed_paths", return_value=paths):
+            result = evaluate(Path.cwd(), "push", {"before": BASE, "after": HEAD})
+        self.assertTrue(result["benchmark_consumer"])
+        self.assertTrue(result["scopes"]["scaffold"])
+        self.assertFalse(result["scopes"]["benchmark"])
+        self.assertFalse(result["fail_safe"])
+
+    def test_benchmark_consumer_input_distinguishes_production_and_test_sources(self):
+        for path in (
+            "android/app/src/main/kotlin/App.kt",
+            "android/core/data/src/main/kotlin/Store.kt",
+            "android/core/protocol/src/main/kotlin/Packet.kt",
+            "android/feature/chats/src/release/kotlin/ReleaseTimeline.kt",
+            "android/platform/widgets/src/main/res/values/strings.xml",
+            "android/feature/chats/build.gradle.kts",
+            "android/core/data/gradle/dependency-locks/release.lockfile",
+            "android/feature/chats/gradle/custom-configuration.toml",
+            "android/feature/chats/src/customRelease/kotlin/Variant.kt",
+            "android/core/testing/src/main/kotlin/TestHelper.kt",
+            "android/core/data/src/testFixtures/kotlin/Fixture.kt",
+            "android/core/data/src/debuggable/kotlin/Variant.kt",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(benchmark_consumer_input(path))
+        for path in (
+            "android/app/src/test/kotlin/AppTest.kt",
+            "android/feature/chats/src/androidTest/kotlin/TimelineTest.kt",
+            "android/core/data/src/debug/kotlin/DebugOnly.kt",
+            "android/feature/chats/README.md",
+            "docs/android/deviations/WP-307.md",
+            "android/benchmark/src/test/kotlin/WorkloadTest.kt",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(benchmark_consumer_input(path))
+        for path in SHARED_GRADLE_INPUTS | ALL_SCOPE_INPUTS:
+            with self.subTest(path=path):
+                self.assertTrue(requires_benchmark_consumer([path]))
+        self.assertFalse(requires_benchmark_consumer(["android/core/testing/src/test/kotlin/TestHelperTest.kt"]))
+
+    def test_test_only_and_documentation_diffs_do_not_compile_benchmark_consumer(self):
+        for path in (
+            "android/feature/chats/src/test/kotlin/TimelineTest.kt",
+            "android/app/src/debug/kotlin/DebugOnly.kt",
+            "docs/android/deviations/WP-307.md",
+        ):
+            with self.subTest(path=path), patch("oracle.workflow_scope.changed_paths", return_value=[path]):
+                result = evaluate(Path.cwd(), "push", {"before": BASE, "after": HEAD})
+                self.assertFalse(result["benchmark_consumer"])
+                self.assertFalse(result["scopes"]["benchmark"])
+                self.assertFalse(result["fail_safe"])
+
+    def test_compiler_observation_guard_selects_consumer_without_full_benchmark(self):
+        path = "tools/android-port/controller/verify_candidate_task_graph.gradle"
+        with patch("oracle.workflow_scope.changed_paths", return_value=[path]):
+            result = evaluate(Path.cwd(), "push", {"before": BASE, "after": HEAD})
+        self.assertTrue(result["scopes"]["controller"])
+        self.assertTrue(result["benchmark_consumer"])
+        self.assertFalse(result["scopes"]["benchmark"])
+        self.assertFalse(result["scopes"]["scaffold"])
+
+    def test_unknown_android_inputs_still_fail_safe_to_consumer_and_full_scopes(self):
+        with patch("oracle.workflow_scope.changed_paths", return_value=["android/new-module/unknown.bin"]):
+            result = evaluate(Path.cwd(), "push", {"before": BASE, "after": HEAD})
+        self.assertTrue(result["fail_safe"])
+        self.assertTrue(result["benchmark_consumer"])
+        self.assertTrue(all(result["scopes"].values()))
+
+    def test_github_output_contains_consumer_selection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            event = Path(temporary) / "event.json"
+            output = Path(temporary) / "output.txt"
+            event.write_text("{}", encoding="utf-8")
+            with patch("oracle.workflow_scope.evaluate", return_value={
+                "scopes": {scope: False for scope in SCOPES}, "benchmark_consumer": True,
+            }):
+                self.assertEqual(workflow_scope.main([
+                    "--event-name", "push", "--event-path", str(event), "--output", str(output),
+                ]), 0)
+            self.assertIn("benchmark-consumer=true\n", output.read_text(encoding="utf-8"))
 
     def test_codec_source_and_harness_schedule_codec(self):
         for path in (
@@ -181,6 +272,7 @@ class WorkflowScopeTests(unittest.TestCase):
                 "base": {"sha": BASE}, "head": {"sha": HEAD},
             }})
         self.assertTrue(result["fail_safe"])
+        self.assertTrue(result["benchmark_consumer"])
         self.assertEqual(result["scopes"], {scope: True for scope in SCOPES})
 
     def test_known_native_core_modules_select_scaffold(self):
@@ -301,6 +393,7 @@ class WorkflowScopeTests(unittest.TestCase):
     def test_dispatch_runs_all_without_being_a_failure_fallback(self):
         result = evaluate(Path.cwd(), "workflow_dispatch", {})
         self.assertFalse(result["fail_safe"])
+        self.assertTrue(result["benchmark_consumer"])
         self.assertEqual(result["scopes"], {scope: True for scope in SCOPES})
 
     def test_malformed_unknown_zero_push_and_diff_failure_run_all(self):

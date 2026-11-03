@@ -341,7 +341,8 @@ class WorkflowTests(unittest.TestCase):
         jobs = workflow["jobs"]
         self.assertEqual(
             set(jobs["scope"]["outputs"]),
-            {"controller", "accessibility-suite", "scaffold", "protocol", "backup", "benchmark", "external-oracle"},
+            {"controller", "accessibility-suite", "scaffold", "protocol", "backup", "benchmark",
+             "benchmark-consumer", "external-oracle"},
         )
         self.assertEqual(jobs["scope"]["outputs"]["controller"], "${{ steps.changed.outputs.controller }}")
         self.assertEqual(
@@ -352,10 +353,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(gradle["env"]["RUN_CONTROLLER"], "${{ needs.scope.outputs.controller }}")
         self.assertEqual(gradle["env"]["RUN_BENCHMARK"], "${{ needs.scope.outputs.benchmark }}")
         self.assertIn("needs.scope.outputs.benchmark == 'true'", jobs["build"]["if"])
+        self.assertIn("needs.scope.outputs['benchmark-consumer'] == 'true'", jobs["build"]["if"])
+        consumer = next(step for step in jobs["build"]["steps"] if step.get("name") == "Compile benchmark consumer")
+        self.assertEqual(consumer["if"], "${{ needs.scope.outputs['benchmark-consumer'] == 'true' }}")
+        self.assertIn("ci.py run --stage scaffold --scope benchmark-consumer", consumer["run"])
         aggregate = next(step for step in jobs["android-ci"]["steps"]
                          if step.get("name") == "Require every selected scope to pass")
         self.assertEqual(aggregate["env"]["BENCHMARK_SELECTED"], "${{ needs.scope.outputs.benchmark }}")
         self.assertIn('[ "$BENCHMARK_SELECTED" = "true" ]', aggregate["run"])
+        self.assertEqual(
+            aggregate["env"]["BENCHMARK_CONSUMER_SELECTED"],
+            "${{ needs.scope.outputs['benchmark-consumer'] }}",
+        )
+        self.assertIn('[ "$BENCHMARK_CONSUMER_SELECTED" = "true" ]', aggregate["run"])
         expected = {
             "external-oracle": ("external-oracle", ["scope"]),
             "backup-oracle": ("backup", ["scope", "build"]),
@@ -376,6 +386,46 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('github.event_name', scope_run)
         self.assertIn('github.event_path', scope_run)
         self.assertIn('$GITHUB_OUTPUT', scope_run)
+
+    def test_benchmark_consumer_step_and_aggregate_cannot_be_bypassed(self):
+        original, text = self.read("android-ci.yml")
+        for kind in (
+            "missing-output", "wrong-output", "missing-step", "duplicate-step", "wrong-guard",
+            "wrong-command", "ignored-failure", "build-condition", "aggregate-env", "aggregate-gate",
+        ):
+            value = copy.deepcopy(original)
+            jobs = value["jobs"]
+            steps = jobs["build"]["steps"]
+            consumer = next(step for step in steps if step.get("name") == "Compile benchmark consumer")
+            aggregate = next(step for step in jobs["android-ci"]["steps"]
+                             if step.get("name") == "Require every selected scope to pass")
+            if kind == "missing-output":
+                jobs["scope"]["outputs"].pop("benchmark-consumer")
+            elif kind == "wrong-output":
+                jobs["scope"]["outputs"]["benchmark-consumer"] = "${{ steps.changed.outputs.benchmark }}"
+            elif kind == "missing-step":
+                steps.remove(consumer)
+            elif kind == "duplicate-step":
+                steps.insert(steps.index(consumer), copy.deepcopy(consumer))
+            elif kind == "wrong-guard":
+                consumer["if"] = "${{ false }}"
+            elif kind == "wrong-command":
+                consumer["run"] = consumer["run"].replace("--scope benchmark-consumer", "--scope scaffold")
+            elif kind == "ignored-failure":
+                consumer["continue-on-error"] = "true"
+            elif kind == "build-condition":
+                jobs["build"]["if"] = jobs["build"]["if"].replace(
+                    "needs.scope.outputs['benchmark-consumer'] == 'true'",
+                    "needs.scope.outputs.backup == 'true'",
+                )
+            elif kind == "aggregate-env":
+                aggregate["env"].pop("BENCHMARK_CONSUMER_SELECTED")
+            else:
+                aggregate["run"] = aggregate["run"].replace(
+                    ' || [ "$BENCHMARK_CONSUMER_SELECTED" = "true" ]', "",
+                )
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_candidate(value, text)
 
     def test_gradle_cache_is_namespaced_and_tracks_actual_locks_and_toolchain(self):
         workflow, _ = self.read("android-ci.yml")

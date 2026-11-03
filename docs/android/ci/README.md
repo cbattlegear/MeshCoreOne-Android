@@ -91,6 +91,26 @@ performance or claim WP-504 device acceptance. Historical five-key scope
 reports remain valid only when the current trusted classification does not
 require benchmark verification.
 
+An independent `benchmark-consumer` output also selects a compile-only
+scaffold invocation when application, core, feature or platform production
+source sets, module build inputs or shared Gradle inputs can affect the
+benchmark/profile variants. Ordinary test, Android-test, debug-only and
+documentation inputs do not select it; unknown Android inputs still fail safe.
+The Gradle task-observation guard itself also selects this route.
+This does not add a scope to historical five- or six-key reports and does not
+run the full benchmark stage for ordinary product changes. The selected Linux
+step executes `validateModuleGraph` and the benchmark/profile Kotlin and Java
+compile tasks. The two Kotlin compiler tasks must actually execute rather than
+use a task-output cache or up-to-date shortcut; their successful actions record
+the committed `WorkloadActivity.kt` and `Workload.kt` Git blobs in their source
+sets. Incremental Kotlin compilation may still reuse unchanged compiler work.
+The exact-head hosted log must contain both records and the fixed task-graph
+report. The historical reader parses the immutable base/head workflow as data:
+it requires this additional output and proof when either declares the new
+contract, rejects removal from a newer base, and leaves older workflows'
+existing acceptance unchanged. The compile-only result does not establish a
+full benchmark build, performance, device behavior or WP-504 acceptance.
+
 Hosted Gradle task-output caching is enabled. Only `:core:data:testDebugUnitTest`
 is explicitly eligible for test-result caching; all other Gradle `Test` tasks
 are explicitly denied cache eligibility until their external inputs and side

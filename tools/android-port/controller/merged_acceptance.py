@@ -33,6 +33,33 @@ class NoImplementationFound(PortError):
 
 
 LEGACY_SCOPE_KEYS = ("controller", "scaffold", "protocol", "backup", "external-oracle")
+CI_WORKFLOW_PATH = ".github/workflows/android-ci.yml"
+
+
+def declares_benchmark_consumer(repo, revision, snapshot):
+    if CI_WORKFLOW_PATH not in snapshot:
+        return False
+    from .workflows import parse_yaml
+
+    try:
+        text = git(repo, "show", f"{revision}:{CI_WORKFLOW_PATH}").decode("utf-8")
+    except UnicodeError as error:
+        raise PortError("CI workflow is not valid UTF-8") from error
+    workflow = parse_yaml(text)
+    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
+    if not isinstance(jobs, dict):
+        raise PortError("CI workflow jobs are malformed")
+    if "scope" not in jobs:
+        return False
+    scope = jobs["scope"]
+    outputs = scope.get("outputs") if isinstance(scope, dict) else None
+    if not isinstance(outputs, dict):
+        raise PortError("CI scope outputs are malformed")
+    if "benchmark-consumer" not in outputs:
+        return False
+    if outputs["benchmark-consumer"] != "${{ steps.changed.outputs.benchmark-consumer }}":
+        raise PortError("CI benchmark consumer output is malformed")
+    return True
 
 
 def timestamp(value, label):
@@ -158,6 +185,44 @@ def validate_benchmark_build_log(log):
         ):
             raise PortError(f"Hosted benchmark {variant} APK inspection is incomplete")
         _validate_benchmark_alignment(artifact, f"{variant} APK", artifact=True)
+
+
+def validate_benchmark_consumer_build_log(log, snapshot):
+    from .ci import (
+        BENCHMARK_CONSUMER_SCOPE, BENCHMARK_CONSUMER_TASKS,
+        validate_benchmark_consumer_compilation,
+    )
+
+    objects = log_objects(log, "Compile benchmark consumer")
+    reports = [item for item in objects if item.get("stage") == "scaffold"]
+    if len(reports) != 1:
+        raise PortError("Missing/ambiguous benchmark consumer compilation in authoritative hosted log")
+    report = reports[0]
+    fields(
+        report,
+        {"stage", "scopes", "result", "tasks", "strict_verification", "resolved_task_graph",
+         "benchmark_consumer_compilation", "compiled_test_sources"},
+        label="benchmark consumer compilation report",
+    )
+    graph = report["resolved_task_graph"]
+    phases = graph.get("phases") if isinstance(graph, dict) else None
+    if (
+        report["result"] != "success" or report["strict_verification"] is not True
+        or report["scopes"] != [BENCHMARK_CONSUMER_SCOPE]
+        or report["tasks"] != list(BENCHMARK_CONSUMER_TASKS)
+        or report["compiled_test_sources"] != {}
+        or not isinstance(graph, dict) or graph.get("result") != "no-duplicate-ci-evidence"
+        or type(graph.get("tasks")) is not int or graph["tasks"] <= 0
+        or not isinstance(phases, dict) or set(phases) != {"preflight", "build"}
+        or any(
+            not isinstance(value, dict) or value.get("result") != "no-duplicate-ci-evidence"
+            or type(value.get("tasks")) is not int or value["tasks"] <= 0
+            for value in phases.values()
+        )
+        or graph["tasks"] != sum(phase["tasks"] for phase in phases.values())
+    ):
+        raise PortError("Hosted benchmark consumer compilation report is incomplete")
+    validate_benchmark_consumer_compilation(report["benchmark_consumer_compilation"], snapshot)
 
 
 def declares_completion(wp, body):
@@ -673,7 +738,7 @@ class MergedAcceptance:
         from .local_scope import candidate_plan
         from .repair_acceptance import read_job_log, validate_build_log
         from .test_runner import NATIVE_INPUTS, NATIVE_SUITE
-        from oracle.workflow_scope import changed_paths, classify, merge_base
+        from oracle.workflow_scope import changed_paths, classify, merge_base, requires_benchmark_consumer
 
         def job(name, conclusion):
             matches = [item for item in jobs if item.get("name") == name]
@@ -714,6 +779,12 @@ class MergedAcceptance:
             and matches_scope_map(reported_scopes, legacy_scopes)
         )
         before, after = tree(self.manifest.repo, base), tree(self.manifest.repo, head)
+        base_consumer = declares_benchmark_consumer(self.manifest.repo, base, before)
+        head_consumer = declares_benchmark_consumer(self.manifest.repo, head, after)
+        if base_consumer and not head_consumer:
+            raise PortError("Candidate removed the trusted benchmark consumer output")
+        consumer_contract = base_consumer or head_consumer
+        consumer_selected = consumer_contract and requires_benchmark_consumer(paths)
         family = lambda path: path == NATIVE_SUITE or path.startswith(NATIVE_SUITE + "/")
         committed = {path for path in after if family(path)}
         native_selected = (
@@ -730,6 +801,12 @@ class MergedAcceptance:
             report.get("base") != base or report.get("head") != head
             or report.get("diff_base") != diff_base or report.get("fail_safe") is not False
             or report.get("paths") != paths or not scope_matches
+            or (
+                consumer_contract and (
+                    type(report.get("benchmark_consumer")) is not bool
+                    or report["benchmark_consumer"] is not consumer_selected
+                )
+            )
             or native_report.get("base") != base or native_report.get("head") != head
             or native_report.get("selected") is not native_selected
             or native_report.get("result") != ("SELECTED" if native_selected else "NOT SELECTED")
@@ -755,7 +832,7 @@ class MergedAcceptance:
         if benchmark_inputs and not scopes["benchmark"]:
             raise PortError("Android benchmark inputs lack selected benchmark verification")
         non_benchmark_build_selected = any(scopes[key] for key in ("scaffold", "protocol", "backup"))
-        build_selected = non_benchmark_build_selected or scopes["benchmark"]
+        build_selected = non_benchmark_build_selected or scopes["benchmark"] or consumer_selected
         product_changes = any(re.match(
             r"^android/(?:app|(?:core|feature|platform)/[^/]+)/src/"
             r"(?:main|debug|release|commonMain|androidMain)/.+\.(?:kt|java)$", path,
@@ -787,6 +864,8 @@ class MergedAcceptance:
                 )
             if scopes["benchmark"]:
                 validate_benchmark_build_log(build_log)
+            if consumer_selected:
+                validate_benchmark_consumer_build_log(build_log, after)
         else:
             job("One Linux Android build", "skipped")
         job("Swift codec oracle", "success" if scopes["external-oracle"] else "skipped")

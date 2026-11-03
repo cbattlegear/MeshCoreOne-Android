@@ -5,6 +5,49 @@ import org.gradle.api.tasks.AbstractExecTask
 def graphTasks = []
 
 gradle.beforeProject { project ->
+    project.tasks.configureEach { task ->
+        def consumerFile = System.getenv("ANDROID_CI_BENCHMARK_CONSUMER")
+        if (consumerFile && task.path in [":app:compileBenchmarkKotlin", ":app:compileProfileKotlin"]) {
+            if (!task.class.name.startsWith("org.jetbrains.kotlin.gradle.tasks.KotlinCompile")) {
+                throw new GradleException("Unexpected benchmark consumer compiler: ${task.path}")
+            }
+            task.outputs.upToDateWhen { false }
+            task.outputs.cacheIf("Benchmark consumer source observation requires task execution") { false }
+            def observed = null
+            def identify = {
+                def androidRoot = task.project.rootProject.projectDir.canonicalFile.toPath()
+                def sources = task.sources.files.collect { it.canonicalFile } as Set
+                def result = [:]
+                [
+                    "benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt",
+                    "benchmark/dataset/kotlin/com/meshcoreone/android/benchmark/Workload.kt",
+                ].each { relative ->
+                    def file = androidRoot.resolve(relative).toFile()
+                    if (!file.isFile() || java.nio.file.Files.isSymbolicLink(file.toPath()) ||
+                            !file.canonicalFile.toPath().startsWith(androidRoot) ||
+                            !sources.contains(file.canonicalFile)) {
+                        throw new GradleException("Missing benchmark consumer compiler source: ${task.path}: ${relative}")
+                    }
+                    def bytes = file.bytes
+                    def digest = java.security.MessageDigest.getInstance("SHA-1")
+                    digest.update(("blob " + bytes.length + "\u0000").getBytes("UTF-8"))
+                    result["android/" + relative] = digest.digest(bytes).encodeHex().toString()
+                }
+                result
+            }
+            task.doFirst { observed = identify() }
+            task.doLast {
+                if (observed == null || identify() != observed) {
+                    throw new GradleException("Benchmark consumer compiler sources changed during ${task.path}")
+                }
+                synchronized (gradle) {
+                    new File(consumerFile).append(JsonOutput.toJson([
+                        task: task.path, sources: observed,
+                    ]) + "\n", "UTF-8")
+                }
+            }
+        }
+    }
     project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->
         def lineageFile = System.getenv("ANDROID_CI_TEST_LINEAGE")
         def sourcesFile = System.getenv("ANDROID_CI_TEST_SOURCES")

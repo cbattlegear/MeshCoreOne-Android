@@ -18,9 +18,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * [OnboardingFlagStore] reads are served from a snapshot loaded before the UI exists; each write updates the snapshot
- * at once and persists, in the order made, on [scope] (one consumer drains the queue). Lock-confined; nothing
- * suspends under the lock. [hasCompleted] is the first-run gate the app root observes.
+ * [OnboardingFlagStore] reads are served from a snapshot loaded before the UI exists; ordinary writes update the
+ * snapshot when queued, while acknowledged writes update it after persistence. One consumer drains writes in order
+ * on [scope]. Lock-confined; nothing suspends under the lock. [hasCompleted] is the first-run gate the app root observes.
  */
 class WriteBehindOnboardingFlags(
     initial: Map<String, Boolean>,
@@ -31,11 +31,15 @@ class WriteBehindOnboardingFlags(
     private data class Write(
         val key: String,
         val value: Boolean,
+        val revision: Long,
         val persisted: CompletableDeferred<Unit>? = null,
     )
 
     private val lock = Any()
     private var values: Map<String, Boolean> = initial
+    private var nextRevision = 0L
+    // A completed write must not overwrite a value already published by a newer operation.
+    private val snapshotRevision = mutableMapOf<String, Long>()
     private val completed = MutableStateFlow(initial[OnboardingState.KEY_HAS_COMPLETED] ?: false)
     private val writes = Channel<Write>(Channel.UNLIMITED)
 
@@ -48,8 +52,9 @@ class WriteBehindOnboardingFlags(
                 for (write in writes) {
                     try {
                         persist(write.key, write.value)
-                        if (write.persisted != null) {
-                            synchronized(lock) {
+                        synchronized(lock) {
+                            if (write.revision >= (snapshotRevision[write.key] ?: 0L)) {
+                                snapshotRevision[write.key] = write.revision
                                 values = values + (write.key to write.value)
                                 if (write.key == OnboardingState.KEY_HAS_COMPLETED) completed.value = write.value
                             }
@@ -81,9 +86,12 @@ class WriteBehindOnboardingFlags(
 
     override fun setBoolean(key: String, value: Boolean) {
         synchronized(lock) {
-            check(writes.trySend(Write(key, value)).isSuccess) {
+            val revision = nextRevision + 1
+            check(writes.trySend(Write(key, value, revision)).isSuccess) {
                 "Onboarding preference writer is unavailable"
             }
+            nextRevision = revision
+            snapshotRevision[key] = revision
             values = values + (key to value)
             if (key == OnboardingState.KEY_HAS_COMPLETED) completed.value = value
         }
@@ -91,7 +99,13 @@ class WriteBehindOnboardingFlags(
 
     override suspend fun persistBoolean(key: String, value: Boolean) {
         val persisted = CompletableDeferred<Unit>()
-        writes.send(Write(key, value, persisted))
+        synchronized(lock) {
+            val revision = nextRevision + 1
+            check(writes.trySend(Write(key, value, revision, persisted)).isSuccess) {
+                "Onboarding preference writer is unavailable"
+            }
+            nextRevision = revision
+        }
         persisted.await()
     }
 

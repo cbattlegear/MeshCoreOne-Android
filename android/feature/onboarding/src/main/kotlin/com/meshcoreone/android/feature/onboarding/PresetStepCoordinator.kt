@@ -6,6 +6,8 @@ import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.ui.UiText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,7 +38,8 @@ class PresetStepCoordinator(
     private val mutable = MutableStateFlow(PresetStepState())
     val state: StateFlow<PresetStepState> = mutable.asStateFlow()
     private var retryCount = 0
-    private var presetApplied = false
+    private var appliedPresetId: String? = null
+    private var completionPersistenceJob: Job? = null
 
     fun visiblePresets(): List<OnboardingPresetOption> = regionPort.catalog.presets(regionPort.selection.value)
 
@@ -49,12 +52,12 @@ class PresetStepCoordinator(
     /** Resolves the user's selection against what is actually visible (a stale id is ignored). */
     fun apply(id: String? = mutable.value.selectedId) {
         if (mutable.value.isApplying) return
-        if (presetApplied) {
-            scope.launch { persistCompletion() }
+        val option = visiblePresets().firstOrNull { it.id == id } ?: return
+        if (appliedPresetId == option.id) {
+            beginCompletionPersistence()
             return
         }
-        val option = visiblePresets().firstOrNull { it.id == id } ?: return
-        mutable.update { it.copy(isApplying = true) }
+        mutable.update { it.copy(isApplying = true, error = null, retryAlert = null) }
         scope.launch {
             val outcome = try {
                 presets.apply(option.id)
@@ -72,8 +75,8 @@ class PresetStepCoordinator(
         when (outcome) {
             OnboardingPresetOutcome.Applied, OnboardingPresetOutcome.NoRadioToConfigure -> {
                 retryCount = 0
-                presetApplied = true
-                persistCompletion()
+                appliedPresetId = id
+                beginCompletionPersistence()
             }
             OnboardingPresetOutcome.NotConnected -> mutable.update {
                 it.copy(isApplying = false, error = UiText.Resource(O.presetErrorNotConnected))
@@ -86,30 +89,45 @@ class PresetStepCoordinator(
         }
     }
 
-    private suspend fun persistCompletion() {
+    private fun beginCompletionPersistence() {
+        if (completionPersistenceJob?.isActive == true) return
         mutable.update { it.copy(isApplying = true, error = null, retryAlert = null) }
-        try {
-            onCompleted()
-            presetApplied = false
-            mutable.update { it.copy(isApplying = false, completionNeedsRetry = false, commitTick = it.commitTick + 1) }
-        } catch (cancelled: CancellationException) {
-            mutable.update { it.copy(isApplying = false) }
-            throw cancelled
-        } catch (_: Exception) {
-            mutable.update {
-                it.copy(isApplying = false, error = UiText.Resource(S.alertRetryUnableToSave), completionNeedsRetry = true)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                onCompleted()
+                appliedPresetId = null
+                mutable.update {
+                    it.copy(isApplying = false, completionNeedsRetry = false, commitTick = it.commitTick + 1)
+                }
+            } catch (cancelled: CancellationException) {
+                mutable.update { it.copy(isApplying = false) }
+                throw cancelled
+            } catch (_: Exception) {
+                mutable.update {
+                    it.copy(isApplying = false, error = UiText.Resource(S.alertRetryUnableToSave), completionNeedsRetry = true)
+                }
             }
         }
+        completionPersistenceJob = job
+        job.invokeOnCompletion { cause ->
+            if (cause is CancellationException) mutable.update { it.copy(isApplying = false) }
+        }
+        job.start()
     }
 
     fun retry() {
-        if (presetApplied && mutable.value.completionNeedsRetry) {
-            scope.launch { persistCompletion() }
+        val current = mutable.value
+        if (current.isApplying) return
+        val alert = current.retryAlert
+        if (alert != null) {
+            mutable.update { it.copy(retryAlert = null) }
+            apply(alert.presetId)
             return
         }
-        val alert = mutable.value.retryAlert ?: return
-        mutable.update { it.copy(retryAlert = null) }
-        apply(alert.presetId)
+        if (appliedPresetId != null && current.completionNeedsRetry) {
+            if (current.selectedId == appliedPresetId) beginCompletionPersistence()
+            else apply(current.selectedId)
+        }
     }
 
     /** Cancel or the max-retries acknowledgement; the latter surfaces the generic fallback. */

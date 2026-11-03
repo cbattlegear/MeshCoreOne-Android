@@ -345,6 +345,57 @@ class PresetStepCoordinatorTest {
         assertEquals(1, c.state.value.commitTick)
     }
 
+    @Test fun changedPresetSelectionAppliesTheNewPresetBeforeRetryingCompletion() {
+        val port = FakePresets()
+        val region = FakeRegion(presets = presets).also {
+            it.setSelection(RegionSelection("US", RegionSelection.Source.MANUAL))
+        }
+        var completions = 0
+        val c = coordinator(port, region = region, done = {
+            completions += 1
+            if (completions == 1) error("preference write failed")
+        })
+        c.select("a"); c.apply()
+        assertEquals(listOf("a"), port.applied)
+        assertTrue(c.state.value.completionNeedsRetry)
+
+        c.dismissError()
+        c.select("b"); c.apply()
+        assertEquals(listOf("a", "b"), port.applied)
+        assertEquals(2, completions)
+        assertFalse(c.state.value.completionNeedsRetry)
+        assertEquals(1, c.state.value.commitTick)
+    }
+
+    @Test fun repeatedCompletionRetryWhileWriteIsHeldStartsOnlyOneMoreWrite() =
+        kotlinx.coroutines.runBlocking {
+            val port = FakePresets()
+            var completions = 0
+            val retryStarted = CompletableDeferred<Unit>()
+            val releaseRetry = CompletableDeferred<Unit>()
+            val c = coordinator(port, done = {
+                completions += 1
+                if (completions == 1) error("preference write failed")
+                retryStarted.complete(Unit)
+                releaseRetry.await()
+            })
+            c.select("loc"); c.apply()
+            assertEquals(1, completions)
+            assertTrue(c.state.value.completionNeedsRetry)
+
+            c.retry()
+            assertTrue(retryStarted.isCompleted)
+            assertTrue(c.state.value.isApplying)
+            c.retry()
+            c.retry()
+            assertEquals(2, completions)
+
+            releaseRetry.complete(Unit)
+            assertEquals(1, c.state.value.commitTick)
+            assertFalse(c.state.value.isApplying)
+            assertEquals(listOf("loc"), port.applied)
+        }
+
     @Test fun notConnectedSurfacesErrorWithoutCompleting() {
         var done = 0
         val c = coordinator(FakePresets(OnboardingPresetOutcome.NotConnected), done = { done += 1 })

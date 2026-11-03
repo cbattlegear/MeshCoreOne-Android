@@ -44,7 +44,7 @@ class OnboardingFlagsTest {
         val writes = mutableListOf<Pair<String, Boolean>>()
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         try {
-            val flags = WriteBehindOnboardingFlags(emptyMap(), scope) { k, v -> writes += k to v }
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, persist = { k, v -> writes += k to v })
             val state = OnboardingState(flags)
             assertFalse(state.hasCompletedOnboarding)
             assertFalse(flags.hasCompleted.value)
@@ -103,6 +103,45 @@ class OnboardingFlagsTest {
         assertFalse(failing.hasCompleted.value)
         assertEquals(listOf("disk full"), failures.map { it.message })
         failureScope.cancel()
+    }
+
+    @Test fun `later immediate write stays visible after an earlier awaited write finishes`() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val persisted = mutableListOf<Boolean>()
+        val scope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.test.StandardTestDispatcher(testScheduler))
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(),
+                scope,
+                persist = { _, value ->
+                    if (value) {
+                        started.complete(Unit)
+                        release.await()
+                    }
+                    persisted += value
+                },
+            )
+            val awaitedWrite = async {
+                flags.persistBoolean(OnboardingState.KEY_HAS_COMPLETED, true)
+            }
+            runCurrent()
+            assertTrue(started.isCompleted)
+            assertFalse(flags.hasCompleted.value)
+
+            flags.setBoolean(OnboardingState.KEY_HAS_COMPLETED, false)
+            assertFalse(flags.hasCompleted.value)
+
+            release.complete(Unit)
+            advanceUntilIdle()
+            awaitedWrite.await()
+
+            assertEquals(listOf(true, false), persisted)
+            assertFalse(flags.hasCompleted.value)
+            assertFalse(flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        } finally {
+            scope.cancel()
+        }
     }
 
     @Test fun `production flag adapter atomically persists completion with the show-once donation`() =

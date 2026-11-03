@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.Display
 import android.view.View
+import android.view.ViewGroup
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivityResultRegistryOwner
@@ -25,6 +26,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
 import androidx.core.app.ActivityOptionsCompat
@@ -39,6 +42,8 @@ import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.lang.reflect.InvocationTargetException
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -135,6 +140,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         description: String,
         timeout: (String) -> AssertionError = ::AvatarStateTimeout,
         deadline: Long = System.nanoTime() + 10_000_000_000L,
+        failureDetails: (() -> String)? = null,
         condition: () -> Boolean,
     ) {
         while (System.nanoTime() < deadline) {
@@ -146,7 +152,25 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             "${node.config.getOrElse(SemanticsProperties.Text) { emptyList() }}@${node.boundsInRoot}"
         }
         System.err.println(diagnostic)
-        throw timeout(diagnostic)
+        val failure = timeout(diagnostic)
+        try {
+            failureDetails?.invoke()?.let { failure.addSuppressed(AssertionError(it)) }
+        } catch (cancelled: CancellationException) {
+            cancelled.addSuppressed(failure)
+            throw cancelled
+        } catch (diagnosticFailure: Throwable) {
+            val target = if (diagnosticFailure is InvocationTargetException) {
+                diagnosticFailure.targetException
+            } else {
+                diagnosticFailure
+            }
+            if (target is CancellationException || target is VirtualMachineError || target is ThreadDeath) {
+                target.addSuppressed(failure)
+                throw target
+            }
+            failure.addSuppressed(diagnosticFailure)
+        }
+        throw failure
     }
 
     private fun awaitAvatarText(
@@ -183,6 +207,45 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             dialog !in previous && dialog.isShowing && dialog.context.activity() === controller.get()
         }
 
+    private fun composeTextsAt(root: View?): List<String> {
+        if (root == null) return emptyList()
+        val pending = java.util.ArrayDeque<View>()
+        val texts = mutableListOf<String>()
+        pending.add(root)
+        while (pending.isNotEmpty()) {
+            val view = pending.removeLast()
+            val method = view.javaClass.methods.firstOrNull {
+                it.name == "getSemanticsOwner" && it.parameterCount == 0
+            }
+            if (method != null) {
+                val owner = method.invoke(view) as SemanticsOwner
+                fun collect(node: SemanticsNode) {
+                    texts += node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.map { it.text }
+                    node.children.forEach(::collect)
+                }
+                collect(owner.rootSemanticsNode)
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) pending.add(view.getChildAt(index))
+            }
+        }
+        return texts
+    }
+
+    private fun failurePresentationDiagnostic(message: String, previous: Set<Dialog>): String {
+        val activity = controller.get()
+        val activityErrorSemantics = composeTextsAt(super.rootView()).count { it == message }
+        val dialogs = ShadowDialog.getShownDialogs().mapIndexed { index, dialog ->
+            val window = dialog.window
+            val decor = window?.decorView
+            val errorSemantics = composeTextsAt(decor).count { it == message }
+            "index=$index,new=${dialog !in previous},showing=${dialog.isShowing}," +
+                "ownedByActivity=${dialog.context.activity() === activity},hasWindow=${window != null}," +
+                "decorAttached=${decor?.isAttachedToWindow},errorComposeSemantics=$errorSemantics"
+        }
+        return "activityErrorComposeSemantics=$activityErrorSemantics; dialogs=$dialogs"
+    }
+
     private fun awaitAvatarFailure(
         message: String,
         previous: Set<Dialog>,
@@ -200,7 +263,12 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             awaitAvatarState("the Activity lifecycle required by production UI collection", ::AvatarFailureLifecycleTimeout, deadline) {
                 controller.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
             }
-            awaitAvatarState("a new showing error dialog owned by this Activity", ::AvatarFailureDialogTimeout, deadline) {
+            awaitAvatarState(
+                "a new showing error dialog owned by this Activity",
+                ::AvatarFailureDialogTimeout,
+                deadline,
+                failureDetails = { failurePresentationDiagnostic(message, previous) },
+            ) {
                 currentFailureDialog(previous)?.also { failureDialog = it } != null
             }
             val dialog = assertNotNull(failureDialog)
@@ -582,6 +650,11 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             assertEquals(message, staleText.text.toString())
             assertEquals(message, foreignText.text.toString())
             assertNull(currentFailureDialog(previous), "Neither same-message decoy belongs to the new current failure")
+            val presentation = failurePresentationDiagnostic(message, previous)
+            assertTrue(presentation.contains("activityErrorComposeSemantics=0"))
+            assertTrue(presentation.contains("new=false"))
+            assertTrue(presentation.contains("new=true"))
+            assertTrue(presentation.contains("ownedByActivity=false"))
             val deadline = System.nanoTime() + 10_000_000_000L
             gate.complete(Unit)
             awaitAvatarFailure(message, previous, deadline) {

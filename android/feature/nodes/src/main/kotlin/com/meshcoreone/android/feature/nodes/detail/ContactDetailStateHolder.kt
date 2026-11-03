@@ -12,6 +12,9 @@ import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.model.localizedNameRes
 import com.meshcoreone.android.feature.nodes.path.PathManagementStateHolder
+import java.util.UUID
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +27,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 
 /** A destructive or radio-changing action awaiting explicit confirmation. */
 sealed interface DetailConfirmation {
@@ -64,6 +69,78 @@ data class ContactDetailState(
     val contactTypeLabel: NodesMessage get() = NodesMessage.res(contact.type.localizedNameRes())
 }
 
+enum class AvatarSaveStage {
+    LAUNCHED,
+    STARTED,
+    REJECTED_BUSY,
+    ENCODE_STARTED,
+    ENCODE_RETURNED,
+    ENCODE_FAILED,
+    ENCODE_CANCELLED,
+    SERVICE_LOOKUP_STARTED,
+    SERVICE_LOOKUP_RETURNED,
+    SERVICE_LOOKUP_FAILED,
+    SERVICE_LOOKUP_CANCELLED,
+    STORE_LOOKUP_STARTED,
+    STORE_LOOKUP_RETURNED,
+    STORE_LOOKUP_FAILED,
+    STORE_LOOKUP_CANCELLED,
+    RADIO_LOOKUP_STARTED,
+    RADIO_LOOKUP_RETURNED,
+    RADIO_LOOKUP_FAILED,
+    RADIO_LOOKUP_CANCELLED,
+    CONTACT_LOOKUP_STARTED,
+    CONTACT_LOOKUP_RETURNED,
+    CONTACT_LOOKUP_FAILED,
+    CONTACT_LOOKUP_CANCELLED,
+    SERVICE_CALL_STARTED,
+    SERVICE_CALL_COMPLETED,
+    SERVICE_CALL_FAILED,
+    SERVICE_CALL_CANCELLED,
+    SERVICE_ENTERED,
+    SERVICE_RETURNED,
+    SERVICE_FAILED,
+    SAVE_SUCCEEDED,
+    SAVE_FAILED,
+    SAVE_CANCELLED,
+    JOB_COMPLETED,
+}
+
+enum class AvatarSaveOutcome { PRESENT, ABSENT, MATCHED, MISMATCHED, COMPLETED, FAILED, CANCELLED, REJECTED }
+
+data class AvatarSaveObservation(
+    val operationId: UUID,
+    val stage: AvatarSaveStage,
+    val outcome: AvatarSaveOutcome,
+    val failureType: String? = null,
+)
+
+/** Synchronous test diagnostic hook; observers must not block or retain media/contact data. */
+fun interface AvatarSaveObserver {
+    fun onObservation(observation: AvatarSaveObservation)
+
+    companion object {
+        val NONE = AvatarSaveObserver {}
+    }
+}
+
+class AvatarSaveOperationContext internal constructor(
+    val operationId: UUID,
+    private val observer: AvatarSaveObserver,
+) : AbstractCoroutineContextElement(Key) {
+    fun observe(
+        stage: AvatarSaveStage,
+        outcome: AvatarSaveOutcome = AvatarSaveOutcome.COMPLETED,
+        failure: Throwable? = null,
+    ) {
+        observer.onObservation(
+            AvatarSaveObservation(operationId, stage, outcome, failure?.javaClass?.simpleName),
+        )
+    }
+
+    companion object Key : CoroutineContext.Key<AvatarSaveOperationContext>
+}
+
 /** Contact detail actions; every radio-changing destructive step goes through [confirm]. */
 class ContactDetailStateHolder(
     contact: ContactDTO,
@@ -72,6 +149,7 @@ class ContactDetailStateHolder(
     val showFromDirectChat: Boolean = false,
     private val onClearMessages: () -> Unit = {},
     private val pingHelper: PingHelper = PingHelper(dependencies),
+    private var avatarSaveObserver: AvatarSaveObserver = AvatarSaveObserver.NONE,
 ) {
     private val mutableState = MutableStateFlow(ContactDetailState(contact))
     val state: StateFlow<ContactDetailState> = mutableState.asStateFlow()
@@ -104,6 +182,10 @@ class ContactDetailStateHolder(
     }
 
     fun onDisappear() = path.cancelDiscovery()
+
+    fun setAvatarSaveObserver(observer: AvatarSaveObserver) {
+        avatarSaveObserver = observer
+    }
 
     fun setNickname(text: String) = mutableState.update { it.copy(nickname = text) }
     fun beginEditingNickname() = mutableState.update { it.copy(isEditingNickname = true) }
@@ -231,45 +313,169 @@ class ContactDetailStateHolder(
 
     suspend fun saveAvatar(jpeg: Bytes?): Boolean = saveAvatar { jpeg }
 
+    fun launchAvatarSave(encode: suspend () -> Bytes?): Job {
+        val operation = AvatarSaveOperationContext(UUID.randomUUID(), avatarSaveObserver)
+        operation.observe(AvatarSaveStage.LAUNCHED)
+        var result: Boolean? = null
+        val job = scope.launch(operation) { result = updateAvatar(encode) }
+        job.invokeOnCompletion { failure ->
+            val outcome = when {
+                failure is CancellationException -> AvatarSaveOutcome.CANCELLED
+                failure != null || result == false || result == null -> AvatarSaveOutcome.FAILED
+                else -> AvatarSaveOutcome.COMPLETED
+            }
+            operation.observe(AvatarSaveStage.JOB_COMPLETED, outcome, failure)
+        }
+        return job
+    }
+
     suspend fun removeAvatar(): Boolean = updateAvatar { null }
 
     private suspend fun updateAvatar(encode: suspend () -> Bytes?): Boolean {
-        if (state.value.isSavingAvatar) return false
+        val operation = currentCoroutineContext()[AvatarSaveOperationContext]
+            ?: AvatarSaveOperationContext(UUID.randomUUID(), avatarSaveObserver).also {
+                it.observe(AvatarSaveStage.LAUNCHED)
+            }
+        operation.observe(AvatarSaveStage.STARTED)
+        if (state.value.isSavingAvatar) {
+            operation.observe(AvatarSaveStage.REJECTED_BUSY, AvatarSaveOutcome.REJECTED)
+            return false
+        }
         val target = current
         mutableState.update { it.copy(isSavingAvatar = true, errorMessage = null) }
         return try {
             currentCoroutineContext().ensureActive()
-            val imageData = encode()
+            val imageData = observeAvatarStep(
+                operation,
+                AvatarSaveStage.ENCODE_STARTED,
+                AvatarSaveStage.ENCODE_RETURNED,
+                AvatarSaveStage.ENCODE_FAILED,
+                AvatarSaveStage.ENCODE_CANCELLED,
+                { if (it == null) AvatarSaveOutcome.ABSENT else AvatarSaveOutcome.PRESENT },
+                encode,
+            )
             currentCoroutineContext().ensureActive()
-            val service = session.contactService()
-            val store = session.servicesDataStore()
-            if (session.currentRadioId() != target.radioId || service == null || store == null) {
+            val service = observeAvatarStep(
+                operation,
+                AvatarSaveStage.SERVICE_LOOKUP_STARTED,
+                AvatarSaveStage.SERVICE_LOOKUP_RETURNED,
+                AvatarSaveStage.SERVICE_LOOKUP_FAILED,
+                AvatarSaveStage.SERVICE_LOOKUP_CANCELLED,
+                { if (it == null) AvatarSaveOutcome.ABSENT else AvatarSaveOutcome.PRESENT },
+            ) { session.contactService() }
+            val store = observeAvatarStep(
+                operation,
+                AvatarSaveStage.STORE_LOOKUP_STARTED,
+                AvatarSaveStage.STORE_LOOKUP_RETURNED,
+                AvatarSaveStage.STORE_LOOKUP_FAILED,
+                AvatarSaveStage.STORE_LOOKUP_CANCELLED,
+                { if (it == null) AvatarSaveOutcome.ABSENT else AvatarSaveOutcome.PRESENT },
+            ) { session.servicesDataStore() }
+            val radioId = observeAvatarStep(
+                operation,
+                AvatarSaveStage.RADIO_LOOKUP_STARTED,
+                AvatarSaveStage.RADIO_LOOKUP_RETURNED,
+                AvatarSaveStage.RADIO_LOOKUP_FAILED,
+                AvatarSaveStage.RADIO_LOOKUP_CANCELLED,
+                { if (it == target.radioId) AvatarSaveOutcome.MATCHED else AvatarSaveOutcome.MISMATCHED },
+            ) { session.currentRadioId() }
+            if (radioId != target.radioId || service == null || store == null) {
                 mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable)) }
+                operation.observe(AvatarSaveStage.SAVE_FAILED, AvatarSaveOutcome.FAILED)
                 false
             } else {
-                val stored = store.fetchContact(target.key) ?: throw NodesContactFailure.ContactNotFound()
-                if (stored.key != target.key || stored.publicKey != target.publicKey) throw NodesContactFailure.ContactNotFound()
-                if (session.currentRadioId() != target.radioId) {
+                val stored = observeAvatarStep(
+                    operation,
+                    AvatarSaveStage.CONTACT_LOOKUP_STARTED,
+                    AvatarSaveStage.CONTACT_LOOKUP_RETURNED,
+                    AvatarSaveStage.CONTACT_LOOKUP_FAILED,
+                    AvatarSaveStage.CONTACT_LOOKUP_CANCELLED,
+                    {
+                        when {
+                            it == null -> AvatarSaveOutcome.ABSENT
+                            it.key == target.key && it.publicKey == target.publicKey -> AvatarSaveOutcome.MATCHED
+                            else -> AvatarSaveOutcome.MISMATCHED
+                        }
+                    },
+                ) { store.fetchContact(target.key) }
+                if (stored == null || stored.key != target.key || stored.publicKey != target.publicKey) {
+                    throw NodesContactFailure.ContactNotFound()
+                }
+                val currentRadioId = observeAvatarStep(
+                    operation,
+                    AvatarSaveStage.RADIO_LOOKUP_STARTED,
+                    AvatarSaveStage.RADIO_LOOKUP_RETURNED,
+                    AvatarSaveStage.RADIO_LOOKUP_FAILED,
+                    AvatarSaveStage.RADIO_LOOKUP_CANCELLED,
+                    { if (it == target.radioId) AvatarSaveOutcome.MATCHED else AvatarSaveOutcome.MISMATCHED },
+                ) { session.currentRadioId() }
+                if (currentRadioId != target.radioId) {
                     mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable)) }
+                    operation.observe(AvatarSaveStage.SAVE_FAILED, AvatarSaveOutcome.FAILED)
                     return false
                 }
                 currentCoroutineContext().ensureActive()
-                service.updateContactAvatar(target.key, imageData)
-                val updated = store.fetchContact(target.key) ?: throw NodesContactFailure.ContactNotFound()
+                observeAvatarStep(
+                    operation,
+                    AvatarSaveStage.SERVICE_CALL_STARTED,
+                    AvatarSaveStage.SERVICE_CALL_COMPLETED,
+                    AvatarSaveStage.SERVICE_CALL_FAILED,
+                    AvatarSaveStage.SERVICE_CALL_CANCELLED,
+                    { AvatarSaveOutcome.COMPLETED },
+                ) { service.updateContactAvatar(target.key, imageData) }
+                val updated = observeAvatarStep(
+                    operation,
+                    AvatarSaveStage.CONTACT_LOOKUP_STARTED,
+                    AvatarSaveStage.CONTACT_LOOKUP_RETURNED,
+                    AvatarSaveStage.CONTACT_LOOKUP_FAILED,
+                    AvatarSaveStage.CONTACT_LOOKUP_CANCELLED,
+                    {
+                        when {
+                            it == null -> AvatarSaveOutcome.ABSENT
+                            it.key == target.key && it.publicKey == target.publicKey -> AvatarSaveOutcome.MATCHED
+                            else -> AvatarSaveOutcome.MISMATCHED
+                        }
+                    },
+                ) { store.fetchContact(target.key) } ?: throw NodesContactFailure.ContactNotFound()
                 check(updated.key == target.key && updated.publicKey == target.publicKey)
                 mutableState.update { it.copy(contact = updated) }
+                operation.observe(AvatarSaveStage.SAVE_SUCCEEDED)
                 true
             }
-        } catch (_: InvalidAvatar) {
+        } catch (error: InvalidAvatar) {
+            operation.observe(AvatarSaveStage.SAVE_FAILED, AvatarSaveOutcome.FAILED, error)
             invalidAvatar()
             false
         } catch (cancelled: CancellationException) {
+            operation.observe(AvatarSaveStage.SAVE_CANCELLED, AvatarSaveOutcome.CANCELLED, cancelled)
             throw cancelled
         } catch (error: Exception) {
+            operation.observe(AvatarSaveStage.SAVE_FAILED, AvatarSaveOutcome.FAILED, error)
             avatarFailure(error)
             false
         } finally {
             mutableState.update { it.copy(isSavingAvatar = false) }
+        }
+    }
+
+    private suspend fun <T> observeAvatarStep(
+        operation: AvatarSaveOperationContext,
+        started: AvatarSaveStage,
+        returned: AvatarSaveStage,
+        failed: AvatarSaveStage,
+        cancelled: AvatarSaveStage,
+        outcome: (T) -> AvatarSaveOutcome,
+        block: suspend () -> T,
+    ): T {
+        operation.observe(started)
+        return try {
+            block().also { operation.observe(returned, outcome(it)) }
+        } catch (error: CancellationException) {
+            operation.observe(cancelled, AvatarSaveOutcome.CANCELLED, error)
+            throw error
+        } catch (error: Exception) {
+            operation.observe(failed, AvatarSaveOutcome.FAILED, error)
+            throw error
         }
     }
 

@@ -42,6 +42,7 @@ import com.meshcoreone.android.core.ui.AvatarImageState
 import com.meshcoreone.android.core.ui.ContactAvatar
 import com.meshcoreone.android.core.ui.CropSize
 import com.meshcoreone.android.core.ui.cropAvatarImage
+import com.meshcoreone.android.feature.nodes.detail.AvatarSaveObserver
 import com.meshcoreone.android.feature.nodes.detail.AvatarProcessing
 import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
@@ -61,7 +62,13 @@ import kotlinx.coroutines.withContext
 /** Configuration-only retention: private image state never enters a Bundle or persistent store. */
 internal class ContactDetailRetainedState : ViewModel() {
     private val details = mutableMapOf<String, ContactDetailLifetime>()
+    private var avatarSaveObserver = AvatarSaveObserver.NONE
     val lifetimes: List<ContactDetailLifetime> get() = details.values.toList()
+
+    fun setAvatarSaveObserver(observer: AvatarSaveObserver) {
+        avatarSaveObserver = observer
+        details.values.forEach { it.holder.setAvatarSaveObserver(observer) }
+    }
 
     fun bind(entryId: String, contact: ContactDTO, dependencies: NodesFeatureDependencies): ContactDetailLifetime {
         details[entryId]?.takeIf {
@@ -71,7 +78,8 @@ internal class ContactDetailRetainedState : ViewModel() {
         }?.let { return it }
         details[entryId]?.close()
         return ContactDetailLifetime(contact, dependencies,
-            CoroutineScope(viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext[Job])))
+            CoroutineScope(viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext[Job])),
+            avatarSaveObserver)
             .also { details[entryId] = it }
     }
 
@@ -92,8 +100,14 @@ internal class ContactDetailLifetime(
     contact: ContactDTO,
     dependencies: NodesFeatureDependencies,
     val scope: CoroutineScope,
+    avatarSaveObserver: AvatarSaveObserver,
 ) {
-    val holder = ContactDetailStateHolder(contact, dependencies, scope)
+    val holder = ContactDetailStateHolder(
+        contact,
+        dependencies,
+        scope,
+        avatarSaveObserver = avatarSaveObserver,
+    )
     var active = true
         private set
     var choosing by mutableStateOf(false)
@@ -261,7 +275,7 @@ internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Compos
             onCancel = { image = null },
             onConfirm = { chosen ->
                 image = null
-                scope.launch { holder.saveAvatar { ContactAvatarMedia.encode(selected, chosen) } }
+                holder.launchAvatarSave { ContactAvatarMedia.encode(selected, chosen) }
             },
         )
     }

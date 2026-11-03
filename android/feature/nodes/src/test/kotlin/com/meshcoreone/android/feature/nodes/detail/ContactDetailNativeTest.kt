@@ -235,9 +235,15 @@ class ContactDetailNativeTest {
         val harness = Harness(clock).connect()
         val alice = contact(radioId = checkNotNull(harness.session.radioId))
         harness.store.contacts += alice
-        val detail = ContactDetailStateHolder(alice, harness.dependencies, scope)
+        val observations = mutableListOf<AvatarSaveObservation>()
+        val detail = ContactDetailStateHolder(
+            alice,
+            harness.dependencies,
+            scope,
+            avatarSaveObserver = AvatarSaveObserver { observations.add(it) },
+        )
         val encodeGate = CompletableDeferred<Bytes?>()
-        val encoding = scope.launch { detail.saveAvatar { encodeGate.await() } }
+        val encoding = detail.launchAvatarSave { encodeGate.await() }
         settle()
         assertTrue(detail.state.value.isSavingAvatar)
         assertFalse(detail.removeAvatar(), "A second operation cannot overlap encoding")
@@ -246,8 +252,13 @@ class ContactDetailNativeTest {
         assertTrue(encoding.isCancelled)
         assertFalse(detail.state.value.isSavingAvatar)
         assertTrue(harness.contactService.avatars.isEmpty())
+        val encodeOperation = observations.first { it.stage == AvatarSaveStage.LAUNCHED }.operationId
+        val encodeEvents = observations.filter { it.operationId == encodeOperation }
+        assertTrue(encodeEvents.any { it.stage == AvatarSaveStage.ENCODE_STARTED })
+        assertTrue(encodeEvents.any { it.stage == AvatarSaveStage.ENCODE_CANCELLED })
+        assertEquals(AvatarSaveOutcome.CANCELLED, encodeEvents.last { it.stage == AvatarSaveStage.JOB_COMPLETED }.outcome)
         harness.contactService.avatarBehavior = { _, _ -> CompletableDeferred<Unit>().await() }
-        val saving = scope.launch { detail.saveAvatar(Bytes.of(1)) }
+        val saving = detail.launchAvatarSave { Bytes.of(1) }
         settle()
         assertTrue(detail.state.value.isSavingAvatar)
         saving.cancel()
@@ -255,6 +266,11 @@ class ContactDetailNativeTest {
         assertTrue(saving.isCancelled)
         assertFalse(detail.state.value.isSavingAvatar)
         assertNull(detail.state.value.errorMessage)
+        val serviceOperation = observations.last { it.stage == AvatarSaveStage.LAUNCHED }.operationId
+        assertTrue(serviceOperation != encodeOperation)
+        val serviceEvents = observations.filter { it.operationId == serviceOperation }
+        assertTrue(serviceEvents.any { it.stage == AvatarSaveStage.SERVICE_CALL_STARTED })
+        assertEquals(AvatarSaveOutcome.CANCELLED, serviceEvents.last { it.stage == AvatarSaveStage.JOB_COMPLETED }.outcome)
     }
 
     @Test

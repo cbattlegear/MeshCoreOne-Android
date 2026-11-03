@@ -117,7 +117,11 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
 
     private fun action(resource: Int) = click(awaitAction(controller.get().getString(resource)))
 
-    private fun awaitAvatarState(description: String, condition: () -> Boolean) {
+    private fun awaitAvatarState(
+        description: String,
+        timeout: (String) -> AssertionError = ::AvatarStateTimeout,
+        condition: () -> Boolean,
+    ) {
         val deadline = System.nanoTime() + 10_000_000_000L
         do {
             advanceFrames()
@@ -128,11 +132,11 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             "${node.config.getOrElse(SemanticsProperties.Text) { emptyList() }}@${node.boundsInRoot}"
         }
         System.err.println(diagnostic)
-        error(diagnostic)
+        throw timeout(diagnostic)
     }
 
-    private fun awaitAvatarText(text: String) {
-        awaitAvatarState("visible text '$text'") {
+    private fun awaitAvatarText(text: String, timeout: (String) -> AssertionError = ::AvatarVisibleTextTimeout) {
+        awaitAvatarState("visible text '$text'", timeout) {
             allSemanticsNodes().any { node ->
                 node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text } &&
                     isDisplayed(node)
@@ -141,9 +145,9 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     }
 
     private fun awaitHeldSave(entered: CompletableDeferred<Unit>) {
-        awaitAvatarState("held avatar store entry") { entered.isCompleted }
+        awaitAvatarState("held avatar store entry", ::AvatarStoreEntryTimeout) { entered.isCompleted }
         val announcement = controller.get().getString(C.contactsDetailAvatarSavingAnnouncement)
-        awaitAvatarText(announcement)
+        awaitAvatarText(announcement, ::AvatarProgressVisibilityTimeout)
         val liveRegion = allSemanticsNodes().single { node ->
             node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == announcement }
         }
@@ -513,7 +517,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
                 .config[SemanticsActions.ScrollToIndex].action
             // This no-location detail has five items; the last is the danger-zone card.
             controller.get().runOnUiThread { assertTrue(assertNotNull(scroll).invoke(4)) }
-            awaitAvatarState("the final danger-zone action in the viewport") {
+            awaitAvatarState("the final danger-zone action in the viewport", ::AvatarViewportTimeout) {
                 actionNode(controller.get().getString(C.contactsDetailClearMessages))?.let(::isDisplayed) == true
             }
             val chooser = actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource))
@@ -527,6 +531,12 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             gate.cancel()
         }
     }
+
+    private class AvatarStateTimeout(message: String) : AssertionError(message)
+    private class AvatarVisibleTextTimeout(message: String) : AssertionError(message)
+    private class AvatarStoreEntryTimeout(message: String) : AssertionError(message)
+    private class AvatarProgressVisibilityTimeout(message: String) : AssertionError(message)
+    private class AvatarViewportTimeout(message: String) : AssertionError(message)
 
     @Test
     fun selectedCropSurvivesActualWindowResizingAndStillCancelsWithoutMutation() {

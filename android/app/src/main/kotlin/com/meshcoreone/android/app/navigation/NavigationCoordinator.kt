@@ -326,11 +326,10 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         return publication
     }
 
-    private data class CapturedContactMatch(val radioId: RadioId?)
-
     private fun currentContactLookup(
         lookup: ContactLinkLookup, current: NavigationState, currentToken: SessionToken?, allowInitialBinding: Boolean,
-    ): CapturedContactMatch? {
+        identifiedSelfPublicKey: Bytes?,
+    ): ContactLinkLookupResolution.Current? {
         if (lookup.owner !== this || lookup.disposition == ContactLinkCaptureDisposition.StaleContext) return null
         val initial = allowInitialBinding && lookup.allowsInitialBinding && currentToken != null &&
             current.initialContactLinkGeneration == lookup.generation &&
@@ -339,29 +338,62 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         val same = current.generation == lookup.generation && current.boundSessionToken == lookup.boundToken &&
             current.radioId == lookup.navigationRadioId
         if (!same && !initial || lookup.revision == null || current.contactLookupRevision != lookup.revision) return null
-        val radio = if (initial && lookup.radioId == null) current.radioId else lookup.radioId
+        val radio = lookup.radioId ?: currentToken?.radioId.takeIf {
+            allowInitialBinding && lookup.allowsInitialBinding
+        }
         if (current.radioId != null && current.radioId != radio) return null
-        return CapturedContactMatch(radio)
+        val selfPublicKey = if (lookup.allowsInitialBinding) {
+            identifiedSelfPublicKey ?: lookup.selfPublicKey
+        } else lookup.selfPublicKey
+        return ContactLinkLookupResolution.Current(radio, selfPublicKey, lookup)
     }
+
+    internal fun resolveCapturedContactLookup(
+        lookup: ContactLinkLookup, currentToken: SessionToken?, allowInitialBinding: Boolean,
+        identifiedSelfPublicKey: Bytes?,
+    ): ContactLinkLookupResolution = currentContactLookup(
+        lookup, mutableState.value, currentToken, allowInitialBinding, identifiedSelfPublicKey,
+    ) ?: ContactLinkLookupResolution.Stale
 
     internal fun isCapturedContactLookupCurrent(
         lookup: ContactLinkLookup, currentToken: SessionToken?, allowInitialBinding: Boolean,
-    ): Boolean = currentContactLookup(lookup, mutableState.value, currentToken, allowInitialBinding) != null
+    ): Boolean = resolveCapturedContactLookup(lookup, currentToken, allowInitialBinding, null) is
+        ContactLinkLookupResolution.Current
 
     internal fun completeCapturedContactLookup(
         lookup: ContactLinkLookup, link: ContactLinkRequest, contact: ContactDTO?,
         currentToken: SessionToken?, allowInitialBinding: Boolean, identifiedSelfPublicKey: Bytes?,
         selectChats: Boolean, publications: ContactLinkPublications,
     ): ContactLinkCompletion {
+        val target = ContactLinkLookupResolution.Current(lookup.radioId, lookup.selfPublicKey, lookup)
+        return when (val completion = completeResolvedCapturedContactLookup(
+            lookup, target, link, contact, currentToken, allowInitialBinding, identifiedSelfPublicKey,
+            selectChats, publications,
+        )) {
+            is ContactLinkResolvedCompletion.Completed -> completion.outcome
+            ContactLinkResolvedCompletion.TargetChanged -> ContactLinkCompletion.StaleContext
+        }
+    }
+
+    internal fun completeResolvedCapturedContactLookup(
+        lookup: ContactLinkLookup, target: ContactLinkLookupResolution.Current,
+        link: ContactLinkRequest, contact: ContactDTO?,
+        currentToken: SessionToken?, allowInitialBinding: Boolean, identifiedSelfPublicKey: Bytes?,
+        selectChats: Boolean, publications: ContactLinkPublications,
+    ): ContactLinkResolvedCompletion {
+        if (target.origin !== lookup) return ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.StaleContext)
         var publication: NavigationStateStore.Publication? = null
         while (true) {
             val snapshot = mutableState.snapshot()
             val current = snapshot.value
-            val matched = currentContactLookup(lookup, current, currentToken, allowInitialBinding)
-                ?: return ContactLinkCompletion.StaleContext
+            val matched = currentContactLookup(lookup, current, currentToken, allowInitialBinding, identifiedSelfPublicKey)
+                ?: return ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.StaleContext)
+            if (target.radioId != matched.radioId || target.selfPublicKey != matched.selfPublicKey) {
+                return ContactLinkResolvedCompletion.TargetChanged
+            }
             val capturedSelf = lookup.disposition == ContactLinkCaptureDisposition.IgnoredSelfContact
             val selfContact = capturedSelf ||
-                lookup.allowsInitialBinding && lookup.publicKey == identifiedSelfPublicKey
+                lookup.allowsInitialBinding && lookup.publicKey == matched.selfPublicKey
             val radio = matched.radioId
             val wrongTarget = link.publicKey != lookup.publicKey ||
                 contact != null && (contact.radioId != radio || contact.publicKey != lookup.publicKey)
@@ -382,7 +414,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             }
             val next = destination.copy(contactLookupRevision = Math.incrementExact(current.contactLookupRevision))
             val deferred = publication ?: contactLinkPublication(publications).also { publication = it }
-            if (mutableState.compareAndSet(snapshot, next, deferred)) return outcome
+            if (mutableState.compareAndSet(snapshot, next, deferred)) {
+                return ContactLinkResolvedCompletion.Completed(outcome)
+            }
         }
     }
 

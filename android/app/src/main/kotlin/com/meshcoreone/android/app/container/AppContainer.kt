@@ -3,7 +3,9 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.CapturedContactLinkContext
+import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
+import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationDestination
 import com.meshcoreone.android.app.navigation.NavigationFailure
@@ -388,14 +390,40 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         }
     }
 
-    internal fun isContactLinkContextCurrent(context: ContactLinkContext, publicKey: Bytes): Boolean {
-        val captured = context as? CapturedContactLinkContext ?: return false
+    internal fun completeResolvedContactLookup(
+        context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
+        link: ContactLinkRequest, existing: ContactDTO?, selectChats: Boolean, publications: ContactLinkPublications,
+    ): ContactLinkResolvedCompletion {
+        val captured = context as? CapturedContactLinkContext
+            ?: return ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.StaleContext)
         return withNavigationCommitBoundary {
             val current = sessions.current
             val lookup = captured.lookup
-            lookup.publicKey == publicKey && isCapturedContactGraphCurrent(captured, current) &&
-                navigation.isCapturedContactLookupCurrent(lookup, current?.token, lookup.allowsInitialBinding)
+            if (!isCapturedContactGraphCurrent(captured, current)) {
+                ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.StaleContext)
+            } else navigation.completeResolvedCapturedContactLookup(
+                lookup, target, link, existing, current?.token, lookup.allowsInitialBinding,
+                current?.navigationPublicKey.takeIf { lookup.allowsInitialBinding }, selectChats, publications,
+            )
         }
+    }
+
+    internal fun resolveContactLinkContext(context: ContactLinkContext, publicKey: Bytes): ContactLinkLookupResolution {
+        val captured = context as? CapturedContactLinkContext ?: return ContactLinkLookupResolution.Stale
+        return withNavigationCommitBoundary {
+            val current = sessions.current
+            val lookup = captured.lookup
+            if (lookup.publicKey != publicKey || !isCapturedContactGraphCurrent(captured, current)) {
+                ContactLinkLookupResolution.Stale
+            } else navigation.resolveCapturedContactLookup(
+                lookup, current?.token, lookup.allowsInitialBinding,
+                current?.navigationPublicKey.takeIf { lookup.allowsInitialBinding },
+            )
+        }
+    }
+
+    internal fun isContactLinkContextCurrent(context: ContactLinkContext, publicKey: Bytes): Boolean {
+        return resolveContactLinkContext(context, publicKey) is ContactLinkLookupResolution.Current
     }
 
     private fun isCapturedContactGraphCurrent(

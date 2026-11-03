@@ -45,6 +45,7 @@ import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ChatLinkEnvironment
 import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
+import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
@@ -1630,6 +1631,49 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 h.container.captureContactLinkContext(key(20), it)
             }
             assertTrue(h.container.isContactLinkContextCurrent(fresh, key(20)))
+        } finally { h.container.close() }
+    }
+
+    @Test fun capturedContactResolutionRechecksTheFirstGraphBeforeCommittingAbsence() = runTest {
+        val h = ContainerHarness(this, store)
+        val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
+        val saved = ContactDTO(
+            radioId = radio, publicKey = key(20), name = "First binding saved peer", lastHeardTimestamp = null,
+        )
+        h.links.configureRadio = { it.knownContacts += contactFrame(saved.publicKey, saved.name) }
+        try {
+            store.saveDevice(DeviceDTO(id = radio.value, radioId = radio, publicKey = key(7), nodeName = "Saved radio"))
+            store.saveContact(saved)
+            assertNull(h.container.connectionPort.lastConnectedDeviceId)
+            val captured = ContactLinkPublications().use {
+                h.container.captureContactLinkContext(saved.publicKey, it)
+            }
+            val unbound = assertIs<ContactLinkLookupResolution.Current>(
+                h.container.resolveContactLinkContext(captured, saved.publicKey),
+            )
+            assertNull(unbound.radioId)
+            assertNull(unbound.selfPublicKey)
+            connect(h)
+            assertEquals(radio, assertNotNull(h.sessions.current).token.radioId)
+            val navigation = h.container.navigation
+            val before = navigation.currentState
+            val link = ContactLinkRequest("Link alias", saved.publicKey, ContactType.REPEATER)
+            assertEquals(ContactLinkResolvedCompletion.TargetChanged, ContactLinkPublications().use {
+                h.container.completeResolvedContactLookup(captured, unbound, link, null, false, it)
+            })
+            assertSame(before, navigation.currentState)
+            assertSame(before, navigation.state.value)
+            val resolved = assertIs<ContactLinkLookupResolution.Current>(
+                h.container.resolveContactLinkContext(captured, saved.publicKey),
+            )
+            assertEquals(radio, resolved.radioId)
+            assertEquals(key(7), resolved.selfPublicKey)
+            val existing = assertNotNull(store.fetchContact(radio, saved.publicKey))
+            assertEquals(ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.Navigated), ContactLinkPublications().use {
+                h.container.completeResolvedContactLookup(captured, resolved, link, existing, false, it)
+            })
+            assertEquals(existing, navigation.currentState.selectedContact)
+            assertNull(navigation.currentState.pendingContactLink)
         } finally { h.container.close() }
     }
 

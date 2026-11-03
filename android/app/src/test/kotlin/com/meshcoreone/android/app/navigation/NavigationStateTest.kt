@@ -154,13 +154,29 @@ class NavigationStateTest {
         val captured = ContactLinkPublications().use {
             n.captureContactLinkLookup(contact.publicKey, null, null, null, null, true, it)
         }
+        val unbound = n.resolveCapturedContactLookup(captured, null, true, null) as ContactLinkLookupResolution.Current
         val token = SessionToken(
             ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000042")), Generation(1), radio,
         )
         assertTrue(n.bindNotificationSession(radio, null, token))
         val link = ContactLinkRequest("Untrusted alias", contact.publicKey, ContactType.REPEATER)
-        assertEquals(ContactLinkCompletion.ConfirmationStaged, ContactLinkPublications().use {
+        val bound = n.currentState
+        assertEquals(ContactLinkResolvedCompletion.TargetChanged, ContactLinkPublications().use {
+            n.completeResolvedCapturedContactLookup(
+                captured, unbound, link, null, token, true, null, selectChats = false, publications = it,
+            )
+        })
+        assertSame(bound, n.currentState)
+        assertEquals(ContactLinkCompletion.StaleContext, ContactLinkPublications().use {
             n.completeCapturedContactLookup(captured, link, null, token, true, null, selectChats = false, publications = it)
+        })
+        assertSame(bound, n.currentState)
+        val resolved = n.resolveCapturedContactLookup(captured, token, true, null) as ContactLinkLookupResolution.Current
+        assertEquals(radio, resolved.radioId)
+        assertEquals(ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.ConfirmationStaged), ContactLinkPublications().use {
+            n.completeResolvedCapturedContactLookup(
+                captured, resolved, link, null, token, true, null, selectChats = false, publications = it,
+            )
         })
         val pending = requireNotNull(n.state.value.pendingContactLink)
         assertEquals(radio, pending.targetRadioId)
@@ -180,12 +196,92 @@ class NavigationStateTest {
             self.captureContactLinkLookup(contact.publicKey, null, null, null, null, true, it)
         }
         assertTrue(self.bindNotificationSession(radio, contact.publicKey, token))
-        assertEquals(ContactLinkCompletion.IgnoredSelfContact, ContactLinkPublications().use {
-            self.completeCapturedContactLookup(
-                selfLookup, link, null, token, true, contact.publicKey, selectChats = false, publications = it,
+        val selfTarget = self.resolveCapturedContactLookup(
+            selfLookup, token, true, contact.publicKey,
+        ) as ContactLinkLookupResolution.Current
+        assertEquals(ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.IgnoredSelfContact), ContactLinkPublications().use {
+            self.completeResolvedCapturedContactLookup(
+                selfLookup, selfTarget, link, null, token, true, contact.publicKey, selectChats = false, publications = it,
             )
         })
         assertNull(self.state.value.pendingContactLink)
+    }
+
+    @Test fun capturedContactResolutionIdentifiesTheFirstGraphBeforeNavigationBinding() {
+        val n = NavigationCoordinator()
+        val token = SessionToken(
+            ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-00000000004a")), Generation(1), radio,
+        )
+        val captured = ContactLinkPublications().use {
+            n.captureContactLinkLookup(contact.publicKey, null, null, null, null, true, it)
+        }
+        val offline = n.resolveCapturedContactLookup(captured, null, true, null) as ContactLinkLookupResolution.Current
+        assertNull(offline.radioId)
+        assertNull(offline.selfPublicKey)
+        val before = n.currentState
+        val target = n.resolveCapturedContactLookup(captured, token, true, room.publicKey) as ContactLinkLookupResolution.Current
+        assertEquals(radio, target.radioId)
+        assertEquals(room.publicKey, target.selfPublicKey)
+        assertSame(before, n.currentState)
+        val link = ContactLinkRequest("First graph", contact.publicKey, ContactType.REPEATER)
+        assertEquals(ContactLinkResolvedCompletion.TargetChanged, ContactLinkPublications().use {
+            n.completeResolvedCapturedContactLookup(captured, offline, link, null, token, true, room.publicKey, false, it)
+        })
+        assertSame(before, n.currentState)
+        assertEquals(ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.Navigated), ContactLinkPublications().use {
+            n.completeResolvedCapturedContactLookup(captured, target, link, contact, token, true, room.publicKey, false, it)
+        })
+        assertEquals(contact, n.currentState.selectedContact)
+        assertNull(n.currentState.pendingContactLink)
+        assertTrue(n.bindNotificationSession(radio, room.publicKey, token))
+        assertEquals(contact, n.currentState.selectedContact)
+    }
+
+    @Test fun capturedContactResolutionBindsSelfIdentityAndRejectsForeignSnapshots() {
+        val n = NavigationCoordinator()
+        val token = SessionToken(
+            ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-00000000004b")), Generation(1), radio,
+        )
+        val captured = ContactLinkPublications().use {
+            n.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, it)
+        }
+        val beforeBinding = n.resolveCapturedContactLookup(captured, null, true, null) as ContactLinkLookupResolution.Current
+        assertEquals(radio, beforeBinding.radioId)
+        assertNull(beforeBinding.selfPublicKey)
+        val foreignNavigation = NavigationCoordinator()
+        val foreignCapture = ContactLinkPublications().use {
+            foreignNavigation.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, it)
+        }
+        val foreignTarget = foreignNavigation.resolveCapturedContactLookup(
+            foreignCapture, null, true, null,
+        ) as ContactLinkLookupResolution.Current
+        val link = ContactLinkRequest("Self", contact.publicKey, ContactType.CHAT)
+        val beforeForeign = n.currentState
+        assertEquals(ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.StaleContext), ContactLinkPublications().use {
+            n.completeResolvedCapturedContactLookup(captured, foreignTarget, link, null, null, true, null, false, it)
+        })
+        assertSame(beforeForeign, n.currentState)
+
+        assertTrue(n.bindNotificationSession(radio, contact.publicKey, token))
+        val bound = n.currentState
+        assertEquals(ContactLinkResolvedCompletion.TargetChanged, ContactLinkPublications().use {
+            n.completeResolvedCapturedContactLookup(
+                captured, beforeBinding, link, null, token, true, contact.publicKey, false, it,
+            )
+        })
+        assertSame(bound, n.currentState)
+        val selfTarget = n.resolveCapturedContactLookup(
+            captured, token, true, contact.publicKey,
+        ) as ContactLinkLookupResolution.Current
+        assertEquals(radio, selfTarget.radioId)
+        assertEquals(contact.publicKey, selfTarget.selfPublicKey)
+        assertEquals(ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.IgnoredSelfContact), ContactLinkPublications().use {
+            n.completeResolvedCapturedContactLookup(
+                captured, selfTarget, link, null, token, true, contact.publicKey, false, it,
+            )
+        })
+        assertNull(n.currentState.pendingContactLink)
+        assertNull(n.currentState.selectedContact)
     }
 
     @Test fun capturedContactCompletionChecksTheExactTargetAndPublishesAfterTheOuterGuard() = runTest {
@@ -289,10 +385,13 @@ class NavigationStateTest {
                 "existing" -> ContactLinkCompletion.Navigated
                 else -> ContactLinkCompletion.ConfirmationStaged
             }
+            val target = n.resolveCapturedContactLookup(
+                captured, token, firstBinding, contact.publicKey.takeIf { firstBinding },
+            ) as ContactLinkLookupResolution.Current
             ContactLinkPublications().use { publications ->
                 synchronized(guard) {
-                    assertEquals(expectedOutcome, n.completeCapturedContactLookup(
-                        captured, ContactLinkRequest("Alias", contact.publicKey, ContactType.REPEATER),
+                    assertEquals(ContactLinkResolvedCompletion.Completed(expectedOutcome), n.completeResolvedCapturedContactLookup(
+                        captured, target, ContactLinkRequest("Alias", contact.publicKey, ContactType.REPEATER),
                         contact.takeIf { flow == "existing" }, token, firstBinding,
                         contact.publicKey.takeIf { firstBinding }, selectChats, publications,
                     ))

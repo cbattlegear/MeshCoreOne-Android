@@ -7,7 +7,25 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.ConnectionManager
 import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
+import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+
+sealed interface ContactLinkLookupResolution {
+    data object Stale : ContactLinkLookupResolution
+
+    // A null radio is a valid unbound attempt, not a lookup against the next graph.
+    class Current internal constructor(
+        val radioId: RadioId?,
+        val selfPublicKey: Bytes?,
+        internal val origin: Any,
+    ) : ContactLinkLookupResolution
+}
+
+sealed interface ContactLinkResolvedCompletion {
+    // The attempted target changed without committing; the original capture may be resolved again.
+    data object TargetChanged : ContactLinkResolvedCompletion
+    data class Completed(val outcome: ContactLinkCompletion) : ContactLinkResolvedCompletion
+}
 
 internal data class ContactLinkLookup(
     val owner: NavigationCoordinator,

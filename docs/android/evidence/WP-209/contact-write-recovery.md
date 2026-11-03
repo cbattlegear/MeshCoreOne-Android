@@ -139,6 +139,15 @@ passing SwiftData restore/export oracle is not an iOS-device run.
 
 ### Exact current-base candidate diagnostics
 
+- Candidate `87d045629c208c3d38e4af92a8f301db3f7d0636`, run
+  [41603718675, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41603718675),
+  completed with the scope classifier, Swift codec oracle and controller/policy
+  jobs passing, but the Android build failed
+  `teardownAndDifferentRadioReplacementCannotSaveAnOldReplyIntoTheNewRadio`.
+  The test expected a replacement full sync to clear uncertainty after the old
+  session had been torn down, without physical-drain proof. The producer
+  correctly rejected that sync; the test now asserts the marker remains set,
+  no snapshot is requested, and neither radio's local contact is misattributed.
 - Candidate `8841480ad2603c1d5c8184934c92af8761707d7c`, run
   [41592559682, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41592559682),
   completed successfully. It predates the serialized-admission and sync-fence

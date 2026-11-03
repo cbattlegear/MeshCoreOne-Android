@@ -504,8 +504,12 @@ class ContactWriteRecoveryTests {
             assertEquals("Radio B", store.fetchContact(radioB, contactsKey(1))?.name)
             assertTrue(otherService.needsContactWriteReconciliation(radioA))
             assertFalse(otherService.needsContactWriteReconciliation(radioB))
-            service(newSession(radio)).syncContacts(radioA, Instant.ofEpochSecond(50))
-            assertEquals("Radio A", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                service(newSession(radio)).syncContacts(radioA, Instant.ofEpochSecond(50))
+            }
+            assertTrue(service(newSession(radio)).needsContactWriteReconciliation(radioA))
+            assertTrue(radio.contactRequests.isEmpty(), "A full snapshot is not proof that the old write drained")
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
             assertEquals("Radio B", store.fetchContact(radioB, contactsKey(1))?.name)
         }
     }
@@ -634,6 +638,7 @@ class ContactWriteRecoveryTests {
             val replacementRadio = radio.replacementView()
             val replacementSession = newSession(replacementRadio)
             val batchSaveEntered = CompletableDeferred<Unit>()
+            val capturedFrames = CompletableDeferred<SnapshotList<ContactFrame>>()
             val releaseBatchSave = CompletableDeferred<Unit>()
             val heldPersistence = object : ContactPersisting by store {
                 override suspend fun batchSaveContacts(
@@ -641,6 +646,7 @@ class ContactWriteRecoveryTests {
                     frames: SnapshotList<ContactFrame>,
                 ): Long {
                     batchSaveEntered.complete(Unit)
+                    capturedFrames.complete(frames)
                     releaseBatchSave.await()
                     return store.batchSaveContacts(radioId, frames)
                 }
@@ -651,6 +657,7 @@ class ContactWriteRecoveryTests {
             runCurrent()
             assertTrue(batchSaveEntered.isCompleted, "The replacement captured the snapshot before local application")
             assertTrue(replacementRadio.contactRequests.isNotEmpty())
+            assertEquals(0, capturedFrames.await().size, "B captured a snapshot that omitted A's queued contact")
 
             releaseSnapshot.complete(Unit)
             runCurrent()

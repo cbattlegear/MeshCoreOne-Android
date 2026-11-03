@@ -19,6 +19,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotSame
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -136,6 +137,72 @@ class AppDeepLinkRouterTest {
         assertNull(environment.pendingContact)
         assertNull(pending.snapshot())
         assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
+        assertEquals(2, environment.captureCount, "Direct call and held delivery each capture once; retry reuses its capture")
+    }
+
+    @Test
+    fun retryContextRejectionRetainsDeliveryWithoutReplacementLookupOrCommit() = runTest {
+        val environment = FakeEnvironment().apply { contactFailure = IllegalStateException("store unavailable") }
+        val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("A", contactUri())
+        pending.submit(delivery)
+        val first = assertNotNull(pending.lookupFailure.value)
+        val originalRadio = environment.currentRadioId
+        environment.currentRadioId = RadioId(UUID(0, 2))
+        environment.contactFailure = null
+        val rejected = assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(
+            pending.retry(first.deliveryId, first.attempt),
+        )
+        assertIs<ContactLookupContextStale>(rejected.failure.cause)
+        assertEquals(listOf(originalRadio), environment.lookupRadios)
+        assertEquals(1, environment.captureCount)
+        assertEquals(0, environment.mutations)
+        assertEquals(delivery, pending.snapshot())
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
+        val stale = assertNotNull(pending.lookupFailure.value)
+        assertTrue(stale.attempt > first.attempt)
+        assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(pending.cancel(first.deliveryId, first.attempt))
+        assertEquals(stale, pending.lookupFailure.value)
+    }
+
+    @Test
+    fun retryCompletionRejectionRemainsUncommittedAfterOriginalLookup() = runTest {
+        val environment = FakeEnvironment().apply { contactFailure = IllegalStateException("store unavailable") }
+        val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("A", contactUri())
+        pending.submit(delivery)
+        val observed = assertNotNull(pending.lookupFailure.value)
+        environment.contactFailure = null
+        environment.forcedCompletion = ContactLinkCompletion.StaleContext
+        val result = assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(
+            pending.retry(observed.deliveryId, observed.attempt),
+        )
+        assertIs<ContactLookupContextStale>(result.failure.cause)
+        assertEquals(delivery, pending.snapshot())
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
+        assertEquals(0, environment.mutations)
+        assertEquals(1, environment.captureCount)
+    }
+
+    @Test
+    fun precommitCancellationAlsoRetainsTheOriginalContactContext() = runTest {
+        val environment = FakeEnvironment().apply { contactFailure = CancellationException("lookup canceled") }
+        val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("A", contactUri())
+        assertFailsWith<CancellationException> { pending.submit(delivery) }
+        assertNull(pending.lookupFailure.value)
+        val originalRadio = environment.currentRadioId
+        environment.currentRadioId = RadioId(UUID(0, 2))
+        environment.contactFailure = null
+        val stale = assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(pending.retry())
+        assertIs<ContactLookupContextStale>(stale.failure.cause)
+        assertEquals(1, environment.captureCount)
+        assertEquals(listOf(originalRadio), environment.lookupRadios)
+        assertEquals(delivery, pending.snapshot())
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
     }
 
     @Test
@@ -275,6 +342,7 @@ class AppDeepLinkRouterTest {
         "meshcore://contact/add?name=Alice&public_key=${key.hexString}&type=1"
 
     private data class CapturedContext(
+        val publicKey: Bytes,
         override val radioId: RadioId?,
         override val selfPublicKey: Bytes?,
         override val disposition: ContactLinkCaptureDisposition,
@@ -297,6 +365,8 @@ class AppDeepLinkRouterTest {
         var mutations = 0
         var adminCommandCount = 0
         var staleCapture = false
+        var contextCurrent = true
+        var captureCount = 0
         var forcedCompletion: ContactLinkCompletion? = null
         var afterCapture: () -> Unit = {}
         var beforeCompletion: () -> Unit = {}
@@ -310,12 +380,13 @@ class AppDeepLinkRouterTest {
         override fun captureContactLinkContext(
             publicKey: Bytes, publications: ContactLinkPublications,
         ): ContactLinkContext {
+            captureCount++
             captureBatch = publications
             publications.defer(object : ContactLinkPublication {
                 override fun release() = onPublication("capture")
             })
             val captured = CapturedContext(
-                currentRadioId, connectedDevicePublicKey,
+                publicKey, currentRadioId, connectedDevicePublicKey,
                 when {
                     staleCapture -> ContactLinkCaptureDisposition.StaleContext
                     publicKey == connectedDevicePublicKey -> ContactLinkCaptureDisposition.IgnoredSelfContact
@@ -325,6 +396,9 @@ class AppDeepLinkRouterTest {
             afterCapture()
             return captured
         }
+
+        override fun isContactLinkContextCurrent(context: ContactLinkContext, publicKey: Bytes): Boolean =
+            contextCurrent && context.radioId == currentRadioId && (context as CapturedContext).publicKey == publicKey
 
         override fun completeContactLookup(
             context: ContactLinkContext, link: MeshCoreDeepLink.Contact, existing: ContactDTO?,

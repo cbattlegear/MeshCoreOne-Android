@@ -48,13 +48,23 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
 
     private suspend fun routeContact(link: MeshCoreDeepLink.Contact, external: Boolean): DeepLinkRouteOutcome {
         val coroutineContext = currentCoroutineContext()
-        val captured = ContactLinkPublications().use { publications ->
+        val guard = coroutineContext[PendingExternalRoute.CommitGuard]
+        val original = guard?.contactLinkContext()
+        val captured = original ?: ContactLinkPublications().use { publications ->
             val capture = {
                 coroutineContext.ensureActive()
-                environment.captureContactLinkContext(link.publicKey, publications)
+                environment.captureContactLinkContext(link.publicKey, publications).also {
+                    guard?.retainContactLinkContext(it)
+                }
             }
-            val guard = coroutineContext[PendingExternalRoute.CommitGuard]
             if (guard == null) capture() else guard.commit(capture)
+        }
+        if (original != null) {
+            val current = checkNotNull(guard).commit {
+                coroutineContext.ensureActive()
+                environment.isContactLinkContextCurrent(original, link.publicKey)
+            }
+            if (!current) return DeepLinkRouteOutcome.ContactLookupFailed(ContactLookupContextStale())
         }
         if (captured.disposition == ContactLinkCaptureDisposition.StaleContext) {
             return commitOutcomeIfActive { DeepLinkRouteOutcome.ContactLookupRejected }
@@ -68,7 +78,6 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
                 } catch (failure: Exception) {
                     coroutineContext.ensureActive()
                     val failed = DeepLinkRouteOutcome.ContactLookupFailed(failure)
-                    val guard = coroutineContext[PendingExternalRoute.CommitGuard]
                     val outcome = if (guard == null) failed else guard.commit { failed }
                     java.util.logging.Logger.getLogger("com.mc1.DeepLinks").warning(
                         "Contact lookup failed; delivery requires retry",
@@ -84,7 +93,8 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
                     ContactLinkCompletion.ConfirmationStaged -> DeepLinkRouteOutcome.ConfirmationStaged
                     ContactLinkCompletion.IgnoredSelfContact -> DeepLinkRouteOutcome.IgnoredSelfContact
                     ContactLinkCompletion.StaleContext, ContactLinkCompletion.WrongTarget ->
-                        DeepLinkRouteOutcome.ContactLookupRejected
+                        if (original != null) DeepLinkRouteOutcome.ContactLookupFailed(ContactLookupContextStale())
+                        else DeepLinkRouteOutcome.ContactLookupRejected
                 }
             }
         }

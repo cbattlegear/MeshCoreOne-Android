@@ -584,6 +584,8 @@ class ExternalRouteReplacementTest {
         ): ContactLinkContext = CapturedLookup(navigation.captureContactLinkLookup(
             publicKey, radio, null, null, null, true, publications,
         ))
+        override fun isContactLinkContextCurrent(context: ContactLinkContext, publicKey: Bytes): Boolean =
+           error("This replacement fixture does not admit contact retries")
         override fun completeContactLookup(
             context: ContactLinkContext, link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
             selectChats: Boolean, publications: ContactLinkPublications,

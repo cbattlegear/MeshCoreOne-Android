@@ -31,6 +31,8 @@ sealed interface DeepLinkRouteOutcome {
     data class ContactLookupFailed(val cause: Exception) : DeepLinkRouteOutcome
 }
 
+class ContactLookupContextStale : Exception("The initiating contact context is no longer current.")
+
 interface AppDeepLinkEnvironment {
     var selectedTab: com.meshcoreone.android.core.contracts.AppTab
     val currentRadioId: RadioId?
@@ -41,6 +43,7 @@ interface AppDeepLinkEnvironment {
     fun navigateToChannel(channel: ChannelDTO)
     fun stageContactConfirmation(link: MeshCoreDeepLink.Contact, selectChats: Boolean = false)
     fun captureContactLinkContext(publicKey: Bytes, publications: ContactLinkPublications): ContactLinkContext
+    fun isContactLinkContextCurrent(context: ContactLinkContext, publicKey: Bytes): Boolean
     fun completeContactLookup(
         context: ContactLinkContext, link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
         selectChats: Boolean, publications: ContactLinkPublications,

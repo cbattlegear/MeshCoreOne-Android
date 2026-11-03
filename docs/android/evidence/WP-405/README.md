@@ -2,6 +2,31 @@
 
 ## Issue #544: first-graph process-store contact lookup
 
+Retry-origin correction: `fced652cd946129e4902e66f989d2bf08000d061`
+still re-captured the active graph when retrying the same failed delivery.
+The holder now retains the original opaque `ContactLinkContext` through
+precommit failure/cancellation, seeds each subsequent attempt's guard with it,
+and clears it only when that delivery terminates or is superseded. The router
+does not recapture or increment the lookup revision on retry. Its adapter
+requires WP-302's synchronous read-only producer seam
+`isContactLinkContextCurrent(context, publicKey)`, checked under the delivery
+guard before any retry store read. Store I/O still runs outside all guards and
+uses the original captured radio.
+
+Stale validation or stale/wrong-target completion on retry returns visible
+`ContactLookupFailed(ContactLookupContextStale())` without commit/consumption.
+Completion continues through the producer's conditional validation. The same
+delivery cannot silently retarget to another radio or an identical replacement
+generation; only a genuinely new delivery may capture that graph. ID/attempt
+Retry/Cancel arbitration remains unchanged. Added authored router controls for
+pre-read rejection, post-read completion rejection and cancellation retaining
+origin, plus real graph/Room different-radio and identical-radio replacement
+families with no replacement read/effect/ack and a fresh B-delivery control.
+The earlier real same-graph recovery control remains. The replacement-only fake
+explicitly rejects unexpected retry validation instead of fabricating validity.
+These cases are uncompiled/unexecuted. The new producer seam is absent on this
+branch until WP-302 composition; no standalone build/acceptance is claimed.
+
 The adapter-only successor `1fec5c1c7751fd80989cb5d09a12b5dd7debee09`
 did not close the consumer failure path: the router still used `lookupOrNull`.
 The follow-up distinguishes `ContactLookupFailed(cause)` from genuine absence,

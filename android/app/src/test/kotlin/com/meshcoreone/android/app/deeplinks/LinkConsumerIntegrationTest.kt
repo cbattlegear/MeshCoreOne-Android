@@ -140,6 +140,88 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun failedExternalContactCannotRetryAgainstDifferentOrIdenticalReplacementGraph() = runTest {
+        for (sameRadio in listOf(false, true)) {
+            var identity = key(7)
+            var failLookup = false
+            val reads = mutableListOf<RadioId>()
+            val recoveringStore = object : PersistenceStoreProtocol by store {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    if (publicKey == key(20)) {
+                        reads += radioId
+                        if (failLookup) throw IllegalStateException("store unavailable")
+                    }
+                    return store.fetchContact(radioId, publicKey)
+                }
+            }
+            val h = ContainerHarness(this, store, identity = { identity }, persistenceOverride = recoveringStore)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved peer") }
+            try {
+                val started = h.container.start()
+                h.eventually("retry origin fixture starts") { started.isCompleted }
+                val connecting = async { h.manager.connect(h.target()) }
+                val navigation = h.container.navigation
+                h.eventually("origin graph binds") {
+                    connecting.isCompleted && h.manager.connectionState == DeviceConnectionState.READY &&
+                        navigation.state.value.navigationReady
+                }
+                connecting.await()
+                val first = assertNotNull(h.sessions.current)
+                val router = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))
+                val pending = PendingExternalRoute(router::routeExternal)
+                pending.markReady()
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri("Alias", key(20), ContactType.REPEATER)
+                val delivery = PendingExternalRoute.Delivery("origin-A", uri)
+                failLookup = true
+                assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(pending.submit(delivery))
+                val failed = assertNotNull(pending.lookupFailure.value)
+                failLookup = false
+                if (!sameRadio) identity = key(8)
+                val rebuilding = async {
+                    h.manager.rebuildSession(assertNotNull(h.appState.connectedDevice).id)
+                }
+                h.eventually("replacement graph binds") {
+                    val next = h.sessions.current
+                    rebuilding.isCompleted && next != null && next !== first &&
+                        h.manager.connectionState == DeviceConnectionState.READY &&
+                        navigation.state.value.boundSessionToken == next.token &&
+                        navigation.state.value.navigationReady
+                }
+                rebuilding.await()
+                val replacement = assertNotNull(h.sessions.current)
+                assertNotEquals(first.token, replacement.token)
+                if (sameRadio) assertEquals(first.token.radioId, replacement.token.radioId)
+                else assertNotEquals(first.token.radioId, replacement.token.radioId)
+                navigation.navigateToMap(focus.latitude, focus.longitude)
+                val before = navigation.currentState
+                reads.clear()
+                val stale = assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(
+                    pending.retry(failed.deliveryId, failed.attempt),
+                )
+                assertIs<com.meshcoreone.android.app.deeplinks.ContactLookupContextStale>(stale.failure.cause)
+                assertTrue(reads.isEmpty(), "Retry must reject before any replacement-radio lookup")
+                assertEquals(before, navigation.currentState)
+                assertEquals(delivery, pending.snapshot())
+                assertTrue(pending.consumedDeliveryIds().isEmpty())
+                val currentFailure = assertNotNull(pending.lookupFailure.value)
+                assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(
+                    pending.retry(failed.deliveryId, failed.attempt),
+                )
+                assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(
+                    pending.cancel(failed.deliveryId, failed.attempt),
+                )
+                assertEquals(currentFailure, pending.lookupFailure.value)
+                val fresh = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
+                    pending.submit(PendingExternalRoute.Delivery("fresh-B", uri)),
+                )
+                assertEquals(DeepLinkRouteOutcome.Navigated, fresh.outcome)
+                assertEquals(listOf(replacement.token.radioId), reads)
+                assertEquals(replacement.token.radioId, assertNotNull(navigation.currentState.selectedContact).radioId)
+                assertNull(pending.lookupFailure.value)
+            } finally { h.container.close() }
+        }
+    }
+
     @Test fun initialViewIntentIsHeldUntilActualContainerBinding() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val h = ContainerHarness(this, store)

@@ -37,6 +37,9 @@ class ContainerDeepLinkEnvironment(
         publicKey: Bytes, publications: ContactLinkPublications,
     ): ContactLinkContext = container.captureContactLinkContext(publicKey, publications)
 
+    override fun isContactLinkContextCurrent(context: ContactLinkContext, publicKey: Bytes): Boolean =
+        container.isContactLinkContextCurrent(context, publicKey)
+
     override fun completeContactLookup(
         context: ContactLinkContext, link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
         selectChats: Boolean, publications: ContactLinkPublications,

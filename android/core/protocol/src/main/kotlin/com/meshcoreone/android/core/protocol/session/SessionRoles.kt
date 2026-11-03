@@ -8,7 +8,6 @@
 // PortedFrom: MeshCore/Sources/MeshCore/Protocols/MessagingSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MeshCore/Sources/MeshCore/Protocols/RemoteAccessSessionOps.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MeshCore/Sources/MeshCore/Protocols/SessionEventStreaming.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-209 Accepted-contact completion and cancellation accounting within the existing exchange owner.
 package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes

@@ -9,6 +9,106 @@ Manifest SHA256: `11120a20d04408b3d21fac09180412df0490cabf1dafb8a3c98fe83e0fad31
 This is an **UNVERIFIED CANDIDATE**, not whole-WP acceptance, physical-radio safety,
 or completion of the independent queue/fence/consumer/restore producers.
 
+## Local retained-submission storage candidate (source-only)
+
+Implementation: `48689995b2d23d7d66c5e30d8720508b5afffd64`, directly on
+`879f9bc5b01936558e017c672a26037ed86ed159`; no held producer ancestry was imported.
+Assignment: `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_rgoBHDEqoqs4s3EYibaisFLx`.
+The canonical inputs remain the separate `d20ad3c` / `9a94ef6` candidates.
+The current `reserve.py admit --wp <owner> --path <path> --operation modify`
+checks returned `wp-owned` for each of these eleven paths:
+
+| Owner | Path under `android/core/` |
+| --- | --- |
+| WP-201 | `contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/ChannelSubmissionPersisting.kt` |
+| WP-201 | `database/src/main/kotlin/com/meshcoreone/android/core/database/ChannelSubmissions.kt` |
+| WP-201 | `database/src/main/kotlin/com/meshcoreone/android/core/database/MeshCoreDatabase.kt` |
+| WP-201 | `database/src/test/kotlin/com/meshcoreone/android/core/database/ChannelOccupantMigrationTest.kt` |
+| WP-201 | `database/src/test/kotlin/com/meshcoreone/android/core/database/RoomBoundaryTest.kt` |
+| WP-202 | `data/src/main/kotlin/com/meshcoreone/android/core/data/repository/PendingSendRepository.kt` |
+| WP-202 | `data/src/main/kotlin/com/meshcoreone/android/core/data/repository/RoomPersistenceStore.kt` |
+| WP-202 | `data/src/main/kotlin/com/meshcoreone/android/core/data/repository/MessageRepository.kt` |
+| WP-202 | `data/src/main/kotlin/com/meshcoreone/android/core/data/repository/RepositoryCascades.kt` |
+| WP-202 | `data/src/main/kotlin/com/meshcoreone/android/core/data/repository/DeviceRepository.kt` |
+| WP-202 | `data/src/test/kotlin/com/meshcoreone/android/core/data/repository/ChannelSubmissionPersistenceTest.kt` |
+
+The invariant set is `one-wp-branch-pr`, `pinned-source`, `declared-verification`,
+`evidence-provenance`. Both this evidence path (WP-201) and the WP-202 deviation
+path separately passed modify admission. Queue owner bef explicitly reported no
+current/planned storage/schema/transaction hunks at its clean `cb4dbd6` candidate;
+13a reported no overlap with its frozen service/receipt/recovery-test hunks.
+Those dispositions serialize this storage slice only. They do not transfer queue,
+service, fixture or runtime ownership. The historical claim refusal remains an audit
+fact; no lease history, admission receipt or successor identity was rewritten.
+
+### Actual operation and retained evidence
+
+`RoomPersistenceStore` implements the independent `ChannelSubmissionPersisting`
+role through the actual pending repository. Existing messaging ports and their
+fakes remain unchanged. `admitChannelSubmission(submission, enqueuedAt)` atomically
+validates an already-saved outgoing DTO's radio/message/index/original occupant/
+text/timestamp, binds the caller's pending UUID to the entire immutable envelope,
+and inserts the exact pending row plus retained receipt. No creation, current-slot
+sampling, rebind or wire authorization occurs. Caller/service timing of local node
+name is carried unchanged, not reconstructed from current metadata.
+
+The receipt's global pending UUID rejects collisions across radios and existing
+unreceipted pending/journal UUIDs, including other kinds. Exact replay preserves
+first enqueue seconds/nanos and sequence; changed radio/message/index/origin/text/
+timestamp/local node/resend returns a typed conflict without replacing anything.
+Evidence contains actual pending state and retained attempts. `ADMITTED` with
+DISPATCHING, UNCERTAIN or ACCEPTED pending is retained state, not permission to
+schedule a fresh attempt. A replay never inserts pending rows or increments counts.
+
+Accepted completion and definitely-unsent retirement update the receipt phase in
+the same existing transaction as pending cleanup and message bookkeeping. Both
+final phases survive reopen and remain nonreinsertable. Explicit message/history/
+device deletion redacts text and node name into a nonreplayable tombstone rather
+than retaining deleted content or rematerializing it. Normal queue cleanup is not
+user deletion and retains exact intent. Generic insertion cannot resurrect those
+canonical IDs. Receipt/pending envelope mismatch fails explicitly.
+
+`reconcileChannelSubmission` returns known exact evidence, or UNKNOWN for absence
+or redaction. There is deliberately no NOT_COMMITTED result: a writer that has not
+entered storage may still commit later. No original-owner lifetime barrier or
+restart request reconstruction is invented. Known admission is not delivery,
+nonacceptance, creation reconciliation or an ordinary-send permit.
+
+### Schema and authored versus executed evidence
+
+The registered additive Room 3-to-4 migration creates `channel_submissions` with
+no backfill, raw secrets or history-policy activation. Existing pending/journal/
+message rows remain unchanged, including unresolved legacy rows. The historical
+v1/v2/v3 KSP exports are not altered. **The v4 KSP export has not been generated;
+Kotlin compilation and actual Room migration validation have not run.**
+
+Thirteen new real-Room test methods are authored in
+`ChannelSubmissionPersistenceTest`: exact replay; each immutable identity/payload
+conflict; missing/mismatched saved intent and legacy proof; original writer not
+yet entered followed by commit; concurrent replay; insertion rollback; retained
+DISPATCHING/UNCERTAIN/ACCEPTED state; accepted and terminal cleanup with disk
+reopen; lost commit return/cancellation; generic resurrection and redaction;
+device/foreign preservation; conflicting concurrent contexts with exactly one
+winner; atomic completion rollback; foreign legacy/DM UUID collision.
+One additional real v3 DISPATCHING journal-to-v4 migration method is authored;
+existing v1/v2 upgrade families also assert no invented receipt. These methods
+are **UNEXECUTED**, not passing discovery evidence.
+
+Source checks executed successfully after the final implementation:
+`C:\Python312\python.exe tools\android-port\portmap.py`,
+`C:\Python312\python.exe tools\android-port\controller\validate.py`,
+and `git diff --check` (also the staged equivalent before freezing).
+These validate source/manifest/traceability only, not Kotlin or SQL execution.
+No Gradle, CI dispatch, publication, integration or protected fixture edits occurred.
+
+Remaining actual owner prerequisites are producer creation/caller-ID adoption,
+queue admission/reconciliation and cancellation ownership, runtime connection-bound
+dispatch fence/graph and same-fence mutation wiring, explicit fixture/ordering hold
+disposition, then authorized generated-schema and native Room/consumer verification.
+The primitive alone does not prove physical-radio safety or resolve #530 end to end.
+All #385/#402/#508, #537-to-#535, history-policy, Room integration, retained local
+execution-owner and publication holds remain unchanged.
+
 ## Persisted contract
 
 `MessageDTO`, `ChannelMessageEnvelope` and `PendingSendDTO` append nullable

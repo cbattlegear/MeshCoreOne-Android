@@ -166,7 +166,7 @@ internal object NotificationActionDispatcher {
             var handled = false
             try {
                 if (!next.receipt.preventsReplay) {
-                    handled = withContext(next.receipt) { target(next.response) }
+                    withContext(next.receipt) { target(next.response).also { handled = it } }
                 }
             } finally {
                 // This executes even if cancellation hides a successful router result.

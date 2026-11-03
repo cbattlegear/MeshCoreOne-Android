@@ -2,6 +2,7 @@
 // AndroidOnly: WP-215 Accepted/uncertain action cancellation, replacement and capacity regressions.
 package com.meshcoreone.android.platform.notifications.messaging
 
+import android.content.Intent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
@@ -10,6 +11,9 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -191,6 +195,92 @@ class NotificationActionDispatcherTest {
         NotificationActionDispatcher.retry()
         runCurrent()
         assertEquals(1, delivered)
+    }
+
+    @Test
+    fun contentTapAcceptsOnlyAValidOpenPayloadIntoTheExistingQueue() = runTest {
+        val delivered = mutableListOf<NotificationResponse>()
+        val response = response("10000000-0000-0000-0000-000000000001").copy(action = null, userText = null)
+        val action = AndroidMessagingNotificationDelivery.ACTION_PREFIX + AndroidMessagingNotificationDelivery.ACTION_OPEN
+        NotificationActionDispatcher.install(this) { delivered += it; true }
+        assertEquals(NotificationContentTapResult.NOT_NOTIFICATION, NotificationContentTap.enqueue(Intent(Intent.ACTION_VIEW)))
+        assertEquals(NotificationContentTapResult.MALFORMED, NotificationContentTap.enqueue(Intent(action)))
+        val intent = NotificationPayloadCodec.write(Intent(action), response.payload)
+        assertEquals(NotificationContentTapResult.ENQUEUED, NotificationContentTap.enqueue(intent))
+        runCurrent()
+        assertEquals(listOf(response), delivered)
+    }
+
+    @Test
+    fun replacementScopeWaitsForCancelledNoncooperativeDeliveryWithoutReplayingIt() = runTest {
+        val originalScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val replacementScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val first = response("10000000-0000-0000-0000-000000000001").copy(action = null, userText = null)
+        val second = response("90000000-0000-0000-0000-000000000009").copy(action = null, userText = null)
+        val originalDeliveries = mutableListOf<NotificationResponse>()
+        val replacementDeliveries = mutableListOf<NotificationResponse>()
+        var continuation: Continuation<Unit>? = null
+        var released = false
+        var active = 0
+        var maxActive = 0
+        try {
+            NotificationActionDispatcher.install(originalScope) {
+                active++
+                maxActive = maxOf(maxActive, active)
+                suspendCoroutine<Unit> { continuation = it }
+                originalDeliveries += it
+                active--
+                true
+            }
+            NotificationActionDispatcher.enqueue(first)
+            runCurrent()
+            assertTrue(continuation != null)
+            assertEquals(1, active)
+            originalScope.cancel()
+            NotificationActionDispatcher.install(replacementScope) {
+                active++
+                maxActive = maxOf(maxActive, active)
+                replacementDeliveries += it
+                active--
+                true
+            }
+            runCurrent()
+            assertTrue(replacementDeliveries.isEmpty())
+            assertEquals(1, active)
+            released = true
+            requireNotNull(continuation).resume(Unit)
+            runCurrent()
+            assertEquals(listOf(first), originalDeliveries)
+            assertTrue(replacementDeliveries.isEmpty())
+            NotificationActionDispatcher.enqueue(second)
+            runCurrent()
+            assertEquals(listOf(second), replacementDeliveries)
+            assertEquals(1, maxActive)
+        } finally {
+            if (!released) continuation?.resume(Unit)
+            originalScope.cancel()
+            replacementScope.cancel()
+            runCurrent()
+        }
+    }
+
+    @Test
+    fun cancellationAfterACommitStillDrainsAnIdenticalQueuedDelivery() = runTest {
+        val same = response("10000000-0000-0000-0000-000000000001")
+        var calls = 0
+        NotificationActionDispatcher.install(this) {
+            calls++
+            requireNotNull(currentCoroutineContext()[NotificationActionCommit]).navigationCommitted()
+            if (calls == 1) throw kotlinx.coroutines.CancellationException("cancelled after commit")
+            true
+        }
+        NotificationActionDispatcher.enqueue(same)
+        NotificationActionDispatcher.enqueue(same)
+        runCurrent()
+        assertEquals(2, calls)
+        NotificationActionDispatcher.retry()
+        runCurrent()
+        assertEquals(2, calls)
     }
 
     @Test

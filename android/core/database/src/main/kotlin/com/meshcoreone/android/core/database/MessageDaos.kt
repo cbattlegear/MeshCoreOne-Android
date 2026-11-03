@@ -30,6 +30,18 @@ interface MessageDao : RowWriter<MessageEntity> {
     suspend fun newestForContact(radioId: UUID, contactID: UUID, limit: Long, offset: Long = 0): List<MessageEntity>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex = :index ORDER BY " + MESSAGE_ORDER + " LIMIT :limit OFFSET :offset")
     suspend fun newestForChannel(radioId: UUID, index: Long, limit: Long, offset: Long = 0): List<MessageEntity>
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID ORDER BY " + MESSAGE_ORDER + " LIMIT :limit OFFSET :offset")
+    suspend fun newestForChannelOccupant(radioId: UUID, index: Long, occupantID: UUID, limit: Long, offset: Long = 0): List<MessageEntity>
+    @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID IS NULL)")
+    suspend fun hasUnboundChannelHistory(radioId: UUID, index: Long): Boolean
+    @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID")
+    suspend fun countForChannelOccupant(radioId: UUID, index: Long, occupantID: UUID): Long
+    @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID AND (sortDate_seconds > :seconds OR (sortDate_seconds = :seconds AND sortDate_nanos >= :nanos))")
+    suspend fun countChannelOccupantAtOrAfter(radioId: UUID, index: Long, occupantID: UUID, seconds: Long, nanos: Int): Long
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID AND timestamp BETWEEN :fromTimestamp AND :toTimestamp ORDER BY createdAt_seconds DESC, createdAt_nanos DESC, timestamp DESC LIMIT :limit")
+    suspend fun channelOccupantCandidates(radioId: UUID, index: Long, occupantID: UUID, fromTimestamp: Long, toTimestamp: Long, limit: Long): List<MessageEntity>
+    @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID AND statusRawValue = 4 AND directionRawValue = 1 AND failureSeen = 0")
+    suspend fun countUnseenChannelOccupantFailures(radioId: UUID, index: Long, occupantID: UUID): Long
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID ORDER BY " + MESSAGE_ORDER)
     fun observeContact(radioId: UUID, contactID: UUID): Flow<List<MessageEntity>>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID IS NULL AND channelIndex IS NULL")

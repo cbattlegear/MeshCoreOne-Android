@@ -199,3 +199,50 @@ does not constitute a lease or verdict.
 The local Gradle execution hold remains in force. Fresh exact-successor hosted
 execution, independently attributed source review, scope/staging and all normal
 protected gates remain required; no acceptance receipt or merge is authorized.
+
+## Initial readiness preemption controls (thread 4454516878)
+
+The exact predecessor `a7813c38b48f8351b9a35c17646aa635c510a96b` passed
+[hosted run 41632534206](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41632534206):
+Services 2807 and App 1850 discovered/run/passed, zero failures/errors/skips.
+Its selected-wake controls do not prove retirement before the initial check.
+There is no existing injected callback or suspension between real dequeue and
+the initial lifetime check. Real CPU preemption is reachable there, but sleeps
+or a dispatcher gate before dequeue would not faithfully control that interval.
+
+The independently reviewed design adds one internal, non-suspending nullable
+checkpoint as the first `awaitReady` statement, after actual dequeue and outside
+the queue lock. It defaults to null and production composition never configures
+it. The default adds only a null check: no suspension, lock, new job, exception
+conversion or public constructor/API is introduced. Instrumentation in production
+source is an explicit tradeoff; instruction timing is not literally identical.
+`SendQueue`, existing readiness conversion and every prior control are unchanged.
+
+Separate DM/channel controls enqueue real persisted envelopes. The one-shot
+checkpoint clears itself BEFORE starting actual shutdown with `UNDISPATCHED`,
+then returns without waiting. Shutdown seals and invalidates ownership, but its
+connection observer's independently held non-cancellable finally blocks the join
+before either drain shutdown/cancellation. The test advances the scheduler before
+asserting that gate. The active real sender must emit exactly one old-token
+initial `queueReadiness` stale result, with no `queueReadiness.woke`, clock wait,
+send command, terminal diagnostic, callback failure or query accounting. The
+original persisted ID, zero attempts and PENDING status are asserted before and
+after observer release and completed teardown. Unexpected checkpoint errors are
+recorded and rethrown, then explicitly rejected by the test so they cannot
+masquerade as valid sender cancellation.
+
+Source-only mutation argument: reverting ONLY the initial check to raw
+`ownership.checkLifetime` throws typed NotConnected rather than cancellation.
+Real `SendQueue` then invokes its real terminal callback, which records
+`terminal.<id>` and fails its retired lifetime check; the new terminal and
+teardown assertions reject that path even if the row remains PENDING. No executed
+mutation result or direct assertion of the swallowed cancellation's cause is
+claimed. Existing exact retained-cause controls remain intact.
+
+All three production/test/evidence path-operation admissions were rechecked.
+b336 and bef confirmed this checkpoint adjacency is disjoint from their held
+work. The channel fixture establishes a genuine saved occupant; future journal
+composition must pass that captured ID through its then-available envelope API
+and genuine admission, not import or bypass held journal work here. The local
+Gradle hold remains untouched. This successor requires independent exact-source
+review before publication and fresh exact-head hosted execution afterward.

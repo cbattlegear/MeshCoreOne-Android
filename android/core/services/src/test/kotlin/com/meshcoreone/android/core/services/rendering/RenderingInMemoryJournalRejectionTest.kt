@@ -8,7 +8,7 @@ import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
 import kotlin.test.assertFailsWith
 import kotlinx.coroutines.test.runTest
-import org.junit.Test
+import org.junit.jupiter.api.Test
 
 class RenderingInMemoryJournalRejectionTest {
     @Test fun everyJournalOperationRejectsInsteadOfPretendingToPersistAnAttempt() = runTest {

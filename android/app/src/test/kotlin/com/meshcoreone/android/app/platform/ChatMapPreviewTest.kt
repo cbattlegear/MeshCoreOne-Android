@@ -170,7 +170,94 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.runOnUiThread { host.setContent { MeshCoreTheme(motionScale = 0f) {
                 if (visible.value) AppMessageContent(content, message, ::report, onMap = {})
             } } }
-            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
+            try {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
+            } catch (failure: AssertionError) {
+                val observations = mutableListOf<String>()
+                fun observe(name: String, read: () -> Any?) {
+                    try { observations += "$name=${read()}" }
+                    catch (problem: Throwable) {
+                        observations += "$name unavailable=${problem.javaClass.name}: ${problem.message}"
+                    }
+                }
+                fun jobState(owner: CoroutineScope) = owner.coroutineContext[Job]?.let {
+                    "active=${it.isActive},cancelled=${it.isCancelled},completed=${it.isCompleted}"
+                } ?: "MISSING_JOB"
+                try {
+                    observe("beforeSemanticsSync") {
+                        compose.runOnUiThread {
+                            observe("fixture") {
+                                "sdk=${Build.VERSION.SDK_INT},visible=${visible.value}," +
+                                    "fixtureJob={${jobState(scope)}},uiJob={${jobState(h.container.uiScope)}}," +
+                                    "network=${previews.network.value},autoAdvance=${compose.mainClock.autoAdvance}"
+                            }
+                            observe("host") {
+                                val decor = host.window.decorView
+                                val rect = android.graphics.Rect()
+                                val globallyVisible = decor.getGlobalVisibleRect(rect)
+                                "lifecycle=${host.lifecycle.currentState},destroyed=${host.isDestroyed}," +
+                                    "finishing=${host.isFinishing},attached=${decor.isAttachedToWindow}," +
+                                    "shown=${decor.isShown},visibility=${decor.visibility}," +
+                                    "windowVisibility=${decor.windowVisibility},focus=${decor.hasWindowFocus()}," +
+                                    "size=${decor.width}x${decor.height},alpha=${decor.alpha}," +
+                                    "globalVisible=$globallyVisible,globalRect=$rect"
+                            }
+                            observe("rendererRequestsAndCache") {
+                                val entered = requests.toList()
+                                val keys = (entered + listOf(
+                                    MapSnapshotRequest(37.7749, -122.4194, false, false),
+                                    MapSnapshotRequest(37.7749, -122.4194, true, false),
+                                    MapSnapshotRequest(37.7749, -122.4194, false, true),
+                                )).distinct()
+                                "rendererEntries=$entered; " + keys.joinToString { request ->
+                                    val bitmap = previews.snapshots.value(request)
+                                    "key=$request,resolved=${previews.snapshots.isResolved(request)}," +
+                                        "bitmap=${bitmap?.let { "${it.width}x${it.height},recycled=${it.isRecycled}" }}"
+                                } + "; inFlight/generation/closed and renderer return/exception are not exposed"
+                            }
+                            observe("renderingPreferences") {
+                                "map=${content.rendering.value[AppStorageKey.showMapPreviewThumbnails]}," +
+                                    "web=${content.rendering.value[AppStorageKey.linkPreviewsEnabled]}"
+                            }
+                        }
+                        "captured; no idle wait requested"
+                    }
+                    observe("persistedPreferences") {
+                        runBlocking {
+                            "map=${storage.preferences.get(AppStorageKey.showMapPreviewThumbnails)}," +
+                                "web=${storage.preferences.get(AppStorageKey.linkPreviewsEnabled)}"
+                        }
+                    }
+                    for ((name, matcher) in listOf(
+                        "pin" to hasTestTag("chat-map-pin"),
+                        "loading" to hasTestTag("chat-map-loading"),
+                        "retry" to hasContentDescription(retry),
+                        "card" to hasContentDescription(label),
+                        "root" to isRoot(),
+                    )) {
+                        observe("postSyncSemantics.$name") {
+                            val nodes = compose.onAllNodes(matcher, useUnmergedTree = true).fetchSemanticsNodes()
+                            "count=${nodes.size}; " + nodes.joinToString { node ->
+                                "id=${node.id},placed=${node.layoutInfo.isPlaced}," +
+                                    "attached=${node.layoutInfo.isAttached},size=${node.size}," +
+                                    "positionInRoot=${node.positionInRoot},clippedRoot=${node.boundsInRoot}," +
+                                    "positionInWindow=${node.positionInWindow},clippedWindow=${node.boundsInWindow}," +
+                                    "parent=${node.parent?.id},config=${node.config}"
+                            }
+                        }
+                    }
+                    observe("postSyncUnmergedTree") { compose.onRoot(useUnmergedTree = true).printToString() }
+                    failure.addSuppressed(IllegalStateException(
+                        "WP-203 initial map-pin failure-only observations: sequential, post-assertion, " +
+                            "not atomic; semantics queries synchronize and may race/change the original state. " +
+                            "These are not observations of the original failing instant.\n" +
+                            observations.joinToString("\n"),
+                    ))
+                } finally {
+                    // Even an unexpected diagnostic failure must never replace the original assertion.
+                    throw failure
+                }
+            }
             compose.runOnIdle { visible.value = false }
             compose.onNodeWithContentDescription(label).assertDoesNotExist()
             compose.runOnIdle { visible.value = true }

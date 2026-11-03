@@ -36,6 +36,41 @@ class CommitRecoveryTest {
 
     @TestFactory fun pendingCreationBoundaries() = Destination.entries.flatMap { destination ->
         listOf(
+            native("${destination}_cancelWhileQueuedForPendingOperationsLeavesReceiptNotStarted") {
+                val h = Harness(this); h.start()
+                val firstSaveEntered = CompletableDeferred<Unit>()
+                val releaseFirstSave = CompletableDeferred<Unit>()
+                val store = object : PersistenceStoreProtocol by h.store {
+                    override suspend fun saveMessage(dto: MessageDTO) {
+                        firstSaveEntered.complete(Unit)
+                        releaseFirstSave.await()
+                        h.store.saveMessage(dto)
+                    }
+                }
+                withService(h, store) { service ->
+                    val first = backgroundScope.async { destination.create(service) }
+                    firstSaveEntered.await()
+                    val receipt = PendingMessageCreation()
+                    val queuedCallStarted = CompletableDeferred<Unit>()
+                    val queued = backgroundScope.async(receipt) {
+                        queuedCallStarted.complete(Unit)
+                        destination.create(service)
+                    }
+                    queuedCallStarted.await()
+                    runCurrent()
+                    assertEquals(PendingMessageCreation.State.NOT_STARTED, receipt.snapshot.state)
+                    assertNull(receipt.snapshot.message)
+                    assertTrue(h.store.messages.isEmpty())
+                    queued.cancelAndJoin()
+                    assertEquals(PendingMessageCreation.State.NOT_STARTED, receipt.snapshot.state)
+                    assertNull(receipt.snapshot.message)
+                    assertTrue(h.store.messages.isEmpty())
+                    assertTrue(h.sends(destination.wire).isEmpty())
+                    releaseFirstSave.complete(Unit)
+                    first.await()
+                    assertEquals(1, h.store.messages.size)
+                }
+            },
             native("${destination}_cancelBeforeWriteProvesNoCommitWithAllocatedIdentity") {
                 val h = Harness(this); h.start()
                 val entered = CompletableDeferred<Unit>()

@@ -9,6 +9,9 @@ import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.PendingSendDTO
+import com.meshcoreone.android.core.model.QueuedChannelAttempt
+import com.meshcoreone.android.core.model.QueuedChannelAttemptKey
+import com.meshcoreone.android.core.model.QueuedChannelAttemptOutcome
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.SnapshotMap
@@ -136,4 +139,13 @@ internal class RenderingInMemoryMessageStore : MessagePersisting {
     override suspend fun incrementPendingSendAttemptCount(key: EntityKey): Long? = unsupported()
     override suspend fun purgeOrphanPendingSends(): Long = unsupported()
     override suspend fun purgeLegacyAttemptCountRows(): Long = unsupported()
+    override suspend fun beginQueuedChannelAttempt(
+        key: QueuedChannelAttemptKey, expectedOccupantID: UUID, wireTimestamp: UInt,
+    ): QueuedChannelAttempt = unsupported()
+    override suspend fun settleQueuedChannelAttempt(
+        key: QueuedChannelAttemptKey, outcome: QueuedChannelAttemptOutcome,
+    ): QueuedChannelAttempt = unsupported()
+    override suspend fun completeAcceptedQueuedChannelAttempt(key: QueuedChannelAttemptKey): Unit = unsupported()
+    override suspend fun fetchQueuedChannelAttempt(key: QueuedChannelAttemptKey): QueuedChannelAttempt? = unsupported()
+    override suspend fun fetchQueuedChannelAttempts(pending: EntityKey): SnapshotList<QueuedChannelAttempt> = unsupported()
 }

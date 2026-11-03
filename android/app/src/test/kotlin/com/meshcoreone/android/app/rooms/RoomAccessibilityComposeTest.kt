@@ -267,6 +267,17 @@ class RoomAccessibilityComposeTest {
         assertTrue("Internal links must not open externally", fixture.external.isEmpty())
     }
 
+    @Test fun contactLinkActionInRoomNavigatesToTheCapturedSavedContact() {
+        val body = "meshcore://contact/add?name=Alice&public_key=${alice.publicKey.hexString}&type=1"
+        val fixture = Fixture(listOf(message(body)))
+        showRoute(fixture)
+
+        invoke("Alice: $body", Chats.chatsMessageActionAddContact(host.get().resources, "Alice"))
+        compose.waitUntil { fixture.navigatedContacts.isNotEmpty() }
+        assertEquals(listOf(alice), fixture.navigatedContacts)
+        assertTrue(fixture.external.isEmpty())
+    }
+
     @Test fun rememberPasswordHasOneLabelledSwitchAndItsToggleReachesTheJoinService() {
         val fixture = Fixture(emptyList(), session.copy(isConnected = false))
         showRoute(fixture)
@@ -415,6 +426,15 @@ class RoomAccessibilityComposeTest {
         compose.waitUntil { fixture.holder.state.value.hasLoadedOnce }
     }
 
+    private data class CapturedRoomContact(
+        val owner: Any,
+        override val radioId: RadioId?,
+        override val selfPublicKey: Bytes?,
+        override val disposition: ContactLinkCaptureDisposition,
+        val publicKey: Bytes,
+        val revision: Long,
+    ) : ContactLinkContext
+
     private inner class Fixture(
         messages: List<RoomMessageDTO>,
         private val room: RemoteNodeSessionDTO = session,
@@ -466,7 +486,41 @@ class RoomAccessibilityComposeTest {
         override var selectedTab = AppTab.CHATS
         override val currentRadioId = radio
         override val connectedDevicePublicKey = session.publicKey
+        private var contactRevision = 0L
         override val parser = MeshCoreLinkParser
+        override fun captureContactLinkContext(
+            publicKey: Bytes, publications: ContactLinkPublications,
+        ): ContactLinkContext {
+            val disposition = if (publicKey == connectedDevicePublicKey)
+                ContactLinkCaptureDisposition.IgnoredSelfContact else ContactLinkCaptureDisposition.Lookup
+            if (disposition == ContactLinkCaptureDisposition.Lookup) contactRevision = Math.incrementExact(contactRevision)
+            return CapturedRoomContact(
+                this, currentRadioId, connectedDevicePublicKey, disposition, publicKey, contactRevision,
+            )
+        }
+        override fun completeContactLookup(
+            context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?,
+            publications: ContactLinkPublications,
+        ): ContactLinkCompletion {
+            val captured = context as? CapturedRoomContact ?: return ContactLinkCompletion.StaleContext
+            if (captured.owner !== this || captured.radioId != currentRadioId ||
+                captured.selfPublicKey != connectedDevicePublicKey || captured.revision != contactRevision
+            ) return ContactLinkCompletion.StaleContext
+            if (link.publicKey != captured.publicKey ||
+                existing != null && (existing.radioId != captured.radioId || existing.publicKey != captured.publicKey)
+            ) return ContactLinkCompletion.WrongTarget
+            if (captured.disposition == ContactLinkCaptureDisposition.IgnoredSelfContact)
+                return ContactLinkCompletion.IgnoredSelfContact
+            val result = if (existing == null) {
+                stageContactLink(link)
+                ContactLinkCompletion.ConfirmationStaged
+            } else {
+                navigateToContactDetail(existing)
+                ContactLinkCompletion.Navigated
+            }
+            contactRevision = Math.incrementExact(contactRevision)
+            return result
+        }
         override fun navigateToMap(latitude: Double, longitude: Double) { maps += latitude to longitude }
         override fun navigateToContactDetail(contact: ContactDTO) { navigatedContacts += contact }
         override fun navigateToChannel(channel: ChannelDTO) = error("Unexpected channel navigation")

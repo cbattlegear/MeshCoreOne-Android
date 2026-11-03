@@ -371,7 +371,7 @@ class BleRecoveryDeviceShadow {
         phy: Int,
         handler: Handler,
     ): BluetoothGatt {
-        assertEquals(RuntimeEnvironment.getApplication<Application>(), context.applicationContext)
+        assertEquals(RuntimeEnvironment.getApplication(), context.applicationContext)
         assertFalse(autoConnect)
         assertEquals(BluetoothDevice.TRANSPORT_LE, transport)
         assertEquals(BluetoothDevice.PHY_LE_1M_MASK, phy)

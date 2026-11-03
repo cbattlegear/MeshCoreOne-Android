@@ -6,7 +6,8 @@
 - **Reviewed predecessor head:** `b91f5fcbbe2f533093f2eab6e84aa641c0c9a103`
 - **Navigation follow-up:** based on `b91f5fcbbe2f533093f2eab6e84aa641c0c9a103`; the lifecycle-safe
   busy-control candidate is `3abfd74ebb56b0b6ba2aad98435ac1e35a4a732b`. Its exact-head Android CI
-  and independent review passed; intermediate findings and corrections are recorded below.
+  passed; the automated review workflow completed, but the actual PR review was COMMENTED, while a
+  separate source-only review found no new blocker. Intermediate findings and corrections are recorded below.
 - **Worktree branch:** `cbattlegear-wp-305-onboarding-recovery`
 - **PR:** [#532](https://github.com/cbattlegear/MeshCoreOne-Android/pull/532) (open draft)
 - **Manifest / policy:** `e81605857f5aa7b893dcd63224fb27a45d7b0f3a` / `b12794157978d6d90ab7508d4e2852fdc2d5e4a4`
@@ -81,10 +82,12 @@
 | Exact-head hosted run [41632599536](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41632599536) | Failed on `057cd5160be8d3e732961cf655e4e5c075ec3c17`: 1 of 1,863 app tests failed because the new lifetime regression incorrectly required an empty process scope despite app adapter collectors. The actual `SettingsRerunNavigationTest` suite marker recorded failure. |
 | Independent review of `057cd5160be8d3e732961cf655e4e5c075ec3c17` | Run [41632615910](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41632615910) confirmed the test-oracle issue (`4454530325`); the regression now captures and compares the live app-adapter job baseline after each successful rerun. |
 | Exact-head hosted run [41635010095](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41635010095) | Passed on `3abfd74ebb56b0b6ba2aad98435ac1e35a4a732b`, base `99479711bfdb7c621765f09d671068ca8b8318ce`: candidate classification, controller/workflow policy, Linux Android build, and `android-ci` passed; the repeated-rerun test was reported passed and `SettingsRerunNavigationTest` ended successfully. Swift codec/backup oracles were skipped. |
-| Independent review of `3abfd74ebb56b0b6ba2aad98435ac1e35a4a732b` | Review run [41635033665](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41635033665) completed successfully with no new consequential source finding. This is not a merge/acceptance receipt. |
+| Copilot review of `3abfd74ebb56b0b6ba2aad98435ac1e35a4a732b` | Workflow run [41635033665](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41635033665) succeeded, but its actual PR review `5752191635` was **COMMENTED — Needs a closer look** and retained navigation thread `4452978212`, noting that its cited run predated the lifecycle changes. A separate `bd` source-only review found no new blocker. This is not a clean approval or acceptance receipt. |
+| Exact-head hosted run [41637952922](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41637952922) | Passed on exact head `8bc05c981f9ac4e0083a1d6ae73fb509bc8c5e59`, base `99479711bfdb7c621765f09d671068ca8b8318ce`: candidate classification, controller/workflow policy, Linux Android build, and `android-ci` passed; `SettingsRerunNavigationTest` emitted a successful suite marker and the build completed successfully. Swift codec/backup oracles were skipped. |
+| Copilot review of `8bc05c981f9ac4e0083a1d6ae73fb509bc8c5e59` | Review run [41637968718](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41637968718) completed with actual PR review `5752453234` **COMMENTED — Needs a closer look**. It identified API 31/37 permission-dialog and device Back/dismissal behavior as unverified. The specific in-app Settings-navigation thread was later answered and resolved in [reply `4454941214`](https://github.com/cbattlegear/MeshCoreOne-Android/pull/532#discussion_r4454941214) based on the mounted controls and exact-head CI; this is not a clean review or acceptance receipt. |
 | Exact-head hosted run [41615052625](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41615052625) | **Passed** on exact head `b91f5fcbbe2f533093f2eab6e84aa641c0c9a103`, base `99479711bfdb7c621765f09d671068ca8b8318ce`: candidate classification, controller/workflow policy, and Linux Android build passed; selected Python assertions 108/108; localization discovery 25/25; `OnboardingGateTest` emitted 8 JUnit case records and its suite marker succeeded. Swift codec/backup oracles were skipped. |
 | Independent exact-head review | Reviewer `bd348` reviewed `b91f5fcbbe2f533093f2eab6e84aa641c0c9a103` against base `99479711bfdb7c621765f09d671068ca8b8318ce`; no new consequential source finding. The registry/Activity test is not OS-dialog or process-death proof. This is not a merge/acceptance receipt. |
-| Protected navigation thread and acceptance | The Settings-navigation review thread remains open. No acceptance receipt, merge, or product/native-tip equivalence decision is claimed. |
+| Protected navigation thread and acceptance | The Settings-navigation review thread was resolved only for the covered in-app navigation behavior. Physical-device Back, API 31/37 permission dialogs and sheet-dismissal lifecycle remain unverified. No acceptance receipt, merge, or product/native-tip equivalence decision is claimed. |
 
 Historical compiler repair: run [41611347165](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41611347165)
 failed on `c80da6cc44c96c4114eeaf4865142eb7416fb12b`. Its actual Kotlin diagnostics showed
@@ -103,5 +106,6 @@ and named the positional test-helper callback; its exact-head run
   remains separately owned and is not integrated or executed by this candidate.
 - This permission regression proves saved Activity recreation with a restored registry only; it does
   not exercise an OS permission dialog or process death.
-- API 31/37 device behavior, radio/BLE/Wi-Fi hardware, mounted Compose flow, native-tip UX review,
-  and full WP-305 acceptance remain unverified.
+- Physical API 31/37 permission-dialog and device Back/sheet-dismissal behavior, radio/BLE/Wi-Fi
+  hardware, native-tip UX review, and full WP-305 acceptance remain unverified. Mounted shell
+  behavior is covered by Robolectric Compose tests, not physical-device evidence.

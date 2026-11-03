@@ -8,6 +8,7 @@ import androidx.room.withTransaction
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutation
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.RxLogRetention
@@ -120,10 +121,16 @@ internal class RoomRepositoryContext(
             suspend fun <T> channelWrite(
                 operation: String,
                 flushBeforeRollback: Boolean = false,
+                identityScope: ChannelIdentityWriteScope? = null,
                 block: suspend RepositoryTransaction.() -> T,
-            ): T = channelIdentityMutation.withChannelIdentityMutation {
-                write(operation, flushBeforeRollback, block)
+            ): T = if (identityScope == null) {
+                channelIdentityMutation.withChannelIdentityRestore { write(operation, flushBeforeRollback, block) }
+            } else {
+                identityScope.withChannelIdentityMutation { write(operation, flushBeforeRollback, block) }
             }
+
+            suspend fun <T> channelOperation(block: suspend (ChannelIdentityWriteScope) -> T): T =
+                channelIdentityMutation.withChannelOperationScope(block)
         }
     }
 

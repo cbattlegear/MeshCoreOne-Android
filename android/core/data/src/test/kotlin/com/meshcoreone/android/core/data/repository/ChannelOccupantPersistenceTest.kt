@@ -3,6 +3,8 @@ package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.model.*
@@ -13,6 +15,8 @@ import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -221,5 +225,103 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         assertEquals(original.channel, store.fetchChannel(RADIO_A, 5u))
         store.saveChannel(RADIO_A, info())
         assertNotEquals(original.occupantID, assertNotNull(store.fetchChannelOccupantID(RADIO_A, 5u)))
+    }
+
+    @Test fun aDirectWriterCannotEnterBetweenRadioAcceptanceAndTheScopedPersistenceCommit() = runTest {
+        val gate = ChannelIdentityMutex()
+        val writer = RoomPersistenceStore(db, owner, clock, channelIdentityMutation = gate)
+        val second = RoomPersistenceStore(db, owner, clock, channelIdentityMutation = gate)
+        val accepted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val operation = async(start = CoroutineStart.UNDISPATCHED) {
+            writer.withChannelOperation { scoped, scope ->
+                gate.requireChannelOperationScope(scope)
+                accepted.complete(Unit)
+                release.await()
+                scoped.saveChannel(RADIO_A, info())
+                assertEquals(info().secret, assertNotNull(scoped.fetchChannel(RADIO_A, 5u)).secret)
+            }
+        }
+        accepted.await()
+        val bypass = async(start = CoroutineStart.UNDISPATCHED) { second.saveChannel(RADIO_A, info(byte = 2)) }
+        try {
+            assertFalse(bypass.isCompleted, "Direct DB writes must wait for the full radio operation, not just its DB phase")
+            assertNull(store.fetchChannel(RADIO_A, 5u))
+            release.complete(Unit)
+            operation.await()
+            bypass.await()
+            assertEquals(info(byte = 2).secret, assertNotNull(store.fetchChannel(RADIO_A, 5u)).secret)
+        } finally {
+            release.complete(Unit)
+            writer.close()
+            second.close()
+        }
+    }
+
+    @Test fun scopedWritersRejectChildJobsAndExpiredFacadesWithoutMutatingAuthority() = runTest {
+        var leaked: ChannelPersisting? = null
+        store.withChannelOperation { scoped, _ ->
+            leaked = scoped
+            supervisorScope {
+                val child = async { scoped.saveChannel(RADIO_A, info()) }
+                assertFailsWith<IllegalStateException> { child.await() }
+            }
+            assertNull(store.fetchChannel(RADIO_A, 5u))
+            scoped.saveChannel(RADIO_A, info())
+        }
+        val epoch = assertNotNull(store.fetchChannelOccupantID(RADIO_A, 5u))
+        assertFailsWith<IllegalStateException> { assertNotNull(leaked).saveChannel(RADIO_A, info(byte = 2)) }
+        assertEquals(epoch, store.fetchChannelOccupantID(RADIO_A, 5u))
+        assertEquals(info().secret, assertNotNull(store.fetchChannel(RADIO_A, 5u)).secret)
+    }
+
+    @Test fun gateValidationRejectsForgedForeignExpiredAndCrossJobCapabilities() = runTest {
+        val gate = ChannelIdentityMutex()
+        val other = ChannelIdentityMutex()
+        val writer = RoomPersistenceStore(db, owner, clock, channelIdentityMutation = gate)
+        var leaked: ChannelIdentityWriteScope? = null
+        try {
+            writer.withChannelOperation { _, scope ->
+                leaked = scope
+                gate.requireChannelOperationScope(scope)
+                assertFailsWith<IllegalStateException> { other.requireChannelOperationScope(scope) }
+                supervisorScope {
+                    val child = async { gate.requireChannelOperationScope(scope) }
+                    assertFailsWith<IllegalStateException> { child.await() }
+                }
+                val forged = object : ChannelIdentityWriteScope {
+                    override suspend fun <T> withChannelIdentityMutation(block: suspend () -> T): T = block()
+                }
+                assertFailsWith<IllegalStateException> { gate.requireChannelOperationScope(forged) }
+            }
+            assertFailsWith<IllegalStateException> { gate.requireChannelOperationScope(assertNotNull(leaked)) }
+        } finally {
+            writer.close()
+        }
+    }
+
+    @Test fun exceptionAndCancellationAlwaysExpireTheScopedMutationCapability() = runTest {
+        val gate = ChannelIdentityMutex()
+        val writer = RoomPersistenceStore(db, owner, clock, channelIdentityMutation = gate)
+        try {
+            for (failure in listOf(IllegalStateException("controlled"), CancellationException("controlled"))) {
+                var escaped: ChannelPersisting? = null
+                try {
+                    writer.withChannelOperation { scoped, _ ->
+                        escaped = scoped
+                        throw failure
+                    }
+                    fail("Controlled operation failure must propagate")
+                } catch (actual: Exception) {
+                    assertSame(failure, actual)
+                }
+                assertFailsWith<IllegalStateException> { assertNotNull(escaped).saveChannel(RADIO_A, info()) }
+                assertNull(store.fetchChannelOccupantID(RADIO_A, 5u))
+            }
+            writer.saveChannel(RADIO_A, info())
+            assertNotNull(store.fetchChannelOccupantID(RADIO_A, 5u))
+        } finally {
+            writer.close()
+        }
     }
 }

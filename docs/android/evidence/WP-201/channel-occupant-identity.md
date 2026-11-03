@@ -52,16 +52,32 @@ contracts module, never a no-op default. Separate repository instances use it by
 default; a fresh instance can be explicitly injected for isolated tests.
 
 1. `withChannelOperation`: outer operation lane across protocol work and persistence.
-2. `withChannelIdentityMutation`: inner lane around a channel repository transaction.
+2. `withChannelIdentityMutation`: inner lane for already-excluded dispatch validation.
 3. `withChannelIdentityRestore`: outer then inner around the whole backup transaction.
 
-The order is outer then inner then repository/Room. The mutexes are non-reentrant;
-there is no inherited-coroutine-context bypass. Restore uses unlocked DAO helpers,
+The order is outer then inner then repository/Room. Every ordinary authority writer
+takes BOTH outer and inner. An earlier inner-only candidate was insufficient: it
+allowed a direct DB writer between radio SET acceptance and its persistence.
+The mutexes are non-reentrant; there is no inherited-coroutine-context bypass.
+Restore uses unlocked DAO helpers,
 not gated repository methods, and invokes its completion callback after both lanes
 are released. Calls to `invalidateChannelOccupant` must not already hold the inner
-lane. All authority-changing repository entry points use the inner lane:
+lane. All authority-changing ordinary repository entry points take outer then inner:
 both save overloads, batch configured/unconfigured/prune, deleteChannel, and
 deleteDeviceData/deleteDeviceAndData. Plain metadata mutations do not rotate epochs.
+
+`ChannelPersisting.withChannelOperation { scopedChannels, scope -> ... }` is the
+sole outer acquisition for a channel-service mutation. The scoped facade takes
+only inner on each write, using a private gate-minted capability. The exact gate
+can validate it through `requireChannelOperationScope`; caller-implemented/foreign
+capabilities, child Jobs and expired scopes are rejected. Scope activity closes in
+`finally` before outer release, including exception/cancellation. The service must
+not nest another ordinary outer acquisition. Its order is scoped operation, service
+mutation lock, protocol work, then scoped persistence; observer callbacks follow
+outside the scope. Protocol serializer callbacks and `NonCancellable` use different
+Jobs: a producer must acquire/consume its scope in the actual admitted Job, not
+silently widen ownership after radio acceptance. Concrete post-ACK cancellation
+integration remains the radio producer's verification obligation.
 
 The independent shared-fence producer (`3008e9f0-6e96-40ab-b810-8feee639494b`)
 owns service/protocol operation exclusion, connection retirement and dispatch.
@@ -104,10 +120,12 @@ Executed with pinned native Windows Python 3.12.4:
 
 Declared new product regressions, not passing executions:
 
-- Ten `ChannelOccupantPersistenceTest` methods: rename/replacement/recreation,
+- Fourteen `ChannelOccupantPersistenceTest` methods: rename/replacement/recreation,
   DTO/batch/radio partition, late successful save, retained unresolved text/queue,
   unknown legacy/ambiguous slot, actual disk reopen/hydration, independent-context
-  exclusion, whole-operation restore/callback ordering, model equality, invalidation.
+  exclusion, whole-operation restore/callback ordering, model equality, invalidation,
+  direct-writer SET/save-gap exclusion, scoped success/child/expired rejection,
+  forged/foreign/exact-Job capability validation, and exception/cancellation expiry.
 - One `ChannelOccupantMigrationTest` method creates a real v1 SQLite database from
   the retained KSP export, opens it through the registered production migration,
   checks retained legacy text/queue/null intent, and reopens the upgraded file.

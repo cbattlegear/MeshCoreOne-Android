@@ -88,6 +88,26 @@ executed locally because the shared Gradle execution lock remains retained.
 They do not prove physical/OEM behavior or protected acceptance for a successor
 to #543.
 
+### Hosted readiness-control setup failure
+
+[Run 41621349810](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41621349810)
+at published head `2d41498d71926cf03384d3ce0085cd4ad95f09d1`
+(base `99479711bfdb7c621765f09d671068ca8b8318ce`) failed both new
+readiness controls before their race assertions. The original log reports
+`IllegalArgumentException: Disconnected snapshot cannot retain an active generation`
+from `ConnectionSnapshot` at `ConnectionContracts.kt:82`, reached by
+`assertReadinessRetirement` at line 732. Core services discovered 2,805 tests,
+with two failures; the required App report was missing. This run is not acceptance.
+
+The owner correction starts these controls in `CONNECTED` with their existing
+token, matching a valid generation that cannot yet drain sends, rather than the
+invalid `DISCONNECTED`/non-null-token combination. It preserves both selected-wake
+timer-cleanup and observer-cancellation barriers and every existing assertion.
+Additional assertions require the token and non-draining state, the actual
+`queueReadiness.woke` stale-generation diagnostic, and zero direct/channel wire
+sends. No production contract or shared fixture is relaxed. The correction
+requires fresh exact-head hosted execution; local Gradle remains held.
+
 ## Custody and verification
 
 Actual producer: session `b33644ad-3a9a-4a37-af40-9a50b34ced2a`, WP-303,

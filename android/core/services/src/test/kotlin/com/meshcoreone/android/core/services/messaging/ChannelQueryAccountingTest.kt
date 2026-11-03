@@ -729,7 +729,9 @@ class ChannelQueryAccountingTest {
             ChatSendQueueConfig(), clock, MessagingIssueReporter { h.diagnostics += it },
         )
         try {
-            h.signals.set(h.token, DeviceConnectionState.DISCONNECTED)
+            h.signals.set(h.token, DeviceConnectionState.CONNECTED)
+            assertEquals(h.token, signals.snapshot.value.token)
+            assertFalse(signals.snapshot.value.state.canDrainSendQueue)
             queue.observeConnectionState()
             queue.hydrate()
             runCurrent()
@@ -760,6 +762,11 @@ class ChannelQueryAccountingTest {
             runCurrent()
             val report = stopping.await()
 
+            assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.StaleResult>().any {
+                it.token == h.token && it.operation == "queueReadiness.woke"
+            }, "The selected readiness wake must reach the retired generation check")
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
             val failures = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
             val lane = if (channel) "channel" else "dm"
             assertTrue(failures.none {

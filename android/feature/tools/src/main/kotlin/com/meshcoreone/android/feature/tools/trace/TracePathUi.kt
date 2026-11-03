@@ -131,7 +131,7 @@ object TracePathScreen {
         DisposableEffect(holder) { onDispose { holder.stopListening(); holder.cancelBatchTrace() } }
         val state by holder.state.collectAsStateWithLifecycle()
         val savedState by savedPaths.state.collectAsStateWithLifecycle()
-        TracePathContent(state, holder, savedState, savedPaths)
+        TracePathContent(state, holder, savedState, savedPaths, dependencies.generation, dependencies.radioId)
     }
 }
 
@@ -153,11 +153,13 @@ private fun TracePathContent(
     holder: TracePathStateHolder,
     savedState: SavedPathsState,
     savedPaths: SavedPathsStateHolder,
+    connectionGeneration: Int,
+    radioId: RadioId?,
 ) {
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val codeInput = rememberTraceCodeInputState(holder)
+    val codeInput = rememberTraceCodeInputState(holder, connectionGeneration, radioId)
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(12.dp),

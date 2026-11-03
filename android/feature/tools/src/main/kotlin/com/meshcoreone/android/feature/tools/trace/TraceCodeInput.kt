@@ -32,6 +32,9 @@ import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.R as Strings
+import com.meshcoreone.android.core.model.RadioId
+
+internal data class TraceCodeInputConnection(val generation: Int, val radioId: RadioId?)
 
 internal class TraceCodeInputState {
     var expanded by mutableStateOf(false)
@@ -39,7 +42,9 @@ internal class TraceCodeInputState {
     var outcome by mutableStateOf<CodeInputResult?>(null)
     var nextHopAnnouncement by mutableStateOf<Int?>(null)
     var restoringDraft by mutableStateOf(false)
+    var requestFocus by mutableStateOf(false)
     var restoredHashMode: UByte? = null
+    var connection by mutableStateOf<TraceCodeInputConnection?>(null)
 }
 
 private fun traceCodeInputSaver(holder: TracePathStateHolder) = Saver<TraceCodeInputState, Bundle>(
@@ -47,7 +52,9 @@ private fun traceCodeInputSaver(holder: TracePathStateHolder) = Saver<TraceCodeI
         Bundle().apply {
             putBoolean("expanded", entry.expanded)
             putString("input", entry.input)
-            holder.state.value.traceHashMode?.let { putInt("traceHashMode", it.toInt()) }
+            val savedMode = holder.state.value.traceHashMode
+                ?: entry.restoredHashMode.takeIf { entry.restoringDraft }
+            savedMode?.let { putInt("traceHashMode", it.toInt()) }
             entry.nextHopAnnouncement?.let { putInt("nextHop", it) }
             entry.outcome?.let { result ->
                 putStringArrayList("added", ArrayList(result.added))
@@ -77,13 +84,22 @@ private fun traceCodeInputSaver(holder: TracePathStateHolder) = Saver<TraceCodeI
 )
 
 @Composable
-internal fun rememberTraceCodeInputState(holder: TracePathStateHolder): TraceCodeInputState {
+internal fun rememberTraceCodeInputState(
+    holder: TracePathStateHolder,
+    connectionGeneration: Int = 0,
+    radioId: RadioId? = holder.deps.connectedDevice()?.radioId,
+): TraceCodeInputState {
     val saver = remember(holder) { traceCodeInputSaver(holder) }
     val entry = rememberSaveable(saver = saver) { TraceCodeInputState() }
-    LaunchedEffect(entry, holder) {
+    LaunchedEffect(entry, holder, connectionGeneration, radioId) {
+        entry.connection = TraceCodeInputConnection(connectionGeneration, radioId)
         // Restore only saved screen state, never a lazy-item remount.
-        if (entry.restoringDraft) {
+        val device = holder.deps.connectedDevice()
+        if (entry.restoringDraft &&
+            (entry.restoredHashMode == null || device != null && device.radioId == radioId)
+        ) {
             entry.restoredHashMode?.let(holder::restoreTraceHashMode)
+            entry.restoredHashMode = null
             entry.restoringDraft = false
         }
     }
@@ -102,8 +118,14 @@ internal fun TraceCodeInput(
     var nextHopAnnouncement by entry::nextHopAnnouncement
     val clipboard = LocalClipboardManager.current
     val focus = remember { FocusRequester() }
-    val classifications = remember(input, state, holder, entry.restoringDraft) {
-        if (entry.restoringDraft) emptyList() else holder.classifyCodes(input)
+    val connection = entry.connection
+    val device = holder.deps.connectedDevice()
+    val mismatchedDevice = connection != null && device?.radioId != connection.radioId
+    val waitingForDevice = mismatchedDevice ||
+        (entry.restoringDraft && entry.restoredHashMode != null && (device == null || device.radioId != connection?.radioId))
+    val hashSize = holder.hashSize
+    val classifications = remember(input, state, holder, entry.restoringDraft, hashSize, connection) {
+        if (entry.restoringDraft || mismatchedDevice) emptyList() else holder.classifyCodes(input)
     }
     val addable = classifications.filter { it.willBeAdded }.map { it.code }
 
@@ -117,7 +139,7 @@ internal fun TraceCodeInput(
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!expanded) {
             OutlinedButton(
-                onClick = { expanded = true },
+                onClick = { entry.requestFocus = true; expanded = true },
                 modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
             ) { Text(stringResource(C.contactsPathEditAddHop)) }
         } else {
@@ -126,7 +148,9 @@ internal fun TraceCodeInput(
                 onValueChange = ::edit,
                 label = { Text(stringResource(C.contactsPathEditAddHop)) },
                 supportingText = {
-                    Text(stringResource(Strings.string.l10n_app_contacts_contacts_add_hexplaceholder, holder.hashSize * 2))
+                    if (!waitingForDevice) {
+                        Text(stringResource(Strings.string.l10n_app_contacts_contacts_add_hexplaceholder, hashSize * 2))
+                    }
                 },
                 modifier = Modifier.fillMaxWidth().focusRequester(focus),
             )
@@ -174,7 +198,8 @@ internal fun TraceCodeInput(
                 modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
             ) {
                 Text(
-                    if (addable.isEmpty()) stringResource(C.contactsPathEditBulkAddEmpty)
+                    if (waitingForDevice) stringResource(Strings.string.l10n_app_contacts_contacts_add_error_notconnected)
+                    else if (addable.isEmpty()) stringResource(C.contactsPathEditBulkAddEmpty)
                     else stringResource(
                         Strings.string.l10n_app_contacts_contacts_pathedit_bulkadd_action, addable.joinToString(", "),
                     ),
@@ -206,10 +231,21 @@ internal fun TraceCodeInput(
                 }
             }
             TextButton(
-                onClick = { expanded = false; input = ""; outcome = null; nextHopAnnouncement = null },
+                onClick = {
+                    expanded = false
+                    entry.requestFocus = false
+                    input = ""
+                    outcome = null
+                    nextHopAnnouncement = null
+                },
                 modifier = Modifier.sizeIn(minHeight = 48.dp),
             ) { Text(stringResource(L.commonDone)) }
-            LaunchedEffect(Unit) { focus.requestFocus() }
+            LaunchedEffect(entry.requestFocus) {
+                if (entry.requestFocus) {
+                    focus.requestFocus()
+                    entry.requestFocus = false
+                }
+            }
         }
     }
 }

@@ -12,10 +12,14 @@ import android.view.ViewGroup
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
@@ -36,8 +40,10 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Duration
+import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -247,15 +253,18 @@ class TraceCodeInputComposeTest {
         settle()
         click("Tower")
         click("Add Hop")
+        assertTrue(input().config[SemanticsProperties.Focused])
         paste("AA,BB,FF,ZZ")
         click("Add nodes: BB")
         val feedback = listOf("Adding as hop 3", "Invalid format: ZZ", "FF not found", "AA already in path")
         assertEquals(feedback, announcementTexts())
         host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
         settle()
+        assertFalse(input().config[SemanticsProperties.Focused])
         scrollToIndex(35)
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
         scrollToIndex(0)
+        assertFalse(input().config[SemanticsProperties.Focused])
         assertEquals("", input().config[SemanticsProperties.EditableText].text)
         assertEquals(feedback, announcementTexts())
         assertEquals(1, host.get().recents.values.values.single().size)
@@ -263,6 +272,7 @@ class TraceCodeInputComposeTest {
         assertTrue(announcementTexts().isEmpty())
         click("Done")
         click("Add Hop")
+        assertTrue(input().config[SemanticsProperties.Focused])
         assertTrue(announcementTexts().isEmpty())
     }
 
@@ -291,9 +301,13 @@ class TraceCodeInputComposeTest {
         setInput("AA00,BB00,FF00,GG")
         val preview = listOf("AA00 will be added", "BB00 will be added", "FF00 not found", "Invalid format: GG")
         assertTrue(texts().containsAll(preview))
+        host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
+        settle()
+        assertFalse(input().config[SemanticsProperties.Focused])
         click("Map")
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
         click("List")
+        assertFalse(input().config[SemanticsProperties.Focused])
         assertEquals("AA00,BB00,FF00,GG", input().config[SemanticsProperties.EditableText].text)
         assertTrue(texts().containsAll(preview))
         click("Add nodes: AA00, BB00")
@@ -302,6 +316,7 @@ class TraceCodeInputComposeTest {
         click("Map")
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
         click("List")
+        assertFalse(input().config[SemanticsProperties.Focused])
         assertEquals("", input().config[SemanticsProperties.EditableText].text)
         assertEquals(feedback, announcementTexts())
         assertEquals(2, host.get().recents.values.values.single().size)
@@ -363,6 +378,153 @@ class TraceCodeInputComposeTest {
         assertTrue(host.get().sender.sent.isEmpty())
     }
 
+    @Test fun disconnectedRecreationsRetainAnInferredWidthUntilSupportedReconnection() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        assertTrue(texts().containsAll(listOf("AA00 will be added", "BB00 will be added")))
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        host.get().runOnUiThread { host.get().reconnect("v1.11.0") }
+        settle()
+        assertTrue(texts().containsAll(listOf("AA00 will be added", "BB00 will be added")))
+        assertFalse(button("Add nodes: AA00, BB00").config.contains(SemanticsProperties.Disabled))
+        click("Add nodes: AA00, BB00")
+        assertEquals(2, host.get().recents.values.values.single().size)
+        assertTrue(host.get().sender.sent.isEmpty())
+    }
+
+    @Test fun disconnectedRecreationRetainsAnExplicitDefaultOverrideWhenTheRadioDefaultChanges() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
+        settle()
+        scrollToIndex(47)
+        click("1 B")
+        assertTrue(button("1 B").config[SemanticsProperties.Selected])
+        scrollToIndex(0)
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+
+        host.get().runOnUiThread { host.get().reconnect("v1.11.0", pathHashMode = 1u) }
+        settle()
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+        scrollToIndex(47)
+        assertTrue(button("1 B").config[SemanticsProperties.Selected])
+        assertFalse(button("2 B").config[SemanticsProperties.Selected])
+    }
+
+    @Test fun disconnectedRestorationDiscardsTheOverrideOnlyAfterUnsupportedFirmwareIsKnown() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+
+        host.get().runOnUiThread { host.get().reconnect("v1.10.0") }
+        settle()
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        host.get().runOnUiThread { host.get().reconnect("v1.11.0") }
+        settle()
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+        assertTrue(host.get().sender.sent.isEmpty())
+    }
+
+    @Test fun pendingRestoreWaitsUntilTheGenerationMatchesTheActiveRadio() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        val activeRadio = RadioId(UUID.fromString("00000000-0000-0000-0000-0000000000b2"))
+        host.get().runOnUiThread { host.get().reconnectWithStaleRadioSignal(activeRadio, RADIO) }
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        scrollToIndex(47)
+        assertTrue(button("1 B").config[SemanticsProperties.Selected])
+        scrollToIndex(0)
+        assertWaitingForConnection("AA00,BB00")
+
+        host.get().runOnUiThread { host.get().publishActiveRadioSignal() }
+        settle()
+        assertTrue(texts().containsAll(listOf("AA00 will be added", "BB00 will be added")))
+        scrollToIndex(47)
+        assertTrue(button("2 B").config[SemanticsProperties.Selected])
+        assertTrue(host.get().sender.sent.isEmpty())
+    }
+
+    @Test fun reconnectReclassifiesAnUnchangedDraftWhenTheRadioDefaultWidthChanges() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA,BB")
+        assertTrue(texts().containsAll(listOf("AA will be added", "BB will be added")))
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertEquals("AA,BB", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().containsAll(listOf("AA not found", "BB not found")))
+
+        host.get().runOnUiThread {
+            host.get().useEmptyDirectory()
+            host.get().reconnect("v1.11.0", pathHashMode = 1u)
+        }
+        settle()
+        assertTrue(texts().containsAll(listOf("Invalid format: AA", "Invalid format: BB")))
+        assertFalse(texts().contains("AA not found"))
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+        assertTrue(host.get().sender.sent.isEmpty())
+    }
+
+    @Test fun manualWidthChoiceWhileDisconnectedSupersedesThePendingRestoration() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        scrollToIndex(4)
+        click("1 B")
+        scrollToIndex(0)
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        host.get().runOnUiThread { host.get().reconnect("v1.11.0", pathHashMode = 1u) }
+        settle()
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+    }
+
     @Test fun activityRecreationRestoresTheExplicitDefaultOverrideInTheActualHolder() {
         host.get().mountObservedEntry()
         settle()
@@ -384,6 +546,140 @@ class TraceCodeInputComposeTest {
         assertEquals(0u.toUByte(), after.state.value.traceHashMode)
         assertTrue(texts().contains("AA will be added"))
         assertFalse(button("Add nodes: AA").config.contains(SemanticsProperties.Disabled))
+    }
+
+    @Test fun disconnectedRecreationRestoresTheExplicitDefaultMarkerInTheActualHolder() {
+        host.get().mountObservedEntry()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        val before = assertNotNull(host.get().observedHolder)
+        host.get().runOnUiThread { before.setTraceHashMode(0u) }
+        settle()
+        assertEquals(0u.toUByte(), before.state.value.traceHashMode)
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        val after = assertNotNull(host.get().observedHolder)
+        assertNotSame(before, after)
+        assertNull(after.state.value.traceHashMode)
+        assertWaitingForConnection("AA00,BB00")
+
+        host.get().runOnUiThread { host.get().reconnect("v1.11.0") }
+        settle()
+        assertEquals(0u.toUByte(), after.state.value.traceHashMode)
+        host.get().setRadioHashMode(1u)
+        setInput("AA")
+        assertEquals(1, after.hashSize)
+        assertEquals(0u.toUByte(), after.state.value.traceHashMode)
+        assertTrue(texts().contains("AA will be added"))
+        assertFalse(button("Add nodes: AA").config.contains(SemanticsProperties.Disabled))
+    }
+
+    @Test fun clearingThePathWhileDisconnectedSupersedesThePendingOverride() {
+        host.get().mountObservedEntry()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        val holder = assertNotNull(host.get().observedHolder)
+        host.get().runOnUiThread { holder.clearPath() }
+        settle()
+        assertNull(holder.state.value.traceHashMode)
+        assertFalse(texts().contains("Not connected to device"))
+
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        val restored = assertNotNull(host.get().observedHolder)
+        assertNotSame(holder, restored)
+        assertNull(restored.state.value.traceHashMode)
+        assertFalse(texts().contains("Not connected to device"))
+        host.get().runOnUiThread { host.get().reconnect("v1.11.0") }
+        settle()
+        assertNull(restored.state.value.traceHashMode)
+        assertTrue(restored.state.value.outboundPath.isEmpty())
+    }
+
+    @Test fun loadingASavedPathWhileDisconnectedSupersedesThePendingOverride() {
+        host.get().mountObservedEntry()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        val holder = assertNotNull(host.get().observedHolder)
+        val saved = savedPath(Bytes.of(0xAA, 0x00, 0x00, 0x00), hashSize = 4)
+        host.get().runOnUiThread { holder.loadSavedPath(saved) }
+        settle()
+        assertNull(holder.state.value.traceHashMode)
+        assertEquals(saved, holder.state.value.activeSavedPath)
+        assertFalse(texts().contains("Not connected to device"))
+
+        host.get().runOnUiThread { host.get().reconnect("v1.11.0") }
+        settle()
+        assertNull(holder.state.value.traceHashMode)
+        assertEquals(saved, holder.state.value.activeSavedPath)
+        assertEquals(Bytes.of(0xAA, 0x00, 0x00, 0x00), holder.state.value.outboundPath.single().hashBytes)
+    }
+
+    @Test fun loadingAnEmptySavedPathCancelsPendingRestorationWithoutAStateChange() {
+        host.get().mountObservedEntry()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        val holder = assertNotNull(host.get().observedHolder)
+        val before = holder.state.value
+        host.get().runOnUiThread { holder.loadSavedPath(savedPath(Bytes.EMPTY)) }
+        settle()
+        assertEquals(before, holder.state.value)
+        assertFalse(texts().contains("Not connected to device"))
+
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        val restored = assertNotNull(host.get().observedHolder)
+        assertNotSame(holder, restored)
+        assertFalse(texts().contains("Not connected to device"))
+        host.get().runOnUiThread { host.get().reconnect("v1.11.0") }
+        settle()
+        assertNull(restored.state.value.traceHashMode)
+        assertTrue(restored.state.value.outboundPath.isEmpty())
+    }
+
+    @Test fun disposingTheDisconnectedEntryCancelsItsPendingRestoration() {
+        host.get().mountObservedEntry()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        val holder = assertNotNull(host.get().observedHolder)
+        host.get().runOnUiThread { content.setContent { MaterialTheme {} } }
+        settle()
+        host.get().runOnUiThread {
+            host.get().reconnect("v1.11.0")
+            host.get().reconfigureObservedHolder()
+        }
+        settle()
+        assertNull(holder.state.value.traceHashMode)
+        assertTrue(holder.state.value.outboundPath.isEmpty())
     }
 
     @Test fun recreatedAndDestroyedActivityDoesNotStarveTheNextMountedScreen() {
@@ -442,6 +738,12 @@ class TraceCodeInputComposeTest {
         assertTrue(host.get().sender.sent.isEmpty())
         scrollToIndex(48)
         assertTrue(button(mode).config[SemanticsProperties.Selected])
+    }
+
+    private fun assertWaitingForConnection(draft: String) {
+        assertEquals(draft, input().config[SemanticsProperties.EditableText].text)
+        assertTrue(button("Not connected to device").config.contains(SemanticsProperties.Disabled))
+        assertFalse(texts().any { it.endsWith(" will be added") || it.startsWith("Invalid format:") })
     }
 
     private fun scrollToIndex(index: Int) {
@@ -575,12 +877,16 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
     private var traceScreenMounted = false
     private var observedEntryMounted = false
     private var firmware = "v1.11.0"
+    private var connectionGeneration by mutableIntStateOf(1)
+    private var disconnectOnRecreation = false
+    private var signaledRadioOverride: RadioId? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         savedState.performRestore(savedInstanceState)
         registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         savedInstanceState?.getString("firmware")?.let(::setFirmware)
+        if (savedInstanceState?.getBoolean("disconnectedOnRecreation") == true) dependencies.device = null
         content = ComposeView(this).apply {
             id = android.R.id.custom
             setViewTreeLifecycleOwner(this@TraceCodeInputTestActivity)
@@ -601,7 +907,11 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         content.setContent {
             focusManager = LocalFocusManager.current
             MaterialTheme {
-                TracePathScreen(TracePathScreen.Dependencies(dependencies, recents, RecordingDiagnostics(), RADIO, 1))
+                TracePathScreen(
+                    TracePathScreen.Dependencies(
+                        dependencies, recents, RecordingDiagnostics(), signaledRadioId(), connectionGeneration,
+                    ),
+                )
             }
         }
     }
@@ -617,10 +927,12 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
                     it.setContactsForTesting(contacts)
                 }
             }
+            LaunchedEffect(holder, connectionGeneration) { holder.configure(dependencies) }
             SideEffect { observedHolder = holder }
             focusManager = LocalFocusManager.current
             val state = holder.state.collectAsStateWithLifecycle().value
-            MaterialTheme { TraceCodeInput(state, holder) }
+            val entry = rememberTraceCodeInputState(holder, connectionGeneration, signaledRadioId())
+            MaterialTheme { TraceCodeInput(state, holder, entry) }
         }
     }
 
@@ -633,10 +945,43 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         dependencies.device = device(firmwareVersionString = firmware, pathHashMode = mode)
     }
 
+    internal fun startDisconnectedOnRecreation() {
+        disconnectOnRecreation = true
+    }
+
+    internal fun useEmptyDirectory() {
+        dependencies.directory = FakeNodeDirectory()
+    }
+
+    private fun signaledRadioId(): RadioId? = signaledRadioOverride ?: dependencies.device?.radioId
+
+    internal fun reconnectWithStaleRadioSignal(activeRadio: RadioId, signaledRadio: RadioId) {
+        firmware = "v1.11.0"
+        dependencies.device = device(firmwareVersionString = firmware, radioId = activeRadio)
+        signaledRadioOverride = signaledRadio
+        connectionGeneration += 1
+    }
+
+    internal fun publishActiveRadioSignal() {
+        signaledRadioOverride = null
+        connectionGeneration += 1
+    }
+
+    internal fun reconnect(version: String, pathHashMode: UByte = 0u) {
+        firmware = version
+        dependencies.device = device(firmwareVersionString = version, pathHashMode = pathHashMode)
+        connectionGeneration += 1
+    }
+
+    internal fun reconfigureObservedHolder() {
+        checkNotNull(observedHolder).configure(dependencies)
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("traceScreenMounted", traceScreenMounted)
         outState.putBoolean("observedEntryMounted", observedEntryMounted)
         outState.putString("firmware", firmware)
+        outState.putBoolean("disconnectedOnRecreation", disconnectOnRecreation || dependencies.device == null)
         savedState.performSave(outState)
         super.onSaveInstanceState(outState)
     }

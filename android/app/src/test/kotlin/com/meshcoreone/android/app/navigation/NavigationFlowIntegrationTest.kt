@@ -1592,6 +1592,47 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun capturedContactRetryValidationKeepsGraphAndRevisionIdentity() = runTest {
+        val h = ContainerHarness(this, store)
+        val target = h.target()
+        try {
+            connect(h, target)
+            val first = assertNotNull(h.sessions.current)
+            val navigation = h.container.navigation
+            val original = ContactLinkPublications().use {
+                h.container.captureContactLinkContext(key(20), it)
+            }
+            val afterCapture = navigation.currentState
+            repeat(2) { assertTrue(h.container.isContactLinkContextCurrent(original, key(20))) }
+            assertFalse(h.container.isContactLinkContextCurrent(original, key(21)))
+            assertSame(afterCapture, navigation.currentState)
+            assertSame(afterCapture, navigation.state.value)
+
+            val newer = ContactLinkPublications().use {
+                h.container.captureContactLinkContext(key(20), it)
+            }
+            val afterNewerCapture = navigation.currentState
+            assertFalse(h.container.isContactLinkContextCurrent(original, key(20)))
+            assertTrue(h.container.isContactLinkContextCurrent(newer, key(20)))
+            assertSame(afterNewerCapture, navigation.currentState)
+
+            h.manager.disconnect()
+            h.settle()
+            connect(h, target)
+            val replacement = assertNotNull(h.sessions.current)
+            assertNotSame(first, replacement)
+            assertNotEquals(first.token, replacement.token)
+            assertEquals(first.token.radioId, replacement.token.radioId)
+            val beforeStaleCheck = navigation.currentState
+            assertFalse(h.container.isContactLinkContextCurrent(newer, key(20)))
+            assertSame(beforeStaleCheck, navigation.currentState)
+            val fresh = ContactLinkPublications().use {
+                h.container.captureContactLinkContext(key(20), it)
+            }
+            assertTrue(h.container.isContactLinkContextCurrent(fresh, key(20)))
+        } finally { h.container.close() }
+    }
+
     @Test fun contactLinksFromBothProducersSurviveProvisionalFirstGraphBeforeTokenPublication() = runTest {
         val publication = CompletableDeferred<Unit>()
         val saving = CompletableDeferred<Unit>()

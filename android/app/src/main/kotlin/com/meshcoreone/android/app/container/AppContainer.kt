@@ -380,24 +380,41 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         return withNavigationCommitBoundary {
             val current = sessions.current
             val lookup = captured.lookup
-            val valid = when {
-                lookup.owner !== navigation -> false
-                current != null && lookup.radioId != null && lookup.radioId != current.token.radioId -> false
-                current == null -> captured.graph == null &&
-                    connectionManager.isNavigationLifecycleCurrent(captured.lifecycle)
-                current.isTornDown -> false
-                captured.graph != null -> current === captured.graph &&
-                    if (lookup.boundToken == current.token)
-                        connectionManager.isNavigationSessionCurrent(current.token)
-                    else lookup.allowsInitialBinding &&
-                        connectionManager.isInitialNavigationSession(captured.lifecycle, current.token)
-                else -> lookup.allowsInitialBinding &&
-                    connectionManager.isInitialNavigationSession(captured.lifecycle, current.token)
-            }
-            if (!valid) ContactLinkCompletion.StaleContext else navigation.completeCapturedContactLookup(
+            if (!isCapturedContactGraphCurrent(captured, current)) ContactLinkCompletion.StaleContext
+            else navigation.completeCapturedContactLookup(
                 lookup, link, existing, current?.token, lookup.allowsInitialBinding,
                 current?.navigationPublicKey.takeIf { lookup.allowsInitialBinding }, selectChats, publications,
             )
+        }
+    }
+
+    internal fun isContactLinkContextCurrent(context: ContactLinkContext, publicKey: Bytes): Boolean {
+        val captured = context as? CapturedContactLinkContext ?: return false
+        return withNavigationCommitBoundary {
+            val current = sessions.current
+            val lookup = captured.lookup
+            lookup.publicKey == publicKey && isCapturedContactGraphCurrent(captured, current) &&
+                navigation.isCapturedContactLookupCurrent(lookup, current?.token, lookup.allowsInitialBinding)
+        }
+    }
+
+    private fun isCapturedContactGraphCurrent(
+        captured: CapturedContactLinkContext, current: RadioSessionContainer?,
+    ): Boolean {
+        val lookup = captured.lookup
+        return when {
+            lookup.owner !== navigation -> false
+            current != null && lookup.radioId != null && lookup.radioId != current.token.radioId -> false
+            current == null -> captured.graph == null &&
+                connectionManager.isNavigationLifecycleCurrent(captured.lifecycle)
+            current.isTornDown -> false
+            captured.graph != null -> current === captured.graph &&
+                if (lookup.boundToken == current.token)
+                    connectionManager.isNavigationSessionCurrent(current.token)
+                else lookup.allowsInitialBinding &&
+                    connectionManager.isInitialNavigationSession(captured.lifecycle, current.token)
+            else -> lookup.allowsInitialBinding &&
+                connectionManager.isInitialNavigationSession(captured.lifecycle, current.token)
         }
     }
 

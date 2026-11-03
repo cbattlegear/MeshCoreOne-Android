@@ -114,6 +114,41 @@ class NavigationStateTest {
         }
     }
 
+    @Test fun capturedContactLookupValidationSharesCompletionRevisionAndInitialBindingRules() {
+        val n = NavigationCoordinator()
+        val token = SessionToken(
+            ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000049")), Generation(1), radio,
+        )
+        val original = ContactLinkPublications().use {
+            n.captureContactLinkLookup(contact.publicKey, null, null, null, null, true, it)
+        }
+        val offline = n.currentState
+        assertTrue(n.isCapturedContactLookupCurrent(original, null, false))
+        assertSame(offline, n.currentState)
+        assertTrue(n.bindNotificationSession(radio, null, token))
+        val bound = n.currentState
+        assertTrue(n.isCapturedContactLookupCurrent(original, token, true))
+        assertFalse(n.isCapturedContactLookupCurrent(original, token, false))
+        assertSame(bound, n.currentState)
+
+        val newer = ContactLinkPublications().use {
+            n.captureContactLinkLookup(contact.publicKey, radio, null, token, token, true, it)
+        }
+        val afterCapture = n.currentState
+        assertFalse(n.isCapturedContactLookupCurrent(original, token, true))
+        assertTrue(n.isCapturedContactLookupCurrent(newer, token, false))
+        assertSame(afterCapture, n.currentState)
+        assertEquals(ContactLinkCompletion.ConfirmationStaged, ContactLinkPublications().use {
+            n.completeCapturedContactLookup(
+                newer, ContactLinkRequest("Current", contact.publicKey, ContactType.REPEATER),
+                null, token, false, null, false, it,
+            )
+        })
+        val afterCompletion = n.currentState
+        assertFalse(n.isCapturedContactLookupCurrent(newer, token, false))
+        assertSame(afterCompletion, n.currentState)
+    }
+
     @Test fun coherentContactCaptureAllowsOnlyItsFirstBindingAndKeepsTargetMetadata() {
         val n = NavigationCoordinator()
         val captured = ContactLinkPublications().use {
@@ -310,6 +345,119 @@ class NavigationStateTest {
             assertEquals(before, n.currentState)
             assertEquals(before, n.state.value)
         }
+    }
+
+    @Test fun selfContactCaptureSupersedesEarlierContactLookup() {
+        val token = SessionToken(
+            ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000046")), Generation(1), radio,
+        )
+        for (found in listOf(false, true)) for (selectChats in listOf(false, true)) {
+            val n = NavigationCoordinator()
+            assertTrue(n.bindNotificationSession(radio, room.publicKey, token))
+            n.selectTab(AppTab.MAP)
+            val older = ContactLinkPublications().use {
+                n.captureContactLinkLookup(contact.publicKey, radio, room.publicKey, token, token, true, it)
+            }
+            val self = ContactLinkPublications().use {
+                n.captureContactLinkLookup(room.publicKey, radio, room.publicKey, token, token, true, it)
+            }
+            assertEquals(ContactLinkCaptureDisposition.IgnoredSelfContact, self.disposition)
+            val beforeOlderCompletion = n.currentState
+            assertEquals(ContactLinkCompletion.StaleContext, ContactLinkPublications().use {
+                n.completeCapturedContactLookup(
+                    older, ContactLinkRequest("Older", contact.publicKey, ContactType.CHAT),
+                    contact.takeIf { found }, token, false, null, false, it,
+                )
+            })
+            assertEquals(beforeOlderCompletion, n.currentState)
+            assertEquals(ContactLinkCompletion.IgnoredSelfContact, ContactLinkPublications().use {
+                n.completeCapturedContactLookup(
+                    self, ContactLinkRequest("Self", room.publicKey, ContactType.REPEATER),
+                    null, token, false, null, selectChats, it,
+                )
+            })
+            assertEquals(if (selectChats) AppTab.CHATS else AppTab.MAP, n.currentState.selectedTab)
+            assertNull(n.currentState.pendingContactLink)
+            assertNull(n.currentState.pendingContactDetail)
+        }
+    }
+
+    @Test fun newerContactCaptureAndCompletedSelfCannotReplaySelfTabIntent() {
+        val token = SessionToken(
+            ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000047")), Generation(1), radio,
+        )
+        val n = NavigationCoordinator()
+        assertTrue(n.bindNotificationSession(radio, room.publicKey, token))
+        n.selectTab(AppTab.MAP)
+        val olderSelf = ContactLinkPublications().use {
+            n.captureContactLinkLookup(room.publicKey, radio, room.publicKey, token, token, true, it)
+        }
+        val newer = ContactLinkPublications().use {
+            n.captureContactLinkLookup(contact.publicKey, radio, room.publicKey, token, token, true, it)
+        }
+        val beforeStaleCompletion = n.currentState
+        assertEquals(ContactLinkCompletion.StaleContext, ContactLinkPublications().use {
+            n.completeCapturedContactLookup(
+                olderSelf, ContactLinkRequest("Self", room.publicKey, ContactType.CHAT),
+                null, token, false, null, true, it,
+            )
+        })
+        assertEquals(beforeStaleCompletion, n.currentState)
+        assertEquals(ContactLinkCompletion.ConfirmationStaged, ContactLinkPublications().use {
+            n.completeCapturedContactLookup(
+                newer, ContactLinkRequest("Newer", contact.publicKey, ContactType.REPEATER),
+                null, token, false, null, false, it,
+            )
+        })
+        val pending = requireNotNull(n.currentState.pendingContactLink)
+        assertEquals("Newer", pending.name)
+        assertEquals(ContactType.REPEATER, pending.type)
+        assertEquals(radio, pending.targetRadioId)
+        assertEquals(AppTab.MAP, n.currentState.selectedTab)
+
+        val currentSelf = ContactLinkPublications().use {
+            n.captureContactLinkLookup(room.publicKey, radio, room.publicKey, token, token, true, it)
+        }
+        assertEquals(ContactLinkCompletion.IgnoredSelfContact, ContactLinkPublications().use {
+            n.completeCapturedContactLookup(
+                currentSelf, ContactLinkRequest("Self", room.publicKey, ContactType.CHAT),
+                null, token, false, null, true, it,
+            )
+        })
+        n.selectTab(AppTab.MAP)
+        val beforeReplay = n.currentState
+        assertEquals(ContactLinkCompletion.StaleContext, ContactLinkPublications().use {
+            n.completeCapturedContactLookup(
+                currentSelf, ContactLinkRequest("Self", room.publicKey, ContactType.CHAT),
+                null, token, false, null, true, it,
+            )
+        })
+        assertEquals(beforeReplay, n.currentState)
+        assertSame(pending, n.currentState.pendingContactLink)
+    }
+
+    @Test fun rejectedSelfCaptureDoesNotSupersedeCurrentContactLookup() {
+        val token = SessionToken(
+            ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000048")), Generation(1), radio,
+        )
+        val n = NavigationCoordinator()
+        assertTrue(n.bindNotificationSession(radio, room.publicKey, token))
+        val current = ContactLinkPublications().use {
+            n.captureContactLinkLookup(contact.publicKey, radio, room.publicKey, token, token, true, it)
+        }
+        val beforeRejectedCapture = n.currentState
+        val rejected = ContactLinkPublications().use {
+            n.captureContactLinkLookup(room.publicKey, radio, room.publicKey, token, token, false, it)
+        }
+        assertEquals(ContactLinkCaptureDisposition.StaleContext, rejected.disposition)
+        assertEquals(beforeRejectedCapture, n.currentState)
+        assertEquals(ContactLinkCompletion.ConfirmationStaged, ContactLinkPublications().use {
+            n.completeCapturedContactLookup(
+                current, ContactLinkRequest("Current", contact.publicKey, ContactType.ROOM),
+                null, token, false, null, false, it,
+            )
+        })
+        assertEquals(contact.publicKey, n.currentState.pendingContactLink?.publicKey)
     }
 
     @Test fun ordinaryUpdateCannotPublishAnUnreleasedGuardedCommit() {

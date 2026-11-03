@@ -16,6 +16,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.*
+import com.meshcoreone.android.app.container.RoomProcessTest
 import com.meshcoreone.android.app.content.DataStoreLinkPreviewPreferencesSource
 import com.meshcoreone.android.app.navigation.AppMapSettings
 import com.meshcoreone.android.app.navigation.AppMessageContent

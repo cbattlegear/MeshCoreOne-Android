@@ -22,8 +22,12 @@ Retry/Cancel arbitration remains unchanged. Added authored router controls for
 pre-read rejection, post-read completion rejection and cancellation retaining
 origin, plus real graph/Room different-radio and identical-radio replacement
 families with no replacement read/effect/ack and a fresh B-delivery control.
-The earlier real same-graph recovery control remains. The replacement-only fake
-explicitly rejects unexpected retry validation instead of fabricating validity.
+The earlier real same-graph recovery control remains. The replacement fixture
+checks the captured public key and delegates retry validity to the producer's
+pure `isCapturedContactLookupCurrent` predicate using its current bound token
+and captured initial-binding allowance; it does not fabricate validity.
+An additional authored recovered-lookup schedule traverses that actual pure
+coordinator predicate before committing the retained delivery once.
 These cases are uncompiled/unexecuted. The new producer seam is absent on this
 branch until WP-302 composition; no standalone build/acceptance is claimed.
 

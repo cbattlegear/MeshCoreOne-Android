@@ -49,6 +49,29 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalCoroutinesApi::class)
 class ExternalRouteReplacementTest {
     @Test
+    fun recoveredLookupRetriesUsingTheActualCoordinatorContextPredicate() = runTest {
+        val environment = Environment()
+        var fail = true
+        environment.contactLookup = {
+            if (fail) throw IllegalStateException("store unavailable")
+            contact()
+        }
+        val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("retry-A", contactUri)
+        assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(pending.submit(delivery))
+        val observed = assertNotNull(pending.lookupFailure.value)
+        fail = false
+        val routed = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
+            pending.retry(observed.deliveryId, observed.attempt),
+        )
+        assertEquals(DeepLinkRouteOutcome.Navigated, routed.outcome)
+        assertEquals(contact(), environment.navigation.state.value.selectedContact)
+        assertNull(pending.lookupFailure.value)
+        assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
+    }
+
+    @Test
     fun replacementNavigatesWithoutWaitingForTheObsoleteLookup() = runTest {
         for (known in listOf(false, true)) {
             val environment = Environment()
@@ -584,8 +607,12 @@ class ExternalRouteReplacementTest {
         ): ContactLinkContext = CapturedLookup(navigation.captureContactLinkLookup(
             publicKey, radio, null, null, null, true, publications,
         ))
-        override fun isContactLinkContextCurrent(context: ContactLinkContext, publicKey: Bytes): Boolean =
-           error("This replacement fixture does not admit contact retries")
+        override fun isContactLinkContextCurrent(context: ContactLinkContext, publicKey: Bytes): Boolean {
+           val lookup = (context as CapturedLookup).lookup
+           return lookup.publicKey == publicKey && navigation.isCapturedContactLookupCurrent(
+               lookup, navigation.state.value.boundSessionToken, lookup.allowsInitialBinding,
+           )
+        }
         override fun completeContactLookup(
             context: ContactLinkContext, link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
             selectChats: Boolean, publications: ContactLinkPublications,

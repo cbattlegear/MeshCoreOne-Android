@@ -138,7 +138,7 @@ internal class ChannelRepository(
             current == null
         ) {
             occupants.upsert(ChannelOccupantEntity(
-                row.radioId, row.index, UUID.randomUUID(), unresolved = !authoritative && current?.unresolved == true,
+                row.radioId, row.index, UUID.randomUUID(), unresolved = !authoritative,
             ))
         } else if (authoritative && current.unresolved) {
             occupants.upsert(current.copy(unresolved = false))

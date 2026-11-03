@@ -141,16 +141,25 @@ class ReactionService internal constructor(
     // MARK: - Persistence
 
     /**
-     * Persists a reaction and updates the message's reaction summary (built from the newest 100 reactions, the
-     * store's default fetch limit). Store failures are logged and yield null; cancellation propagates.
+     * Persists a reaction unless the store already has its sender/emoji, then rebuilds the summary from the
+     * newest 100 reactions (the store's default fetch limit). Store failures are logged and yield null;
+     * cancellation propagates.
      */
     suspend fun persistReactionAndUpdateSummary(
         reaction: ReactionDTO,
         dataStore: ReactionPersisting,
     ): ReactionPersistResult? = persistenceMutex.withLock {
         val message = EntityKey(reaction.radioId, reaction.messageID)
+        val exists = try {
+            dataStore.reactionExists(message, reaction.senderName, reaction.emoji)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            logger.log(Level.SEVERE, "Failed to check reaction for message ${reaction.messageID}: ${error.message}", error)
+            return@withLock null
+        }
         try {
-            dataStore.saveReaction(reaction)
+            if (!exists) dataStore.saveReaction(reaction)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {

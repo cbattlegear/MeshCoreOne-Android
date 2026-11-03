@@ -21,11 +21,13 @@ import com.meshcoreone.android.core.services.reactions.PendingReaction
 import com.meshcoreone.android.core.services.reactions.PendingDMReaction
 import com.meshcoreone.android.core.services.reactions.ReactionService
 import com.meshcoreone.android.core.services.rendering.MessageFragment
+import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import java.time.Clock
 import java.time.ZoneOffset
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -51,7 +53,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
     private val emoji = "\uD83D\uDC4D"
     private val stamp = 1_704_067_200u
 
-    private enum class Fault { EXISTS, SAVE_BEFORE, SAVE_AFTER, FETCH_BEFORE, FETCH_AFTER, SUMMARY_BEFORE, SUMMARY_AFTER }
+    private enum class Fault { EXISTS, EXISTS_LOCKED, SAVE_BEFORE, SAVE_AFTER, FETCH_BEFORE, FETCH_AFTER, SUMMARY_BEFORE, SUMMARY_AFTER }
 
     @Test fun directExistsFailureRetainsTheUnfinishedBatch() = runTest { recover(this, true, Fault.EXISTS, false) }
     @Test fun channelExistsFailureRetainsTheUnfinishedBatch() = runTest { recover(this, false, Fault.EXISTS, false) }
@@ -97,6 +99,192 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
     @Test fun directCancelledOldReplayWaiterRetainsItsPendingReaction() = runTest { interleave(this, true, false, true, true) }
     @Test fun channelCancelledOldReplayWaiterRetainsItsPendingReaction() = runTest { interleave(this, false, false, true, true) }
 
+    @Test fun directHistoryWinsTheSameReactionWithoutReplacingItsIdentity() = runTest { sameReaction(this, true, true) }
+    @Test fun channelHistoryWinsTheSameReactionWithoutReplacingItsIdentity() = runTest { sameReaction(this, false, true) }
+    @Test fun directLiveWinsAnOutdatedReplayExistenceCheck() = runTest { sameReaction(this, true, false) }
+    @Test fun channelLiveWinsAnOutdatedReplayExistenceCheck() = runTest { sameReaction(this, false, false) }
+    @Test fun directOldHistoryWinsTheSameReactionAcrossReconnect() = runTest { sameReaction(this, true, true, reconnect = true) }
+    @Test fun channelOldHistoryWinsTheSameReactionAcrossReconnect() = runTest { sameReaction(this, false, true, reconnect = true) }
+    @Test fun directReplacementSessionWinsAnOutdatedReplayExistenceCheck() = runTest { sameReaction(this, true, false, reconnect = true) }
+    @Test fun channelReplacementSessionWinsAnOutdatedReplayExistenceCheck() = runTest { sameReaction(this, false, false, reconnect = true) }
+    @Test fun directSameSenderCanStillAddADifferentEmoji() = runTest { sameReaction(this, true, true, distinctEmoji = true) }
+    @Test fun channelSameSenderCanStillAddADifferentEmoji() = runTest { sameReaction(this, false, true, distinctEmoji = true) }
+    @Test fun directLockedExistenceFailureRetainsTheUnfinishedBatch() = runTest { recover(this, true, Fault.EXISTS_LOCKED, false) }
+    @Test fun channelLockedExistenceFailureRetainsTheUnfinishedBatch() = runTest { recover(this, false, Fault.EXISTS_LOCKED, false) }
+    @Test fun directLockedExistenceCancellationRetainsTheUnfinishedBatch() = runTest { recover(this, true, Fault.EXISTS_LOCKED, true) }
+    @Test fun channelLockedExistenceCancellationRetainsTheUnfinishedBatch() = runTest { recover(this, false, Fault.EXISTS_LOCKED, true) }
+
+    private suspend fun sameReaction(
+        test: TestScope,
+        direct: Boolean,
+        historyFirst: Boolean,
+        reconnect: Boolean = false,
+        distinctEmoji: Boolean = false,
+    ) {
+        val historyChecked = CompletableDeferred<Unit>()
+        val bothChecked = CompletableDeferred<Unit>()
+        val releaseHistoryCheck = CompletableDeferred<Unit>()
+        val releaseLiveCheck = CompletableDeferred<Unit>()
+        val snapshotReady = CompletableDeferred<Unit>()
+        val releaseSnapshot = CompletableDeferred<Unit>()
+        val checkLock = Any()
+        val outsideResults = mutableListOf<Boolean>()
+        var targetKey: EntityKey? = null
+        var checks = 0
+        var saves = 0
+        var fetched = false
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
+                val exists = store.reactionExists(message, senderName, emoji)
+                val ordinal = synchronized(checkLock) {
+                    if (message == targetKey && senderName == "Bob") {
+                        checks++
+                        if (checks <= 2) outsideResults += exists
+                        checks
+                    } else 0
+                }
+                when (ordinal) {
+                    1 -> { historyChecked.complete(Unit); releaseHistoryCheck.await() }
+                    2 -> { bothChecked.complete(Unit); releaseLiveCheck.await() }
+                }
+                return exists
+            }
+
+            override suspend fun saveReaction(dto: ReactionDTO) {
+                saves++
+                store.saveReaction(dto)
+            }
+
+            override suspend fun fetchReactions(message: EntityKey, limit: Long): SnapshotList<ReactionDTO> {
+                val rows = store.fetchReactions(message, limit)
+                if (!fetched) {
+                    fetched = true
+                    snapshotReady.complete(Unit)
+                    releaseSnapshot.await()
+                }
+                return rows
+            }
+        }
+        val clock = object : SyncClock by SyncClock.SYSTEM { override fun now() = EPOCH }
+        val harness = ContainerHarness(test, store, persistenceOverride = persistence, syncClock = clock)
+        harness.links.configureRadio = { it.knownContacts += contactFrame(key(3), if (direct) "Bob" else "Alice") }
+        val jobs = mutableListOf<Job>()
+        var mounted: ChatViewModel? = null
+        var firmware: FirmwareRadio? = null
+        var previousResponse: ((Bytes) -> List<Bytes>?)? = null
+        try {
+            val connectionTarget = harness.target()
+            harness.manager.connect(connectionTarget)
+            harness.eventually("same-reaction handlers ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY &&
+                    harness.sessions.current?.messagePollingService?.hasMessageHandlersWired == true
+            }
+            val original = assertNotNull(harness.sessions.current)
+            val radio = original.token.radioId
+            val contact = assertNotNull(store.fetchContact(radio, key(3)))
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val channel = assertNotNull(store.fetchChannel(radio, 3u))
+            val target = MessageDTO(
+                radioId = radio, contactID = if (direct) contact.id else null,
+                channelIndex = if (direct) null else channel.index, text = "Hello", timestamp = stamp,
+                createdAt = EPOCH, sortDate = EPOCH, senderNodeName = if (direct) null else "Alice",
+                direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED,
+            )
+            store.saveMessage(target)
+            val message = EntityKey(radio, target.id)
+            targetKey = message
+            assertTrue(store.fetchReactions(message).isEmpty(), "This race starts with no committed Bob reaction")
+            val wire = if (direct) "$emoji\nb45pc4ek" else "@[Alice]$emoji\nb45pc4ek"
+            val service = original.reactionService
+            if (direct) service.requeuePendingDMReaction(
+                PendingDMReaction(assertNotNull(ReactionParser.parseDM(wire)), contact.id, "Bob", wire, radio, EPOCH),
+            ) else service.requeuePendingReaction(
+                PendingReaction(assertNotNull(ReactionParser.parse(wire)), channel.index, "Bob", wire, radio, EPOCH),
+            )
+            val conversation = if (direct) TimelineConversation.Direct(contact) else TimelineConversation.Channel(channel)
+            val viewModel = ChatViewModel(
+                conversation, harness.container.chatsFeature.timeline(conversation), CoroutineScope(currentCoroutineContext()),
+            )
+            mounted = viewModel
+            val history = test.async(start = CoroutineStart.UNDISPATCHED) { viewModel.open() }.also(jobs::add)
+            historyChecked.await()
+            if (reconnect) {
+                harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+                harness.manager.connect(connectionTarget)
+                harness.eventually("same-reaction replacement handlers ready") {
+                    harness.manager.connectionState == DeviceConnectionState.READY &&
+                        harness.sessions.current?.messagePollingService?.hasMessageHandlersWired == true
+                }
+                assertTrue(original.isTornDown)
+            }
+            val live = assertNotNull(harness.sessions.current)
+            assertEquals(radio, live.token.radioId)
+            if (reconnect) {
+                assertTrue(live.token.generation.value > original.token.generation.value)
+                assertNotSame(service, live.reactionService)
+            }
+            assertEquals(contact.id, assertNotNull(store.fetchContact(radio, contact.publicKey)).id)
+            assertNotNull(store.fetchMessage(message))
+            val liveEmoji = if (distinctEmoji) "\u2764\uFE0F" else emoji
+            val liveWire = if (direct) "$liveEmoji\nb45pc4ek" else "Bob: @[Alice]$liveEmoji\nb45pc4ek"
+            val frame = if (direct) {
+                Bytes.of(0x10, 20, 0, 0) + contact.publicKey.prefix(6) + Bytes.of(0, 0) +
+                    le32(stamp.toLong()) + Bytes.utf8(liveWire)
+            } else Bytes.of(0x11, 20, 0, 0, 3, 0, 0) + le32(stamp.toLong()) + Bytes.utf8(liveWire)
+            val currentFirmware = harness.links.radios.last()
+            firmware = currentFirmware
+            val prior = currentFirmware.respond
+            previousResponse = prior
+            val frames = ConcurrentLinkedQueue(listOf(frame))
+            currentFirmware.respond = { command ->
+                if (command[0] == 0x0a.toUByte()) listOf(frames.poll() ?: Bytes.of(0x0a)) else prior(command)
+            }
+            val arrival = test.async { live.messagePollingService.pollAllMessages() }.also(jobs::add)
+            bothChecked.await()
+            assertEquals(listOf(false, false), synchronized(checkLock) { outsideResults.toList() },
+                "The actual App and SyncCoordinator existence checks both precede either insert")
+            if (historyFirst) releaseHistoryCheck.complete(Unit) else releaseLiveCheck.complete(Unit)
+            snapshotReady.await()
+            val first = store.fetchReactions(message).single()
+            assertEquals(1, saves)
+            if (historyFirst) {
+                assertEquals(EPOCH, first.receivedAt)
+                releaseLiveCheck.complete(Unit)
+            } else releaseHistoryCheck.complete(Unit)
+            releaseSnapshot.complete(Unit)
+            history.await()
+            assertEquals(1L, arrival.await())
+            viewModel.open()
+            assertNull(viewModel.state.value.loadError)
+            val rows = store.fetchReactions(message)
+            if (distinctEmoji) {
+                assertEquals(setOf(emoji, liveEmoji), rows.map { it.emoji }.toSet())
+                assertEquals(2, rows.size)
+                assertEquals(2, saves, "A different emoji must not be deduplicated")
+            } else {
+                assertEquals(listOf(first), rows, "Neither retry may insert another UUID or replace the first row")
+                assertEquals(1, saves)
+            }
+            assertEquals(first, rows.single { it.id == first.id })
+            assertTrue(rows.all { it.radioId == radio && it.messageID == target.id && it.senderName == "Bob" })
+            assertEquals(4, synchronized(checkLock) { checks }, "Both stale callers must recheck inside the shared boundary")
+            val summary = if (distinctEmoji) "$emoji:1,$liveEmoji:1" else "$emoji:1"
+            assertEquals(summary, assertNotNull(store.fetchMessage(message)).reactionSummary)
+            assertEquals(summary, viewModel.state.value.messages.single().reactionSummary)
+            viewModel.refresh()
+            assertEquals(rows, store.fetchReactions(message))
+            assertEquals(summary, viewModel.state.value.messages.single().reactionSummary)
+        } finally {
+            releaseHistoryCheck.complete(Unit)
+            releaseLiveCheck.complete(Unit)
+            releaseSnapshot.complete(Unit)
+            jobs.forEach { it.cancelAndJoin() }
+            previousResponse?.let { firmware?.respond = it }
+            mounted?.close()
+            harness.container.close()
+        }
+    }
+
     private suspend fun interleave(
         test: TestScope,
         direct: Boolean,
@@ -124,11 +312,11 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
 
             override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
                 val result = store.reactionExists(message, senderName, emoji)
-                if (reconnect && !historyFirst && !duplicateStarted.isCompleted) {
+                if (reconnect && !historyFirst && senderName == "Bob" && !duplicateStarted.isCompleted) {
                     duplicateStarted.complete(Unit)
                     releaseDuplicateCheck.await()
                 }
-                duplicateChecked.complete(Unit)
+                if (senderName == "Bob") duplicateChecked.complete(Unit)
                 return result
             }
 
@@ -313,7 +501,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 it.complete(Unit)
                 awaitCancellation()
             }
-            val error = if (fault == Fault.EXISTS || fault == Fault.FETCH_BEFORE || fault == Fault.FETCH_AFTER) {
+            val error = if (fault in setOf(Fault.EXISTS, Fault.EXISTS_LOCKED, Fault.FETCH_BEFORE, Fault.FETCH_AFTER)) {
                 PersistenceStoreError.FetchFailed("Injected $fault")
             } else {
                 PersistenceStoreError.SaveFailed("Injected $fault")
@@ -323,6 +511,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
 
         override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
             hit(Fault.EXISTS)
+            hit(Fault.EXISTS_LOCKED)
             return actual.reactionExists(message, senderName, emoji)
         }
 
@@ -399,7 +588,12 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             assertEquals(3, original.values.size)
             original.restore()
             val gate = if (cancel) CompletableDeferred<Unit>() else null
-            persistence.arm(fault, occurrence = 2, cancellationGate = gate)
+            val occurrence = when (fault) {
+                Fault.EXISTS -> 3
+                Fault.EXISTS_LOCKED -> 4
+                else -> 2
+            }
+            persistence.arm(fault, occurrence = occurrence, cancellationGate = gate)
             if (gate != null) {
                 val attempt = test.launch { viewModel.refresh() }
                 gate.await()
@@ -415,7 +609,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 "Only Bob completed: retain Carol and Dave, including parsed identity, radio, raw text and receivedAt")
             unfinished.restore()
             val partial = store.fetchReactions(key)
-            val committed = fault !in setOf(Fault.EXISTS, Fault.SAVE_BEFORE)
+            val committed = fault !in setOf(Fault.EXISTS, Fault.EXISTS_LOCKED, Fault.SAVE_BEFORE)
             assertEquals(if (committed) 2 else 1, partial.size)
             assertEquals(if (committed) setOf("Bob", "Carol") else setOf("Bob"), partial.map { it.senderName }.toSet())
             assertEquals(if (fault == Fault.SUMMARY_AFTER) "$emoji:2" else "$emoji:1",

@@ -351,3 +351,55 @@ contact, target and committed Bob retention immediately after reconnect, before
 starting the replacement writer. No production pruning behavior, store
 operation, expected count or identity assertion is bypassed or weakened.
 This correction still requires its own normal exact-head execution.
+
+## Atomic semantic idempotence
+
+Corrected reconnect head `642bf92bd666bf6cf0cb909dceda43267841a3b8` passed normal
+PR run [41623838754](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41623838754),
+attempt 1, authoritative Android job `125876184419`: App 1,901, services 2,801
+and chats 443 discovered/run/passed, zero failures/errors/skips. All 42
+failure/concurrency and nine history methods occur in the real inventory and
+both suites end successfully. This is not acceptance of the additional
+semantic-idempotence correction.
+
+The independent reviewer and latest actual Copilot overview identify another
+tightly coupled gap: App and SyncCoordinator check semantic existence before
+the shared mutex. Both can read false, then serialize distinct UUID inserts for
+the same radio/message/sender/emoji because Room's upsert is identity-based and
+its semantic index is nonunique. The resulting doubled count survives refresh.
+The outside-check seam partly predates this repair; restored replay and its
+required persistent idempotence make it inseparable from this concern. The
+earlier Bob-versus-Carol controls did not start with absent Bob versus live Bob.
+
+The service now checks existence again inside the shared persistence operation,
+using the unchanged store matcher. Only an absent semantic reaction is saved;
+both paths still rebuild and persist the summary before returning success.
+Existing first-writer identity and metadata are retained, and check errors and
+cancellation cannot acknowledge replay. The actual persistence owner b5 reports
+no current/intended service/App/Sync guard, saveReaction, matcher or summary edit
+and no semantic collision on this exact boundary. No Room/DAO/schema, query,
+origin-proof or SyncCoordinator production edit is needed; no historical rows
+are dropped, merged or replaced.
+
+Eight new App/Room methods start with zero reaction rows, gate the actual history
+and actual polling-wired SyncCoordinator existence reads at false, then release
+either winner into persistence while holding its real fetched snapshot. They
+exercise both scopes/orderings and real connection replacement. The poller
+receives protocol frames through the existing fake radio, not a copied duplicate
+guard or DTO-only dedup substitute. The loser must recheck after the winner
+releases the boundary; the original row, count one, stored summary and mounted
+history remain identical after another refresh. Two positive controls use the
+same sender with a different emoji and require two rows; the earlier Bob/Carol
+controls retain the distinct-sender case.
+
+Four further controls inject final-guard failure/cancellation for each scope.
+The original outer existence controls move their injected call from two to three
+solely to account for Bob's new inside-lock read: Bob must still fully complete
+before Carol fails. Final-guard controls interrupt call four, Carol's locked
+read. All previous queue, partial-commit, metadata, cancellation and concurrency
+assertions remain; no original method is removed. Total affected inventory is
+56 failure/concurrency plus nine history methods.
+
+These are source candidates until their own exact normal PR execution and
+independent review. The previous 51-method pass is not successor evidence;
+the local execution hold and source pin remain unchanged.

@@ -42,7 +42,6 @@ internal class TraceCodeInputState {
     var outcome by mutableStateOf<CodeInputResult?>(null)
     var nextHopAnnouncement by mutableStateOf<Int?>(null)
     var restoringDraft by mutableStateOf(false)
-    var requestFocus by mutableStateOf(false)
     var restoredHashMode: UByte? = null
     var connection by mutableStateOf<TraceCodeInputConnection?>(null)
 }
@@ -116,6 +115,7 @@ internal fun TraceCodeInput(
     var input by entry::input
     var outcome by entry::outcome
     var nextHopAnnouncement by entry::nextHopAnnouncement
+    var requestFocus by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val focus = remember { FocusRequester() }
     val connection = entry.connection
@@ -139,7 +139,7 @@ internal fun TraceCodeInput(
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!expanded) {
             OutlinedButton(
-                onClick = { entry.requestFocus = true; expanded = true },
+                onClick = { requestFocus = true; expanded = true },
                 modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
             ) { Text(stringResource(C.contactsPathEditAddHop)) }
         } else {
@@ -233,17 +233,17 @@ internal fun TraceCodeInput(
             TextButton(
                 onClick = {
                     expanded = false
-                    entry.requestFocus = false
+                    requestFocus = false
                     input = ""
                     outcome = null
                     nextHopAnnouncement = null
                 },
                 modifier = Modifier.sizeIn(minHeight = 48.dp),
             ) { Text(stringResource(L.commonDone)) }
-            LaunchedEffect(entry.requestFocus) {
-                if (entry.requestFocus) {
+            LaunchedEffect(requestFocus) {
+                if (requestFocus) {
                     focus.requestFocus()
-                    entry.requestFocus = false
+                    requestFocus = false
                 }
             }
         }

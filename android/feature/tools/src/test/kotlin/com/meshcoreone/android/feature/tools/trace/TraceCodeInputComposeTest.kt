@@ -323,6 +323,22 @@ class TraceCodeInputComposeTest {
         assertTrue(host.get().sender.sent.isEmpty())
     }
 
+    @Test fun leavingBeforeInitialFocusDoesNotRequestFocusOnListReturn() {
+        host.get().mountTraceScreen()
+        settle()
+        host.get().runOnUiThread {
+            val openEntry = assertNotNull(button("Add Hop").config[SemanticsActions.OnClick].action)
+            val showMap = assertNotNull(button("Map").config[SemanticsActions.OnClick].action)
+            assertTrue(openEntry())
+            assertTrue(showMap())
+        }
+        settle()
+        assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
+        click("List")
+        assertEquals("", input().config[SemanticsProperties.EditableText].text)
+        assertFalse(input().config[SemanticsProperties.Focused])
+    }
+
     @Test fun actualActivityRecreationRestoresTwoByteDraftBeforePreviewAndSubmission() {
         assertRecreatedDraft("AA00,BB00", "2 B")
     }
@@ -523,6 +539,27 @@ class TraceCodeInputComposeTest {
         settle()
         assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+    }
+
+    @Test fun manualWidthChoiceSurvivesImmediateReconnectWithoutAnotherRecreation() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        scrollToIndex(4)
+        click("1 B")
+        host.get().runOnUiThread { host.get().reconnect("v1.11.0", pathHashMode = 1u) }
+        settle()
+        scrollToIndex(0)
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+        scrollToIndex(47)
+        assertTrue(button("1 B").config[SemanticsProperties.Selected])
     }
 
     @Test fun activityRecreationRestoresTheExplicitDefaultOverrideInTheActualHolder() {

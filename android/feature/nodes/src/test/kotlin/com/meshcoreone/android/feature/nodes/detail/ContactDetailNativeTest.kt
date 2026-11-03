@@ -231,6 +231,39 @@ class ContactDetailNativeTest {
     }
 
     @Test
+    fun `production avatar save launcher rejects absent encoded image without removing the current avatar`() = scenario {
+        val harness = Harness(clock).connect()
+        val alice = contact(radioId = checkNotNull(harness.session.radioId)).copy(avatarImageData = Bytes.of(9))
+        harness.store.contacts += alice
+        val observations = mutableListOf<AvatarSaveObservation>()
+        val detail = ContactDetailStateHolder(
+            alice,
+            harness.dependencies,
+            scope,
+            avatarSaveObserver = AvatarSaveObserver { observations.add(it) },
+        )
+
+        val save = detail.launchAvatarSave { null }
+        save.join()
+
+        assertTrue(save.isCompleted)
+        assertEquals(alice, detail.state.value.contact)
+        assertEquals(alice, harness.store.contacts.single())
+        assertTrue(harness.contactService.avatars.isEmpty())
+        assertTrue(harness.contactService.calls.isEmpty())
+        assertEquals(NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_avatar_invalidimage), detail.state.value.errorMessage)
+        assertFalse(detail.state.value.isSavingAvatar)
+        val operationId = observations.first { it.stage == AvatarSaveStage.LAUNCHED }.operationId
+        val events = observations.filter { it.operationId == operationId }
+        assertTrue(events.any {
+            it.stage == AvatarSaveStage.ENCODE_RETURNED && it.outcome == AvatarSaveOutcome.ABSENT
+        })
+        assertTrue(events.any { it.stage == AvatarSaveStage.SAVE_FAILED })
+        assertFalse(events.any { it.stage == AvatarSaveStage.SERVICE_CALL_STARTED })
+        assertEquals(AvatarSaveOutcome.FAILED, events.last { it.stage == AvatarSaveStage.JOB_COMPLETED }.outcome)
+    }
+
+    @Test
     fun `avatar cancellation during encoding or persistence resets saving and propagates`() = scenario {
         val harness = Harness(clock).connect()
         val alice = contact(radioId = checkNotNull(harness.session.radioId))

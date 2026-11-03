@@ -536,12 +536,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             AvatarSaveStage.SAVE_SUCCEEDED,
             AvatarSaveStage.JOB_COMPLETED,
         )
-        var prior = -1
-        expected.forEach { stage ->
-            val index = stages.indexOf(stage)
-            assertTrue(index > prior, "Missing or out-of-order avatar save stage $stage")
-            prior = index
-        }
+        assertEquals(expected, stages, "Avatar save stages must match the complete ordered operation")
         assertEquals(AvatarSaveOutcome.COMPLETED, events.last().outcome)
         assertNull(events.last().failureType)
     }

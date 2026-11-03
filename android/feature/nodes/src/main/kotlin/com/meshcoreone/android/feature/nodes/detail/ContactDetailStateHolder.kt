@@ -317,7 +317,7 @@ class ContactDetailStateHolder(
         val operation = AvatarSaveOperationContext(UUID.randomUUID(), avatarSaveObserver)
         operation.observe(AvatarSaveStage.LAUNCHED)
         var result: Boolean? = null
-        val job = scope.launch(operation) { result = updateAvatar(encode) }
+        val job = scope.launch(operation) { result = updateAvatar { encode() ?: throw InvalidAvatar() } }
         job.invokeOnCompletion { failure ->
             val outcome = when {
                 failure is CancellationException -> AvatarSaveOutcome.CANCELLED

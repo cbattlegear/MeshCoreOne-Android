@@ -6,10 +6,14 @@ import android.app.Application
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
+import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.content.Context
+import android.os.Handler
 import android.os.Looper
 import com.meshcoreone.android.core.ble.AndroidGattFacade
 import com.meshcoreone.android.core.ble.BlePhase
@@ -18,9 +22,10 @@ import com.meshcoreone.android.core.ble.NusUuid
 import com.meshcoreone.android.core.connectivity.ConnectivityPlatform
 import com.meshcoreone.android.core.connectivity.SystemLinkAdopter
 import com.meshcoreone.android.core.connectivity.ble.BleLinkInspector
-import com.meshcoreone.android.core.connectivity.ble.SystemLinkProbe
+import com.meshcoreone.android.core.connectivity.platform.AndroidSystemLinkProbe
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothEndpoint
-import com.meshcoreone.android.core.connectivity.pairing.KnownEndpointStore
+import com.meshcoreone.android.core.connectivity.pairing.DeviceEndpointIdentity
+import com.meshcoreone.android.core.connectivity.pairing.InMemoryKnownEndpointStore
 import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
@@ -35,7 +40,7 @@ import com.meshcoreone.android.core.runtime.RuntimeIssueReporter
 import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueProgress
 import com.meshcoreone.android.core.services.rendering.DraftStore
-import java.util.UUID
+import kotlin.Suppress
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -64,7 +69,7 @@ import org.robolectric.shadows.ShadowBluetoothAdapter
 import org.robolectric.shadows.ShadowBluetoothGatt
 
 @OptIn(ExperimentalCoroutinesApi::class)
-@Config(sdk = [31], shadows = [BleRecoveryGattShadow::class])
+@Config(sdk = [31], shadows = [BleRecoveryDeviceShadow::class, BleRecoveryGattShadow::class])
 class BleRecoveryIntegrationTest : RoomProcessTest() {
     @Test fun nativeLossAndHealthReconnectReplaceGraphWithoutAcceptingOldGattIdentityOrFrames() = runTest {
         val f = Fixture(this)
@@ -170,7 +175,8 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
                 original.isTornDown && f.container.sessions.current == null && f.container.currentTransport == null &&
                     f.factory.currentBleLink()?.diagnostics?.phase == BlePhase.Idle
             }
-            f.systemConnected = true
+            f.markSystemConnected()
+            assertTrue(f.systemProbe.isDeviceConnectedToSystem(f.target.deviceId))
             f.runOperation { f.manager.checkBLEConnectionHealth() }
             assertEquals(DeviceConnectionState.DISCONNECTED, f.manager.connectionState)
             assertEquals(1, f.peers.size, "health must not open another app's system-connected GATT")
@@ -192,33 +198,21 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
         private val address = "02:00:00:00:38:30"
         val target = ConnectionTarget.Bluetooth(
             BluetoothPairingHandle(BluetoothAddress(address), null),
-            UUID.fromString("38300000-0000-0000-0000-000000000001"),
+            DeviceEndpointIdentity.deviceId(address),
         )
         val peers = mutableListOf<Peer>()
         val preferences = MemoryConnectionPreferences()
-        var systemConnected = false
         var adoptions = 0
         private val clock = SchedulerClock { test.testScheduler.currentTime }
         val factory = AndroidRuntimeLinkFactory(
             { handle -> AndroidGattFacade(application, handle) },
             linkDispatcher = UnconfinedTestDispatcher(test.testScheduler),
         )
-        private val probe = object : SystemLinkProbe {
-            override suspend fun isDeviceConnectedToSystem(deviceId: UUID) = systemConnected && deviceId == target.deviceId
-            override suspend fun systemConnectedDeviceIds() = if (systemConnected) setOf(target.deviceId) else emptySet()
-        }
+        val systemProbe = AndroidSystemLinkProbe(application)
         private val pairing = HarnessPairingService().also { it.registered[target.deviceId] = "Controlled BLE radio" }
-        private val endpoints = object : KnownEndpointStore {
-            override suspend fun endpoint(deviceId: UUID): BluetoothEndpoint? =
-                if (deviceId == target.deviceId) BluetoothEndpoint(deviceId, address, null) else null
-            override suspend fun remember(endpoint: BluetoothEndpoint) {
-                assertEquals(target.deviceId, endpoint.deviceId)
-                assertEquals(address, endpoint.address)
-            }
-            override suspend fun forget(deviceId: UUID) = Unit
-        }
+        private val endpoints = InMemoryKnownEndpointStore()
         private val connectivity = ConnectivityPlatform(
-            pairing, BleLinkInspector(probe, factory::currentBleLink) { BluetoothAvailability.Ready },
+            pairing, BleLinkInspector(systemProbe, factory::currentBleLink) { BluetoothAvailability.Ready },
             endpoints, SystemLinkAdopter { adoptions++; false },
         )
         private val diagnostics = mutableListOf<com.meshcoreone.android.core.runtime.RuntimeDiagnostic>()
@@ -227,7 +221,7 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             passwords = MemoryVault(),
             connectionPreferences = preferences,
             connectivity = connectivity,
-            linkProbe = probe,
+            linkProbe = systemProbe,
             scans = newScans(),
             linkFactory = factory,
             notificationDelivery = RecordingDelivery(),
@@ -248,14 +242,20 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             val adapter = requireNotNull(BluetoothAdapter.getDefaultAdapter())
             Shadows.shadowOf(adapter).setState(BluetoothAdapter.STATE_ON)
             val device = adapter.getRemoteDevice(address)
-            Shadows.shadowOf(device).setBondState(BluetoothDevice.BOND_BONDED)
-            Shadows.shadowOf(device).setGattConnectionInterceptor { opened ->
+            val deviceShadow = Shadow.extract<BleRecoveryDeviceShadow>(device)
+            deviceShadow.onOpen = { opened ->
                 val peer = Peer(opened, test)
                 peers += peer
                 requireNotNull(peer.shadow.gattCallback).onConnectionStateChange(
                     opened, BluetoothGatt.GATT_SUCCESS, BluetoothProfile.STATE_CONNECTED,
                 )
             }
+        }
+
+        fun markSystemConnected() {
+            val manager = application.getSystemService(BluetoothManager::class.java)
+            val device = requireNotNull(manager.adapter).getRemoteDevice(address)
+            Shadows.shadowOf(manager).addDevice(BluetoothProfile.GATT, BluetoothProfile.STATE_CONNECTED, device)
         }
 
         fun pump() {
@@ -285,15 +285,30 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
         }
 
         suspend fun connect() {
+            endpoints.remember(BluetoothEndpoint(target.deviceId, address, null))
+            assertEquals(address, endpoints.endpoint(target.deviceId)?.address)
             runOperation { manager.connect(target) }
             until("connection ready") { manager.connectionState == DeviceConnectionState.READY }
             assertEquals(BlePhase.Connected, factory.currentBleLink()?.diagnostics?.phase)
             assertEquals(target.deviceId, LastConnectionStore(preferences, clock).read().deviceId)
+            val peer = peers.last()
+            assertEquals(listOf("discover", "mtu", "notify", "descriptor"), peer.shadow.setup)
+            assertEquals(1, peer.shadow.services.size)
+            assertTrue(peer.shadow.notificationsEnabled)
+            assertFalse(peer.shadow.closed)
+            assertEquals(0, peer.shadow.disconnects)
         }
 
         suspend fun close() {
             try { runOperation { container.close() } }
-            finally { peers.forEach { it.job.cancel() } }
+            finally {
+                peers.forEach {
+                    it.job.cancel()
+                    assertEquals(1, it.shadow.disconnects)
+                    assertEquals(1, it.shadow.closes)
+                    assertTrue(it.shadow.closed)
+                }
+            }
         }
     }
 
@@ -315,7 +330,6 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             service.addCharacteristic(tx)
             service.addCharacteristic(rx)
             shadow.addDiscoverableService(service)
-            shadow.allowCharacteristicNotification(rx)
             val commands = Channel<Bytes>(Channel.UNLIMITED)
             val firmware = FirmwareRadio(key(7))
             test.backgroundScope.launch(job, start = CoroutineStart.UNDISPATCHED) {
@@ -331,31 +345,116 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
     }
 }
 
+@Implements(BluetoothDevice::class, minSdk = 31, maxSdk = 32)
+class BleRecoveryDeviceShadow {
+    @RealObject private lateinit var actual: BluetoothDevice
+    private lateinit var address: String
+    internal var onOpen: (BluetoothGatt) -> Unit = { error("Native GATT peer is not installed") }
+
+    @Implementation
+    fun __constructor__(address: String) {
+        this.address = address
+    }
+
+    @Implementation
+    fun getAddress(): String = address
+
+    @Implementation
+    fun getBondState(): Int = BluetoothDevice.BOND_BONDED
+
+    @Implementation
+    fun connectGatt(
+        context: Context,
+        autoConnect: Boolean,
+        callback: BluetoothGattCallback,
+        transport: Int,
+        phy: Int,
+        handler: Handler,
+    ): BluetoothGatt {
+        assertEquals(RuntimeEnvironment.getApplication<Application>(), context.applicationContext)
+        assertFalse(autoConnect)
+        assertEquals(BluetoothDevice.TRANSPORT_LE, transport)
+        assertEquals(BluetoothDevice.PHY_LE_1M_MASK, phy)
+        assertEquals(Looper.getMainLooper(), handler.looper)
+        val gatt = ShadowBluetoothGatt.newInstance(actual)
+        val shadow = Shadow.extract<BleRecoveryGattShadow>(gatt)
+        shadow.gattCallback = callback
+        onOpen(gatt)
+        return gatt
+    }
+}
+
 @Implements(BluetoothGatt::class, minSdk = 31, maxSdk = 32)
-class BleRecoveryGattShadow : ShadowBluetoothGatt() {
+class BleRecoveryGattShadow {
     @RealObject private lateinit var actual: BluetoothGatt
+    internal lateinit var gattCallback: BluetoothGattCallback
     internal var onCommand: (ByteArray) -> Unit = { error("Firmware peer is not installed") }
     internal var onClosed: () -> Unit = {}
     internal var closes = 0
     internal var disconnects = 0
     internal val writes = mutableListOf<ByteArray>()
+    internal val setup = mutableListOf<String>()
+    private val discoverable = mutableListOf<BluetoothGattService>()
+    internal val services = mutableListOf<BluetoothGattService>()
+    internal var notificationsEnabled = false
+    internal var closed = false
+
+    internal fun addDiscoverableService(service: BluetoothGattService) {
+        discoverable += service
+    }
 
     @Implementation
-    override fun requestMtu(mtu: Int): Boolean {
+    fun discoverServices(): Boolean {
+        check(!closed)
+        setup += "discover"
+        services.clear()
+        services += discoverable
+        check(services.isNotEmpty())
+        gattCallback.onServicesDiscovered(actual, BluetoothGatt.GATT_SUCCESS)
+        return true
+    }
+
+    @Implementation
+    fun getServices(): List<BluetoothGattService> = services.toList()
+
+    @Implementation
+    fun setCharacteristicNotification(characteristic: BluetoothGattCharacteristic, enable: Boolean): Boolean {
+        check(!closed)
+        assertEquals(NusUuid.RX, characteristic.uuid)
+        assertTrue(services.any { characteristic in it.characteristics })
+        assertTrue(enable)
+        setup += "notify"
+        notificationsEnabled = true
+        return true
+    }
+
+    @Implementation
+    fun requestMtu(mtu: Int): Boolean {
+        check(!closed)
+        assertTrue(mtu >= 247)
+        setup += "mtu"
         requireNotNull(gattCallback).onMtuChanged(actual, 247, BluetoothGatt.GATT_SUCCESS)
         return true
     }
 
     @Suppress("DEPRECATION")
     @Implementation
-    override fun writeDescriptor(descriptor: BluetoothGattDescriptor): Boolean {
+    fun writeDescriptor(descriptor: BluetoothGattDescriptor): Boolean {
+        check(!closed)
+        assertTrue(notificationsEnabled)
+        assertEquals(NusUuid.CCCD, descriptor.uuid)
+        assertTrue(requireNotNull(descriptor.value).contentEquals(byteArrayOf(1, 0)))
+        setup += "descriptor"
         requireNotNull(gattCallback).onDescriptorWrite(actual, descriptor, BluetoothGatt.GATT_SUCCESS)
         return true
     }
 
     @Suppress("DEPRECATION")
     @Implementation
-    override fun writeCharacteristic(characteristic: BluetoothGattCharacteristic): Boolean {
+    fun writeCharacteristic(characteristic: BluetoothGattCharacteristic): Boolean {
+        check(!closed)
+        assertEquals(NusUuid.TX, characteristic.uuid)
+        assertTrue(services.any { characteristic in it.characteristics })
         val bytes = requireNotNull(characteristic.value).copyOf()
         writes += bytes
         requireNotNull(gattCallback).onCharacteristicWrite(actual, characteristic, BluetoothGatt.GATT_SUCCESS)
@@ -364,16 +463,15 @@ class BleRecoveryGattShadow : ShadowBluetoothGatt() {
     }
 
     @Implementation
-    override fun disconnect() {
+    fun disconnect() {
         disconnects++
-        super.disconnect()
     }
 
     @Implementation
-    override fun close() {
+    fun close() {
         closes++
+        closed = true
         onClosed()
-        super.close()
     }
 
     internal fun lose(status: Int = BluetoothGatt.GATT_SUCCESS) {

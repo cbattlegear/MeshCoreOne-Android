@@ -12,7 +12,10 @@ import android.view.ViewGroup
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
@@ -275,6 +278,31 @@ class TraceCodeInputComposeTest {
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
     }
 
+    @Test fun switchingBetweenListAndMapPreservesDraftAndPartialAddFeedback() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        setInput("AA00,BB00,FF00,GG")
+        val preview = listOf("AA00 will be added", "BB00 will be added", "FF00 not found", "Invalid format: GG")
+        assertTrue(texts().containsAll(preview))
+        click("Map")
+        assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
+        click("List")
+        assertEquals("AA00,BB00,FF00,GG", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().containsAll(preview))
+        click("Add nodes: AA00, BB00")
+        val feedback = listOf("Adding as hop 3", "Invalid format: GG", "FF00 not found")
+        assertEquals(feedback, announcementTexts())
+        click("Map")
+        assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
+        click("List")
+        assertEquals("", input().config[SemanticsProperties.EditableText].text)
+        assertEquals(feedback, announcementTexts())
+        assertEquals(2, host.get().recents.values.values.single().size)
+        assertTrue(host.get().sender.sent.isEmpty())
+    }
+
     @Test fun actualActivityRecreationRestoresTwoByteDraftBeforePreviewAndSubmission() {
         assertRecreatedDraft("AA00,BB00", "2 B")
     }
@@ -305,6 +333,11 @@ class TraceCodeInputComposeTest {
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
         scrollToIndex(47)
         assertTrue(button("1 B").config[SemanticsProperties.Selected])
+        scrollToIndex(0)
+        host.get().setRadioHashMode(1u)
+        setInput("AA")
+        assertTrue(texts().contains("AA will be added"))
+        assertFalse(button("Add nodes: AA").config.contains(SemanticsProperties.Disabled))
     }
 
     @Test fun actualActivityRestorationDoesNotApplyASavedOverrideToUnsupportedFirmware() {
@@ -323,6 +356,42 @@ class TraceCodeInputComposeTest {
         assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
         assertTrue(host.get().sender.sent.isEmpty())
+    }
+
+    @Test fun activityRecreationRestoresTheExplicitDefaultOverrideInTheActualHolder() {
+        host.get().mountObservedEntry()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        val before = assertNotNull(host.get().observedHolder)
+        host.get().runOnUiThread { before.setTraceHashMode(0u) }
+        settle()
+        assertEquals(0u.toUByte(), before.state.value.traceHashMode)
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        val after = assertNotNull(host.get().observedHolder)
+        assertNotSame(before, after)
+        assertEquals(0u.toUByte(), after.state.value.traceHashMode)
+        host.get().setRadioHashMode(1u)
+        setInput("AA")
+        assertEquals(1, after.hashSize)
+        assertEquals(0u.toUByte(), after.state.value.traceHashMode)
+        assertTrue(texts().contains("AA will be added"))
+        assertFalse(button("Add nodes: AA").config.contains(SemanticsProperties.Disabled))
+    }
+
+    @Test fun restoringAnExplicitDefaultOverrideDoesNotInvalidateAnExistingPathOrResult() {
+        val harness = configured()
+        val saved = savedPath(Bytes.of(0xAA), hashSize = 1)
+        val previous = result(emptyList())
+        harness.holder.editStateForTesting { it.copy(activeSavedPath = saved, result = previous) }
+        harness.holder.restoreTraceHashMode(0u)
+        assertEquals(0u.toUByte(), harness.state.traceHashMode)
+        assertEquals(saved, harness.state.activeSavedPath)
+        assertEquals(previous, harness.state.result)
+        harness.deps.device = device(pathHashMode = 1u)
+        assertEquals(1, harness.holder.hashSize)
     }
 
     private fun assertRecreatedDraft(draft: String, mode: String) {
@@ -459,13 +528,17 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
     internal lateinit var focusManager: FocusManager
     internal val recents = MapRecentsStorage()
     internal val sender = FakeTraceSender()
+    internal var observedHolder: TracePathStateHolder? = null
+        private set
+    private val contacts = listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")) +
+        (1..40).map { contact(it, name = "Repeater $it") }
     private val dependencies = FakeTraceDependencies().apply {
         device = device()
-        directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")) +
-            (1..40).map { contact(it, name = "Repeater $it") })
+        directory = FakeNodeDirectory(contacts = contacts)
         this.sender = this@TraceCodeInputTestActivity.sender
     }
     private var traceScreenMounted = false
+    private var observedEntryMounted = false
     private var firmware = "v1.11.0"
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -484,10 +557,12 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         }
         setContentView(content)
         if (savedInstanceState?.getBoolean("traceScreenMounted") == true) mountTraceScreen()
+        else if (savedInstanceState?.getBoolean("observedEntryMounted") == true) mountObservedEntry()
     }
 
     internal fun mountTraceScreen() {
         traceScreenMounted = true
+        observedEntryMounted = false
         content.setContent {
             focusManager = LocalFocusManager.current
             MaterialTheme {
@@ -496,13 +571,36 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         }
     }
 
+    internal fun mountObservedEntry() {
+        traceScreenMounted = false
+        observedEntryMounted = true
+        content.setContent {
+            val scope = rememberCoroutineScope()
+            val holder = remember(dependencies) {
+                TracePathStateHolder(scope, SystemTraceTimeSource, EnglishTraceStrings, recents, RecordingDiagnostics()).also {
+                    it.configure(dependencies)
+                    it.setContactsForTesting(contacts)
+                }
+            }
+            SideEffect { observedHolder = holder }
+            focusManager = LocalFocusManager.current
+            val state = holder.state.collectAsStateWithLifecycle().value
+            MaterialTheme { TraceCodeInput(state, holder) }
+        }
+    }
+
     internal fun setFirmware(version: String) {
         firmware = version
         dependencies.device = device(firmwareVersionString = version)
     }
 
+    internal fun setRadioHashMode(mode: UByte) {
+        dependencies.device = device(firmwareVersionString = firmware, pathHashMode = mode)
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("traceScreenMounted", traceScreenMounted)
+        outState.putBoolean("observedEntryMounted", observedEntryMounted)
         outState.putString("firmware", firmware)
         savedState.performSave(outState)
         super.onSaveInstanceState(outState)

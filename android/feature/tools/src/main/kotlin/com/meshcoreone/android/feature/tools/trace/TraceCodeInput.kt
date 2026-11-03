@@ -83,7 +83,7 @@ internal fun rememberTraceCodeInputState(holder: TracePathStateHolder): TraceCod
     LaunchedEffect(entry, holder) {
         // Restore only saved screen state, never a lazy-item remount.
         if (entry.restoringDraft) {
-            entry.restoredHashMode?.let(holder::adoptTraceHashMode)
+            entry.restoredHashMode?.let(holder::restoreTraceHashMode)
             entry.restoringDraft = false
         }
     }

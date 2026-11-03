@@ -387,14 +387,25 @@ class TracePathStateHolder(
 
     /** Switches to a pasted uniform width the radio can honor, unless it already matches. */
     fun adoptHashSize(forPastedCodes: String) {
+        if (!supportsTraceHashOverride) return
         val mode = TraceHashModes.inferredTraceHashMode(forPastedCodes) ?: return
-        adoptTraceHashMode(mode)
+        applySupportedTraceHashMode(mode, preserveOverride = false)
     }
 
-    internal fun adoptTraceHashMode(mode: UByte) {
-        if (deps.connectedDevice()?.supportsTraceHashSizeOverride != true) return
-        if (mode == effectiveTraceMode) return
-        setTraceHashMode(mode)
+    internal fun restoreTraceHashMode(mode: UByte) {
+        if (!supportsTraceHashOverride) return
+        applySupportedTraceHashMode(mode, preserveOverride = true)
+    }
+
+    private val supportsTraceHashOverride: Boolean
+        get() = deps.connectedDevice()?.supportsTraceHashSizeOverride == true
+
+    private fun applySupportedTraceHashMode(mode: UByte, preserveOverride: Boolean) {
+        if (mode != effectiveTraceMode) {
+            setTraceHashMode(mode)
+        } else if (preserveOverride && current.traceHashMode != mode) {
+            update { it.copy(traceHashMode = mode) }
+        }
     }
 
     fun recordRecent(publicKey: Bytes) {

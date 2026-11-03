@@ -157,6 +157,7 @@ private fun TracePathContent(
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val codeInput = rememberTraceCodeInputState(holder)
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(12.dp),
@@ -180,7 +181,7 @@ private fun TracePathContent(
                 Text(stringResource(C.contactsTraceSaved))
             }
         }
-        if (showMap) TracePathMapContent(state) else TracePathListContent(state, holder)
+        if (showMap) TracePathMapContent(state) else TracePathListContent(state, holder, codeInput)
     }
     if (showSaved) {
         AlertDialog(
@@ -221,9 +222,8 @@ private fun TracePathContent(
 }
 
 @Composable
-private fun TracePathListContent(state: TracePathState, holder: TracePathStateHolder) {
+private fun TracePathListContent(state: TracePathState, holder: TracePathStateHolder, codeInput: TraceCodeInputState) {
     val scope = rememberCoroutineScope()
-    val codeInput = rememberTraceCodeInputState(holder)
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),

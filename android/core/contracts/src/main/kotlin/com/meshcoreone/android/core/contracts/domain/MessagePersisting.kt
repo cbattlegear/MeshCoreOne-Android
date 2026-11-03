@@ -23,6 +23,13 @@ interface PendingSendPersisting {
     suspend fun incrementPendingSendAttemptCount(key: EntityKey): Long?
     suspend fun purgeOrphanPendingSends(): Long
     suspend fun purgeLegacyAttemptCountRows(): Long
+    suspend fun beginQueuedChannelAttempt(
+        key: QueuedChannelAttemptKey, expectedOccupantID: UUID, wireTimestamp: UInt,
+    ): QueuedChannelAttempt
+    suspend fun settleQueuedChannelAttempt(key: QueuedChannelAttemptKey, outcome: QueuedChannelAttemptOutcome): QueuedChannelAttempt
+    suspend fun completeAcceptedQueuedChannelAttempt(key: QueuedChannelAttemptKey)
+    suspend fun fetchQueuedChannelAttempt(key: QueuedChannelAttemptKey): QueuedChannelAttempt?
+    suspend fun fetchQueuedChannelAttempts(pending: EntityKey): SnapshotList<QueuedChannelAttempt>
 }
 
 interface MessagePersisting : PendingSendPersisting {

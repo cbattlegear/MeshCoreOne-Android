@@ -117,4 +117,6 @@ data class PendingSendEntity(
     val messageTimestamp: Long, val localNodeName: String?, val sequence: Long,
     @Embedded(prefix = "enqueuedAt_") val enqueuedAt: StoredInstant, val attemptCount: Long?,
     val channelOccupantID: UUID? = null,
+    val channelDispatchStateRawValue: Long? = null,
+    val channelAttemptID: UUID? = null,
 )

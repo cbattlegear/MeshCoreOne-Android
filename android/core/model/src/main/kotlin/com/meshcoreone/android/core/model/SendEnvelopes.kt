@@ -38,6 +38,8 @@ data class PendingSendDTO(
     val enqueuedAt: Instant,
     val attemptCount: Long? = 0,
     val channelOccupantID: UUID? = null,
+    val channelDispatchState: QueuedChannelDispatchState? = null,
+    val channelAttemptID: UUID? = null,
 ) {
     fun directMessageEnvelope(): DirectMessageEnvelope? =
         if (kind == PendingSendKind.DM && contactID != null) DirectMessageEnvelope(messageID, contactID, isResend) else null

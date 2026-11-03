@@ -54,10 +54,26 @@ fun ReactionEntity.toDTO(): ReactionDTO =
 fun PendingSendDTO.toEntity(): PendingSendEntity = PendingSendEntity(
     radioId.value, id, messageID, kind.rawValue, contactID, channelIndex?.toLong(), isResend, messageText,
     messageTimestamp.toLong(), localNodeName, sequence, StoredInstant.from(enqueuedAt), attemptCount, channelOccupantID,
+    channelDispatchState?.rawValue,
+    channelAttemptID,
 )
 fun PendingSendEntity.toDTO(): PendingSendDTO = PendingSendDTO(
     id, RadioId(radioId), messageID,
     PendingSendKind.fromRawValue(kindRawValue) ?: throw DatabaseValueException("pendingSend.kind", "Unknown raw value $kindRawValue"),
     contactID, channelIndex?.ubyte("pendingSend.channelIndex"), isResend, messageText, messageTimestamp.uint("pendingSend.messageTimestamp"),
     localNodeName, sequence, enqueuedAt.toInstant(), attemptCount, channelOccupantID,
+    checkedChannelDispatchState(),
+    channelAttemptID,
 )
+
+private fun PendingSendEntity.checkedChannelDispatchState(): QueuedChannelDispatchState? {
+    val state = channelDispatchStateRawValue?.let {
+        QueuedChannelDispatchState.fromRawValue(it)
+            ?: throw DatabaseValueException("pendingSend.channelDispatchState", "Unknown raw value $it")
+    }
+    val ownsAttempt = state != null && state != QueuedChannelDispatchState.READY
+    if (ownsAttempt != (channelAttemptID != null) ||
+        state != null && (kindRawValue != PendingSendKind.CHANNEL.rawValue || channelOccupantID == null)
+    ) throw DatabaseValueException("pendingSend.channelDispatchState", "State, intended occupant and current attempt disagree")
+    return state
+}

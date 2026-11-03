@@ -186,6 +186,25 @@ zero errors/skips, with evidence explicitly incomplete. The database suite was
 This run does not establish Room repository, fence or fixture execution, nor does
 it contain the later fresh-lease gate or held ChannelService/runtime composition.
 
+The exact `0b26607fbf204becd9ee0a0f12f4bde9b4ba9314` successor was executed by
+[41600492653](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41600492653).
+Its database suite discovered 49 tests, 48 passed and the migration fixture failed
+with `org.json.JSONException` at line 24. Available mandatory reports totaled
+5,979 discovered, 5,978 passed and one failed, with zero errors/skips; required
+data/services reports were absent. This is not integration evidence.
+Static inspection of the exact retained exported v1 schema confirms that
+`link_preview_data` omits optional `indices`, while the fixture unconditionally
+called `getJSONArray("indices")`. The console excerpt does not expose a deeper
+exception message; none is invented. Standalone `b8303ba7cdb218c7c653d0e46bdefc1011264f93`
+handles only the absent optional array, still creates every present index and
+still rejects malformed present arrays. The migration/data assertions are unchanged.
+`e1f4c05ce40de4044823c7228882ddb90954af15` normalizes one patch line ending.
+Its exact diagnostic
+[41602293043](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41602293043)
+was dispatched, with no passing outcome claimed here. It contains the shared
+admission contract but not the journal/schema-v3 or later producer fence/service/
+runtime candidates.
+
 ## Shared connection admission support
 
 The runtime lifecycle owner and fence owner agreed the bounded WP-201
@@ -205,3 +224,94 @@ admitted model-module contract test surface, as the existing `DomainContractTest
 does: value/reference mismatch, revoke before admission, retained admitted count,
 concurrent idempotent completion, acquisition/revocation race and exact count
 overflow. These are authored declarations pending execution, not drain evidence.
+
+## Separately assigned queued channel-send journal
+
+Coordinator assignment `call_9WQQN5ukC9BgNcRYtZDZNKoR` explicitly adds the bounded
+WP-201/202 storage prerequisite, separate from occupant identity and the independent
+#535 candidate. WP-208 producer `13a03908-afb8-42bd-9c96-57a27920076e` confirmed it
+owns the real queue/channel retry consumer, that wire timestamps are UInt seconds,
+and that channel command success has no additional wire ACK metadata.
+
+All modified model/contracts/database paths and repository/test support paths
+passed actual trusted WP-201/WP-202 `modify` admissions. Historical reservations are
+not adopted or rewritten. Production queue, inline send, UI, held ChannelService
+and runtime code are not edited by this journal candidate.
+
+`PendingSendDTO` appends nullable `channelDispatchState` and `channelAttemptID`.
+Null is unknown legacy state, never inferred READY from a SENT message or occupant
+proof. New proved channel submissions through the enqueue/retry transaction receive
+READY with no active attempt. Generic channel upsert cannot create dispatch proof,
+reset an existing state/pointer, replace its payload, or overwrite it as a DM.
+Automatic orphan/legacy purges retain channel intent; ordinary pending deletion and
+fresh retry enqueue reject retained unknown, DISPATCHING, ACCEPTED or UNCERTAIN
+submissions. Explicit user message/history/device-data deletion remains distinct.
+
+Five real abstract methods on `PendingSendPersisting`:
+
+- `beginQueuedChannelAttempt(key, expectedOccupantID, wireTimestamp)` compares the
+  exact radio/pending/message IDs, saved/queued channel index, original occupant
+  UUID and exact text, then atomically writes DISPATCHING, its current attempt UUID
+  and immutable journal metadata before the caller may dispatch. Another retained
+  unresolved submission for that message blocks begin even if this row was READY
+  before the other attempt started.
+- `settleQueuedChannelAttempt(key, outcome)` CASes that same active attempt:
+  ACCEPTED is cleanup-only; DEFINITELY_UNSENT returns the submission to READY with
+  no current pointer; UNCERTAIN never re-arms. Repeated identical terminal
+  settlement is idempotent even after completion or a later attempt. A fresh UUID
+  is required for every subsequent actual wire attempt, including pool backoff.
+- `completeAcceptedQueuedChannelAttempt(key)` accepts only the exact accepted
+  attempt. In one transaction it applies SENT unless already DELIVERED, commits the
+  actual wire timestamp, deletes only its exact accepted pending row and marks the
+  journal completed. Only a resend increments sendCount, zeroes heardRepeats and
+  deletes repeat rows, once. A different live submission for the message causes a
+  typed atomic rejection before any mutation; no newer outcome is overwritten.
+- `fetchQueuedChannelAttempt(key)` and `fetchQueuedChannelAttempts(pendingKey)`
+  provide real exact-key readback/history, including immutable `isResend` and
+  completed state for accepted hydration cleanup. Missing reads return null/empty;
+  no command returns fake success or defaults from an unsupported implementation.
+
+Conflicts use the existing `PersistenceStoreException(InvalidData)` with typed
+`QueuedChannelAttemptRejected(pending, reason)` cause, reported through the standard
+repository mechanism. No new UI-error variant or unknown/retry UX is selected.
+Malformed persisted states/phases fail projection explicitly rather than becoming
+READY, accepted, or silently omitted.
+
+Schema v3 adds nullable state/pointer columns plus
+`queued_channel_attempts(radioId,attemptID,pendingID,messageID,channelIndex,
+channelOccupantID,wireTimestamp,isResend,phaseRawValue,isCompleted)`, keyed by
+radio/attempt UUID. No foreign cascade may discard uncertain evidence during
+ordinary queue cleanup. Explicit full device-data erase clears its partition.
+The registered v2-to-v3 migration creates no attempt records and stamps no legacy
+queue state; v1-to-v3 chains the existing migration. Generated v3 schema validation
+must come from real KSP/Room execution, not a handwritten schema export.
+
+Sixteen authored real-Room regressions discriminate exact begin metadata and
+saved text/proof mismatch, independent-context single-claim exclusion, failed
+pre-wire/acceptance/completion rollback, definite-unsent fresh-attempt reuse guards,
+unknown/uncertain preservation and retry rejection, real DISPATCHING/UNCERTAIN and
+ACCEPTED disk reopen, idempotent resend cleanup after a later explicit submission,
+atomic refusal of a newer live message owner, radio partitions, malformed state,
+late delivery/nonresend counters and explicit device-data erase. Actual Room
+transaction-executor schedules additionally cancel before begin executes and at
+committed begin/acceptance/completion return, then reconcile exact stored state
+without inferring acceptance or repeating resend bookkeeping. These follow the
+existing native repository commit-return cancellation fixture, not a fake store.
+The migration fixture exercises retained exported v1 and a v2 database produced by the actual
+v1-to-v2 migration, preserving original text/proof and null unknown state through
+upgrade/reopen. This is not a fabricated v2 KSP export.
+
+These are storage-boundary declarations, not actual queue/session wire-count
+assertions. Crash-left DISPATCHING never proves either acceptance or nonacceptance;
+the real producer must hydrate only READY, clean ACCEPTED without radio calls and
+expose unknown/uncertain intent without automatic replay. Producer adoption,
+post-return cancellation handling and exact-candidate composed execution remain
+required. No inline-send journal, recovery UX, hardware drain, bidirectional codec
+or exactly-once delivery is claimed.
+
+Journal source checks passed using `C:\Python312\python.exe`:
+`tools\android-port\portmap.py`, `tools\android-port\controller\validate.py`
+and `git diff --check`. These validate source provenance, controller policy and
+whitespace, not Kotlin/Room execution. The retained local Gradle execution owner
+was not changed or used. The immutable journal candidate remains UNVERIFIED
+until its own exact-candidate hosted run discovers and passes the required suites.

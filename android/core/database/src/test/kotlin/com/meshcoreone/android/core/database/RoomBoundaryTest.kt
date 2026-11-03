@@ -36,10 +36,10 @@ class RoomBoundaryTest {
     @Test fun actualSqliteTablesColumnsPrimaryKeysForeignKeysAndIdentityMatchTheKspExport() = runTest {
         db.devices().count()
         val export = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
-            "com.meshcoreone.android.core.database.MeshCoreDatabase\\2.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
-        assertEquals(2, export.getInt("version")); assertEquals(18, export.getJSONArray("entities").length())
+            "com.meshcoreone.android.core.database.MeshCoreDatabase\\3.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
+        assertEquals(3, export.getInt("version")); assertEquals(19, export.getJSONArray("entities").length())
         val sqlite = db.openHelper.readableDatabase
-        sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(2, it.getInt(0)) }
+        sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(3, it.getInt(0)) }
         sqlite.query("SELECT identity_hash FROM room_master_table WHERE id=42").use {
             assertTrue(it.moveToFirst()); assertEquals(export.getString("identityHash"), it.getString(0))
         }
@@ -60,8 +60,12 @@ class RoomBoundaryTest {
                 assertEquals(field.getString("affinity") to notNull, actual[field.getString("columnName")], "$name.${field.getString("columnName")}")
             }
             val pk = entity.getJSONObject("primaryKey").getJSONArray("columnNames")
-            if (name !in setOf("devices", "debug_log_entries", "link_preview_data", "node_status_snapshots", "channel_occupants")) {
-                assertEquals(listOf("radioId", "id"), (0 until pk.length()).map { pk.getString(it) })
+            val primaryColumns = (0 until pk.length()).map { pk.getString(it) }
+            when {
+                name == "channel_occupants" -> assertEquals(listOf("radioId", "index"), primaryColumns)
+                name == "queued_channel_attempts" -> assertEquals(listOf("radioId", "attemptID"), primaryColumns)
+                name !in setOf("devices", "debug_log_entries", "link_preview_data", "node_status_snapshots") ->
+                    assertEquals(listOf("radioId", "id"), primaryColumns)
             }
             val keys = if (entity.has("foreignKeys")) entity.getJSONArray("foreignKeys") else JSONArray()
             foreignKeys += keys.length()

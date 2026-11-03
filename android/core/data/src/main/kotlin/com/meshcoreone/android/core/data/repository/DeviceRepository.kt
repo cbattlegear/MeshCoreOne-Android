@@ -140,6 +140,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         val messages = database.messages().backupPageWithoutPreviewBlobs(radioId.value, Long.MAX_VALUE, 0)
         deleteMessageDependents(radioId, messages, reactionsByMessage = false)
         database.pendingSends().clearRadio(radioId.value)
+        database.queuedChannelAttempts().clearRadio(radioId.value)
         database.messages().clearRadio(radioId.value)
         database.channels().clearRadio(radioId.value)
         database.channelOccupants().clearRadio(radioId.value)

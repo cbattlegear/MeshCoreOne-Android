@@ -450,7 +450,7 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         assertEquals(b, store.fetchMessage(EntityKey(RADIO_B, b.id)))
     }
 
-    @Test fun malformedFutureDispatchStateFailsExplicitlyAndDoesNotBecomeReadyOrLoseText() = runTest {
+    @Test fun malformedDispatchStateOrAttemptPhaseFailsExplicitlyWithoutBecomingReadyOrLosingText() = runTest {
         val row = channelMessage()
         val pending = queued(row)
         seed(row, pending)
@@ -460,6 +460,16 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         assertEquals(99L, retained.channelDispatchStateRawValue)
         assertEquals(row.text, retained.messageText)
         assertTrue(db.queuedChannelAttempts().forPending(RADIO_A.value, pending.id).isEmpty())
+        db.pendingSends().upsert(pending.toEntity().copy(channelDispatchStateRawValue = QueuedChannelDispatchState.READY.rawValue))
+        val key = attempt(pending)
+        store.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 1u)
+        val original = assertNotNull(db.queuedChannelAttempts().byId(RADIO_A.value, key.attemptID))
+        db.queuedChannelAttempts().upsert(original.copy(phaseRawValue = 99))
+        assertFailsWith<PersistenceStoreException> { store.fetchQueuedChannelAttempt(key) }
+        assertEquals(99L, db.queuedChannelAttempts().byId(RADIO_A.value, key.attemptID)?.phaseRawValue)
+        db.queuedChannelAttempts().upsert(original.copy(isCompleted = true))
+        assertFailsWith<PersistenceStoreException> { store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, pending.id)) }
+        assertEquals(row.text, store.fetchPendingSends(RADIO_A).single().messageText)
     }
 
     @Test fun nonResendCompletionPreservesLateDeliverySendCountAndRepeatHistory() = runTest {

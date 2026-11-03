@@ -320,13 +320,22 @@ class ContactService(
      * ZephCore V-contact remove is disabled: no `CMD_REMOVE` (which would turn `v.contact` off), no
      * local wipe, and no `NodeDeleted` storage-full clear.
      */
-    suspend fun removeContact(radioId: RadioId, publicKey: Bytes) =
-        ContactWriteRecovery.withContactMutationFence(preferences, radioId) {
-            if (isProtectedVContact(radioId, publicKey)) {
-                logger.log(ContactLogLevel.INFO, "removeContact ignored for ZephCore V-contact (remove disabled)")
-                return@withContactMutationFence
-            }
+    suspend fun removeContact(radioId: RadioId, publicKey: Bytes) {
+        if (isProtectedVContact(radioId, publicKey)) {
+            logger.log(ContactLogLevel.INFO, "removeContact ignored for ZephCore V-contact (remove disabled)")
+            return
+        }
 
+        ContactWriteRecovery.withContactMutationFence(
+            preferences,
+            radioId,
+            shouldMutate = {
+                if (isProtectedVContact(radioId, publicKey)) {
+                    logger.log(ContactLogLevel.INFO, "removeContact ignored for ZephCore V-contact (remove disabled)")
+                    false
+                } else true
+            },
+        ) {
             try {
                 session.removeContact(publicKey)
             } catch (cancelled: CancellationException) {

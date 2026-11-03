@@ -5,11 +5,11 @@ import com.meshcoreone.android.core.contracts.domain.ChannelReceiveEnvelope
 import com.meshcoreone.android.core.contracts.domain.ChannelReceiveEnvelopePolling
 import com.meshcoreone.android.core.contracts.domain.ChannelReceiveOrigin
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.domain.errors.MessagePollingException
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.DeliveryContext
-import com.meshcoreone.android.core.model.EntityKey
 import com.meshcoreone.android.core.protocol.bytes.ByteWriter
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelMessage

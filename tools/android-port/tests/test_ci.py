@@ -58,14 +58,199 @@ class BenchmarkConsumerTests(unittest.TestCase):
             "task.outputs.upToDateWhen { false }",
             'task.outputs.cacheIf("Benchmark consumer source observation requires task execution") { false }',
             "task.sources.files",
-            "task.doFirst { observed = identify() }",
-            "task.doLast {",
+            "gradle.taskGraph.beforeTask { task ->",
+            "consumerInputs[task.path] = identify()",
+            "gradle.taskGraph.afterTask { task, state ->",
+            "state.failure != null",
+            "!state.executed",
+            "!state.didWork",
+            "state.skipped",
+            "state.upToDate",
+            "state.noSource",
+            "state.skipMessage != null",
             "identify() != observed",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, guard)
+        compiler_configuration = guard.split("gradle.beforeProject", 1)[1].split(
+            "project.tasks.withType(org.gradle.api.tasks.testing.Test)", 1,
+        )[0]
+        self.assertNotIn("task.doFirst", compiler_configuration)
+        self.assertNotIn("task.doLast", compiler_configuration)
+        observation = guard.split("gradle.taskGraph.afterTask { task, state ->", 1)[1]
+        self.assertLess(observation.index("state.skipMessage != null"),
+                        observation.index("new File(consumerFile).append"))
         for path in ci.BENCHMARK_CONSUMER_SOURCES:
             self.assertIn(path.removeprefix("android/"), guard)
+
+    def test_hosted_consumer_requires_fresh_project_and_private_gradle_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "android"
+            module = project / "app"
+            module.mkdir(parents=True)
+            (project / "settings.gradle.kts").write_text("", encoding="utf-8")
+            (module / "build.gradle.kts").write_text("", encoding="utf-8")
+            output = root / "output"
+            home, cache = ci.prepare_benchmark_consumer_state(project, output)
+            self.assertEqual(home, output / "gradle-user-home")
+            self.assertEqual(cache, output / "gradle-project-cache")
+            self.assertEqual(list(home.iterdir()), [])
+            self.assertEqual(list(cache.iterdir()), [])
+            with self.assertRaisesRegex(PortError, "must use new directories"):
+                ci.prepare_benchmark_consumer_state(project, output)
+
+        for relative in ("build", ".gradle", "app/build", "app/.gradle", "build-logic/build"):
+            with self.subTest(previous=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = root / "android"
+                for script in ("settings.gradle.kts", "app/build.gradle.kts",
+                               "build-logic/settings.gradle.kts"):
+                    path = project / script
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("", encoding="utf-8")
+                previous = project / relative
+                previous.mkdir()
+                marker = previous / "retained"
+                marker.write_text("unchanged", encoding="utf-8")
+                with self.assertRaisesRegex(PortError, "project state is not fresh"):
+                    ci.prepare_benchmark_consumer_state(project, root / "output")
+                self.assertEqual(marker.read_text(encoding="utf-8"), "unchanged")
+                self.assertFalse((root / "output").exists())
+
+        for name in ("gradle-user-home", "gradle-project-cache"):
+            with self.subTest(existing=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = root / "android"
+                project.mkdir()
+                output = root / "output"
+                (output / name).mkdir(parents=True)
+                marker = output / name / "retained"
+                marker.write_text("unchanged", encoding="utf-8")
+                with self.assertRaisesRegex(PortError, "must use new directories"):
+                    ci.prepare_benchmark_consumer_state(project, output)
+                self.assertEqual(marker.read_text(encoding="utf-8"), "unchanged")
+
+    def test_hosted_consumer_refuses_linked_or_unreadable_project_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "android"
+            linked = project / "linked"
+            linked.mkdir(parents=True)
+            original = Path.is_symlink
+
+            def simulated_link(path):
+                return path == linked or original(path)
+
+            with patch.object(Path, "is_symlink", simulated_link):
+                with self.assertRaisesRegex(PortError, "Linked benchmark consumer project"):
+                    ci.prepare_benchmark_consumer_state(project, root / "output")
+
+            def inaccessible(*args, onerror, **kwargs):
+                onerror(PermissionError("fixture"))
+                yield from ()
+
+            with patch.object(ci.os, "walk", inaccessible):
+                with self.assertRaisesRegex(PortError, "Cannot inspect benchmark consumer project"):
+                    ci.prepare_benchmark_consumer_state(project, root / "output")
+
+            linked_output = root / "linked-output"
+            linked_output.mkdir()
+
+            def simulated_output_link(path):
+                return path == linked_output or original(path)
+
+            with patch.object(Path, "is_symlink", simulated_output_link):
+                with self.assertRaisesRegex(PortError, "Linked benchmark consumer output"):
+                    ci.prepare_benchmark_consumer_state(project, linked_output / "output")
+            with self.assertRaisesRegex(PortError, "must be separate"):
+                ci.prepare_benchmark_consumer_state(project, project / "output")
+            with self.assertRaisesRegex(PortError, "must be absolute"):
+                ci.prepare_benchmark_consumer_state(project, Path("relative-output"))
+
+    def test_consumer_execution_isolates_hosted_home_and_disables_caches_for_both_phases(self):
+        cases = (
+            ("linux", False, [ci.BENCHMARK_CONSUMER_SCOPE]),
+            ("windows", False, [ci.BENCHMARK_CONSUMER_SCOPE]),
+            ("linux", True, [ci.BENCHMARK_CONSUMER_SCOPE]),
+            ("linux", False, ["protocol"]),
+        )
+        for host, local, scopes in cases:
+            with self.subTest(host=host, local=local, scopes=scopes), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = root / "android"
+                project.mkdir()
+                (project / "settings.gradle.kts").write_text("", encoding="utf-8")
+                output = root / "output"
+                calls = []
+
+                def capture(command, environment, log, **kwargs):
+                    calls.append((list(command), dict(environment), log))
+                    if log.name == "gradle-scaffold.log":
+                        raise PortError("captured build")
+
+                with (
+                    patch.object(ci, "REPO", root),
+                    patch.object(ci, "load_manifest", return_value=object()),
+                    patch.object(ci, "port_map", return_value=[]),
+                    patch.object(ci.platform, "python_version", return_value="3.12.4"),
+                    patch.object(ci, "toolchain_lock", return_value={"python": "3.12.4"}),
+                    patch.object(ci, "candidate_environment", return_value={
+                        "GRADLE_USER_HOME": str(root / "restored-home"), "PATH": "fixture",
+                    }),
+                    patch.object(ci, "verify_wrapper"),
+                    patch.object(ci, "execute", side_effect=capture),
+                    patch.object(ci, "validate_candidate_task_graph", return_value={"tasks": 1}),
+                    patch.object(ci, "write_github_outputs"),
+                    patch.object(ci.shutil, "which", return_value="fixture-pwsh"),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    self.assertRaisesRegex(PortError, "captured build"),
+                ):
+                    ci.run_stage("scaffold", {"host": host, "private_root": str(root / "private")},
+                                 output, local=local, scopes=scopes)
+
+                consumer = scopes == [ci.BENCHMARK_CONSUMER_SCOPE]
+                expected_home = output / "gradle-user-home" if consumer and not local else root / "restored-home"
+                self.assertTrue(calls)
+                for _, environment, _ in calls:
+                    self.assertEqual(environment["GRADLE_USER_HOME"], str(expected_home))
+                gradle = [call for call in calls if call[2].name.startswith("gradle-")]
+                self.assertEqual(len(gradle), 2 if consumer else 1)
+                for command, _, log in gradle:
+                    if host == "windows":
+                        suffix = "-preflight" if "preflight" in log.name else ""
+                        invocation = json.loads((output / f"gradle-scaffold{suffix}-invocation.json")
+                                                .read_text(encoding="utf-8"))
+                        arguments = invocation["arguments"]
+                    else:
+                        arguments = command
+                    self.assertEqual("--no-build-cache" in arguments, consumer)
+                    self.assertEqual("--no-configuration-cache" in arguments, consumer)
+                    self.assertEqual("--build-cache" in arguments, not consumer and not local)
+                    cache = output / "gradle-project-cache" if consumer and not local else root / "private" / "project-root"
+                    self.assertEqual(arguments[arguments.index("--project-cache-dir") + 1], str(cache))
+
+    def test_stale_hosted_consumer_project_stops_before_any_subprocess(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "android"
+            (project / "build").mkdir(parents=True)
+            (project / "settings.gradle.kts").write_text("", encoding="utf-8")
+            with (
+                patch.object(ci, "REPO", root),
+                patch.object(ci, "load_manifest", return_value=object()),
+                patch.object(ci, "port_map", return_value=[]),
+                patch.object(ci.platform, "python_version", return_value="3.12.4"),
+                patch.object(ci, "toolchain_lock", return_value={"python": "3.12.4"}),
+                patch.object(ci, "candidate_environment", return_value={}),
+                patch.object(ci, "execute") as execute,
+                contextlib.redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(PortError, "project state is not fresh"),
+            ):
+                ci.run_stage("scaffold", {"host": "linux", "private_root": str(root / "private")},
+                             root / "output", scopes=[ci.BENCHMARK_CONSUMER_SCOPE])
+            execute.assert_not_called()
+            self.assertTrue((project / "build").is_dir())
 
     def test_source_evidence_requires_each_exact_task_and_committed_blob(self):
         snapshot = {path: str(index + 1) * 40 for index, path in enumerate(ci.BENCHMARK_CONSUMER_SOURCES)}

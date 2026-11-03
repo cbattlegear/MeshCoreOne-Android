@@ -102,19 +102,26 @@ The Gradle task-observation guard itself also selects this route.
 This does not add a scope to historical five- or six-key reports and does not
 run the full benchmark stage for ordinary product changes. The selected Linux
 step executes `validateModuleGraph` and the benchmark/profile Kotlin and Java
-compile tasks. The guard disables task-output caching and up-to-date shortcuts
-for the two Kotlin tasks and records the committed `WorkloadActivity.kt` and
-`Workload.kt` Git blobs observed by their actions. Incremental Kotlin work may
-still be reused. Independent review found that candidate-controlled Gradle
-configuration can disable the compilers and forge those records, so the current
-records do not independently prove execution. Trusted acceptance remains blocked
-pending a hardened observer and execution-input closure. The historical reader
-detects the new declaration from immutable base/head workflows while preserving
-older workflows' existing acceptance. The compile-only result does not establish
-a full benchmark build, performance, device behavior or WP-504 acceptance.
+compile tasks. Hosted consumer execution creates a new Gradle user home and
+project cache rather than using the restored home, rejects pre-existing build or
+`.gradle` state in discovered Gradle project directories, and disables build and
+configuration caches. The guard requires the two Kotlin tasks to report
+successful, non-skipped work and records the committed `WorkloadActivity.kt`
+and `Workload.kt` Git blobs before and after their actions. A local consumer run
+does not establish the hosted isolation boundary.
 
-Hosted Gradle task-output caching is enabled. Only `:core:data:testDebugUnitTest`
-is explicitly eligible for test-result caching; all other Gradle `Test` tasks
+These are producer observations, not independent proof: candidate-controlled
+build configuration, earlier Python steps and other executable inputs still
+require a trusted immutable execution-input closure and reader enforcement.
+Trusted acceptance remains blocked pending that separately reviewed boundary.
+The historical reader detects the new declaration from immutable base/head
+workflows while preserving older workflows' existing acceptance. The
+compile-only result does not establish a full benchmark build, performance,
+device behavior or WP-504 acceptance.
+
+Outside the isolated consumer invocation, hosted Gradle task-output caching is
+enabled. Only `:core:data:testDebugUnitTest` is explicitly eligible for
+test-result caching; all other Gradle `Test` tasks
 are explicitly denied cache eligibility until their external inputs and side
 effects are accounted for. The candidate task-graph init script declares the WP-203
 fixture directory as an input and the interop artifact directory as an output,

@@ -412,6 +412,43 @@ def read_benchmark_consumer_compilation(path, repo):
     return validate_benchmark_consumer_compilation(records, snapshot)
 
 
+def prepare_benchmark_consumer_state(project: Path, output: Path):
+    if not project.is_dir() or project.is_symlink() or project.is_junction():
+        raise PortError("Benchmark consumer requires an unlinked Android project directory")
+    if not output.is_absolute():
+        raise PortError("Benchmark consumer output directory must be absolute")
+    for path in (output, *output.parents):
+        if path.is_symlink() or path.is_junction():
+            raise PortError(f"Linked benchmark consumer output directory: {path}")
+    project_path, output_path = project.resolve(), output.resolve()
+    if output_path.is_relative_to(project_path) or project_path.is_relative_to(output_path):
+        raise PortError("Benchmark consumer output must be separate from the Android project")
+
+    def walk_error(error):
+        raise PortError("Cannot inspect benchmark consumer project state") from error
+
+    for current, directories, files in os.walk(project, followlinks=False, onerror=walk_error):
+        directory = Path(current)
+        if {"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"} & set(files):
+            for name in ("build", ".gradle"):
+                previous = directory / name
+                if previous.exists() or previous.is_symlink():
+                    raise PortError(f"Benchmark consumer project state is not fresh: {previous}")
+        for name in directories:
+            path = directory / name
+            if path.is_symlink() or path.is_junction():
+                raise PortError(f"Linked benchmark consumer project directory: {path}")
+        directories[:] = [name for name in directories if name not in ("build", ".gradle")]
+
+    output.mkdir(parents=True, exist_ok=True)
+    home, cache = output / "gradle-user-home", output / "gradle-project-cache"
+    if any(path.exists() or path.is_symlink() for path in (home, cache)):
+        raise PortError("Benchmark consumer Gradle state must use new directories")
+    home.mkdir(mode=0o700)
+    cache.mkdir(mode=0o700)
+    return home, cache
+
+
 def stage_tasks(stage, selected, *, affected_candidate=False):
     if BENCHMARK_CONSUMER_SCOPE in selected:
         if stage != "scaffold" or selected != [BENCHMARK_CONSUMER_SCOPE] or affected_candidate:
@@ -427,14 +464,21 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
     print(f"Verified Kotlin source dispositions and pinned provenance: {len(dispositions)} files", flush=True)
     if platform.python_version() != toolchain_lock()["python"]:
         raise PortError("Declared CI executor requires Python 3.12.4")
+    project = REPO / "android"
+    default_selection = ("scaffold",) if stage == "scaffold" else ("protocol",) if stage == "protocol" else ()
+    selected = list(scopes or default_selection)
+    tasks = stage_tasks(stage, selected, affected_candidate=affected_candidate)
+    consumer = selected == [BENCHMARK_CONSUMER_SCOPE]
     environment = candidate_environment(state, local=local)
+    cache = Path(state["private_root"]) / "project-root"
+    if consumer and not local:
+        home, cache = prepare_benchmark_consumer_state(project, output)
+        environment["GRADLE_USER_HOME"] = str(home)
     task_graph = output / f"gradle-{stage}-task-graph.json"
     verify_wrapper()
     execute([sys.executable, str(REPO / "android" / "scaffold" / "check_environment.py")],
             environment, output / f"{stage}-preflight.log", timeout=60)
     environment["ANDROID_CI_TASK_GRAPH"] = str(task_graph)
-    project = REPO / "android"
-    cache = Path(state["private_root"]) / "project-root"
     options = [
         "--no-daemon", "--console=plain", "--dependency-verification", "strict",
         "-Pkotlin.compiler.execution.strategy=in-process",
@@ -443,13 +487,12 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
     ]
     if not local:
         options.extend(("--build-cache", "--parallel", "--max-workers=8"))
+    if consumer:
+        options = [option for option in options if option != "--build-cache"]
+        options.extend(("--no-build-cache", "--no-configuration-cache"))
     if local:
         options.append("-PscaffoldTestJvmArgs=-Xms32m -XX:+UseSerialGC -XX:ActiveProcessorCount=2 -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=32m -XX:MaxMetaspaceSize=256m")
     wrapper = REPO / "android" / ("gradlew.bat" if state["host"] == "windows" else "gradlew")
-    default_selection = ("scaffold",) if stage == "scaffold" else ("protocol",) if stage == "protocol" else ()
-    selected = list(scopes or default_selection)
-    tasks = stage_tasks(stage, selected, affected_candidate=affected_candidate)
-    consumer = selected == [BENCHMARK_CONSUMER_SCOPE]
     if affected_candidate:
         if local or stage != "scaffold" or state["host"] != "linux":
             raise PortError("Affected candidate selection is available only for hosted Linux scaffold verification")

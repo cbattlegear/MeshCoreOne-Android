@@ -284,6 +284,10 @@ class EnvironmentTests(unittest.TestCase):
                         patch.object(ci, "load_manifest", return_value=None),
                         patch.object(ci, "port_map", return_value={}),
                         patch.object(ci, "candidate_environment", return_value={}),
+                        patch.object(
+                            ci, "prepare_benchmark_consumer_state",
+                            return_value=(output / "gradle-user-home", output / "gradle-project-cache"),
+                        ) as isolate,
                         patch.object(ci, "verify_wrapper"),
                         patch.object(ci.shutil, "which", return_value="fixture-pwsh"),
                         patch.object(ci, "execute", side_effect=execute),
@@ -295,6 +299,10 @@ class EnvironmentTests(unittest.TestCase):
                             local=local, scopes=scopes,
                         )
 
+                    if stage == "benchmark":
+                        isolate.assert_not_called()
+                    else:
+                        isolate.assert_called_once_with(REPO / "android", output)
                     self.assertEqual(len(calls), 3)
                     if host == "windows":
                         preflight = load_json(output / f"gradle-{stage}-preflight-invocation.json")["arguments"]
@@ -317,12 +325,15 @@ class EnvironmentTests(unittest.TestCase):
                     else:
                         self.assertIn("--parallel", preflight)
                         self.assertIn("--max-workers=8", preflight)
-                        self.assertIn("--build-cache", build)
                         if stage == "benchmark":
+                            self.assertIn("--build-cache", build)
                             self.assertIn("--max-workers=1", build)
                             self.assertNotIn("--max-workers=8", build)
                             self.assertNotIn("--parallel", build)
                         else:
+                            self.assertNotIn("--build-cache", build)
+                            self.assertIn("--no-build-cache", build)
+                            self.assertIn("--no-configuration-cache", build)
                             self.assertIn("--max-workers=8", build)
                             self.assertIn("--parallel", build)
 

@@ -265,10 +265,27 @@ class MeshCoreSession private constructor(
         requirePrefix(destination, "sendMessage")
         return messageSent(PacketBuilder.sendMessage(destination, text, timestamp, attempt))
     }
+    override suspend fun sendMessage(
+        destination: Bytes, text: String, timestamp: Instant, attempt: UByte, dispatch: MessageWriteDispatch,
+    ): MessageSentInfo {
+        dispatch.claim()
+        requirePrefix(destination, "sendMessage")
+        val packet = PacketBuilder.sendMessage(destination, text, timestamp, attempt)
+        return core.exchange(dispatch.accounting) {
+            query(packet, "messageSent", errorMatcher = ::deviceError) { (it as? MeshEvent.MessageSent)?.info }
+        }
+    }
     suspend fun sendMessage(destination: Destination, text: String, timestamp: Instant = Instant.now(), attempt: UByte = 0u): MessageSentInfo =
         sendMessage(destination.publicKey(6), text, timestamp, attempt)
     override suspend fun sendChannelMessage(channel: UByte, text: String, timestamp: Instant) =
         simple(PacketBuilder.sendChannelMessage(channel, text, timestamp))
+    override suspend fun sendChannelMessage(
+        channel: UByte, text: String, timestamp: Instant, dispatch: MessageWriteDispatch,
+    ) {
+        dispatch.claim()
+        val packet = PacketBuilder.sendChannelMessage(channel, text, timestamp)
+        core.exchange(dispatch.accounting) { simple(packet) }
+    }
     override suspend fun sendCommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
         requirePrefix(destination, "sendCommand")
         return messageSent(PacketBuilder.sendCommand(destination, command, timestamp))

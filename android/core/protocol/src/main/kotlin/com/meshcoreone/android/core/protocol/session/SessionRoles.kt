@@ -29,6 +29,21 @@ interface MessagingSessionOps {
         destination: Bytes, text: String, timestamp: Instant = Instant.now(), attempt: UByte = 0u,
     ): MessageSentInfo
     suspend fun sendChannelMessage(channel: UByte, text: String, timestamp: Instant = Instant.now())
+    /** Unsupported implementations preserve the old call and leave cancellation accounting UNKNOWN. */
+    suspend fun sendMessage(
+        destination: Bytes, text: String, timestamp: Instant = Instant.now(), attempt: UByte = 0u,
+        dispatch: MessageWriteDispatch,
+    ): MessageSentInfo {
+        dispatch.claim()
+        return sendMessage(destination, text, timestamp, attempt)
+    }
+    /** Use a fresh handle per attempt; a returned OK is not end-to-end message delivery. */
+    suspend fun sendChannelMessage(
+        channel: UByte, text: String, timestamp: Instant = Instant.now(), dispatch: MessageWriteDispatch,
+    ) {
+        dispatch.claim()
+        sendChannelMessage(channel, text, timestamp)
+    }
 }
 
 interface ContactSessionOps {

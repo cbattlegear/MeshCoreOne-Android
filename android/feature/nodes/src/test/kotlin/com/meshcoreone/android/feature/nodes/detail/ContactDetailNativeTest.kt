@@ -255,9 +255,9 @@ class ContactDetailNativeTest {
         assertFalse(detail.state.value.isSavingAvatar)
         val operationId = observations.first { it.stage == AvatarSaveStage.LAUNCHED }.operationId
         val events = observations.filter { it.operationId == operationId }
-        assertTrue(events.any {
-            it.stage == AvatarSaveStage.ENCODE_RETURNED && it.outcome == AvatarSaveOutcome.ABSENT
-        })
+        val encodeFailure = events.single { it.stage == AvatarSaveStage.ENCODE_FAILED }
+        assertEquals(AvatarSaveOutcome.FAILED, encodeFailure.outcome)
+        assertEquals("InvalidAvatar", encodeFailure.failureType)
         assertTrue(events.any { it.stage == AvatarSaveStage.SAVE_FAILED })
         assertFalse(events.any { it.stage == AvatarSaveStage.SERVICE_CALL_STARTED })
         assertEquals(AvatarSaveOutcome.FAILED, events.last { it.stage == AvatarSaveStage.JOB_COMPLETED }.outcome)

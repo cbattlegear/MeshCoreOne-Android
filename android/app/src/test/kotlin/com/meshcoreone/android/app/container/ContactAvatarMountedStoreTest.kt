@@ -527,6 +527,8 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             AvatarSaveStage.RADIO_LOOKUP_RETURNED,
             AvatarSaveStage.CONTACT_LOOKUP_STARTED,
             AvatarSaveStage.CONTACT_LOOKUP_RETURNED,
+            AvatarSaveStage.RADIO_LOOKUP_STARTED,
+            AvatarSaveStage.RADIO_LOOKUP_RETURNED,
             AvatarSaveStage.SERVICE_CALL_STARTED,
             AvatarSaveStage.SERVICE_ENTERED,
             AvatarSaveStage.SERVICE_RETURNED,

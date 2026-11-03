@@ -1,4 +1,5 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/MessagePollingService.swift@db14559b39d32322b06477c6ae676112f583db50
+// Native adaptation: WP-214 Nonactivated opt-in receive envelopes; legacy consumers retain their existing contract.
 package com.meshcoreone.android.core.services.messaging
 
 import com.meshcoreone.android.core.contracts.domain.*
@@ -10,6 +11,7 @@ import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import java.time.Duration
+import java.util.UUID
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.*
@@ -29,18 +31,29 @@ class MessagePollingService(
     scope: CoroutineScope,
     private val clock: SessionClock = SystemSessionClock(),
     reporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
-) : MessagePollingServiceProtocol {
-    private data class Delivery(val event: MeshEvent, val context: DeliveryContext, var failure: Exception? = null)
+) : MessagePollingServiceProtocol, ChannelReceiveEnvelopePolling {
+    private data class Delivery(
+        val event: MeshEvent,
+        val context: DeliveryContext,
+        val channelEnvelope: ChannelReceiveEnvelope?,
+        val matchesChannelOccurrence: Boolean,
+        var failure: Exception? = null,
+    ) {
+        fun inContext(context: DeliveryContext): Delivery =
+            copy(context = context, channelEnvelope = channelEnvelope?.copy(context = context))
+    }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
     private val lock = Any()
     private val lifecycle = Mutex()
     private val dispatch = Mutex()
     private val pending = ArrayDeque<Delivery>()
     private val parked = ArrayDeque<Delivery>()
-    private val observedDuringPoll = ArrayDeque<MeshEvent>()
+    private val observedDuringPoll = ArrayDeque<Delivery>()
     private val expectedEchoes = mutableMapOf<MeshEvent, Long>()
+    private val expectedChannelEchoes = mutableMapOf<ChannelMessage, ArrayDeque<Delivery>>()
     private var contactHandler: (suspend (ContactMessage, ContactDTO?, DeliveryContext) -> Unit)? = null
     private var channelHandler: (suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit)? = null
+    private var channelEnvelopeHandler: (suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit)? = null
     private var signedHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
     private var cliHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
     private var listener: Deferred<Unit>? = null
@@ -62,7 +75,8 @@ class MessagePollingService(
     val pendingHandlerCount: Long get() = synchronized(lock) { handlerCount }
     val undeliveredCount: Int get() = synchronized(lock) { pending.size + parked.size }
     val hasMessageHandlersWired: Boolean get() = synchronized(lock) {
-        contactHandler != null || channelHandler != null || signedHandler != null || cliHandler != null
+        contactHandler != null || channelHandler != null || channelEnvelopeHandler != null ||
+            signedHandler != null || cliHandler != null
     }
 
     private fun remember(operation: String, cause: Throwable) {
@@ -83,7 +97,13 @@ class MessagePollingService(
     }
     override suspend fun setChannelMessageHandler(handler: suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit) {
         ownership.checkLifetime("setChannelMessageHandler")
-        synchronized(lock) { channelHandler = handler }
+        synchronized(lock) { channelHandler = handler; channelEnvelopeHandler = null }
+    }
+    override suspend fun setChannelReceiveEnvelopeHandler(
+        handler: suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit,
+    ) {
+        ownership.checkLifetime("setChannelReceiveEnvelopeHandler")
+        synchronized(lock) { channelEnvelopeHandler = handler; channelHandler = null }
     }
     override suspend fun setSignedMessageHandler(handler: suspend (ContactMessage, ContactDTO?) -> Unit) {
         ownership.checkLifetime("setSignedMessageHandler")
@@ -94,7 +114,10 @@ class MessagePollingService(
         synchronized(lock) { cliHandler = handler }
     }
     override suspend fun clearMessageHandlers() {
-        synchronized(lock) { contactHandler = null; channelHandler = null; signedHandler = null; cliHandler = null }
+        synchronized(lock) {
+            contactHandler = null; channelHandler = null; channelEnvelopeHandler = null
+            signedHandler = null; cliHandler = null
+        }
     }
 
     suspend fun startMessageEventMonitoring(radioId: RadioId = token.radioId): Unit = lifecycle.withLock {
@@ -107,14 +130,17 @@ class MessagePollingService(
             stream.collect { event ->
                 checkPolling("messageEvent")
                 val deferred = synchronized(lock) {
-                    if (takeEcho(event)) true
+                    val delivery = newDelivery(event, DeliveryContext.Live)
+                    if (takeEcho(delivery)) true
                     else if (pollingActive) {
-                        observedDuringPoll.addLast(event)
+                        observedDuringPoll.addLast(delivery)
                         true
-                    } else false
+                    } else {
+                        pending.addLast(delivery)
+                        false
+                    }
                 }
                 if (!deferred) {
-                    synchronized(lock) { pending.addLast(Delivery(event, DeliveryContext.Live)) }
                     try { deliverPending() }
                     catch (failure: MessagePollingException) { remember("messageHandler", failure) }
                     catch (failure: PersistenceStoreException) { remember("messageLookup", failure) }
@@ -133,7 +159,7 @@ class MessagePollingService(
         stopAutoLocked()
         val task = synchronized(lock) { monitorActive = false; listener.also { listener = null } }
         task?.cancelAndJoin()
-        synchronized(lock) { expectedEchoes.clear() }
+        synchronized(lock) { expectedEchoes.clear(); expectedChannelEchoes.clear() }
     }
 
     override suspend fun startAutoFetch(radioId: RadioId) {
@@ -265,15 +291,19 @@ class MessagePollingService(
                     }
                 }
                 synchronized(lock) {
-                    val seen = observedDuringPoll.indexOfFirst { it == event }
+                    var delivery = newDelivery(event, DeliveryContext.InitialSync(anchor))
+                    val seen = observedDuringPoll.indexOfFirst { matchesEcho(it, delivery) }
                     if (seen >= 0) {
-                        repeat(seen) { pending.addLast(Delivery(observedDuringPoll.removeFirst(), DeliveryContext.Live)) }
-                        observedDuringPoll.removeFirst()
+                        repeat(seen) { pending.addLast(observedDuringPoll.removeFirst()) }
+                        val observed = observedDuringPoll.removeFirst()
+                        delivery = observed.inContext(delivery.context).copy(
+                            matchesChannelOccurrence = observed.matchesChannelOccurrence || delivery.matchesChannelOccurrence,
+                        )
                     } else {
                         transferObserved()
-                        if (monitorActive) expectedEchoes[event] = Math.incrementExact(expectedEchoes[event] ?: 0)
+                        if (monitorActive) expectEcho(delivery)
                     }
-                    pending.addLast(Delivery(event, DeliveryContext.InitialSync(anchor)))
+                    pending.addLast(delivery)
                 }
                 count = Math.incrementExact(count)
                 dispatchPending()
@@ -290,7 +320,7 @@ class MessagePollingService(
     }
 
     private fun transferObserved() {
-        while (observedDuringPoll.isNotEmpty()) pending.addLast(Delivery(observedDuringPoll.removeFirst(), DeliveryContext.Live))
+        while (observedDuringPoll.isNotEmpty()) pending.addLast(observedDuringPoll.removeFirst())
     }
 
     private suspend fun finishResidualDeliveries(): Exception? {
@@ -313,9 +343,46 @@ class MessagePollingService(
             failure
         }
 
-    private fun takeEcho(event: MeshEvent): Boolean {
-        val count = expectedEchoes[event] ?: return false
-        if (count == 1L) expectedEchoes.remove(event) else expectedEchoes[event] = count - 1
+    private fun newDelivery(event: MeshEvent, context: DeliveryContext): Delivery = Delivery(
+        event, context,
+        (event as? MeshEvent.ChannelMessageReceived)?.let {
+            ChannelReceiveEnvelope(UUID.randomUUID(), token, it.message, context, ChannelReceiveOrigin.Unproved)
+        },
+        channelEnvelopeHandler != null,
+    )
+
+    private fun matchesEcho(first: Delivery, second: Delivery): Boolean {
+        val left = first.channelEnvelope
+        val right = second.channelEnvelope
+        if (left != null && right != null && (first.matchesChannelOccurrence || second.matchesChannelOccurrence)) {
+            // SessionCore fans one parsed message object out to its poll result and event subscribers.
+            // Structural equality alone cannot identify that occurrence, much less its firmware origin.
+            return left.message === right.message && left.origin == right.origin
+        }
+        return first.event == second.event
+    }
+
+    private fun expectEcho(delivery: Delivery) {
+        val envelope = delivery.channelEnvelope
+        if (envelope == null) {
+            expectedEchoes[delivery.event] = Math.incrementExact(expectedEchoes[delivery.event] ?: 0)
+        } else {
+            expectedChannelEchoes.getOrPut(envelope.message) { ArrayDeque() }.addLast(delivery)
+        }
+    }
+
+    private fun takeEcho(delivery: Delivery): Boolean {
+        val envelope = delivery.channelEnvelope
+        if (envelope != null) {
+            val echoes = expectedChannelEchoes[envelope.message] ?: return false
+            val index = echoes.indexOfFirst { matchesEcho(it, delivery) }
+            if (index < 0) return false
+            echoes.removeAt(index)
+            if (echoes.isEmpty()) expectedChannelEchoes.remove(envelope.message)
+            return true
+        }
+        val count = expectedEchoes[delivery.event] ?: return false
+        if (count == 1L) expectedEchoes.remove(delivery.event) else expectedEchoes[delivery.event] = count - 1
         return true
     }
 
@@ -347,10 +414,17 @@ class MessagePollingService(
                     is MeshEvent.ChannelMessageReceived -> {
                         val channel = dataStore.fetchChannel(token.radioId, event.message.channelIndex)
                         checkPolling("dispatchChannel.lookup")
-                        val handler = synchronized(lock) { channelHandler }
+                        val handler = synchronized(lock) {
+                            channelEnvelopeHandler?.let { callback ->
+                                val envelope = checkNotNull(delivery.channelEnvelope)
+                                suspend { callback(envelope, channel) }
+                            } ?: channelHandler?.let { callback ->
+                                suspend { callback(event.message, channel, delivery.context) }
+                            }
+                        }
                             ?: throw MessagePollingException(MessagePollingError.PollingFailed,
                                 IllegalStateException("Channel handler is not installed"))
-                        invokeConsumer { handler(event.message, channel, delivery.context) }
+                        invokeConsumer(handler)
                     }
                     else -> throw MessagePollingException(MessagePollingError.PollingFailed)
                 }
@@ -444,7 +518,10 @@ class MessagePollingService(
             work.forEach { it.first.cancel() }
             lifecycle.withLock { stopAutoLocked() }
             for ((task, invocation) in work) joinUnlessConsumerClosing(task, invocation)
-            synchronized(lock) { polling = null; listener = null; monitorActive = false; expectedEchoes.clear() }
+            synchronized(lock) {
+                polling = null; listener = null; monitorActive = false
+                expectedEchoes.clear(); expectedChannelEchoes.clear()
+            }
             clearMessageHandlers()
             ownership.job.cancel()
             if (work.none { it.second?.closing?.isCompleted == true }) ownership.job.join()

@@ -58,6 +58,9 @@ interface ComposerSendPort {
 
     /** Mark the saved message failed unless delivered, publishing its actual status/event through the app adapter. */
     suspend fun recordLocalEnqueueFailure(messageId: UUID)
+
+    /** A committed create did not return, so its exact row still needs admission to the timeline. */
+    suspend fun recordCommittedCreationFailure(messageId: UUID) = recordLocalEnqueueFailure(messageId)
 }
 
 sealed interface ComposerCreationOutcome {

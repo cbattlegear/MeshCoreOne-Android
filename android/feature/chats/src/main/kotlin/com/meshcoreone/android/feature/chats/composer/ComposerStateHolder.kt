@@ -290,7 +290,8 @@ class ComposerStateHolder(
         // An interrupted enqueue may still be completing durable acceptance in the queue's owner.
         // Only a known creation with no enqueue attempt is safe to fail after cancellation.
         if (savedId != null && (failure !is CancellationException || pendingId == null)) {
-            port.recordLocalEnqueueFailure(savedId)
+            if (pendingId == null) port.recordCommittedCreationFailure(savedId)
+            else port.recordLocalEnqueueFailure(savedId)
         }
     }
 

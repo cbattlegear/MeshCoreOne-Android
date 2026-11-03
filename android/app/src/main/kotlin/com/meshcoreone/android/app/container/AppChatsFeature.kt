@@ -739,6 +739,18 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                             target, text, checkNotNull(revision), slotGeneration,
                         )
                     }
+                    override suspend fun recordCommittedCreationFailure(messageId: UUID) {
+                        pinned.recordLocalEnqueueFailure(messageId)
+                        val saved = savedMessage(radio, messageId)
+                        val channelIndex = saved.channelIndex
+                        if (channelIndex != null) {
+                            app.messageEventStream.send(MessageEvent.ChannelMessageReceived(saved, channelIndex))
+                        } else {
+                            val contact = saved.contactID?.let { store.fetchContact(EntityKey(radio, it)) }
+                                ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
+                            app.messageEventStream.send(MessageEvent.DirectMessageReceived(saved, contact))
+                        }
+                    }
                     override suspend fun canRestoreDraft(): Boolean {
                         if (!isSameSlot()) return false
                         if (target !is ComposerTarget.Channel) return true
@@ -812,16 +824,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 val message = savedMessage(radio, messageId)
                 if (message.status == MessageStatus.PENDING) failPending(message)
             }
-            val saved = savedMessage(radio, messageId)
-            val channelIndex = saved.channelIndex
-            if (channelIndex != null) {
-                app.messageEventStream.send(MessageEvent.ChannelMessageReceived(saved, channelIndex))
-            } else {
-                val contact = saved.contactID?.let { store.fetchContact(EntityKey(radio, it)) }
-                    ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
-                app.messageEventStream.send(MessageEvent.DirectMessageReceived(saved, contact))
-            }
-            app.refreshConversations()
         }
     }
 

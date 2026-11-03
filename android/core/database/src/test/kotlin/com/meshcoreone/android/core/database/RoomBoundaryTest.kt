@@ -36,10 +36,10 @@ class RoomBoundaryTest {
     @Test fun actualSqliteTablesColumnsPrimaryKeysForeignKeysAndIdentityMatchTheKspExport() = runTest {
         db.devices().count()
         val export = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
-            "com.meshcoreone.android.core.database.MeshCoreDatabase\\1.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
-        assertEquals(1, export.getInt("version")); assertEquals(17, export.getJSONArray("entities").length())
+            "com.meshcoreone.android.core.database.MeshCoreDatabase\\2.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
+        assertEquals(2, export.getInt("version")); assertEquals(17, export.getJSONArray("entities").length())
         val sqlite = db.openHelper.readableDatabase
-        sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(1, it.getInt(0)) }
+        sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(2, it.getInt(0)) }
         sqlite.query("SELECT identity_hash FROM room_master_table WHERE id=42").use {
             assertTrue(it.moveToFirst()); assertEquals(export.getString("identityHash"), it.getString(0))
         }
@@ -240,7 +240,7 @@ class RoomBoundaryTest {
             val reopened = fileDatabase(name)
             try {
                 assertEquals(id, assertNotNull(reopened.devices().byId(id)).id)
-                reopened.openHelper.writableDatabase.execSQL("PRAGMA user_version=2")
+                reopened.openHelper.writableDatabase.execSQL("PRAGMA user_version=99")
             } finally { reopened.close() }
             val unsupported = fileDatabase(name)
             try { assertFailsWith<IllegalStateException> { unsupported.devices().count() } } finally { unsupported.close() }

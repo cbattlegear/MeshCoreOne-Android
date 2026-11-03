@@ -13,6 +13,7 @@ data class DirectMessageEnvelope(val messageID: UUID, val contactID: UUID, val i
 data class ChannelMessageEnvelope(
     val messageID: UUID, val channelIndex: UByte, val isResend: Boolean,
     val messageText: String, val messageTimestamp: UInt, val localNodeName: String?,
+    val channelOccupantID: UUID? = null,
 )
 
 enum class PendingSendKind(val rawValue: Long) {
@@ -36,12 +37,13 @@ data class PendingSendDTO(
     val sequence: Long,
     val enqueuedAt: Instant,
     val attemptCount: Long? = 0,
+    val channelOccupantID: UUID? = null,
 ) {
     fun directMessageEnvelope(): DirectMessageEnvelope? =
         if (kind == PendingSendKind.DM && contactID != null) DirectMessageEnvelope(messageID, contactID, isResend) else null
     fun channelMessageEnvelope(): ChannelMessageEnvelope? =
         if (kind == PendingSendKind.CHANNEL && channelIndex != null) {
-            ChannelMessageEnvelope(messageID, channelIndex, isResend, messageText, messageTimestamp, localNodeName)
+            ChannelMessageEnvelope(messageID, channelIndex, isResend, messageText, messageTimestamp, localNodeName, channelOccupantID)
         } else null
 
     companion object {
@@ -58,6 +60,7 @@ data class PendingSendDTO(
         ): PendingSendDTO = PendingSendDTO(
             id, radioId, envelope.messageID, PendingSendKind.CHANNEL, null, envelope.channelIndex,
             envelope.isResend, envelope.messageText, envelope.messageTimestamp, envelope.localNodeName, 0, enqueuedAt,
+            channelOccupantID = envelope.channelOccupantID,
         )
     }
 }

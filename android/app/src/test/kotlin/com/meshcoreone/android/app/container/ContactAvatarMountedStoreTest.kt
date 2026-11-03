@@ -79,8 +79,8 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             harness.settle()
             harness.assertReady()
             val radio = assertNotNull(harness.appState.currentRadioId)
-            val preview = ContactDTO(radioId = radio, publicKey = key(44), name = "Back preview contact")
-            val target = ContactDTO(radioId = radio, publicKey = key(45), name = "Held avatar target")
+            val preview = ContactDTO(radioId = radio, publicKey = key(44), name = "Back preview contact", lastHeardTimestamp = null)
+            val target = ContactDTO(radioId = radio, publicKey = key(45), name = "Held avatar target", lastHeardTimestamp = null)
             val foreign = target.copy(radioId = RadioId(UUID(0, 992)), publicKey = key(46), name = "Foreign radio")
             listOf(preview, target, foreign).forEach { store.saveContact(it) }
             val targetKey = EntityKey(radio, target.id)

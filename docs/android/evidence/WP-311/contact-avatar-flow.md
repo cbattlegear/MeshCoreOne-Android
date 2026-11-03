@@ -247,3 +247,27 @@ passed before publication. The new regression still needs positive hosted execut
 independent exact-head review; it is injected host dispatcher/registry behavior,
 not a real OS gesture, OS picker, process-death, physical TalkBack or device result.
 The existing local Gradle execution hold remains in force.
+
+Run [41606465089](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41606465089)
+on `8cfd75b0f8ed2b8d99a46fc9a5178b5d00f3ff3f` ended **failure**. Linux job
+`125817505931` failed App test compilation: the two newly added `ContactDTO`
+fixtures omitted the required `lastHeardTimestamp` constructor argument. Both
+now explicitly use `null`, consistent with the existing mounted fixture. The
+real-shell regression did not execute on that head.
+
+The same original log reports API31 `saveContinuesWhenTheProfileRowLeavesTheLazyViewport`
+and `savingAnnouncesProgressAndPreventsASecondSelectionUntilTheStoreCompletes`
+failing with `AvatarVisibleTextTimeout`. In these methods that type identifies
+the exact post-gate-release synthetic error-text wait, whereas held-store entry,
+saving progress and viewport stages have distinct types. Those earlier stages
+therefore returned in these failed invocations; this does not establish a
+complete passing test or diagnose the final error-visibility cause. The command
+then timed out after 3,600 seconds; GitHub lists zero retained artifacts. No
+complete suite result or API37 pass is inferred.
+
+The follow-up retains the final exact visible-error requirement, but first
+separately requires the active lifetime's completed save and exact typed error,
+a showing dialog, and the exact dialog text semantics. Each stage has its own
+failure type so short original job logs can distinguish state propagation,
+dialog presentation, text and bounds visibility without manufacturing a cause.
+No timeout, coverage, store, viewport or accessibility assertion is relaxed.

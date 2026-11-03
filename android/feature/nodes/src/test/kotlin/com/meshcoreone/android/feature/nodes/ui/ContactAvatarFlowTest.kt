@@ -28,6 +28,7 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.feature.nodes.NodesNavigation
 import com.meshcoreone.android.feature.nodes.contacts.key
+import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
 import java.io.ByteArrayInputStream
@@ -152,6 +153,24 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == announcement }
         }
         assertEquals(LiveRegionMode.Polite, liveRegion.config[SemanticsProperties.LiveRegion])
+    }
+
+    private fun awaitAvatarFailure(message: String) {
+        val retained = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java]
+        val detail = retained.lifetimes.single()
+        awaitAvatarState("the completed save's exact error state", ::AvatarFailureStateTimeout) {
+            detail.active && !detail.holder.state.value.isSavingAvatar &&
+                detail.holder.state.value.errorMessage == NodesMessage.Text(message)
+        }
+        awaitAvatarState("a showing error dialog", ::AvatarFailureDialogTimeout) {
+            ShadowDialog.getLatestDialog()?.isShowing == true
+        }
+        awaitAvatarState("the error dialog's exact text semantics", ::AvatarFailureTextTimeout) {
+            allSemanticsNodes().any { node ->
+                node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == message }
+            }
+        }
+        awaitAvatarText(message, ::AvatarFailureVisibilityTimeout)
     }
 
     private fun pick(file: Boolean = false) {
@@ -473,7 +492,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             assertEquals(1, harness.contactService.avatars.size)
             assertNull(harness.store.contacts.single().avatarImageData)
             gate.complete(Unit)
-            awaitAvatarText("failed: write rejected")
+            awaitAvatarFailure("failed: write rejected")
             action(C.contactsCommonOk)
             val recovered = assertNotNull(actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource)))
             kotlin.test.assertFalse(recovered.config.contains(SemanticsProperties.Disabled))
@@ -524,7 +543,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             assertTrue(chooser == null || !isDisplayed(chooser), "The profile row must leave the lazy viewport")
             assertEquals(1, harness.contactService.avatars.size)
             gate.complete(Unit)
-            awaitAvatarText("failed: retained operation")
+            awaitAvatarFailure("failed: retained operation")
             assertEquals(1, harness.contactService.avatars.size)
             assertNull(harness.store.contacts.single().avatarImageData)
         } finally {
@@ -537,6 +556,10 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     private class AvatarStoreEntryTimeout(message: String) : AssertionError(message)
     private class AvatarProgressVisibilityTimeout(message: String) : AssertionError(message)
     private class AvatarViewportTimeout(message: String) : AssertionError(message)
+    private class AvatarFailureStateTimeout(message: String) : AssertionError(message)
+    private class AvatarFailureDialogTimeout(message: String) : AssertionError(message)
+    private class AvatarFailureTextTimeout(message: String) : AssertionError(message)
+    private class AvatarFailureVisibilityTimeout(message: String) : AssertionError(message)
 
     @Test
     fun selectedCropSurvivesActualWindowResizingAndStillCancelsWithoutMutation() {

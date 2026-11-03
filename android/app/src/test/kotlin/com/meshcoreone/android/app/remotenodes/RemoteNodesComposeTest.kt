@@ -441,8 +441,9 @@ class RemoteNodesComposeTest {
             }
         }
         fun send(command: String) {
-            compose.onNodeWithTag("remote-cli-input").performClick().performTextReplacement(command)
-                .performKeyInput { pressKey(Key.Enter) }
+            val input = compose.onNodeWithTag("remote-cli-input")
+            input.performClick().performTextReplacement(command)
+            input.performKeyInput { pressKey(Key.Enter) }
             compose.onNodeWithTag("remote-cli-confirm").performClick()
             compose.waitForIdle()
         }

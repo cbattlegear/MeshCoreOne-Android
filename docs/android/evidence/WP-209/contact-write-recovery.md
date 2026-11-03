@@ -128,16 +128,25 @@ The ordering tests pause `batchSaveContacts` only after a complete contact-strea
 response, and pause local `deleteContact` only after the device remove response,
 so they prove the service fence rather than protocol request serialization.
 Another test holds cleanup after the acknowledged device removal and local delete,
-then verifies a new snapshot cannot start and `NodeDeleted` is emitted only after
-the production `ContactCleanupCoordinator` finishes; its callback seam suspends
-at notification cleanup and sync-notification order is asserted. Cancellation
-through that coordinator after acknowledgement is asserted to keep the recovery
-marker and block a subsequent contact write. Protected V-contact
+then verifies a new snapshot cannot start and observes the `NodeDeleted` event
+directly: it must remain unseen while notification cleanup is suspended, then
+arrive after the production `ContactCleanupCoordinator` finishes; sync-notification
+order and the final event order are also asserted. Cancellation through that
+coordinator after acknowledgement is asserted to keep the recovery marker and
+block a subsequent contact write. Protected V-contact
 remote and local removals are exercised while an Add is active and another Add
 is queued; both remain true no-ops, with no remove command, local deletion,
 event, recovery marker or queued-write invalidation.
 Protected V-contact no-ops also return while an unrelated snapshot is paused in
 persistence, without waiting for or mutating that sync fence.
+
+The 32 test methods are authored source controls, not test-discovery or execution
+evidence; they remain unexecuted while the shared Gradle reservation is held.
+The cleanup-cancellation control injects `CancellationException` from a suspended
+cleanup callback rather than cancelling a suspended caller job. No post-failure
+recovery-fence reuse control or general callback-deadlock proof is claimed.
+Unknown-send injection does not establish a device-committed removal with a lost
+acknowledgement.
 
 `ContactWriteCompletionRoomTest` has three real-Room methods for transactional
 radio isolation, complete local metadata preservation, stale/equal-time CAS

@@ -40,6 +40,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -785,7 +786,15 @@ class ContactWriteRecoveryTests {
             )
             val deleteService = service(coordinator = coordinator, cleanup = cleanup)
             val events = deleteService.events()
-            val collectedEvents = async { events.events.toList() }
+            val observedEvents = mutableListOf<ContactServiceEvent>()
+            val nodeDeletedObserved = CompletableDeferred<ContactServiceEvent>()
+            val collectedEvents = async {
+                events.events.collect { event ->
+                    observedEvents += event
+                    if (event == ContactServiceEvent.NodeDeleted) nodeDeletedObserved.complete(event)
+                }
+                observedEvents
+            }
             val removal = async { deleteService.removeContact(radioA, contactsKey(1)) }
             runCurrent()
 
@@ -795,10 +804,12 @@ class ContactWriteRecoveryTests {
             val snapshot = async { deleteService.syncContacts(radioA, null) }
             runCurrent()
             assertEquals(0, radio.completedSnapshots, "Sync must wait through cleanup after the ACK")
-            assertFalse(collectedEvents.isCompleted, "NodeDeleted must follow cleanup completion")
+            assertFalse(nodeDeletedObserved.isCompleted, "NodeDeleted must follow cleanup completion")
 
             releaseCleanup.complete(Unit)
             runCurrent()
+            assertTrue(nodeDeletedObserved.isCompleted, "NodeDeleted must be delivered after cleanup")
+            assertEquals(ContactServiceEvent.NodeDeleted, nodeDeletedObserved.await())
             removal.await()
             snapshot.await()
             assertEquals(1, radio.completedSnapshots)

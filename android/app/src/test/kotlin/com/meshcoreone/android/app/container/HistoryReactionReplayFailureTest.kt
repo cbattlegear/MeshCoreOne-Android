@@ -15,6 +15,7 @@ import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.reactions.PendingReaction
 import com.meshcoreone.android.core.services.reactions.PendingDMReaction
@@ -29,6 +30,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
@@ -88,9 +90,24 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
     @Test fun directCancelledDuplicateWaiterRetainsItsPendingReaction() = runTest { interleave(this, true, false, true) }
     @Test fun channelCancelledDuplicateWaiterRetainsItsPendingReaction() = runTest { interleave(this, false, false, true) }
 
-    private suspend fun interleave(test: TestScope, direct: Boolean, historyFirst: Boolean, cancelWaiter: Boolean = false) {
+    @Test fun directOldReplaySerializesReplacementSessionReaction() = runTest { interleave(this, true, true, reconnect = true) }
+    @Test fun channelOldReplaySerializesReplacementSessionReaction() = runTest { interleave(this, false, true, reconnect = true) }
+    @Test fun directReplacementSessionReactionSerializesOldReplay() = runTest { interleave(this, true, false, reconnect = true) }
+    @Test fun channelReplacementSessionReactionSerializesOldReplay() = runTest { interleave(this, false, false, reconnect = true) }
+    @Test fun directCancelledOldReplayWaiterRetainsItsPendingReaction() = runTest { interleave(this, true, false, true, true) }
+    @Test fun channelCancelledOldReplayWaiterRetainsItsPendingReaction() = runTest { interleave(this, false, false, true, true) }
+
+    private suspend fun interleave(
+        test: TestScope,
+        direct: Boolean,
+        historyFirst: Boolean,
+        cancelWaiter: Boolean = false,
+        reconnect: Boolean = false,
+    ) {
         val snapshotReady = CompletableDeferred<Unit>()
         val releaseSnapshot = CompletableDeferred<Unit>()
+        val duplicateStarted = CompletableDeferred<Unit>()
+        val releaseDuplicateCheck = CompletableDeferred<Unit>()
         val duplicateChecked = CompletableDeferred<Unit>()
         val liveSaveStarted = CompletableDeferred<Unit>()
         var fetches = 0
@@ -107,6 +124,10 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
 
             override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
                 val result = store.reactionExists(message, senderName, emoji)
+                if (reconnect && !historyFirst && !duplicateStarted.isCompleted) {
+                    duplicateStarted.complete(Unit)
+                    releaseDuplicateCheck.await()
+                }
                 duplicateChecked.complete(Unit)
                 return result
             }
@@ -120,7 +141,8 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
         val jobs = mutableListOf<Job>()
         var mounted: ChatViewModel? = null
         try {
-            harness.manager.connect(harness.target())
+            val connectionTarget = harness.target()
+            harness.manager.connect(connectionTarget)
             harness.eventually("concurrent reaction session ready") {
                 harness.manager.connectionState == DeviceConnectionState.READY
             }
@@ -157,11 +179,24 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 conversation, harness.container.chatsFeature.timeline(conversation), CoroutineScope(currentCoroutineContext()),
             )
             mounted = viewModel
-            // The actual sync adapter and history consumer share this session's service and real Room store.
-            val adapter = SyncReactionAdapter(service)
+            suspend fun liveAdapter(): SyncReactionAdapter {
+                if (!reconnect) return SyncReactionAdapter(service)
+                harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+                harness.manager.connect(connectionTarget)
+                harness.eventually("replacement reaction session ready") {
+                    harness.manager.connectionState == DeviceConnectionState.READY
+                }
+                val replacement = assertNotNull(harness.sessions.current)
+                assertTrue(live.isTornDown)
+                assertEquals(radio, replacement.token.radioId)
+                assertTrue(replacement.token.generation.value > live.token.generation.value)
+                assertNotSame(service, replacement.reactionService)
+                return SyncReactionAdapter(replacement.reactionService)
+            }
             if (historyFirst) {
                 val history = test.async(start = CoroutineStart.UNDISPATCHED) { viewModel.open() }.also(jobs::add)
                 snapshotReady.await()
+                val adapter = liveAdapter()
                 val arrival = test.async(start = CoroutineStart.UNDISPATCHED) {
                     adapter.persistReactionAndUpdateSummary(carol, persistence)
                 }.also(jobs::add)
@@ -172,11 +207,19 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 history.await()
                 assertEquals("$emoji:2", assertNotNull(arrival.await()).summary)
             } else {
+                val oldHistory = if (reconnect) {
+                    test.async(start = CoroutineStart.UNDISPATCHED) { viewModel.open() }.also {
+                        jobs += it
+                        duplicateStarted.await()
+                    }
+                } else null
+                val adapter = liveAdapter()
                 val arrival = test.async(start = CoroutineStart.UNDISPATCHED) {
                     adapter.persistReactionAndUpdateSummary(carol, persistence)
                 }.also(jobs::add)
                 snapshotReady.await()
-                val history = test.async(start = CoroutineStart.UNDISPATCHED) { viewModel.open() }.also(jobs::add)
+                val history = oldHistory ?: test.async(start = CoroutineStart.UNDISPATCHED) { viewModel.open() }.also(jobs::add)
+                releaseDuplicateCheck.complete(Unit)
                 duplicateChecked.await()
                 assertEquals(1, fetches, "Duplicate reconciliation must wait for the complete live persistence operation")
                 assertFalse(history.isCompleted)
@@ -209,6 +252,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             assertEquals("$emoji:2", viewModel.state.value.messages.single().reactionSummary)
         } finally {
             releaseSnapshot.complete(Unit)
+            releaseDuplicateCheck.complete(Unit)
             jobs.forEach { it.cancelAndJoin() }
             mounted?.close()
             harness.container.close()

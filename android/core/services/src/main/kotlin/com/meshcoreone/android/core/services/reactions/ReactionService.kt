@@ -47,19 +47,21 @@ data class ReactionPersistResult(val messageID: UUID, val summary: String)
  *
  * Swift isolates this in an actor. Here the pending queues are immutable values swapped under one lock that
  * is never held across a suspension; [MessageLRUCache] has its own lock. A separate mutex serializes
- * complete persistence/summary operations across suspension. Nothing is scheduled, so no coroutine
+ * complete persistence/summary operations across suspension. The process factory shares that mutex
+ * across connection generations; queues and caches remain session-owned. Nothing is scheduled, so no coroutine
  * scope is needed; [clock] stamps `receivedAt` on queued reactions.
  */
 class ReactionService internal constructor(
     private val messageCache: MessageLRUCache,
     private val clock: Clock,
+    private val persistenceMutex: Mutex = Mutex(),
 ) {
     /** A service with its own message cache; [clock] also stamps the cache's `indexedAt`. */
-    constructor(clock: Clock = Clock.systemUTC()) : this(MessageLRUCache(clock = clock), clock)
+    constructor(clock: Clock = Clock.systemUTC(), persistenceMutex: Mutex = Mutex()) :
+        this(MessageLRUCache(clock = clock), clock, persistenceMutex)
 
     private val logger: Logger = Logger.getLogger("ReactionService")
     private val lock = Any()
-    private val persistenceMutex = Mutex()
 
     // Pending reactions queues: no TTL, session lifetime. Guarded by [lock].
     private var pendingReactions = PendingQueue.empty<PendingReactionKey, PendingReaction>()

@@ -280,3 +280,57 @@ polling/device evidence. Their pre-fix failure has not been executed locally
 under the retained hard lock. The original 30 controls remain intact; the
 successor requires new exact-head PR execution and independent review, not credit
 from the passing `0e9234918` run.
+
+## Replacement-session persistence boundary
+
+The same-generation successor `f827e788d37032282c00fd8d7dfea24fb0a437c6`
+passed normal PR run
+[41614514548](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41614514548),
+attempt 1: App 1,895, services 2,801 and chats 443 discovered/run/passed, zero
+failures/errors/skips, with all 36 failure/concurrency and nine history methods.
+This historical pass does not cover the replacement-session correction below.
+
+Independent review and actual inline finding `4453399854` identify the missing
+lifetime boundary: a screen-owned history coroutine can keep the old service
+after the connection graph is torn down. A replacement service previously got
+its own mutex, so old history could still overwrite a replacement writer's newer
+summary and acknowledge its pending entry. Per-instance operation serialization
+is necessary but not sufficient.
+
+The process-owned `RadioSessionContainerFactory` now supplies the same mutex to
+each `RadioSessionContainer.create` and its `ReactionService`. That argument is
+required at graph creation, preventing an accidental per-generation fallback.
+Only the persistence boundary survives; message caches, pending queues, session
+jobs and radio services still belong to their original connection. No Room,
+query/occupant-proof, dispatch-origin, teardown or messaging-queue implementation
+is modified. Standalone service tests keep their own default mutex.
+
+Six additional methods use the actual runtime manager to disconnect and reconnect
+the same radio, asserting a new service and greater generation plus completed
+old teardown while history remains suspended in the screen-owned operation.
+History-first holds the old fetched snapshot while the replacement live adapter
+must wait before save. Live-first holds old history inside its existence read,
+reconnects, then holds the replacement writer's fetched snapshot before releasing
+old history to wait for the shared boundary. Both scopes also cancel that old
+waiter and inspect exact pending restoration. Final real Room rows and mounted
+history retain both identities and count two through a further refresh. The
+original 36 failure/concurrency methods and nine history methods remain present.
+These are real runtime-generation/Room interleavings through the sync persistence
+adapter, not physical radio or full live-polling evidence. A pre-fix execution of
+these six controls has not occurred under the retained local hold.
+
+Trusted `reviewed-support-consumer` admission passed for both newly touched
+container files with `modify-related-consumer`. The scoped claim again refused
+the unchanged historical binding mismatch; no reservation was cleared/recreated.
+The actual #543 integration producer explicitly reports no unpublished
+factory/create/reaction-service construction intent and only its four disjoint
+published paths. The actual #530 producer's limited no-conflicting replay
+helper/import disposition is published as #540 comment `6600038072`; neither
+report grants global custody. The persistence owner received the exact new
+synchronization seam; no persistence implementation is adopted here.
+
+Same-host preflight and whitespace checks passed. The supported local launcher
+again refused `gradle-execution held`; retained owner
+`local-check:f516a7e271f444dd9cb2efcc8b995a16` is untouched. The successor
+requires fresh exact-head normal PR CI, authenticated scope and independent
+review. No predecessor's passing run is claimed for its new code.

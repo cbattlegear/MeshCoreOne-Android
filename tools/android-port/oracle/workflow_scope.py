@@ -116,6 +116,7 @@ RULES = {
     },
     "backup": {
         "exact": {
+            "docs/android/evidence/WP-203/WP203InteropTests.swift",
             "tools/android-port/oracle/wp203_ci.py",
             "tools/android-port/oracle/wp203_interop.py",
             "tools/android-port/oracle/tests/test_wp203_ci.py",

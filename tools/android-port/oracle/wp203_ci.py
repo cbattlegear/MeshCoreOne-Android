@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from controller.ci import execute, execution_identity, preflight
 from controller.ci_environment import candidate_environment, verify_wrapper
+from controller.ci_evidence import suite_case_ids, suite_counts
 from controller.errors import PortError
 from controller.gates import Binding
 from controller.module_junit import report_record
@@ -33,6 +34,7 @@ DATA_NAMES = {
               "swift-results.xml", "swift-restore-export.log"),
 }
 MAXIMUM_DATA_BYTES = 52_428_800
+SWIFT_HANDOFF_DATA = ("swift-export.meshcoreone", "swift-export.json", "swift-room-proof.json")
 
 
 def identity():
@@ -86,6 +88,81 @@ def validate_producer_data(root):
             or not isinstance(exported.get("userDefaults"), dict)):
         raise OracleError("Kotlin export semantics are stale or incomplete")
     return {"stage": "producer", "data": records, "proof": proof}
+
+
+def swift_data_handoff(root, bound):
+    return {
+        "schema_version": 1, "identity": bound, "source_sha": SOURCE_SHA,
+        "data": [record(root, name) for name in SWIFT_HANDOFF_DATA],
+    }
+
+
+def validate_swift_handoff(root, bound):
+    path = root / "swift-handoff.json"
+    digest_file(path)
+    handoff = load_json(path)
+    if (not isinstance(handoff, dict) or type(handoff.get("schema_version")) is not int
+            or handoff != swift_data_handoff(root, bound)):
+        raise OracleError("Swift data handoff differs from the exact head/base/source/run/attempt or bytes")
+    proof = load_json(root / "swift-room-proof.json")
+    if (not isinstance(proof, dict) or proof.get("source_sha") != SOURCE_SHA
+            or proof.get("producer") != "actual-frozen-SwiftData-restore-and-AppBackupService-export"
+            or type(proof.get("inserted")) is not int or proof["inserted"] != 12
+            or type(proof.get("skipped")) is not int or proof["skipped"] != 0
+            or type(proof.get("reimport_inserted")) is not int or proof["reimport_inserted"] != 0
+            or proof.get("restore_semantics_compared") is not True
+            or proof.get("preferences_restored") is not True):
+        raise OracleError("Swift data handoff lacks actual frozen SwiftData restore/export observations")
+    return proof
+
+
+def consume_swift_data(state, output, incoming):
+    if state["host"] != "linux":
+        raise OracleError("The declared interoperability native jobs use ephemeral Linux x64")
+    if output.exists() or not output.is_absolute():
+        raise OracleError("A new absolute native output directory is required")
+    bound = identity()
+    validate_swift_handoff(incoming, bound)
+    output.mkdir(parents=True)
+    preflight(state, output)
+    verify_wrapper()
+    environment = candidate_environment(state)
+    command = [
+        str(REPO / "android" / "gradlew"), "-p", str(REPO / "android"), *TASKS,
+        "--no-daemon", "--console=plain", "--dependency-verification", "strict",
+        "--max-workers=1", "-Pkotlin.compiler.execution.strategy=in-process", "-PscaffoldTestHeap=512m",
+        "--project-cache-dir", str(Path(state["private_root"]) / "wp203-consumer-project"),
+        "-Pwp203InteropInputDir=" + str(incoming.resolve()),
+        "--no-build-cache", "--rerun-tasks", "--quiet",
+    ]
+    execute(command, environment, output / "native-consumer.log", stream_output=True)
+    reports = REPO / "android" / "core" / "data" / "build" / "test-results" / "testDebugUnitTest"
+    discovery = suite_counts(reports, 1)
+    database_discovery = suite_counts(
+        REPO / "android" / "core" / "database" / "build" / "test-results" / "testDebugUnitTest", 1,
+    )
+    required = {
+        ("com.meshcoreone.android.core.data.backup.BackupInteropTest", method)
+        for method in (
+            "actualRoomKotlinExportProducesAllFamiliesForSwift",
+            "actualSwiftExportRestoresIntoRealRoomAndMatchesSourceSemantics",
+        )
+    }
+    if not required.issubset({(case["class"], case["method"]) for case in suite_case_ids(reports)}):
+        raise OracleError("Actual native runner omitted the mandatory backup interoperability assertions")
+    produced = REPO / "android" / "core" / "data" / "build" / "reports" / "wp203" / "interop"
+    digest_file(produced / "swift-to-kotlin-room-proof.json")
+    proof = load_json(produced / "swift-to-kotlin-room-proof.json")
+    if (not isinstance(proof, dict) or proof.get("consumer") != "actual-Swift-export-Room-restore"
+            or proof.get("compressedSha256") != digest_file(incoming / "swift-export.meshcoreone")
+            or type(proof.get("inserted")) is not int or proof["inserted"] != 12
+            or type(proof.get("reimportInserted")) is not int or proof["reimportInserted"] != 0
+            or proof.get("sourceSemanticsCompared") is not True or proof.get("preferencesRestored") is not True):
+        raise OracleError("Actual Swift-to-Room restore observations disagree with the handed-off bytes")
+    return {
+        "stage": "consumer", "identity": bound, "result": "passed",
+        "discovery": {"core/data": discovery, "core/database": database_discovery}, "restore": proof,
+    }
 
 
 
@@ -204,8 +281,14 @@ def main(argv=None):
     parser.add_argument("--input", type=Path)
     args = parser.parse_args(argv)
     try:
-        result = native(args.stage, load_json(args.state), args.output, args.input)
-        print(json_bytes({"stage": result["stage"], "result": "passed", "identity": result["identity"]}).decode(), end="")
+        if args.stage == "consumer":
+            if args.input is None:
+                raise OracleError("Actual Swift data handoff directory is required")
+            result = consume_swift_data(load_json(args.state), args.output, args.input)
+        else:
+            result = native(args.stage, load_json(args.state), args.output, args.input)
+            result = {"stage": result["stage"], "result": "passed", "identity": result["identity"]}
+        print(json_bytes(result).decode(), end="")
         return 0
     except (PortError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print("BLOCKED: " + str(error), file=sys.stderr)

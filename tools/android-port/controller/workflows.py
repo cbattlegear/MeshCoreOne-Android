@@ -72,7 +72,7 @@ def validate_candidate(value: dict, text: str):
     if not {"pull_request", "merge_group", "push", "workflow_dispatch"}.issubset(events):
         raise PortError("Required PR/merge-group/push/manual event is missing")
     jobs = value.get("jobs", {})
-    if set(jobs) != {"scope", "controller", "build", "external-oracle", "backup-oracle", "android-ci"}:
+    if set(jobs) != {"scope", "controller", "build", "external-oracle", "backup-oracle", "backup-consumer", "android-ci"}:
         raise PortError("Missing/unknown mandatory CI job")
     gate = jobs["android-ci"]
     scope_outputs = jobs["scope"].get("outputs", {})
@@ -82,7 +82,7 @@ def validate_candidate(value: dict, text: str):
     ):
         raise PortError("Diff-derived controller scope and committed accessibility-suite selection must remain separate")
     if (gate.get("name") != "android-ci" or gate.get("if") != "${{ always() }}"
-            or gate.get("needs") != ["scope", "controller", "build", "external-oracle", "backup-oracle"]):
+            or gate.get("needs") != ["scope", "controller", "build", "external-oracle", "backup-oracle", "backup-consumer"]):
         raise PortError("android-ci must always report every selected build outcome")
     build = jobs["build"]
     if any(jobs[name].get("runs-on") != "macos-26-intel" for name in ("external-oracle", "backup-oracle")):
@@ -209,12 +209,67 @@ def validate_candidate(value: dict, text: str):
         ] not in ([runner_command], [parity_runner_command])
     ):
         raise PortError("Controller CI must discover the real native accessibility runner regressions once and fail closed")
-    for name in ("build", "external-oracle", "backup-oracle"):
+    for name in ("build", "external-oracle", "backup-oracle", "backup-consumer"):
         job = jobs[name]
         if job.get("if") == "${{ always() }}" or "scope" not in job.get("needs", []):
             raise PortError("Expensive jobs must be scope-selected and use default fail-closed dependencies")
     if jobs["external-oracle"].get("needs") != ["scope"]:
         raise PortError("The independent Swift codec oracle must not wait for controller tests")
+    validate_backup_return(jobs)
+
+
+def validate_backup_return(jobs):
+    consumer = jobs["backup-consumer"]
+    if (consumer.get("needs") != ["scope", "backup-oracle"]
+            or consumer.get("if") != "${{ needs.scope.outputs.backup == 'true' }}"
+            or consumer.get("runs-on") != "ubuntu-24.04" or "strategy" in consumer
+            or consumer.get("continue-on-error")):
+        raise PortError("Swift-to-Room consumer must be a selected independent Linux job after successful Swift export")
+    swift_steps = jobs["backup-oracle"]["steps"]
+    uploads = [step for step in swift_steps if step.get("uses", "").startswith("actions/upload-artifact@")]
+    expected_paths = [
+        "${{ runner.temp }}/swift-output/" + name
+        for name in ("swift-export.meshcoreone", "swift-export.json", "swift-room-proof.json", "swift-handoff.json")
+    ]
+    if (len(uploads) != 1 or uploads[0] != swift_steps[-1]
+            or uploads[0].get("if") or uploads[0].get("continue-on-error")
+            or uploads[0].get("with") != {
+                "name": "backup-swift-${{ github.run_id }}-${{ github.run_attempt }}",
+                "path": "\n".join(expected_paths) + "\n", "if-no-files-found": "error", "retention-days": "1",
+            }):
+        raise PortError("Swift handoff must transfer only same-run controlled backup data after actual restore/export")
+    steps = consumer["steps"]
+    checkouts = [step for step in steps if step.get("uses", "").startswith("actions/checkout@")]
+    downloads = [step for step in steps if step.get("uses", "").startswith("actions/download-artifact@")]
+    restores = [step for step in steps if "wp203_ci.py" in step.get("run", "")]
+    command = (
+        "python tools/android-port/oracle/wp203_ci.py consumer "
+        '--state "$ANDROID_CI_STATE" --input "${{ runner.temp }}/swift-input" '
+        '--output "${{ runner.temp }}/room-consumer"'
+    )
+    if (len(checkouts) != 1 or checkouts[0] != steps[0]
+            or checkouts[0].get("with") != {
+                "ref": "${{ github.event.pull_request.head.sha || github.sha }}",
+                "fetch-depth": "0", "persist-credentials": "false",
+            }
+            or len(downloads) != 1 or downloads[0].get("with") != {
+                "name": "backup-swift-${{ github.run_id }}-${{ github.run_attempt }}",
+                "path": "${{ runner.temp }}/swift-input",
+            }
+            or len(restores) != 1 or restores[0].get("run") != command
+            or steps[-1] != restores[0] or steps.index(downloads[0]) >= steps.index(restores[0])
+            or any(step.get("if") or step.get("continue-on-error") for step in steps)
+            or any(step.get("uses", "").startswith("actions/upload-artifact@") for step in steps)):
+        raise PortError("Room destination must consume exact same-run Swift data and execute mandatory tests, not upload CI results")
+    gate = jobs["android-ci"]["steps"]
+    environment = {key: value for step in gate for key, value in step.get("env", {}).items()}
+    runs = "\n".join(step.get("run", "") for step in gate)
+    if (environment.get("BACKUP_CONSUMER_RESULT") != "${{ needs.backup-consumer.result }}"
+            or runs.count('test "$BACKUP_CONSUMER_RESULT" = "success"') != 1
+            or runs.count('test "$BACKUP_CONSUMER_RESULT" = "skipped"') != 1
+            or 'test "$BACKUP_RESULT" = "success"\n  test "$BACKUP_CONSUMER_RESULT" = "success"' not in runs
+            or 'test "$BACKUP_RESULT" = "skipped"\n  test "$BACKUP_CONSUMER_RESULT" = "skipped"' not in runs):
+        raise PortError("android-ci must require both actual backup directions, including deliberate unselected skips")
 
 
 def validate_setup(value: dict, text: str):

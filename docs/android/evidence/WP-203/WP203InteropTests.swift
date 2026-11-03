@@ -24,6 +24,9 @@ final class WP203InteropTests: XCTestCase {
     XCTAssertEqual(envelope.contacts[0].avatarImageData, Data([0x00, 0x80, 0xFF]))
     XCTAssertEqual(envelope.messages[0].ackCode, 0x8000_0000)
     XCTAssertEqual(envelope.messages[0].timestamp, UInt32.max)
+    XCTAssertEqual(envelope.contacts[0].outPathLength, 255)
+    XCTAssertEqual(envelope.contacts[0].outPath, Data())
+    XCTAssertEqual(envelope.discoveredNodes[0].outPathLength, 255)
 
     let container = try PersistenceStore.createContainer(inMemory: true)
     let store = PersistenceStore(modelContainer: container)
@@ -103,6 +106,7 @@ final class WP203InteropTests: XCTestCase {
     XCTAssertEqual(discovered.radioID, envelope.discoveredNodes[0].radioID)
     XCTAssertEqual(discovered.publicKey, envelope.discoveredNodes[0].publicKey)
     XCTAssertEqual(discovered.name, envelope.discoveredNodes[0].name)
+    XCTAssertEqual(discovered.outPathLength, envelope.discoveredNodes[0].outPathLength)
     XCTAssertEqual(discovered.outPath, envelope.discoveredNodes[0].outPath)
   }
 }

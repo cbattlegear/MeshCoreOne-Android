@@ -269,6 +269,7 @@ class WorkflowTests(unittest.TestCase):
         expected = {
             "external-oracle": ("external-oracle", ["scope"]),
             "backup-oracle": ("backup", ["scope", "build"]),
+            "backup-consumer": ("backup", ["scope", "backup-oracle"]),
         }
         for job_name, (scope, needs) in expected.items():
             with self.subTest(job=job_name):
@@ -286,6 +287,77 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('github.event_name', scope_run)
         self.assertIn('github.event_path', scope_run)
         self.assertIn('$GITHUB_OUTPUT', scope_run)
+
+    def test_backup_chain_returns_only_same_run_data_to_a_fresh_room_runner(self):
+        workflow, text = self.read("android-ci.yml")
+        jobs = workflow["jobs"]
+        upload = jobs["backup-oracle"]["steps"][-1]
+        self.assertEqual(upload["with"]["path"].splitlines(), [
+            "${{ runner.temp }}/swift-output/" + name
+            for name in ("swift-export.meshcoreone", "swift-export.json", "swift-room-proof.json", "swift-handoff.json")
+        ])
+        self.assertNotIn("swift-results", upload["with"]["path"])
+        self.assertEqual(jobs["backup-consumer"]["runs-on"], "ubuntu-24.04")
+        self.assertEqual(jobs["backup-consumer"]["needs"], ["scope", "backup-oracle"])
+        self.assertIn("wp203_ci.py consumer", jobs["backup-consumer"]["steps"][-1]["run"])
+        self.assertIn("backup-consumer", jobs["android-ci"]["needs"])
+        validate_candidate(workflow, text)
+
+    def test_backup_return_cannot_skip_a_direction_or_accept_unbound_data_or_reports(self):
+        original, text = self.read("android-ci.yml")
+        for mode in ("missing-job", "missing-dependency", "wrong-host", "ignore-job", "skip-job",
+                     "skip-restore", "ignore-restore", "wrong-command", "wrong-ref", "stale-artifact",
+                     "wrong-source-run", "extra-xml", "missing-handoff", "missing-data-is-warning",
+                     "missing-gate-need", "missing-gate-success", "missing-gate-skip", "wrong-gate-result"):
+            changed = copy.deepcopy(original)
+            jobs = changed["jobs"]
+            consumer = jobs["backup-consumer"]
+            upload = jobs["backup-oracle"]["steps"][-1]
+            if mode == "missing-job":
+                del jobs["backup-consumer"]
+            elif mode == "missing-dependency":
+                consumer["needs"] = ["scope"]
+            elif mode == "wrong-host":
+                consumer["runs-on"] = "macos-26-intel"
+            elif mode == "ignore-job":
+                consumer["continue-on-error"] = "true"
+            elif mode == "skip-job":
+                consumer["if"] = "${{ false }}"
+            elif mode == "skip-restore":
+                consumer["steps"][-1]["if"] = "${{ false }}"
+            elif mode == "ignore-restore":
+                consumer["steps"][-1]["continue-on-error"] = "true"
+            elif mode == "wrong-command":
+                consumer["steps"][-1]["run"] += " || true"
+            elif mode == "wrong-ref":
+                consumer["steps"][0]["with"]["ref"] = "main"
+            elif mode == "stale-artifact":
+                download = next(step for step in consumer["steps"]
+                                if step.get("uses", "").startswith("actions/download-artifact@"))
+                download["with"]["name"] = "backup-swift-previous-run"
+            elif mode == "wrong-source-run":
+                download = next(step for step in consumer["steps"]
+                                if step.get("uses", "").startswith("actions/download-artifact@"))
+                download["with"]["run-id"] = "1"
+            elif mode == "extra-xml":
+                upload["with"]["path"] += "${{ runner.temp }}/swift-output/swift-results.xml\n"
+            elif mode == "missing-handoff":
+                upload["with"]["path"] = upload["with"]["path"].replace(
+                    "${{ runner.temp }}/swift-output/swift-handoff.json\n", "")
+            elif mode == "missing-data-is-warning":
+                upload["with"]["if-no-files-found"] = "warn"
+            elif mode == "missing-gate-need":
+                jobs["android-ci"]["needs"].remove("backup-consumer")
+            elif mode == "missing-gate-success":
+                jobs["android-ci"]["steps"][0]["run"] = jobs["android-ci"]["steps"][0]["run"].replace(
+                    '  test "$BACKUP_CONSUMER_RESULT" = "success"\n', "")
+            elif mode == "missing-gate-skip":
+                jobs["android-ci"]["steps"][0]["run"] = jobs["android-ci"]["steps"][0]["run"].replace(
+                    '  test "$BACKUP_CONSUMER_RESULT" = "skipped"\n', "")
+            else:
+                jobs["android-ci"]["steps"][0]["env"]["BACKUP_CONSUMER_RESULT"] = "${{ needs.backup-oracle.result }}"
+            with self.subTest(mode=mode), self.assertRaises(PortError):
+                validate_candidate(changed, text)
 
     def test_gradle_cache_is_namespaced_and_tracks_actual_locks_and_toolchain(self):
         workflow, _ = self.read("android-ci.yml")

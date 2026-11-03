@@ -15,7 +15,8 @@ import org.junit.Test
 class BackupInteropTest : BackupRoomTest() {
     @Test fun actualRoomKotlinExportProducesAllFamiliesForSwift() = runBlocking {
         val input = fullEnvelope().copy(
-            contacts = SnapshotList.of(contact().copy(lastHeardTimestamp = 1_700_000_500u, avatarImageData = Bytes.of(0, 0x80, 0xFF))),
+            contacts = SnapshotList.of(contact().copy(lastHeardTimestamp = 1_700_000_500u,
+                avatarImageData = Bytes.of(0, 0x80, 0xFF), outPathLength = 255u, outPath = Bytes.EMPTY)),
             messages = SnapshotList.of(message().copy(text = "Hi\u4F60\uD83D\uDE00\u05E9\u05DC\u05D5\u05DD",
                 createdAt = fraction("1700000501.1234567"), sortDate = fraction("-0.25"),
                 direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED, textType = TextType.SIGNED_PLAIN,
@@ -29,10 +30,16 @@ class BackupInteropTest : BackupRoomTest() {
         val result = service.importBackup(input, store)
         assertEquals(12L, result.totalInserted)
         assertTrue(result.userDefaultsRestored)
+        db.openHelper.writableDatabase.execSQL("UPDATE contacts SET outPathLength = -1")
+        db.openHelper.writableDatabase.execSQL("UPDATE discovered_nodes SET outPathLength = -1")
+        assertEquals(-1L, requireNotNull(db.contacts().byId(RADIO.value, input.contacts.single().id)).outPathLength)
+        assertEquals(-1L, db.discoveredNodes().backupAll().single().outPathLength)
         val exported = service.export(store)
         val envelope = AppBackupCodec().parseBackup(exported.data)
         assertEquals(12L, BackupModelKind.entries.sumOf { envelope.manifest.count(it) })
         assertEquals(input.messages.single().sortDate, envelope.messages.single().sortDate)
+        assertEquals(255.toUByte(), envelope.contacts.single().outPathLength)
+        assertEquals(255.toUByte(), envelope.discoveredNodes.single().outPathLength)
         val output = output()
         output.mkdirs()
         File(output, "kotlin-export.meshcoreone").writeBytes(exported.data.toByteArray())
@@ -70,6 +77,8 @@ class BackupInteropTest : BackupRoomTest() {
         assertEquals(expectedMessage.regionScope, message.regionScope); assertEquals(expectedMessage.regionScopeMatches, message.regionScopeMatches)
         assertEquals(expectedMessage.routeType, message.routeType); assertEquals(expectedMessage.failureSeen, message.failureSeen)
         assertEquals(envelope.contacts.single().avatarImageData, actual.contacts.single().avatarImageData)
+        assertEquals(envelope.contacts.single().outPathLength, actual.contacts.single().outPathLength)
+        assertEquals(envelope.discoveredNodes.single().outPathLength, actual.discoveredNodes.single().outPathLength)
         assertEquals(envelope.remoteNodeSessions.single().id, actual.roomMessages.single().sessionID)
         assertEquals(envelope.savedTracePaths.single().runs, actual.savedTracePaths.single().runs)
         assertEquals(envelope.nodeStatusSnapshots.single(), actual.nodeStatusSnapshots.single())

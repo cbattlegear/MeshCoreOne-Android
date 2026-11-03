@@ -1,5 +1,37 @@
 # WP-203 evidence contract
 
+## Current issue #382 bidirectional runner repair (2026-11-02)
+
+The current candidate workflow at pickup main
+`1e1ff70345f203b41f9a8b04836c2cc4640500c9` had a reachable Kotlin-to-SwiftData
+restore/export job but no Swift-to-Room return job. Its green result could not
+establish current bidirectional interoperability. The accepted component repairs
+below and #471's legacy file-reopen/export observations remain accepted in their
+own bounded scopes; neither is reopened or presented as new compatibility proof.
+
+The bounded repair adds a separate ephemeral Linux `backup-consumer` job after
+the real macOS SwiftData oracle. Only actual Swift compressed/JSON backup data,
+restore observations and a same-head/base/source/run/attempt data provenance
+handoff cross that boundary. No executable, raw JUnit, log or second CI-result
+bundle is uploaded. The destination reruns `:core:data:verifyBackupTests`,
+`:core:data:verifyPersistenceRepositoryTests`, `:core:database:testDebugUnitTest`
+and `validateModuleGraph` with the actual Swift input directory, strict dependency
+verification, forced tests and no build cache. Both actual interop methods and
+nonzero, unskipped data/database discovery are mandatory. The hosted job/log,
+not a committed result bundle, remains authoritative.
+
+The producer now starts with real Room contact/discovered-node signed `-1`
+legacy rows, exports their unsigned `255` wire values and sends those bytes
+through the frozen Swift decoder/importer/exporter and independent Room importer.
+This supplements #471's file-reopen fixtures without changing their original
+bindings. The Swift harness is executable input, so changing it now selects the
+backup chain instead of being mistaken for inert evidence documentation.
+
+Local guard results and actual owner/admission boundaries are recorded in
+[the runner repair deviation](../../deviations/WP-203.md#issue-382-bidirectional-return-path-2026-11-02).
+Until the exact hosted candidate completes both restores, these are implemented
+assertions, not current Swift/Room observations or release acceptance.
+
 ## Current pickup: retained R118 repairs (issue #382)
 
 Reconciled on `1c1f3b451b25200432ecab09cb41397ae612e4af` against frozen

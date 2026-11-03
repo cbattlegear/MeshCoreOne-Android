@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from contextlib import ExitStack
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -52,6 +53,110 @@ class BundleTests(unittest.TestCase):
             "restoreVerified": True,
             "skipped": 0,
         }))
+
+    def make_swift_handoff(self):
+        (self.root / "swift-export.meshcoreone").write_bytes(b"controlled Swift bytes")
+        (self.root / "swift-export.json").write_bytes(b"{}")
+        proof = {
+            "source_sha": SOURCE_SHA,
+            "producer": "actual-frozen-SwiftData-restore-and-AppBackupService-export",
+            "inserted": 12, "skipped": 0, "reimport_inserted": 0,
+            "restore_semantics_compared": True, "preferences_restored": True,
+        }
+        (self.root / "swift-room-proof.json").write_bytes(json_bytes(proof))
+        (self.root / "swift-handoff.json").write_bytes(json_bytes(CI.swift_data_handoff(self.root, self.identity)))
+        return proof
+
+    def test_swift_handoff_transfers_only_data_not_ci_reports(self):
+        proof = self.make_swift_handoff()
+        self.assertEqual(proof, CI.validate_swift_handoff(self.root, self.identity))
+        value = json.loads((self.root / "swift-handoff.json").read_text())
+        self.assertEqual({"schema_version", "identity", "source_sha", "data"}, set(value))
+        self.assertEqual(list(CI.SWIFT_HANDOFF_DATA), [row["path"] for row in value["data"]])
+        self.assertFalse(any(self.root.glob("*.xml")))
+        self.assertNotIn("junit", value)
+
+    def test_swift_handoff_rejects_stale_candidate_run_attempt_source_and_extra_results(self):
+        self.make_swift_handoff()
+        path = self.root / "swift-handoff.json"
+        original = json.loads(path.read_text())
+        for field, value in (("identity", {**self.identity, "run_id": 2}),
+                             ("identity", {**self.identity, "run_attempt": 2}),
+                             ("identity", {**self.identity, "binding": {"head_sha": "b" * 40}}),
+                             ("source_sha", "c" * 40), ("junit", {"passed": 1})):
+            with self.subTest(field=field, value=value):
+                path.write_bytes(json_bytes({**original, field: value}))
+                with self.assertRaisesRegex(OracleError, "exact head/base/source/run/attempt"):
+                    CI.validate_swift_handoff(self.root, self.identity)
+
+    def test_swift_handoff_rejects_tampered_data_and_false_restore_observations(self):
+        for field, value in (("inserted", 0), ("skipped", 1), ("reimport_inserted", 1),
+                             ("restore_semantics_compared", False), ("preferences_restored", False),
+                             ("producer", "Kotlin-only"), ("source_sha", "b" * 40)):
+            with self.subTest(field=field):
+                proof = self.make_swift_handoff()
+                (self.root / "swift-room-proof.json").write_bytes(json_bytes({**proof, field: value}))
+                (self.root / "swift-handoff.json").write_bytes(json_bytes(CI.swift_data_handoff(self.root, self.identity)))
+                with self.assertRaisesRegex(OracleError, "actual frozen SwiftData"):
+                    CI.validate_swift_handoff(self.root, self.identity)
+        self.make_swift_handoff()
+        (self.root / "swift-export.meshcoreone").write_bytes(b"tampered")
+        with self.assertRaisesRegex(OracleError, "bytes"):
+            CI.validate_swift_handoff(self.root, self.identity)
+
+    def test_consumer_runs_real_declared_tasks_with_swift_input_and_no_result_bundle(self):
+        self.make_swift_handoff()
+        produced = self.root / "android" / "core" / "data" / "build" / "reports" / "wp203" / "interop"
+        produced.mkdir(parents=True)
+        proof = {
+            "consumer": "actual-Swift-export-Room-restore",
+            "compressedSha256": CI.digest_file(self.root / "swift-export.meshcoreone"),
+            "inserted": 12, "reimportInserted": 0, "sourceSemanticsCompared": True, "preferencesRestored": True,
+        }
+        (produced / "swift-to-kotlin-room-proof.json").write_bytes(json_bytes(proof))
+        cases = [
+            {"class": "com.meshcoreone.android.core.data.backup.BackupInteropTest", "method": method}
+            for method in ("actualRoomKotlinExportProducesAllFamiliesForSwift",
+                           "actualSwiftExportRestoresIntoRealRoomAndMatchesSourceSemantics")
+        ]
+        output = self.root / "consumer-output"
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(CI, "REPO", self.root))
+            stack.enter_context(patch.object(CI, "identity", return_value=self.identity))
+            stack.enter_context(patch.object(CI, "preflight"))
+            stack.enter_context(patch.object(CI, "verify_wrapper"))
+            stack.enter_context(patch.object(CI, "candidate_environment", return_value={}))
+            stack.enter_context(patch.object(CI, "suite_counts", return_value={"discovered": 2}))
+            methods = stack.enter_context(patch.object(CI, "suite_case_ids", return_value=cases))
+            execute = stack.enter_context(patch.object(CI, "execute"))
+            result = CI.consume_swift_data({"host": "linux", "private_root": str(self.root)}, output, self.root)
+            command = execute.call_args.args[0]
+            for task in CI.TASKS:
+                self.assertIn(task, command)
+            self.assertIn("-Pwp203InteropInputDir=" + str(self.root.resolve()), command)
+            self.assertIn("--rerun-tasks", command)
+            self.assertIn("--no-build-cache", command)
+            self.assertEqual(proof, result["restore"])
+            self.assertEqual([], list(output.iterdir()))
+            methods.return_value = cases[:1]
+            with self.assertRaisesRegex(OracleError, "omitted the mandatory"):
+                CI.consume_swift_data({"host": "linux", "private_root": str(self.root)},
+                                      self.root / "omitted-output", self.root)
+            methods.return_value = cases
+            (produced / "swift-to-kotlin-room-proof.json").write_bytes(json_bytes({**proof, "reimportInserted": 1}))
+            with self.assertRaisesRegex(OracleError, "restore observations disagree"):
+                CI.consume_swift_data({"host": "linux", "private_root": str(self.root)},
+                                      self.root / "bad-proof-output", self.root)
+
+    def test_invalid_swift_handoff_never_starts_consumer_preflight_or_gradle(self):
+        self.make_swift_handoff()
+        (self.root / "swift-export.meshcoreone").unlink()
+        with patch.object(CI, "identity", return_value=self.identity), patch.object(CI, "preflight") as preflight, \
+                patch.object(CI, "execute") as execute:
+            with self.assertRaisesRegex(OracleError, "Missing"):
+                CI.consume_swift_data({"host": "linux"}, self.root / "output", self.root)
+            preflight.assert_not_called()
+            execute.assert_not_called()
 
     def test_report_free_producer_validates_actual_bytes_and_room_semantics(self):
         self.make_report_free_producer()

@@ -16,7 +16,7 @@ from controller.errors import PortError
 from controller.schema import load_json
 from oracle.codec_harness import mac_environment, run as run_reference_codec
 from oracle.reference import FrozenReference, OracleError, REPO, SOURCE_SHA, json_bytes, sha256, write_or_check
-from oracle.wp203_ci import DATA_NAMES, identity, record, validate_bundle, validate_producer_data
+from oracle.wp203_ci import identity, swift_data_handoff, validate_producer_data
 
 TEST_NAME = "testRealKotlinExportRestoresIntoSwiftDataAndSwiftExportsForRoom"
 HARNESS = "docs/android/evidence/WP-203/WP203InteropTests.swift"
@@ -192,13 +192,8 @@ def run(incoming, output, stage_root):
             or proof.get("reimport_inserted") != 0 or proof.get("restore_semantics_compared") is not True
             or proof.get("preferences_restored") is not True or len(proof.get("source_arrays", [])) != 12):
         raise OracleError("Actual source SwiftData restore/count/preference proof disagrees")
-    evidence = {
-        "schema_version": 1, "stage": "swift", "identity": bound, "source_sha": SOURCE_SHA,
-        "tasks": TASK_DESCRIPTION, "data": [record(output, name) for name in DATA_NAMES["swift"]], "junit": result,
-    }
-    write_or_check(output / "wp203-evidence.json", json_bytes(evidence), check=False)
-    validate_bundle(output, "swift", bound)
-    return evidence
+    write_or_check(output / "swift-handoff.json", json_bytes(swift_data_handoff(output, bound)), check=False)
+    return {"stage": "swift", "identity": bound, "discovery": result, "restore": proof}
 
 
 def main(argv=None):
@@ -209,7 +204,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         result = run(args.input, args.output, args.stage_root)
-        print(json_bytes({"stage": result["stage"], "result": "passed", "identity": result["identity"]}).decode(), end="")
+        print(json_bytes({"result": "passed", **result}).decode(), end="")
         return 0
     except (PortError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print("BLOCKED: " + str(error), file=sys.stderr)

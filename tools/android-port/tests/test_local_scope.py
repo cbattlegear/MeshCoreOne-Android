@@ -15,6 +15,7 @@ from controller.local_scope import (
     candidate_plan, collect_named_cases, collect_targeted_reports, report_inputs,
     run_scaffold, select_paths, validate_plan, validation_preflight_options,
 )
+from test_module_junit import notification_fixture, notification_report
 
 
 class LocalScopeSelectionTests(unittest.TestCase):
@@ -225,13 +226,72 @@ class LocalScopeBindingTests(unittest.TestCase):
     def write(self, name, content):
         path = self.repo / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        path.write_text(content, encoding="utf-8", newline="\n")
 
     def commit(self):
         self.git("add", "--all")
         self.git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                  "commit", "--quiet", "-m", "scope fixture")
         return self.git("rev-parse", "HEAD")
+
+    def test_remapped_notification_sources_select_real_runner_in_affected_and_full(self):
+        notification_fixture(self.write)
+        base = self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        source = "android/platform/notifications/src/main/kotlin/Delivery.kt"
+        self.write(source, "changed producer")
+        head = self.commit()
+        plan = candidate_plan(self.repo, base, head)
+        self.assertIn("module:platform/notifications", plan["scopes"])
+        self.assertIn(":platform:notifications:testDebugUnitTest", plan["tasks"])
+        directories, _ = report_inputs(self.repo, plan)
+        self.assertIn(self.repo / "android/platform/notifications/build/test-results/testDebugUnitTest", directories)
+        self.assertNotIn(self.repo / "android/platform/notifications/build/test-results/test", directories)
+        with self.assertRaises(PortError):
+            collect_targeted_reports(self.repo, plan["scopes"])
+        notification_report(self.repo)
+        self.assertEqual(collect_targeted_reports(self.repo, plan["scopes"])["platform/notifications"]["passed"], 6)
+        self.write("android/gradle.properties", "build change")
+        full = candidate_plan(self.repo, base, self.commit())
+        self.assertTrue(full["full_scaffold"])
+        self.assertIn(":platform:notifications:testDebugUnitTest", full["tasks"])
+
+    def test_remapped_targeted_reports_cannot_be_substituted_or_dirty(self):
+        from controller.module_junit import NOTIFICATION_CASES, NOTIFICATION_ROOT
+
+        notification_fixture(self.write)
+        self.commit()
+        scopes = ["module:platform/notifications"]
+        notification_report(self.repo, {(c, m + "Substitute") for c, m in NOTIFICATION_CASES})
+        with self.assertRaisesRegex(PortError, "mandatory remapped"):
+            collect_targeted_reports(self.repo, scopes)
+        notification_report(self.repo)
+        self.write("android/platform/notifications/" + NOTIFICATION_ROOT + "/Dirty.kt", "dirty")
+        with self.assertRaisesRegex(PortError, "differ"):
+            collect_targeted_reports(self.repo, scopes)
+
+    def test_instrumentation_only_module_does_not_select_jvm_runner(self):
+        self.write("android/platform/widgets/build.gradle.kts", 'plugins { id("mesh.android.library") }\n')
+        self.write("android/platform/widgets/src/androidTest/kotlin/DeviceTest.kt", "device")
+        base = self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        self.write("android/platform/widgets/src/main/kotlin/Widget.kt", "production")
+        plan = candidate_plan(self.repo, base, self.commit())
+        self.assertIn("module:platform/widgets", plan["scopes"])
+        self.assertNotIn(":platform:widgets:testDebugUnitTest", plan["tasks"])
+        self.assertEqual(collect_targeted_reports(self.repo, plan["scopes"]), {})
+
+    def test_unsupported_mapping_cannot_supply_a_targeted_pass(self):
+        notification_fixture(self.write)
+        base = self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        build = self.repo / "android/platform/notifications/build.gradle.kts"
+        self.write(build, build.read_text(encoding="utf-8").replace('getByName("test")', 'getByName("androidTest")'))
+        head = self.commit()
+        plan = candidate_plan(self.repo, base, head)
+        self.assertTrue(plan["full_scaffold"])
+        with self.assertRaisesRegex(PortError, "mapping build"):
+            report_inputs(self.repo, plan)
 
     def test_actual_git_diff_binds_base_head_tree_and_scopes(self):
         plan = candidate_plan(self.repo, self.base, self.head)

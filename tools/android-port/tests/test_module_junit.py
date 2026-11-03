@@ -16,6 +16,8 @@ from controller.module_junit import (
 )
 from test_ci_evidence import junit_report
 
+NOTIFICATION_FIXTURE_COMMIT = "1e1ff70345f203b41f9a8b04836c2cc4640500c9"
+
 
 def notification_fixture(write):
     root = Path(__file__).resolve().parents[3]
@@ -27,7 +29,8 @@ def notification_fixture(write):
     ]
     for relative in paths:
         content = subprocess.check_output([
-            "git", "-C", str(root), "show", "HEAD:android/platform/notifications/" + relative,
+            "git", "-C", str(root), "show",
+            NOTIFICATION_FIXTURE_COMMIT + ":android/platform/notifications/" + relative,
         ]).decode("utf-8")
         write("android/platform/notifications/" + relative, content)
     for module, plugin in (("model", "mesh.jvm.library"), ("contracts", "mesh.jvm.library"),

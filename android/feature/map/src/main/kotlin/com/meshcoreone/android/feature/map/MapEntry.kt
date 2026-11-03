@@ -44,8 +44,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.meshcoreone.android.core.designsystem.ColorScheme
-import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.l10n.R
@@ -58,6 +56,7 @@ import com.meshcoreone.android.core.maps.MapFilterHost
 import com.meshcoreone.android.core.maps.MapFilterState
 import com.meshcoreone.android.core.maps.MapPreferences
 import com.meshcoreone.android.core.maps.resolvedMapIsDark
+import com.meshcoreone.android.core.maps.effectiveAppThemeIsDark
 import com.meshcoreone.android.core.maps.MapLibreMapSurface
 import com.meshcoreone.android.core.maps.MapLibreOpenFreeMap
 import com.meshcoreone.android.core.maps.MapLibreRuntime
@@ -162,7 +161,7 @@ private fun MapContent(
     val filter = settings?.filter ?: MapFilterState.seed(MapFilterHost.MAIN_MAP)
     val clustering = settings?.clustering ?: true
     val labels = settings?.labels ?: true
-    val appIsDark = LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK
+    val appIsDark = effectiveAppThemeIsDark()
     val scope = rememberCoroutineScope()
     val holder = remember(dependencies, scope) { MapFeatureStateHolder(dependencies, scope, filter) }
     val feature by holder.state.collectAsStateWithLifecycle()

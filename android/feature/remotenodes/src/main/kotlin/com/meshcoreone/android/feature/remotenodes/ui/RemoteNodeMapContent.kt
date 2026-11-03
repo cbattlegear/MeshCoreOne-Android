@@ -15,9 +15,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings
-import com.meshcoreone.android.core.designsystem.ColorScheme
-import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.maps.*
+import com.meshcoreone.android.core.maps.effectiveAppThemeIsDark
 import com.meshcoreone.android.feature.remotenodes.map.CoordinateRegion
 import com.meshcoreone.android.feature.remotenodes.map.MapPoint
 import com.meshcoreone.android.feature.remotenodes.map.SnrBadge
@@ -172,7 +171,7 @@ private fun RemoteNodeMapContentWithPreferences(
     var style by rememberSaveable { mutableStateOf(MapStyle.STANDARD) }
     val uri = LocalUriHandler.current
     val isDark = resolvedMapIsDark(
-        preferences.appearance, LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK,
+        preferences.appearance, effectiveAppThemeIsDark(),
     )
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         RemoteHeading(title)

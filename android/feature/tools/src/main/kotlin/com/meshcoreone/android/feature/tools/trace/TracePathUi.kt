@@ -48,8 +48,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.meshcoreone.android.core.designsystem.ColorScheme
-import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as T
@@ -67,11 +65,13 @@ import com.meshcoreone.android.core.maps.MapPreferenceStore
 import com.meshcoreone.android.core.maps.MapPreferences
 import com.meshcoreone.android.core.maps.MapFilterHost
 import com.meshcoreone.android.core.maps.MapColorPreference
+import com.meshcoreone.android.core.maps.effectiveAppThemeIsDark
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import com.meshcoreone.android.core.l10n.R as Strings
+import java.text.NumberFormat
 
 @Composable
 private fun rememberTraceStrings(): TracePathStrings {
@@ -395,7 +395,7 @@ internal fun TracePathMapContent(
     val unit = stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesStatusSnrBadgeUnit)
     val badgeFormatter = remember(locale, unit) { TraceMapBadgeFormat(locale, unit) }
     val formatBadge: (Double, Double) -> String = remember(badgeFormatter) { badgeFormatter::format }
-    val appIsDark = LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK
+    val appIsDark = effectiveAppThemeIsDark()
     LaunchedEffect(preferences, retry) {
         try {
             preferences.observe(MapFilterHost.TRACE_PATH).collect {

@@ -25,6 +25,101 @@ import org.junit.jupiter.api.TestFactory
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelQueryAccountingTest {
     @TestFactory fun recovery() = listOf(
+        native("direct-message readiness wake racing shutdown retains its pending identity") {
+            assertReadinessRetirement(channel = false)
+        },
+        native("channel readiness wake racing shutdown retains its pending identity") {
+            assertReadinessRetirement(channel = true)
+        },
+        native("selected direct-message park wake racing shutdown retains its pending identity") {
+            val h = connection()
+            val message = h.message(MessageStatus.PENDING)
+            val pending = h.pending(message, 2)
+            h.transport.directError = 3u
+            var parked = false
+            val timerEntered = CompletableDeferred<Unit>()
+            val timerCancelled = CompletableDeferred<Unit>()
+            val releaseTimer = CompletableDeferred<Unit>()
+            val subscriptionCancelled = CompletableDeferred<Unit>()
+            val releaseSubscription = CompletableDeferred<Unit>()
+            val clock = object : SessionClock by h.clock {
+                override suspend fun sleepFor(duration: Duration) {
+                    if (!parked) {
+                        h.clock.sleepFor(duration)
+                        return
+                    }
+                    timerEntered.complete(Unit)
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        withContext(NonCancellable) {
+                            timerCancelled.complete(Unit)
+                            releaseTimer.await()
+                        }
+                    }
+                }
+            }
+            val signals = object : ConnectionSignals by h.signals {
+                override suspend fun subscribeTransitions(): ConnectionSubscription {
+                    val source = h.signals.subscribeTransitions()
+                    return object : ConnectionSubscription {
+                        override val initial = source.initial
+                        override val transitions = flow {
+                            try { emitAll(source.transitions) }
+                            finally {
+                                withContext(NonCancellable) {
+                                    subscriptionCancelled.complete(Unit)
+                                    releaseSubscription.await()
+                                }
+                            }
+                        }
+                        override fun close() = source.close()
+                    }
+                }
+            }
+            val queue = ChatSendQueueService(
+                h.token, h.store, h.service, MessagingChannelQuery { null },
+                OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, h.scope,
+                ChatSendQueueConfig(), clock, MessagingIssueReporter {
+                    if (it is MessagingDiagnostic.Failure && it.operation == "park.${message.id}") parked = true
+                    h.diagnostics += it
+                },
+            )
+            try {
+                start(h, queue)
+                assertTrue(timerEntered.isCompleted, "The real direct sender must park on its transport deadline")
+                val receipt = h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)).single()
+                assertEquals(pending.id, receipt.id)
+                assertEquals(3L, receipt.attemptCount)
+                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                queue.transportDidOpen()
+                runCurrent()
+                assertTrue(timerCancelled.isCompleted, "The selected direct-message wake must precede shutdown")
+
+                val stopping = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { queue.shutdown() }
+                runCurrent()
+                assertTrue(subscriptionCancelled.isCompleted, "Shutdown must seal ownership before the sender resumes")
+                assertFalse(stopping.isCompleted)
+                releaseTimer.complete(Unit)
+                runCurrent()
+                releaseSubscription.complete(Unit)
+                runCurrent()
+                val report = stopping.await()
+                val failures = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                assertTrue(failures.none { it.operation == "terminal.${message.id}" ||
+                    it.operation == "dmQueueCallback" }, "Retirement must not terminalize a parked direct envelope: $failures")
+                assertTrue(report.issues.isEmpty(), "Retirement must not retain a direct queue failure: ${report.issues}")
+                val retained = h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)).single()
+                assertEquals(pending.id, retained.id)
+                assertEquals(3L, retained.attemptCount)
+                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+            } finally {
+                releaseTimer.complete(Unit)
+                releaseSubscription.complete(Unit)
+                queue.shutdown()
+                h.close()
+            }
+        },
         native("selected park wake racing shutdown retains only its persisted query failure") {
             val h = connection()
             val message = h.message(MessageStatus.PENDING, 0u)
@@ -588,6 +683,98 @@ class ChannelQueryAccountingTest {
         h.signals.set(h.token, DeviceConnectionState.CONNECTED)
         queue.hydrate(); runCurrent()
         h.signals.set(h.token, DeviceConnectionState.READY); runCurrent()
+    }
+
+    private suspend fun TestScope.assertReadinessRetirement(channel: Boolean) {
+        val h = connection()
+        val subscriptionCancelled = CompletableDeferred<Unit>()
+        val releaseSubscription = CompletableDeferred<Unit>()
+        val readinessWait = CompletableDeferred<Unit>()
+        val timerCancelled = CompletableDeferred<Unit>()
+        val releaseTimer = CompletableDeferred<Unit>()
+        var holdTimerCleanup = false
+        val clock = object : SessionClock by h.clock {
+            override suspend fun sleepFor(duration: Duration) {
+                readinessWait.complete(Unit)
+                try { h.clock.sleepFor(duration) }
+                finally {
+                    if (holdTimerCleanup) withContext(NonCancellable) {
+                        timerCancelled.complete(Unit)
+                        releaseTimer.await()
+                    }
+                }
+            }
+        }
+        val signals = object : ConnectionSignals by h.signals {
+            override suspend fun subscribeTransitions(): ConnectionSubscription {
+                val source = h.signals.subscribeTransitions()
+                return object : ConnectionSubscription {
+                    override val initial = source.initial
+                    override val transitions = flow {
+                        try { emitAll(source.transitions) }
+                        finally {
+                            withContext(NonCancellable) {
+                                subscriptionCancelled.complete(Unit)
+                                releaseSubscription.await()
+                            }
+                        }
+                    }
+                    override fun close() = source.close()
+                }
+            }
+        }
+        val queue = ChatSendQueueService(
+            h.token, h.store, h.service, MessagingChannelQuery { null },
+            OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, h.scope,
+            ChatSendQueueConfig(), clock, MessagingIssueReporter { h.diagnostics += it },
+        )
+        try {
+            h.signals.set(h.token, DeviceConnectionState.DISCONNECTED)
+            queue.observeConnectionState()
+            queue.hydrate()
+            runCurrent()
+            val message = h.message(MessageStatus.PENDING, if (channel) 0u else null)
+            if (channel) {
+                queue.enqueueChannel(ChannelMessageEnvelope(message.id, 0u, false, message.text, message.timestamp, "Test"))
+            } else {
+                queue.enqueueDM(DirectMessageEnvelope(message.id, CONTACT, false))
+            }
+            runCurrent()
+            assertTrue(readinessWait.isCompleted, "The envelope must be dequeued and suspended at readiness")
+            val pending = h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)).single()
+            assertEquals(0L, pending.attemptCount)
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+
+            h.signals.set(h.token, DeviceConnectionState.READY)
+            holdTimerCleanup = true
+            queue.transportDidOpen()
+            runCurrent()
+            assertTrue(timerCancelled.isCompleted, "The readiness wake must win before shutdown starts")
+            val stopping = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { queue.shutdown() }
+            assertTrue(subscriptionCancelled.isCompleted, "Shutdown must invalidate ownership before releasing the sender")
+            assertFalse(stopping.isCompleted)
+            releaseTimer.complete(Unit)
+            runCurrent()
+            releaseSubscription.complete(Unit)
+            runCurrent()
+            val report = stopping.await()
+
+            val failures = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+            val lane = if (channel) "channel" else "dm"
+            assertTrue(failures.none {
+                it.operation == "terminal.${message.id}" || it.operation == "${lane}QueueCallback"
+            }, "Retirement must not terminalize the dequeued envelope: $failures")
+            assertTrue(report.issues.isEmpty(), "Retirement must not retain a queue teardown failure: ${report.issues}")
+            val retained = h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)).single()
+            assertEquals(pending.id, retained.id)
+            assertEquals(0L, retained.attemptCount)
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+        } finally {
+            releaseTimer.complete(Unit)
+            releaseSubscription.complete(Unit)
+            queue.shutdown()
+            h.close()
+        }
     }
 
     private fun queryFailures(h: Harness, messageID: UUID) =

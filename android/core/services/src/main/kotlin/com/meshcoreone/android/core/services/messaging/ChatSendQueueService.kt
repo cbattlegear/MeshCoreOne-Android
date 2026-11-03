@@ -205,10 +205,19 @@ class ChatSendQueueService(
     }
 
     private suspend fun awaitReady() {
-        ownership.checkLifetime("queueReadiness")
+        checkQueueReadinessLifetime("queueReadiness")
         while (!ownership.isReady) {
             clock.messagingDeadline(config.transportWaitTimeout) { triggers.wait() }
-            ownership.checkLifetime("queueReadiness.woke")
+            checkQueueReadinessLifetime("queueReadiness.woke")
+        }
+    }
+    private suspend fun checkQueueReadinessLifetime(operation: String) {
+        try { ownership.checkLifetime(operation) }
+        catch (failure: MessageServiceException) {
+            if (failure.error == MessageServiceError.NotConnected && ownership.closing) {
+                throw CancellationException("Send queue generation retired").also { it.initCause(failure) }
+            }
+            throw failure
         }
     }
     private suspend fun park(id: UUID, failure: Throwable): Nothing {

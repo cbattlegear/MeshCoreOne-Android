@@ -1,8 +1,8 @@
-# Persisted park disposition during generation retirement
+# Persisted queue disposition during generation retirement
 
-Publication-time status: source analysis and an isolated candidate, not an
-executed repair or acceptance claim. Original hosted job logs remain authoritative;
-no second CI-result bundle is retained.
+Status: bounded source repair and deterministic regressions are implemented in a
+local candidate; Android test execution and protected acceptance are not claimed.
+Original hosted job logs remain authoritative; no second CI-result bundle is retained.
 
 ## Original observation
 
@@ -62,6 +62,31 @@ test-only production hook are added.
 
 The App lifecycle assertions are not weakened. Their failure messages now expose
 the actual retained issues and messaging operations if a different defect remains.
+
+## Already-dequeued readiness work
+
+The additional review findings on #543 head
+`0dfd6abf5d05d0c1f5ecf81775eb219916c237fa`, base
+`99479711bfdb7c621765f09d671068ca8b8318ce`, identify a distinct interval not
+closed by the shutdown-entry seals. `SendQueue` removes an envelope under its
+lock and invokes the sender after releasing that lock. An already-dequeued sender
+can therefore reach or resume `awaitReady` after shutdown has invalidated
+ownership, where `NotConnected` previously escaped to terminal handling instead
+of preserving the durable send.
+
+`awaitReady` now translates only a `NotConnected` produced while this queue's
+ownership is closing into `CancellationException`, retaining the typed failure
+as its cause. This routes the envelope through `SendQueue`'s existing
+cancellation/requeue behavior; unrelated readiness failures remain unchanged.
+New direct-message and channel regressions use the real service/queue, select a
+readiness wake, and hold connection-observer cancellation until shutdown has
+invalidated ownership. A further direct-message regression starts from a genuine
+transient transport error and selects the parked-send wake before shutdown.
+Together they assert pending identity, attempt count, `PENDING` message status,
+and absence of terminal and queue-callback failures. These new tests have not
+executed locally because the shared Gradle execution lock remains retained.
+They do not prove physical/OEM behavior or protected acceptance for a successor
+to #543.
 
 ## Custody and verification
 

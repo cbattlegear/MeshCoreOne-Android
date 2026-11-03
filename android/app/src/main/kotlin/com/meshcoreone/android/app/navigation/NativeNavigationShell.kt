@@ -149,6 +149,14 @@ fun NativeNavigationShell(
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
     val state by coordinator.state.collectAsStateWithLifecycle()
+    val onboardingRouteActive = state.activeStack.lastOrNull()?.destination ==
+        NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+    val onboardingFlow = remember(onboarding, onboardingRouteActive) {
+        if (onboardingRouteActive) onboarding?.retainedFlowCoordinator() else null
+    }
+    val canNavigateFromCurrentRoute = {
+        !onboardingRouteActive || onboardingFlow?.canLeaveCurrentFlow() != false
+    }
     val holders = AppTab.entries.associateWith { rememberSaveableStateHolder() }
     val owners = state.stacks.flatMap { (tab, stack) -> stack.map { it.id to tab } }.toMap()
     val liveContentKeys by rememberUpdatedState(owners.keys.map { "entry-$it" }.toSet())
@@ -219,7 +227,7 @@ fun NativeNavigationShell(
                 NavigationSuiteItem(
                     navigationSuiteType = type,
                     selected = state.selectedTab == tab,
-                    onClick = { coordinator.selectTab(tab) },
+                    onClick = { if (canNavigateFromCurrentRoute()) coordinator.selectTab(tab) },
                     modifier = Modifier
                         .heightIn(min = if (useRail) 72.dp else 80.dp * fontScale)
                         .testTag("tab:${tab.name}")
@@ -276,7 +284,7 @@ fun NativeNavigationShell(
                             navigationIcon = {
                                 if (state.canGoBack) {
                                     IconButton(
-                                        onClick = { coordinator.back() },
+                                        onClick = { if (canNavigateFromCurrentRoute()) coordinator.back() },
                                         modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("navigation-back"),
                                     ) {
                                         Icon(painterResource(R.drawable.ic_back), stringResource(Strings.string.scaffold_back))
@@ -318,7 +326,7 @@ fun NativeNavigationShell(
                     modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                     entryDecorators = listOf(decorator),
                     sceneStrategies = listOf(strategy),
-                    onBack = { coordinator.back() },
+                    onBack = { if (canNavigateFromCurrentRoute()) coordinator.back() },
                     transitionSpec = {
                         androidx.compose.animation.fadeIn(
                             androidx.compose.animation.core.tween(if (motionScale == 0f) 0 else 180),

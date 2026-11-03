@@ -9,7 +9,9 @@
 - Initial combined diagnostic head: `d4c63e7027469ac63a1515e66cc0fb2f3bf53697`
   (WP-208 producer `e98a1ecb633bdc1ac1b9be6d44f4483076fdbc7b` integrated).
   Hosted run: <https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41581606473>,
-  attempt 1, workflow dispatch. This is a provisional diagnostic, not final
+  attempt 1, workflow dispatch: **failed** at
+  `:feature:onboarding:mergeDebugUnitTestResources` with `Java heap space`.
+  This is a provisional diagnostic, not final
   verification: the producer is correcting definite-unsent serializer provenance,
   and WP-215 is reconciling existing #495 dispatcher commitment/retry hunks.
 
@@ -78,6 +80,10 @@ then cancels the caller and checks the committed receipt after release. A
 dispatcher witness separately prevents replay of committed mark-read actions.
 Additional dispatcher cases preserve #495's navigation-commit cancellation and
 READY retries during the last delay and after the bounded retry window.
+The receipt also exposes `wireNotDispatched()`: only the protocol dispatch owner
+may reset IN_FLIGHT to READY after the cancelled call settles with definite-unsent
+proof. A guard regression forbids resetting UNCERTAIN or ACCEPTED. The protocol
+producer prerequisite and real serializer contention cases remain required.
 
 ## Actual local verification
 
@@ -100,8 +106,23 @@ The original eight frozen `NotificationActionHandlerTests` configuration,
 reaction-preview and channel-fallback cases and existing Kotlin counterparts
 remain unchanged. Source/send helpers were inspected read-only at the fixed pin.
 
-Exact-commit hosted diagnostic execution must use the existing reviewed Android
-candidate CI workflow after genuine producer integration. Its real job/log/method
-discovery is authoritative; do not attach a second hashed CI-result bundle.
+## Provisional hosted diagnostic result
+
+The existing Android candidate CI workflow, runner entry, scope classifier and
+toolchain pins were byte-compared with the trusted starting base and unchanged.
+The feature branch was pushed explicitly unverified, then the existing
+`workflow_dispatch` entrance ran the initial combined `d4c63e7` candidate.
+Controller/workflow policy and the Swift codec oracle jobs passed. The Linux
+Android build failed from Java heap exhaustion in the unrelated onboarding
+resource-merge task after 10m43s. The log reaches `:core:services:compileTestKotlin`
+without reported compilation errors in these cases, but does not establish
+execution/discovery of the new service, App or dispatcher tests. No passing
+behavioral count is claimed.
+
+Workflow dispatch selects the full graph. The coordinator was asked to provide a
+legitimate affected-scope hosted route for the revised producer/consumer candidate,
+not to change unrelated build memory or bypass the retained local reservation.
+The final exact-commit job/log/method discovery remains authoritative; do not
+attach a second hashed CI-result bundle.
 Robolectric/hosted results do not prove physical device, API-specific on-device
 background/radio, durable delivery, signing or full WP acceptance.

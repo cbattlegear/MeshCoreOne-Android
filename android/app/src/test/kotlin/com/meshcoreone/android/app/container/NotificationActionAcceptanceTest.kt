@@ -169,7 +169,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 "Peer", "Incoming message", false, null, null, payload,
             )))
             val notification = context.getSystemService(NotificationManager::class.java).activeNotifications
-                .single { it.tag.endsWith("wp215-acceptance") }.notification
+                .single { it.tag?.endsWith("wp215-acceptance") == true }.notification
             val reply = notification.actions.single()
             val input = reply.remoteInputs.single()
             val fillIn = Intent()

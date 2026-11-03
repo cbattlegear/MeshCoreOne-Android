@@ -103,6 +103,7 @@ class RadioSessionContainer private constructor(
     private val containerJob: Job,
     private val scope: CoroutineScope,
     private val ownership: FactoryOwnership,
+    reactionPersistenceMutex: Mutex,
 ) : RuntimeServices, AppSession {
     override val transportType: TransportType get() = inputs.transportType
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
@@ -135,7 +136,7 @@ class RadioSessionContainer private constructor(
     // region Services (constructed in dependency order; every dependency exists before its consumer)
 
     override val syncCoordinator = SyncCoordinator(scope, env.syncClock, env.logSink)
-    override val reactionService = ReactionService()
+    override val reactionService = ReactionService(persistenceMutex = reactionPersistenceMutex)
     val heardRepeatsService = HeardRepeatsService(dataStore)
     override val rxLogService = RxLogService(
         session, RxLogServiceStore.from(dataStore), HeardRepeatProcessingAdapter(heardRepeatsService), scope,
@@ -540,12 +541,19 @@ class RadioSessionContainer private constructor(
          * Builds the graph for one generation. Everything allocated is registered with [ownership] first, so a
          * failure partway through construction (or a teardown racing the factory) still releases the scope.
          */
-        fun create(inputs: RuntimeServiceInputs, ownership: FactoryOwnership, env: SessionEnvironment): RadioSessionContainer {
+        fun create(
+            inputs: RuntimeServiceInputs,
+            ownership: FactoryOwnership,
+            env: SessionEnvironment,
+            reactionPersistenceMutex: Mutex,
+        ): RadioSessionContainer {
             val parent = inputs.connection.scope.coroutineContext[Job]
             val job = SupervisorJob(parent)
             val scope = CoroutineScope(inputs.connection.scope.coroutineContext + job)
             ownership.own(LifecycleStage.STOP_SERVICES) { job.cancelAndJoin() }
-            val container = RadioSessionContainer(inputs.connection.token, inputs, env, job, scope, ownership)
+            val container = RadioSessionContainer(
+                inputs.connection.token, inputs, env, job, scope, ownership, reactionPersistenceMutex,
+            )
             ownership.register(container)
             env.onSessionLifecycle.created(container)
             return container

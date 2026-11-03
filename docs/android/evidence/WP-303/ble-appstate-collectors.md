@@ -2,10 +2,10 @@
 
 <!-- android-port-wp:WP-303 -->
 
-Status: **source-reviewed, execution-pending candidate**. No Kotlin compilation,
-test discovery or execution of the two new methods is claimed. This adds software
-controls to WP-303, not WP-205 completion or a new receipt for the historical
-#529 candidate.
+Status: **source-reviewed; hosted execution passed for the unchanged test
+blob on the immediately preceding head**. This evidence-only update requires
+fresh exact-head CI before acceptance. This adds software controls to WP-303,
+not WP-205 completion or a new receipt for the historical #529 candidate.
 
 ## Binding and custody
 
@@ -15,7 +15,9 @@ controls to WP-303, not WP-205 completion or a new receipt for the historical
   with `cd8a315e` as its second parent. It preserves the exact reviewed test
   blob. Later controller-only main commit `024dfd11` was merged as
   `55778f1dc06b9e2e32d7b0211c7a87faf15c0e6b`; the final evidence refresh is
-  a descendant of that merge.
+  a descendant of that merge. Evidence-only successor
+  `910752cc8b52d5b8df3dcf7bc32e873ba7eb8500` was tested against base
+  `024dfd11`; this document update must receive a fresh run on its new head.
 - Retained owner parent: `ba7a02e5927b2cad22f9c92cbe808dbccf26a8ce`.
 - Actual producer: session `b33644ad-3a9a-4a37-af40-9a50b34ced2a`, managed
   branch `cbattlegear-ble-integration`.
@@ -161,19 +163,31 @@ Observed with pinned native Windows Python `3.12.4`:
 - Current-main reconciliation check: passed; the candidate diff from
   `024dfd11` contains only the BLE collector test and this evidence file, and
   the reviewed test blob remains `968979214fa3fb203b0c3761237f06796462a4f2`.
+- Exact-hosted predecessor run `41736738382`, head
+  `910752cc8b52d5b8df3dcf7bc32e873ba7eb8500`, base
+  `024dfd11e95a59f33ef4e7abe1865e36673e68f3`: completed successfully.
+  The `One Linux Android build`, `Controller and workflow policy`,
+  `Classify candidate scopes`, `android-ci`, and required checklist jobs
+  succeeded. The Swift codec and SwiftData restore/export oracles were skipped
+  by workflow selection. The App `:app:testDebugUnitTest` report positively
+  discovered all five `BleRecoveryIntegrationTest` methods; all five passed,
+  including both new collector methods. The raw report log binds the tested
+  source to blob `968979214fa3fb203b0c3761237f06796462a4f2`.
 
 `python tools\android-port\controller\execution_recovery.py status` still reports
 the retained `gradle-execution` owner
 `local-check:f516a7e271f444dd9cb2efcc8b995a16`, bound to
 `3c5297acdc083df21ec08afd7654aeaaa103ee59`; its cleanup input is missing or
-noncanonical. No recovery, lock release, alternate execution namespace, direct
-Gradle, runtime deployment, push or hosted dispatch was attempted.
+noncanonical. It was not recovered, released, or bypassed. No direct local
+Gradle execution or runtime deployment was attempted. The reviewed source was
+published to a feature branch and a normal PR was opened; no manual hosted
+dispatch occurred.
 
 The declared verification is `android-scaffold` with the actual App unit-test
-runner (`:app:testDebugUnitTest`), subject to normal admission. Independent
-source review is complete for the unchanged test blob; fresh exact-candidate
-hosted positive discovery/execution of all five methods in the changed test
-file remains required. Do not copy, hash or commit another CI-result bundle.
+runner (`:app:testDebugUnitTest`). Independent source review and execution of
+the unchanged test blob are complete. Because this evidence update creates a
+new PR head, its automatic exact-head workflow must also pass before that head
+is treated as accepted. Do not copy, hash or commit another CI-result bundle.
 
 Physical Android BLE/CDM, OEM/background behavior, bond refresh, SDK/device proof
 and protected gates remain separate. The approved no-implicit-rearm adaptation,

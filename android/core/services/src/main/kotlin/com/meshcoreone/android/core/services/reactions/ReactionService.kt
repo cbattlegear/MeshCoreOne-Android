@@ -115,6 +115,12 @@ class ReactionService internal constructor(
         logger.fine { "Queued pending reaction ${parsed.emoji} for ${parsed.targetSender}" }
     }
 
+    /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
+    fun requeuePendingReaction(pending: PendingReaction) {
+        val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
+        synchronized(lock) { pendingReactions = pendingReactions.enqueue(key, pending, MAX_PENDING_REACTIONS) }
+    }
+
     /** Clears all pending reactions (call on disconnect). */
     internal fun clearPendingReactions() {
         val cleared = synchronized(lock) {
@@ -195,6 +201,12 @@ class ReactionService internal constructor(
         val pending = PendingDMReaction(parsed, contactID, senderName, rawText, radioId, clock.instant())
         synchronized(lock) { pendingDMReactions = pendingDMReactions.enqueue(key, pending, MAX_PENDING_REACTIONS) }
         logger.fine { "Queued pending DM reaction ${parsed.emoji}" }
+    }
+
+    /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
+    fun requeuePendingDMReaction(pending: PendingDMReaction) {
+        val key = PendingDMReactionKey(pending.contactID, pending.parsed.messageHash)
+        synchronized(lock) { pendingDMReactions = pendingDMReactions.enqueue(key, pending, MAX_PENDING_REACTIONS) }
     }
 
     /** Test-visible total of queued reactions (channel, DM). */

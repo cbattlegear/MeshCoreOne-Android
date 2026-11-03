@@ -21,6 +21,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.notifications.didReceive
@@ -34,6 +35,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -50,6 +52,55 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
     }
     @Test fun replyCancelledBeforeWireCanBeRetriedByReplacementDispatcher() = runTest {
         replyBoundary(channel = false, beforeWire = true)
+    }
+
+    @Test fun realRoomMarkReadRecordsCommitBeforeReturningToCancelledCaller() = runTest {
+        val reached = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var hold = false
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun clearUnreadCount(key: EntityKey) {
+                store.clearUnreadCount(key)
+                if (hold) {
+                    reached.complete(Unit)
+                    release.await()
+                }
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val peerKey = key(4)
+        h.links.configureRadio = { it.knownContacts += contactFrame(peerKey, "Mark read peer") }
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val session = requireNotNull(h.sessions.current)
+            val contact = requireNotNull(store.fetchContact(session.token.radioId, peerKey))
+            val contactKey = EntityKey(contact.radioId, contact.id)
+            store.saveContact(contact.copy(unreadCount = 1))
+            val message = MessageDTO(
+                radioId = contact.radioId, contactID = contact.id, text = "Unread", timestamp = 1u,
+                direction = MessageDirection.INCOMING, isRead = false,
+            )
+            store.saveMessage(message)
+            hold = true
+            val receipt = NotificationActionReceipt()
+            val caller = launch(receipt) { session.notificationActionHandler.handleMarkAsRead(contactKey, message.id) }
+            h.eventually("actual Room writes committed before held return") { reached.isCompleted }
+            assertTrue(requireNotNull(store.fetchMessage(EntityKey(contact.radioId, message.id))).isRead)
+            assertEquals(0L, requireNotNull(store.fetchContact(contactKey)).unreadCount)
+            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+            caller.cancel()
+            release.complete(Unit)
+            h.eventually("bounded mark-read finishes after caller cancellation") { caller.isCompleted }
+            caller.join()
+            assertTrue(caller.isCancelled)
+            assertEquals(NotificationActionReceipt.State.COMMITTED, receipt.state)
+            assertTrue(requireNotNull(store.fetchMessage(EntityKey(contact.radioId, message.id))).isRead)
+        } finally {
+            release.complete(Unit)
+            h.container.close()
+        }
     }
 
     private suspend fun TestScope.replyBoundary(

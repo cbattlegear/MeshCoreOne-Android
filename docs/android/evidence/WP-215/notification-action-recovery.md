@@ -52,6 +52,10 @@ and cancellation before the wire with subsequent legitimate retry. Core witnesse
 cover the tighter session-owned result-loss boundary. Existing transaction tests
 are retained; their explicit cancellation target now refers to the outer caller
 when the mark-read body deliberately runs in NonCancellable.
+An additional App witness uses the actual Room store to assert the message is
+read and contact unread count is zero while the final write's return is held,
+then cancels the caller and checks the committed receipt after release. A
+dispatcher witness separately prevents replay of committed mark-read actions.
 
 ## Actual local verification
 

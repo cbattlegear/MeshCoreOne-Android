@@ -117,6 +117,24 @@ class NotificationActionDispatcherTest {
     }
 
     @Test
+    fun committedMarkReadIsNotReplayedAfterCancelledReturn() = runTest {
+        var writes = 0
+        NotificationActionDispatcher.install(this) {
+            writes++
+            requireNotNull(currentCoroutineContext()[NotificationActionReceipt]).committed()
+            awaitCancellation()
+        }
+        NotificationActionDispatcher.enqueue(
+            response("10000000-0000-0000-0000-000000000001").copy(action = NotificationAction.MARK_READ, userText = null),
+        )
+        runCurrent()
+        NotificationActionDispatcher.install(this) { writes++; true }
+        runCurrent()
+        assertEquals(1, writes)
+        assertTrue(NotificationActionDispatcher.drainOnce())
+    }
+
+    @Test
     fun receiptBookkeepingDoesNotChangeTheBoundedQueueCapacity() = runTest {
         repeat(32) {
             assertEquals(EnqueueResult.DELIVERED_OR_QUEUED,

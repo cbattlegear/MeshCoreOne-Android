@@ -3,8 +3,11 @@ package com.meshcoreone.android.feature.onboarding
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -37,6 +40,16 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     val hasCompletionError: StateFlow<Boolean> = completionError.asStateFlow()
     private val completingWithoutDevice = MutableStateFlow(false)
     val isCompletingWithoutDevice: StateFlow<Boolean> = completingWithoutDevice.asStateFlow()
+    val canLeaveCurrentFlowState: StateFlow<Boolean> = combine(
+        preset.state,
+        isCompletingWithoutDevice,
+    ) { presetState, completingWithoutDevice ->
+        !completingWithoutDevice && !presetState.isApplying
+    }.stateIn(
+        scope,
+        SharingStarted.Eagerly,
+        initialValue = !completingWithoutDevice.value && canLeaveCurrentFlow(),
+    )
     val currentStep: OnboardingStep get() = onboarding.onboardingPath.lastOrNull() ?: OnboardingStep.WELCOME
 
     /** Resumes a partially onboarded install above the welcome root (no-op once complete). */

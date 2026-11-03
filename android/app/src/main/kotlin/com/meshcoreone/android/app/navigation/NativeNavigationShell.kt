@@ -154,7 +154,11 @@ fun NativeNavigationShell(
     val onboardingFlow = remember(onboarding, onboardingRouteActive) {
         if (onboardingRouteActive) onboarding?.retainedFlowCoordinator() else null
     }
-    val canNavigateFromCurrentRoute = {
+    val flowCanLeaveCurrentRoute = onboardingFlow?.canLeaveCurrentFlowState
+        ?.collectAsStateWithLifecycle()?.value ?: true
+    val canNavigateFromCurrentRoute = !onboardingRouteActive ||
+        (flowCanLeaveCurrentRoute && onboardingFlow?.canLeaveCurrentFlow() != false)
+    val canNavigateFromCurrentRouteNow = {
         !onboardingRouteActive || onboardingFlow?.canLeaveCurrentFlow() != false
     }
     val holders = AppTab.entries.associateWith { rememberSaveableStateHolder() }
@@ -227,7 +231,8 @@ fun NativeNavigationShell(
                 NavigationSuiteItem(
                     navigationSuiteType = type,
                     selected = state.selectedTab == tab,
-                    onClick = { if (canNavigateFromCurrentRoute()) coordinator.selectTab(tab) },
+                    onClick = { if (canNavigateFromCurrentRouteNow()) coordinator.selectTab(tab) },
+                    enabled = canNavigateFromCurrentRoute,
                     modifier = Modifier
                         .heightIn(min = if (useRail) 72.dp else 80.dp * fontScale)
                         .testTag("tab:${tab.name}")
@@ -284,7 +289,8 @@ fun NativeNavigationShell(
                             navigationIcon = {
                                 if (state.canGoBack) {
                                     IconButton(
-                                        onClick = { if (canNavigateFromCurrentRoute()) coordinator.back() },
+                                        onClick = { if (canNavigateFromCurrentRouteNow()) coordinator.back() },
+                                        enabled = canNavigateFromCurrentRoute,
                                         modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("navigation-back"),
                                     ) {
                                         Icon(painterResource(R.drawable.ic_back), stringResource(Strings.string.scaffold_back))
@@ -294,14 +300,22 @@ fun NativeNavigationShell(
                             actions = {
                                 if (state.selectedTab == AppTab.NODES) {
                                     androidx.compose.material3.TextButton(
-                                        { if (canNavigateFromCurrentRoute()) coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES)) },
-                                        Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
+                                        onClick = {
+                                            if (canNavigateFromCurrentRouteNow()) {
+                                                coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES))
+                                            }
+                                        },
+                                        enabled = canNavigateFromCurrentRoute,
+                                        modifier = Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
                                     ) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)) }
                                 }
                                 IconButton(
                                     onClick = {
-                                        if (canNavigateFromCurrentRoute()) coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                                        if (canNavigateFromCurrentRouteNow()) {
+                                            coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                                        }
                                     },
+                                    enabled = canNavigateFromCurrentRoute,
                                     modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("open-radio-setup"),
                                 ) {
                                     Icon(MeshSymbol.RADIO.vector, stringResource(Strings.string.scaffold_onboarding_title))
@@ -328,7 +342,7 @@ fun NativeNavigationShell(
                     modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                     entryDecorators = listOf(decorator),
                     sceneStrategies = listOf(strategy),
-                    onBack = { if (canNavigateFromCurrentRoute()) coordinator.back() },
+                    onBack = { if (canNavigateFromCurrentRouteNow()) coordinator.back() },
                     transitionSpec = {
                         androidx.compose.animation.fadeIn(
                             androidx.compose.animation.core.tween(if (motionScale == 0f) 0 else 180),

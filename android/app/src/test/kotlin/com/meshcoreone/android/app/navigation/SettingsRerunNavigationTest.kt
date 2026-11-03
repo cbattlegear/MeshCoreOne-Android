@@ -6,7 +6,9 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -163,12 +165,13 @@ class SettingsRerunNavigationTest {
             compose.onNodeWithText(applyLabel).performClick()
             applyStarted.await()
 
-            compose.onNodeWithTag("navigation-back").performClick()
             assertRerunStillMounted(navigation)
+            compose.onNodeWithTag("navigation-back").assertIsNotEnabled()
 
             releaseApply.complete(Unit)
             flow.preset.state.first { it.error != null }
             compose.onNodeWithText("held radio apply failure").assertIsDisplayed()
+            compose.onNodeWithTag("navigation-back").assertIsEnabled()
             compose.onNodeWithText(ApplicationProvider.getApplicationContext<Context>().getString(L.commonOk)).performClick()
             compose.onNodeWithText(applyLabel).performClick()
             compose.waitUntil { navigation.state.value.selectedTab == AppTab.CHATS }
@@ -222,14 +225,15 @@ class SettingsRerunNavigationTest {
             completionStarted.await()
             assertTrue(flow.preset.state.value.isApplying)
 
-            compose.onNodeWithTag("tab:MAP").performClick()
             assertRerunStillMounted(navigation)
+            compose.onNodeWithTag("tab:MAP").assertIsNotEnabled()
 
             releaseCompletion.complete(Unit)
             flow.preset.state.first { it.completionNeedsRetry }
             val completionFailure = ApplicationProvider.getApplicationContext<Context>().getString(S.alertRetryUnableToSave)
             compose.onAllNodesWithText(completionFailure).assertCountEquals(1)
             compose.onNodeWithText(completionFailure).assertIsDisplayed()
+            compose.onNodeWithTag("tab:MAP").assertIsEnabled()
             val retryLabel = ApplicationProvider.getApplicationContext<Context>().getString(L.commonTryAgain)
             compose.onNodeWithText(retryLabel).assertIsDisplayed().performClick()
             compose.waitUntil { navigation.state.value.selectedTab == AppTab.CHATS }
@@ -260,6 +264,7 @@ class SettingsRerunNavigationTest {
             val option = flow.preset.visiblePresets().first()
             val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
             val applyLabel = enterSettingsRerun(navigation, dependencies, flow, option)
+            compose.onNodeWithTag("open-radio-setup").assertIsEnabled()
             compose.onNodeWithText(applyLabel).performClick()
             applyStarted.await()
 
@@ -308,16 +313,16 @@ class SettingsRerunNavigationTest {
             applyStarted.await()
 
             val stackSize = navigation.state.value.activeStack.size
-            compose.onNodeWithTag("open-remote-nodes").performClick()
-            assertRerunStillMounted(navigation, AppTab.NODES)
-            assertEquals(stackSize, navigation.state.value.activeStack.size)
-            compose.onNodeWithTag("open-radio-setup").performClick()
+            compose.onNodeWithTag("open-remote-nodes").assertIsNotEnabled()
+            compose.onNodeWithTag("open-radio-setup").assertIsNotEnabled()
             assertRerunStillMounted(navigation, AppTab.NODES)
             assertEquals(stackSize, navigation.state.value.activeStack.size)
 
             releaseApply.complete(Unit)
             flow.preset.state.first { it.error != null }
             compose.onNodeWithText("held nodes apply failure").assertIsDisplayed()
+            compose.onNodeWithTag("open-remote-nodes").assertIsEnabled()
+            compose.onNodeWithTag("open-radio-setup").assertIsEnabled()
             compose.onNodeWithText(ApplicationProvider.getApplicationContext<Context>().getString(L.commonOk))
                 .performClick()
 
@@ -326,7 +331,7 @@ class SettingsRerunNavigationTest {
                 NavigationDestination.Auxiliary(com.meshcoreone.android.core.contracts.FeatureId.REMOTE_NODES),
                 navigation.state.value.activeStack.last().destination,
             )
-            compose.onNodeWithTag("open-radio-setup").performClick()
+            compose.onNodeWithTag("open-radio-setup").assertIsEnabled().performClick()
             assertEquals(
                 NavigationDestination.Auxiliary(com.meshcoreone.android.core.contracts.FeatureId.ONBOARDING),
                 navigation.state.value.activeStack.last().destination,

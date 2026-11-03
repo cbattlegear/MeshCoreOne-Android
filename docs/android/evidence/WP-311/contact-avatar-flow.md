@@ -368,3 +368,36 @@ follow-up does not purport to fix the unproven production/presentation cause.
 It is retained as an immutable local source-only candidate for independent review;
 the PR head remains `f54bd768c` until that review and a publication decision.
 Fresh exact-head/current-base normal affected hosted execution is still required.
+
+## Source-only pre-service diagnostic
+
+The subsequent bounded source trace follows Choose through the captured
+`ContactDetailLifetime.scope`, `holder.saveAvatar`, Default-dispatched JPEG
+encoding, cancellation checks, live radio/service/store resolution, matching
+Room contact lookup and finally `updateContactAvatar`. The actual App nodes
+adapter delegates the contact lookup and avatar service to the live graph.
+Normal detail disposal closes the lifetime/scope; configuration disposal does
+not. Source inspection alone does not establish which step failed in run
+`41625098790`, and no speculative production change was made.
+
+The App test now records a read-only retained-lifetime snapshot before Choose
+and on a failed wait: active/cancelled scope and child-job flags, actual dispatcher,
+saving/error state, synthetic selected identity and image presence. Test-only
+reflection reads the feature's existing internal ViewModel/holder so no public
+product observer or behavior is added; a missing/mismatched reflective contract
+fails explicitly, rather than producing a reassuring empty snapshot.
+A separate no-store dispatcher probe in that exact retained scope records Main
+entry, a Default hop, Main return and its actual completion/cancellation class.
+It is observation of a distinct probe job, not proof the encoder job ran.
+
+The unchanged real session/store are wrapped transparently to record current-radio,
+service/store resolution and contact-lookup entry/return/identity outcome.
+All reads still delegate to the production App adapter and real Room, and all
+service writes still forward/rethrow as before. Thus a failed assertion can
+distinguish a closed/cancelled lifetime, an unstarted or saving/encoding phase,
+an actual typed failure, store suspension/mismatch and observed dispatcher
+progress, without replacing encoding, bypassing identity checks or faking entry.
+No new waits or deadline extensions are added. Both predictive variants retain
+all Back/selection/Room assertions, and the mounted save retains its exact
+five-second total deadline. These diagnostics are an unexecuted hypothesis
+discriminator, not a confirmed product failure or passing fix.

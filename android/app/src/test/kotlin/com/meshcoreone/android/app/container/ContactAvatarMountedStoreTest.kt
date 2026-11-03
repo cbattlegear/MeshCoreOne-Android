@@ -26,6 +26,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.core.app.ActivityOptionsCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.core.contracts.FeatureId
@@ -41,6 +43,8 @@ import com.meshcoreone.android.feature.nodes.NodesEntry
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesSession
+import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
+import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.UUID
@@ -51,6 +55,11 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
@@ -110,7 +119,8 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                     }
                 }
             }
-            val dependencies = production.withContactService(heldService)
+            val trace = java.util.concurrent.CopyOnWriteArrayList<String>()
+            val dependencies = production.withContactService(heldService, trace)
             val navigation = NavigationCoordinator()
             var requestCode: Int? = null
             val registry = object : ActivityResultRegistry() {
@@ -161,8 +171,17 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                 compose.onAllNodes(androidx.compose.ui.test.hasText(host.get().getString(C.contactsDetailAvatarCropChoose)))
                     .fetchSemanticsNodes().isNotEmpty()
             }
+            val beforeChoose = compose.runOnUiThread { avatarLifetimeDiagnostic(host.get(), trace) }
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).performClick()
-            compose.waitUntil(5_000) { entered.isCompleted }
+            try {
+                compose.waitUntil(5_000) { entered.isCompleted }
+            } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
+                throw AssertionError(
+                    "Held service not entered after Choose; before=$beforeChoose; trace=$trace; " +
+                        compose.runOnUiThread { avatarLifetimeDiagnostic(host.get()) },
+                    timeout,
+                )
+            }
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarSavingAnnouncement)).assertExists()
             assertEquals(storedTarget, store.fetchContact(targetKey))
             val before = navigation.state.value
@@ -251,6 +270,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             val writes = java.util.concurrent.CopyOnWriteArrayList<Pair<EntityKey, Bytes?>>()
             val returned = java.util.concurrent.atomic.AtomicInteger()
             val serviceFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+            val trace = java.util.concurrent.CopyOnWriteArrayList<String>()
             val dependencies = production.withContactService(object : NodesContactService by service {
                 override suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) {
                     writes += contact to imageData
@@ -262,7 +282,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                         throw error
                     }
                 }
-            })
+            }, trace)
             var requestCode: Int? = null
             fun newRegistry() = object : ActivityResultRegistry() {
                 override fun <I, O> onLaunch(code: Int, contract: ActivityResultContract<I, O>, input: I, options: ActivityOptionsCompat?) {
@@ -331,12 +351,14 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             pick()
             recreate()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).assertExists()
+            val beforeChoose = compose.runOnUiThread { avatarLifetimeDiagnostic(host.get(), trace) }
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).performClick()
             val saveDeadline = System.nanoTime() + 5_000_000_000L
             fun awaitWrite(stage: String, deadline: Long, condition: () -> Boolean) {
                 fun diagnostic() =
                     "$stage; calls=${writes.map { it.first }}, returned=${returned.get()}, " +
                         "serviceFailure=${serviceFailure.get()}, lifecycle=${host.get().lifecycle.currentState}; " +
+                        "before=$beforeChoose; trace=$trace; ${compose.runOnUiThread { avatarLifetimeDiagnostic(host.get()) }}; " +
                         compose.onAllNodes(SemanticsMatcher("all mounted nodes") { true },
                             useUnmergedTree = true).fetchSemanticsNodes().joinToString { it.config.toString() }
                 val remainingMillis = (deadline - System.nanoTime()) / 1_000_000L
@@ -388,9 +410,58 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         }
     }
 
-    private fun NodesFeatureDependencies.withContactService(service: NodesContactService) = NodesFeatureDependencies(
+    // Test-only reflection observes the feature's internal retained owner without adding a product API.
+    private fun avatarLifetimeDiagnostic(activity: ComponentActivity, trace: MutableList<String>? = null): String {
+        val type = Class.forName("com.meshcoreone.android.feature.nodes.ui.ContactDetailRetainedState")
+            .asSubclass(ViewModel::class.java)
+        val retained = ViewModelProvider(activity)[type]
+        val lifetimes = type.getMethod("getLifetimes").invoke(retained) as List<*>
+        return lifetimes.joinToString(prefix = "retained=[", postfix = "]") { value ->
+            val lifetime = requireNotNull(value)
+            val scope = lifetime.javaClass.getMethod("getScope").invoke(lifetime) as CoroutineScope
+            val holder = lifetime.javaClass.getMethod("getHolder").invoke(lifetime) as ContactDetailStateHolder
+            val state = holder.state.value
+            val job = scope.coroutineContext[Job]
+            if (trace != null) {
+                scope.launch {
+                    trace += "dispatcher-probe:retained-scope-enter"
+                    withContext(Dispatchers.Default) { trace += "dispatcher-probe:default-enter" }
+                    trace += "dispatcher-probe:retained-scope-return"
+                }.invokeOnCompletion { error ->
+                    trace += "dispatcher-probe:completion:${error?.javaClass?.simpleName ?: "success"}"
+                }
+            }
+            "active=${lifetime.javaClass.getMethod("getActive").invoke(lifetime)}, " +
+                "scopeActive=${job?.isActive}, scopeCancelled=${job?.isCancelled}, " +
+                "children=${job?.children?.map { "active=${it.isActive}/cancelled=${it.isCancelled}/completed=${it.isCompleted}" }?.toList()}, " +
+                "dispatcher=${scope.coroutineContext[kotlin.coroutines.ContinuationInterceptor]}, " +
+                "saving=${state.isSavingAvatar}, error=${state.errorMessage}, " +
+                "selected=${state.contact.id}/${state.contact.radioId}, " +
+                "imagePresent=${lifetime.javaClass.getMethod("getImage").invoke(lifetime) != null}"
+        }
+    }
+
+    private fun NodesFeatureDependencies.withContactService(
+        service: NodesContactService,
+        trace: MutableList<String>,
+    ) = NodesFeatureDependencies(
         session = object : NodesSession by session {
-            override fun contactService() = service
+            override fun currentRadioId() = session.currentRadioId().also { trace += "current-radio:$it" }
+            override fun contactService() = service.also { trace += "contact-service" }
+            override fun servicesDataStore(): NodesDataStore? {
+                val actual = session.servicesDataStore()
+                trace += "services-store-present:${actual != null}"
+                return actual?.let { store ->
+                    object : NodesDataStore by store {
+                        override suspend fun fetchContact(key: EntityKey): ContactDTO? {
+                            trace += "fetch-contact-enter:$key"
+                            return store.fetchContact(key).also {
+                                trace += "fetch-contact-return:present=${it != null}, identityMatches=${it?.let { value -> value.id == key.id && value.radioId == key.radioId }}"
+                            }
+                        }
+                    }
+                }
+            }
         },
         uriCodec = uriCodec,
         timeouts = timeouts,

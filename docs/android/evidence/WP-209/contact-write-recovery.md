@@ -31,6 +31,7 @@ matched each actual edit before authoring:
 | `core/data/.../repository/ContactRepository.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
 | `app/.../container/AndroidPlatformAdapters.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
 | `core/data/.../repository/ContactWriteCompletionRoomTest.kt` | `add-or-update-related-test` | `reviewed-support-test` |
+| `core/services/.../device/DiscoveryTestRoles.kt` | `add-or-update-related-test` | `reviewed-support-test` |
 | `app/.../container/ContactRecoveryFlagsTest.kt` | `add-or-update-related-test` | `reviewed-support-test` |
 
 These are Android-relative source/test surfaces; no build configuration, resource,
@@ -38,6 +39,8 @@ source pin or UI-owned file is changed. The support edits are directly necessary
 the existing protocol owner must retain the persistence continuation, Room must
 make the newer-row decision atomically, and the existing process preference
 adapter must report durable-write failure rather than claiming recovery was saved.
+The discovery test role explicitly rejects the added abstract persistence operation,
+preserving the existing repository contract invariant and its unrelated tests.
 
 The initial supported `claim` attempt was refused with
 `Existing WP lease is bound to different source/base/manifest/backend`.

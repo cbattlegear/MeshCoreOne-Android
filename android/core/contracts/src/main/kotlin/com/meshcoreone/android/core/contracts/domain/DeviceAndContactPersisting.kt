@@ -47,8 +47,7 @@ interface ContactPersisting {
      */
     suspend fun saveContactPreservingNewer(
         radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame? = null,
-    ): ContactSaveResult? =
-        throw UnsupportedOperationException("Atomic contact completion persistence is not implemented")
+    ): ContactSaveResult?
     suspend fun saveContact(dto: ContactDTO)
     suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long
     suspend fun deleteContact(key: EntityKey)

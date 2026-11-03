@@ -2,6 +2,32 @@
 
 ## Issue #544: first-graph process-store contact lookup
 
+The adapter-only successor `1fec5c1c7751fd80989cb5d09a12b5dd7debee09`
+did not close the consumer failure path: the router still used `lookupOrNull`.
+The follow-up distinguishes `ContactLookupFailed(cause)` from genuine absence,
+propagates cancellation, logs a generic warning without URI/key/error content,
+and does not invoke contact completion or commit a failed lookup.
+`PendingExternalRoute` returns `RetryableFailure`, retains the original
+delivery, and excludes it from consumed IDs until actual commit, supersession
+or explicit cancellation.
+
+The retained process-memory `lookupFailure: StateFlow<LookupFailure?>` includes
+`deliveryId`, monotonically increasing `attempt` and original `cause`.
+`retry(expectedDeliveryId, expectedAttempt)` and
+`cancel(expectedDeliveryId, expectedAttempt)` compare and claim the exact
+current failed attempt under holder arbitration before suspension. Stale
+actions return `Superseded`; matching cancellation returns `Cancelled` and
+accounts only that delivery. A replacement clears the former failure; a late
+superseded failure cannot publish over its replacement. Failure publication
+occurs after in-flight cleanup and outside lifecycle/delivery-guard monitors.
+
+Four holder schedules, one router guard/recovery method and one real
+graph/Room failing-then-recovered route method are authored, not executed.
+The host still ignores outcomes on this branch: WP-302 owns the required
+localized failure/Try Again/Cancel consumer, passing both observed identity
+fields. There is no automatic retry policy or durable delivery guarantee.
+**Issue #544 is not end-to-end complete or runtime-verified.**
+
 The external adapter now calls `container.processStore.fetchContact` with the
 captured radio and public key, rather than the last-device-preference-gated
 `offlineDataStore`. This removes a source-derived false-absence window before

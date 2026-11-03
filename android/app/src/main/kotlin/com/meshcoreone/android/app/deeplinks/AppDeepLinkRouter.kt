@@ -61,7 +61,20 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         }
         val existing = if (captured.disposition == ContactLinkCaptureDisposition.Lookup) {
             captured.radioId?.let { radioId ->
-                lookupOrNull { environment.fetchContact(radioId, link.publicKey) }
+                try {
+                    environment.fetchContact(radioId, link.publicKey)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    coroutineContext.ensureActive()
+                    val failed = DeepLinkRouteOutcome.ContactLookupFailed(failure)
+                    val guard = coroutineContext[PendingExternalRoute.CommitGuard]
+                    val outcome = if (guard == null) failed else guard.commit { failed }
+                    java.util.logging.Logger.getLogger("com.mc1.DeepLinks").warning(
+                        "Contact lookup failed; delivery requires retry",
+                    )
+                    return outcome
+                }
             }
         } else null
         return ContactLinkPublications().use { publications ->

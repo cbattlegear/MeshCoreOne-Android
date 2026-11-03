@@ -28,6 +28,7 @@ sealed interface DeepLinkRouteOutcome {
     data object Navigated : DeepLinkRouteOutcome
     data object ConfirmationStaged : DeepLinkRouteOutcome
     data object ContactLookupRejected : DeepLinkRouteOutcome
+    data class ContactLookupFailed(val cause: Exception) : DeepLinkRouteOutcome
 }
 
 interface AppDeepLinkEnvironment {

@@ -444,8 +444,14 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             result()
             action(C.contactsDetailAvatarCropChoose)
             awaitHeldSave(entered)
-            scrollToAction(controller.get().getString(C.contactsDetailClearMessages))
-            advanceFrames()
+            kotlin.test.assertFalse(contact.hasLocation)
+            val scroll = allSemanticsNodes().first { it.config.contains(SemanticsActions.ScrollToIndex) }
+                .config[SemanticsActions.ScrollToIndex].action
+            // This no-location detail has five items; the last is the danger-zone card.
+            controller.get().runOnUiThread { assertTrue(assertNotNull(scroll).invoke(4)) }
+            awaitAvatarState("the final danger-zone action in the viewport") {
+                actionNode(controller.get().getString(C.contactsDetailClearMessages))?.let(::isDisplayed) == true
+            }
             val chooser = actionNode(controller.get().getString(C.contactsDetailAvatarChooseSource))
             assertTrue(chooser == null || !isDisplayed(chooser), "The profile row must leave the lazy viewport")
             assertEquals(1, harness.contactService.avatars.size)

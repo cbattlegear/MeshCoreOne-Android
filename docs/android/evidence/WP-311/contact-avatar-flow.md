@@ -160,3 +160,18 @@ The App/Room mounted case also recreates before picker return and during crop
 before inspecting the actual selected-contact persistence and foreign-radio sentinel.
 No MainActivity or navigation-owned source is changed. These assertions await
 exact-candidate hosted execution and do not supply device/TalkBack evidence.
+
+The superseded `de6c13ee` run
+[41591386784](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41591386784)
+ended cancelled after the recreation repair was published. Its original job log
+nevertheless contains two concrete failures: the App foreign sentinel compared
+an unsaved DTO (`lastHeardTimestamp=null`) with Room's normalized persisted value
+(`0`), and the API31 viewport fixture exhausted its repeated `ScrollBy` search
+at `NodesScreensComposeTest.kt:142`. Neither is a product pass. The follow-up
+compares the complete foreign contact to a pre-action Room snapshot, retaining
+full no-mutation equality and explicit foreign-key/avatar assertions. The
+viewport fixture invokes the production lazy list's native `ScrollToIndex`
+action for the final card of the no-location fixture, then independently requires
+the danger-zone action to be visible and the avatar chooser to be outside the
+viewport before releasing the held store. It no longer relies on fixed 600-pixel
+scroll increments. The earlier `2848455` timeout cause remains unproven.

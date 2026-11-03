@@ -67,6 +67,11 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             store.saveContact(foreign)
             val targetKey = EntityKey(radio, target.id)
             val foreignKey = EntityKey(foreign.radioId, foreign.id)
+            val storedForeign = assertNotNull(store.fetchContact(foreignKey))
+            assertEquals(foreign.id, storedForeign.id)
+            assertEquals(foreign.radioId, storedForeign.radioId)
+            assertEquals(foreign.publicKey, storedForeign.publicKey)
+            assertNull(storedForeign.avatarImageData)
             var requestCode: Int? = null
             fun newRegistry() = object : ActivityResultRegistry() {
                 override fun <I, O> onLaunch(code: Int, contract: ActivityResultContract<I, O>, input: I, options: ActivityOptionsCompat?) {
@@ -131,7 +136,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             compose.onNodeWithText(host.get().getString(C.contactsCommonCancel)).performClick()
             compose.waitForIdle()
             assertNull(assertNotNull(store.fetchContact(targetKey)).avatarImageData)
-            assertEquals(foreign, store.fetchContact(foreignKey))
+            assertEquals(storedForeign, store.fetchContact(foreignKey))
             pick()
             recreate()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarCropChoose)).assertExists()
@@ -146,7 +151,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             assertEquals(512, decoded.width)
             assertEquals(512, decoded.height)
             assertTrue(android.graphics.Color.blue(decoded.getPixel(256, 256)) > 240)
-            assertEquals(foreign, store.fetchContact(foreignKey))
+            assertEquals(storedForeign, store.fetchContact(foreignKey))
             compose.waitUntil(5_000) {
                 !compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseSource))
                     .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
@@ -154,7 +159,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             click(C.contactsDetailAvatarChooseSource)
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarRemovePhoto)).assertExists().performClick()
             compose.waitUntil(5_000) { runBlocking { store.fetchContact(targetKey)?.avatarImageData == null } }
-            assertEquals(foreign, store.fetchContact(foreignKey))
+            assertEquals(storedForeign, store.fetchContact(foreignKey))
         } finally {
             host.windowFocusChanged(false)
             host.pause().stop().destroy()

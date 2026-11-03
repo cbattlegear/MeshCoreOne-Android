@@ -1,5 +1,5 @@
 // PortedFrom: MC1Tests/Views/Chats/ChatViewModelReactionIndexingTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-309 Fetched-history replay through the mounted App timeline and real Room store.
+// WP-309 Fetched-history replay through the mounted App timeline and real Room store.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.state.ReactionIndexScope

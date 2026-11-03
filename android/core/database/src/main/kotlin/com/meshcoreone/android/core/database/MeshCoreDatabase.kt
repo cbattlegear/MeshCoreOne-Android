@@ -1,5 +1,5 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-201 Nullable original-channel attribution upgrade; no authority, backfill or destructive fallback.
+// WP-201: Nullable original-channel attribution upgrade; no authority, backfill or destructive fallback.
 package com.meshcoreone.android.core.database
 
 import android.content.Context

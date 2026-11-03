@@ -31,6 +31,17 @@ coordinator predicate before committing the retained delivery once.
 These cases are uncompiled/unexecuted. The new producer seam is absent on this
 branch until WP-302 composition; no standalone build/acceptance is claimed.
 
+Exact isolated producer prerequisite
+`b4e1ce63d90e1d48547f37ddf5ff1c01a74ba814` (parent
+`4c2522d37c0b12e4e41764a8b5f926b7612076b3`) was inspected through Git
+objects, not imported. Its two-argument container check shares the graph
+predicate with completion and checks the captured public key. Its pure
+coordinator check shares generation/token/radio/revision matching with the
+completion CAS and preserves first-binding rules. Accepted self-capture also
+allocates and consumes a revision. The isolated commit includes producer
+regression source, not executed evidence. Consumer composition and localized
+host wiring remain coordinated prerequisites; this pin does not lift a hold.
+
 The adapter-only successor `1fec5c1c7751fd80989cb5d09a12b5dd7debee09`
 did not close the consumer failure path: the router still used `lookupOrNull`.
 The follow-up distinguishes `ContactLookupFailed(cause)` from genuine absence,

@@ -279,6 +279,7 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
                 }
             }
         }
+        item(key = "trace-code-input") { TraceCodeInput(state, holder) }
         if (state.availableRepeaters.isNotEmpty()) {
             item {
                 Text(stringResource(T.toolsNodeDiscoveryRepeaters), style = MaterialTheme.typography.titleMedium)

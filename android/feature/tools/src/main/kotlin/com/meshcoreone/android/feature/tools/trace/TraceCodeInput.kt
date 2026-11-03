@@ -1,6 +1,7 @@
 // PortedFrom: MC1/Views/PathEditing/AddHopPickerView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.tools.trace
 
+import android.os.Bundle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -31,15 +33,72 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.R as Strings
 
+internal class TraceCodeInputState {
+    var expanded by mutableStateOf(false)
+    var input by mutableStateOf("")
+    var outcome by mutableStateOf<CodeInputResult?>(null)
+    var nextHopAnnouncement by mutableStateOf<Int?>(null)
+    var restoringDraft by mutableStateOf(false)
+}
+
+private val TraceCodeInputSaver = Saver<TraceCodeInputState, Bundle>(
+    save = { entry ->
+        Bundle().apply {
+            putBoolean("expanded", entry.expanded)
+            putString("input", entry.input)
+            entry.nextHopAnnouncement?.let { putInt("nextHop", it) }
+            entry.outcome?.let { result ->
+                putStringArrayList("added", ArrayList(result.added))
+                putStringArrayList("notFound", ArrayList(result.notFound))
+                putStringArrayList("alreadyInPath", ArrayList(result.alreadyInPath))
+                putStringArrayList("invalidFormat", ArrayList(result.invalidFormat))
+            }
+        }
+    },
+    restore = { saved ->
+        TraceCodeInputState().apply {
+            expanded = saved.getBoolean("expanded")
+            input = requireNotNull(saved.getString("input"))
+            nextHopAnnouncement = if (saved.containsKey("nextHop")) saved.getInt("nextHop") else null
+            if (saved.containsKey("added")) outcome = CodeInputResult(
+                added = requireNotNull(saved.getStringArrayList("added")),
+                notFound = requireNotNull(saved.getStringArrayList("notFound")),
+                alreadyInPath = requireNotNull(saved.getStringArrayList("alreadyInPath")),
+                invalidFormat = requireNotNull(saved.getStringArrayList("invalidFormat")),
+            )
+            restoringDraft = true
+        }
+    },
+)
+
 @Composable
-internal fun TraceCodeInput(state: TracePathState, holder: TracePathStateHolder) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    var input by rememberSaveable { mutableStateOf("") }
-    var outcome by remember { mutableStateOf<CodeInputResult?>(null) }
-    var nextHopAnnouncement by remember { mutableStateOf<Int?>(null) }
+internal fun rememberTraceCodeInputState(holder: TracePathStateHolder): TraceCodeInputState {
+    val entry = rememberSaveable(saver = TraceCodeInputSaver) { TraceCodeInputState() }
+    LaunchedEffect(entry, holder) {
+        // A lazy-item remount must not reapply inference over an explicit width choice.
+        if (entry.restoringDraft) {
+            if (entry.input.contains(',')) holder.adoptHashSize(entry.input)
+            entry.restoringDraft = false
+        }
+    }
+    return entry
+}
+
+@Composable
+internal fun TraceCodeInput(
+    state: TracePathState,
+    holder: TracePathStateHolder,
+    entry: TraceCodeInputState = rememberTraceCodeInputState(holder),
+) {
+    var expanded by entry::expanded
+    var input by entry::input
+    var outcome by entry::outcome
+    var nextHopAnnouncement by entry::nextHopAnnouncement
     val clipboard = LocalClipboardManager.current
     val focus = remember { FocusRequester() }
-    val classifications = remember(input, state, holder) { holder.classifyCodes(input) }
+    val classifications = remember(input, state, holder, entry.restoringDraft) {
+        if (entry.restoringDraft) emptyList() else holder.classifyCodes(input)
+    }
     val addable = classifications.filter { it.willBeAdded }.map { it.code }
 
     fun edit(value: String) {

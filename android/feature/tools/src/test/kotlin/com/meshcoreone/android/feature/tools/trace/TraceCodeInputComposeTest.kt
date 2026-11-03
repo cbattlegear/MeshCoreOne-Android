@@ -1,13 +1,14 @@
 // AndroidOnly: WP-314 TS-09 Mounted code/paste actions use the production parser and width policy.
 package com.meshcoreone.android.feature.tools.trace
 
-import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.Bundle
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
@@ -15,6 +16,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
@@ -23,18 +26,15 @@ import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.setViewTreeLifecycleOwner
-import androidx.savedstate.SavedStateRegistryController
-import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.After
@@ -52,31 +52,20 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [31], qualifiers = "en-rUS-w360dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class TraceCodeInputComposeTest {
-    private lateinit var host: ActivityController<Activity>
-    private lateinit var owner: ScreenOwner
-    private lateinit var content: ComposeView
-    private val frames = BroadcastFrameClock()
+    private lateinit var host: ActivityController<TraceCodeInputTestActivity>
+    private val content get() = host.get().content
+    private val frames get() = host.get().frames
     private var frameNanos = 0L
 
     @Before fun setup() {
-        host = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        host = Robolectric.buildActivity(TraceCodeInputTestActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
-        owner = ScreenOwner()
-        content = ComposeView(host.get()).apply {
-            setViewTreeLifecycleOwner(owner)
-            setViewTreeSavedStateRegistryOwner(owner)
-            setParentCompositionContext(createLifecycleAwareWindowRecomposer(coroutineContext = frames, lifecycle = owner.lifecycle))
-        }
-        host.get().setContentView(content)
     }
 
     @After fun dispose() {
-        content.disposeComposition()
-        owner.registry.currentState = Lifecycle.State.DESTROYED
         host.windowFocusChanged(false)
         host.pause().stop().destroy()
-        frames.cancel()
     }
 
     @Test fun realTraceScreenExposesPastePreviewAndAddsOnlyDistinctResolvableCodes() {
@@ -241,6 +230,86 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun mountedLazyDisposalPreservesEveryRejectedCategoryAndCapturedSuccessUntilTheNextEdit() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Tower")
+        click("Add Hop")
+        paste("AA,BB,FF,ZZ")
+        click("Add nodes: BB")
+        val feedback = listOf("Adding as hop 3", "Invalid format: ZZ", "FF not found", "AA already in path")
+        assertEquals(feedback, announcementTexts())
+        host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
+        settle()
+        scrollToIndex(35)
+        assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
+        scrollToIndex(0)
+        assertEquals("", input().config[SemanticsProperties.EditableText].text)
+        assertEquals(feedback, announcementTexts())
+        assertEquals(1, host.get().recents.values.values.single().size)
+        setInput("AA,BB")
+        assertTrue(announcementTexts().isEmpty())
+        click("Done")
+        click("Add Hop")
+        assertTrue(announcementTexts().isEmpty())
+    }
+
+    @Test fun lazyRemountDoesNotReapplyDraftInferenceAfterAnExplicitWidthChoice() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().runOnUiThread { host.get().focusManager.clearFocus(force = true) }
+        settle()
+        scrollToIndex(47)
+        assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
+        click("1 B")
+        assertTrue(button("1 B").config[SemanticsProperties.Selected])
+        scrollToIndex(0)
+        assertEquals("AA00,BB00", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+    }
+
+    @Test fun actualActivityRecreationRestoresTwoByteDraftBeforePreviewAndSubmission() {
+        assertRecreatedDraft("AA00,BB00", "2 B")
+    }
+
+    @Test fun actualActivityRecreationRestoresFourByteDraftBeforePreviewAndSubmission() {
+        assertRecreatedDraft("AA000000,BB000000", "4 B")
+    }
+
+    private fun assertRecreatedDraft(draft: String, mode: String) {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste(draft)
+        val codes = draft.split(',')
+        assertTrue(texts().containsAll(codes.map { "$it will be added" }))
+        val before = host.get()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertNotSame(before, host.get())
+        assertEquals(draft, input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().containsAll(codes.map { "$it will be added" }))
+        assertFalse(texts().any { it.startsWith("Invalid format:") })
+        assertFalse(button("Add nodes: ${codes.joinToString(", ")}").config.contains(SemanticsProperties.Disabled))
+        click("Add nodes: ${codes.joinToString(", ")}")
+        assertEquals(2, host.get().recents.values.values.single().size)
+        assertTrue(host.get().sender.sent.isEmpty())
+        scrollToIndex(48)
+        assertTrue(button(mode).config[SemanticsProperties.Selected])
+    }
+
+    private fun scrollToIndex(index: Int) {
+        host.get().runOnUiThread {
+            val list = nodes().single { it.config.contains(SemanticsActions.ScrollToIndex) }
+            assertTrue(assertNotNull(list.config[SemanticsActions.ScrollToIndex].action)(index))
+        }
+        settle()
+    }
+
     private fun configured(supportsOverride: Boolean = true) = TraceHarness(configureDependencies = true).also {
         it.deps.device = device(firmwareVersionString = if (supportsOverride) "v1.11.0" else "v1.10.0")
         it.holder.setContactsForTesting(listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")))
@@ -331,15 +400,56 @@ class TraceCodeInputComposeTest {
         }
         return checkNotNull(find(content)) { "Production code-entry UI must be attached" }
     }
+}
 
-    private class ScreenOwner : SavedStateRegistryOwner {
-        val registry = LifecycleRegistry(this)
-        override val lifecycle: Lifecycle get() = registry
-        private val savedState = SavedStateRegistryController.create(this).apply {
-            performAttach()
-            performRestore(null)
+class TraceCodeInputTestActivity : ComponentActivity() {
+    val frames = BroadcastFrameClock()
+    lateinit var content: ComposeView
+        private set
+    internal lateinit var focusManager: FocusManager
+    internal val recents = MapRecentsStorage()
+    internal val sender = FakeTraceSender()
+    private val dependencies = FakeTraceDependencies().apply {
+        device = device()
+        directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")) +
+            (1..40).map { contact(it, name = "Repeater $it") })
+        this.sender = this@TraceCodeInputTestActivity.sender
+    }
+    private var traceScreenMounted = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        content = ComposeView(this).apply {
+            id = android.R.id.custom
+            setViewTreeLifecycleOwner(this@TraceCodeInputTestActivity)
+            setViewTreeSavedStateRegistryOwner(this@TraceCodeInputTestActivity)
+            setParentCompositionContext(createLifecycleAwareWindowRecomposer(
+                coroutineContext = frames,
+                lifecycle = this@TraceCodeInputTestActivity.lifecycle,
+            ))
         }
-        override val savedStateRegistry get() = savedState.savedStateRegistry
-        init { registry.currentState = Lifecycle.State.RESUMED }
+        setContentView(content)
+        if (savedInstanceState?.getBoolean("traceScreenMounted") == true) mountTraceScreen()
+    }
+
+    internal fun mountTraceScreen() {
+        traceScreenMounted = true
+        content.setContent {
+            focusManager = LocalFocusManager.current
+            MaterialTheme {
+                TracePathScreen(TracePathScreen.Dependencies(dependencies, recents, RecordingDiagnostics(), RADIO, 1))
+            }
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("traceScreenMounted", traceScreenMounted)
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun onDestroy() {
+        content.disposeComposition()
+        frames.cancel()
+        super.onDestroy()
     }
 }

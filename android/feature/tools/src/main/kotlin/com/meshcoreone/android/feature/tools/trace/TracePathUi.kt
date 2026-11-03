@@ -223,6 +223,7 @@ private fun TracePathContent(
 @Composable
 private fun TracePathListContent(state: TracePathState, holder: TracePathStateHolder) {
     val scope = rememberCoroutineScope()
+    val codeInput = rememberTraceCodeInputState(holder)
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -279,7 +280,7 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
                 }
             }
         }
-        item(key = "trace-code-input") { TraceCodeInput(state, holder) }
+        item(key = "trace-code-input") { TraceCodeInput(state, holder, codeInput) }
         if (state.availableRepeaters.isNotEmpty()) {
             item {
                 Text(stringResource(T.toolsNodeDiscoveryRepeaters), style = MaterialTheme.typography.titleMedium)

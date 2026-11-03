@@ -69,7 +69,11 @@ fun PresetStepScreen(
             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = OnboardingMetrics.cardSpacing),
             verticalArrangement = Arrangement.spacedBy(OnboardingMetrics.mediumSpacing)) {
-            presets.forEach { preset -> PresetRow(preset, preset.id == state.selectedId) { actions.onSelect(preset.id) } }
+            presets.forEach { preset ->
+                PresetRow(preset, preset.id == state.selectedId, enabled = !state.isApplying) {
+                    actions.onSelect(preset.id)
+                }
+            }
             if (presets.size > 1) {
                 Text(stringResource(O.presetDiscordHelp), Modifier.fillMaxWidth().padding(top = OnboardingMetrics.mediumSpacing),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
@@ -111,13 +115,16 @@ fun PresetStepScreen(
 }
 
 @Composable
-private fun PresetRow(preset: OnboardingPresetOption, isSelected: Boolean, onClick: () -> Unit) {
+private fun PresetRow(preset: OnboardingPresetOption, isSelected: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val hint = stringResource(O.presetRowAccessibilityHint)
     Card(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = OnboardingMetrics.minHitTarget)
-                .clickable(role = Role.RadioButton, onClick = onClick)
-                .semantics(mergeDescendants = true) { selected = isSelected; onClick(hint) { onClick(); true } }
+                .clickable(enabled = enabled, role = Role.RadioButton, onClick = onClick)
+                .semantics(mergeDescendants = true) {
+                    selected = isSelected
+                    if (enabled) onClick(hint) { onClick(); true }
+                }
                 .padding(OnboardingMetrics.cardSpacing),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
         ) {

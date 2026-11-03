@@ -43,7 +43,9 @@ class PresetStepCoordinator(
 
     fun visiblePresets(): List<OnboardingPresetOption> = regionPort.catalog.presets(regionPort.selection.value)
 
-    fun select(id: String) = mutable.update { it.copy(selectedId = id) }
+    fun select(id: String) = mutable.update {
+        if (it.isApplying) it else it.copy(selectedId = id)
+    }
     fun dismissError() = mutable.update { it.copy(error = null) }
 
     fun canApply(canApplyToRadio: Boolean, state: PresetStepState): Boolean =

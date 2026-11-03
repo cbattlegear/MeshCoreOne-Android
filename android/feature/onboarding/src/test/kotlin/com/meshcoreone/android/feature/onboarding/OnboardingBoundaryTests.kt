@@ -396,6 +396,44 @@ class PresetStepCoordinatorTest {
             assertEquals(listOf("loc"), port.applied)
         }
 
+    @Test fun selectionCannotChangeWhileRadioApplyIsSuspended() = kotlinx.coroutines.runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val applyOutcome = CompletableDeferred<OnboardingPresetOutcome>()
+        val applied = mutableListOf<String>()
+        val port = object : OnboardingPresetPort {
+            override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
+            override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                applied += presetId
+                started.complete(Unit)
+                return applyOutcome.await()
+            }
+        }
+        val region = FakeRegion(presets = presets).also {
+            it.setSelection(RegionSelection("US", RegionSelection.Source.MANUAL))
+        }
+        lateinit var c: PresetStepCoordinator
+        var completedWith: String? = null
+        c = PresetStepCoordinator(scope, region, port) {
+            completedWith = c.state.value.selectedId
+        }
+        c.select("a")
+        c.apply()
+
+        try {
+            started.await()
+            assertTrue(c.state.value.isApplying)
+            c.select("b")
+            assertEquals("a", c.state.value.selectedId)
+        } finally {
+            if (!applyOutcome.isCompleted) applyOutcome.complete(OnboardingPresetOutcome.Applied)
+        }
+
+        assertEquals(listOf("a"), applied)
+        assertEquals("a", completedWith)
+        assertEquals(1, c.state.value.commitTick)
+        assertFalse(c.state.value.isApplying)
+    }
+
     @Test fun notConnectedSurfacesErrorWithoutCompleting() {
         var done = 0
         val c = coordinator(FakePresets(OnboardingPresetOutcome.NotConnected), done = { done += 1 })

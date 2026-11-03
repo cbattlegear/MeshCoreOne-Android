@@ -50,8 +50,10 @@ import java.io.ByteArrayOutputStream
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -73,6 +75,25 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactAvatarMountedStoreTest : RoomProcessTest() {
     @get:Rule val compose = createEmptyComposeRule()
+
+    @Test
+    fun timeoutDiagnosticsPreserveTheStageCauseAndCollectorFailure() {
+        val timeout = IllegalStateException("original timeout")
+        for (collector in listOf(ReflectiveOperationException("reflection failed"), AssertionError("collector assertion"))) {
+            val failure = assertFailsWith<AssertionError> {
+                failWithDiagnostics("actual stage timed out", timeout) { throw collector }
+            }
+            assertEquals("actual stage timed out", failure.message)
+            assertSame(timeout, failure.cause)
+            assertSame(collector, failure.suppressed.single())
+        }
+        val cancellation = CancellationException("diagnostic cancelled")
+        val propagated = assertFailsWith<CancellationException> {
+            failWithDiagnostics("actual stage timed out", timeout) { throw cancellation }
+        }
+        assertSame(cancellation, propagated)
+        assertSame(timeout, propagated.suppressed.single().cause)
+    }
 
     @Test
     @Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h900dp-mdpi")
@@ -176,11 +197,10 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             try {
                 compose.waitUntil(5_000) { entered.isCompleted }
             } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
-                throw AssertionError(
-                    "Held service not entered after Choose; before=$beforeChoose; trace=$trace; " +
-                        compose.runOnUiThread { avatarLifetimeDiagnostic(host.get()) },
-                    timeout,
-                )
+                failWithDiagnostics("Held service not entered after Choose", timeout) {
+                    "before=$beforeChoose; trace=$trace; " +
+                        compose.runOnUiThread { avatarLifetimeDiagnostic(host.get()) }
+                }
             }
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarSavingAnnouncement)).assertExists()
             assertEquals(storedTarget, store.fetchContact(targetKey))
@@ -362,16 +382,18 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                         compose.onAllNodes(SemanticsMatcher("all mounted nodes") { true },
                             useUnmergedTree = true).fetchSemanticsNodes().joinToString { it.config.toString() }
                 val remainingMillis = (deadline - System.nanoTime()) / 1_000_000L
-                if (remainingMillis <= 0) throw AssertionError(diagnostic())
+                if (remainingMillis <= 0) failWithDiagnostics("$stage: shared deadline expired", null, ::diagnostic)
                 try {
                     compose.waitUntil(remainingMillis) {
                         harness.scheduler.runCurrent()
                         condition()
                     }
                 } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
-                    throw AssertionError(diagnostic(), timeout)
+                    failWithDiagnostics("$stage: shared deadline wait timed out", timeout, ::diagnostic)
                 }
-                if (System.nanoTime() >= deadline) throw AssertionError(diagnostic())
+                if (System.nanoTime() >= deadline) {
+                    failWithDiagnostics("$stage: condition completed after shared deadline", null, ::diagnostic)
+                }
             }
             awaitWrite("Production encoder must reach the actual avatar service", saveDeadline) { writes.isNotEmpty() }
             assertEquals(targetKey, writes.single().first)
@@ -410,7 +432,24 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         }
     }
 
-    // Test-only reflection observes the feature's internal retained owner without adding a product API.
+    private fun failWithDiagnostics(stage: String, timeout: Throwable?, diagnostic: () -> String): Nothing {
+        val failure = AssertionError(stage, timeout)
+        try {
+            failure.addSuppressed(AssertionError(diagnostic()))
+        } catch (cancelled: CancellationException) {
+            cancelled.addSuppressed(failure)
+            throw cancelled
+        } catch (diagnosticFailure: Throwable) {
+            if (diagnosticFailure is VirtualMachineError || diagnosticFailure is ThreadDeath) {
+                diagnosticFailure.addSuppressed(failure)
+                throw diagnosticFailure
+            }
+            failure.addSuppressed(diagnosticFailure)
+        }
+        throw failure
+    }
+
+    // Test-only reflection and an optional scheduling probe; neither proves the encoder executed.
     private fun avatarLifetimeDiagnostic(activity: ComponentActivity, trace: MutableList<String>? = null): String {
         val type = Class.forName("com.meshcoreone.android.feature.nodes.ui.ContactDetailRetainedState")
             .asSubclass(ViewModel::class.java)

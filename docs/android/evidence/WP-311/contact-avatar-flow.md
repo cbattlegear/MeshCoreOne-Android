@@ -380,24 +380,44 @@ Normal detail disposal closes the lifetime/scope; configuration disposal does
 not. Source inspection alone does not establish which step failed in run
 `41625098790`, and no speculative production change was made.
 
-The App test now records a read-only retained-lifetime snapshot before Choose
+The App test now records a best-effort retained-lifetime observation before Choose
 and on a failed wait: active/cancelled scope and child-job flags, actual dispatcher,
 saving/error state, synthetic selected identity and image presence. Test-only
 reflection reads the feature's existing internal ViewModel/holder so no public
 product observer or behavior is added; a missing/mismatched reflective contract
-fails explicitly, rather than producing a reassuring empty snapshot.
+fails explicitly, rather than producing a reassuring fallback snapshot.
+`ViewModelProvider` is get-or-create: an empty lifetime list does not prove a
+previously captured owner was found. Fields are read sequentially, not atomically.
 A separate no-store dispatcher probe in that exact retained scope records Main
 entry, a Default hop, Main return and its actual completion/cancellation class.
-It is observation of a distinct probe job, not proof the encoder job ran.
+The probe is a real child launched before Choose and appears among the observed
+children. It can warm or perturb scheduling; it is not read-only or timing-neutral.
+Its trace records are not correlated to individual retained lifetimes when
+multiple entries exist. It is not proof the encoder job ran.
 
 The unchanged real session/store are wrapped transparently to record current-radio,
 service/store resolution and contact-lookup entry/return/identity outcome.
-All reads still delegate to the production App adapter and real Room, and all
+The lookup `identityMatches` field checks UUID and radio only, not public key;
+the production holder's additional public-key check remains unchanged.
+Lookup entry without return cannot distinguish suspension from exception or
+cancellation. All reads still delegate to the production App adapter and real Room, and all
 service writes still forward/rethrow as before. Thus a failed assertion can
-distinguish a closed/cancelled lifetime, an unstarted or saving/encoding phase,
-an actual typed failure, store suspension/mismatch and observed dispatcher
-progress, without replacing encoding, bypassing identity checks or faking entry.
+provide hypotheses about lifetime cancellation, saving/error state, lookup
+progress and dispatcher activity, without conclusively identifying an encoder
+job or distinguishing every failure/suspension schedule. They do not replace
+encoding, bypass identity checks or fake entry.
 No new waits or deadline extensions are added. Both predictive variants retain
 all Back/selection/Room assertions, and the mounted save retains its exact
 five-second total deadline. These diagnostics are an unexecuted hypothesis
 discriminator, not a confirmed product failure or passing fix.
+
+Independent review of `ebff0dae9` found that a diagnostic collector exception
+could replace the original timeout while constructing the failure message.
+The local correction first creates an assertion naming the original stage and
+retaining its timeout as the cause. Successful diagnostic text is a suppressed
+assertion; a collector/reflection/assertion failure is itself suppressed on the
+stage assertion. Diagnostic cancellation and VM/thread termination propagate
+with the stage assertion suppressed, retaining both failures without swallowing
+cancellation. Added controls exercise reflection failure, assertion failure and
+cancellation preservation. These controls are source-only until actual hosted
+execution; no static check is represented as their runtime result.

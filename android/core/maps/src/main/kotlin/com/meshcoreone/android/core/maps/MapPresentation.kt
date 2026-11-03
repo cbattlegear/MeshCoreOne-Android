@@ -28,6 +28,7 @@ data class MapPresentationState(
     val showsUserLocation: Boolean = false,
     val issue: MapIssue? = null,
     val isDark: Boolean = false,
+    val cameraCommandRevision: Long = 0,
 ) {
     val canRender: Boolean get() = availability is MapAvailability.Available
     val attribution: List<MapProviderAttribution>
@@ -48,6 +49,15 @@ interface SharedMapController {
     fun onStart()
     fun onStop()
 }
+
+internal fun shouldApplyMapCamera(
+    camera: MapCamera,
+    lastReportedCamera: MapCamera?,
+    lastAppliedCamera: MapCamera?,
+    commandRevision: Long,
+    lastAppliedCommandRevision: Long,
+): Boolean = commandRevision != lastAppliedCommandRevision ||
+    (camera != lastReportedCamera && camera != lastAppliedCamera)
 
 interface SharedMapAdapter {
     val availability: StateFlow<MapAvailability>

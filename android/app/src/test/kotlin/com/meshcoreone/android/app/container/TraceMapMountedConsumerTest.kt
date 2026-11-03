@@ -19,6 +19,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.maps.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -124,7 +125,34 @@ class TraceMapMountedConsumerTest {
         assertTrue(failures.isEmpty())
     }
 
-    private fun mount() {
+    @Test fun systemMapAppearanceFollowsEffectiveAppThemeAndKeepsExplicitMapOverrides() {
+        mount(AppColorSchemePreference.DARK)
+        compose.waitUntil(5_000) { latest?.isDark == true }
+
+        val preferences = MeshCoreStorage.get(host.get()).preferences
+        runBlocking { preferences.set(AppStorageKey.mapColorSchemePreference, "light") }
+        compose.waitUntil(5_000) { latest?.isDark == false }
+        runBlocking { preferences.set(AppStorageKey.mapColorSchemePreference, "dark") }
+        compose.waitUntil(5_000) { latest?.isDark == true }
+    }
+
+    @Test fun explicitTraceFramingReissuesAfterPanAndOnRepeatedFit() {
+        mount()
+        val initialRevision = latest!!.cameraCommandRevision
+        compose.onNodeWithTag("pan").performClick()
+        compose.waitUntil(5_000) { latest?.camera == panned }
+        assertEquals(initialRevision, latest!!.cameraCommandRevision)
+
+        compose.onNodeWithTag("trace-map:center-all").performClick()
+        compose.waitUntil(5_000) {
+            latest?.camera != panned && latest!!.cameraCommandRevision > initialRevision
+        }
+        val firstFitRevision = latest!!.cameraCommandRevision
+        compose.onNodeWithTag("trace-map:center-all").performClick()
+        compose.waitUntil(5_000) { latest!!.cameraCommandRevision > firstFitRevision }
+    }
+
+    private fun mount(appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM) {
         val directory = object : TraceNodeDirectory {
             override suspend fun fetchContacts(radioId: RadioId) = tableContacts
             override suspend fun fetchDiscoveredNodes(radioId: RadioId) = listOf(hill)
@@ -149,7 +177,7 @@ class TraceMapMountedConsumerTest {
             feature, recent, TraceDiagnostics { _, error -> failures += error }, radio, 0, preferences,
         )
         host.get().setContent {
-            MeshCoreTheme {
+            MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false) {
                 TracePathScreen(
                     dependencies.copy(nodeTableVersion = tableVersion.intValue),
                     mapSurface = { presentation, _, _, camera, marker, overlay ->

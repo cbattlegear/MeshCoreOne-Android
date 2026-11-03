@@ -3,7 +3,6 @@
 package com.meshcoreone.android.feature.remotenodes.ui
 
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
@@ -16,6 +15,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings
+import com.meshcoreone.android.core.designsystem.ColorScheme
+import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.maps.*
 import com.meshcoreone.android.feature.remotenodes.map.CoordinateRegion
 import com.meshcoreone.android.feature.remotenodes.map.MapPoint
@@ -161,6 +162,7 @@ private fun RemoteNodeMapContentWithPreferences(
     val system = MeasurementSystem.of(locale)
     val unit = stringResource(SnrBadge.UNIT_TEXT_RESOURCE)
     val presentation = remember(points, lines, region, locale, system, unit) { remoteMapPresentation(points, lines, region, locale, system, unit) }
+    var cameraCommandRevision by remember { mutableLongStateOf(0L) }
     val encodedCameraState = if (saveCameraState) {
         rememberSaveable(if (preserveCameraOnContentChange) null else region) { mutableStateOf<String?>(null) }
     } else {
@@ -169,7 +171,9 @@ private fun RemoteNodeMapContentWithPreferences(
     var encodedCamera by encodedCameraState
     var style by rememberSaveable { mutableStateOf(MapStyle.STANDARD) }
     val uri = LocalUriHandler.current
-    val isDark = resolvedMapIsDark(preferences.appearance, isSystemInDarkTheme())
+    val isDark = resolvedMapIsDark(
+        preferences.appearance, LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK,
+    )
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         RemoteHeading(title)
         Row(Modifier.horizontalScroll(rememberScrollState())) {
@@ -189,13 +193,20 @@ private fun RemoteNodeMapContentWithPreferences(
             points.isEmpty() -> Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesHistoryNoSnapshotsMessage))
             availability is MapLayerAvailability.Unavailable -> Text(availability.reason, color = MaterialTheme.colorScheme.error)
             else -> surface(
-                presentation.copy(style = style, camera = encodedCamera?.let(MapCamera::decode) ?: presentation.camera, isDark = isDark),
+                presentation.copy(
+                    style = style, camera = encodedCamera?.let(MapCamera::decode) ?: presentation.camera,
+                    cameraCommandRevision = cameraCommandRevision, isDark = isDark,
+                ),
                 preferences.clustering, preferences.labels, title,
                 { encodedCamera = it.encode(); onCameraChanged(it) }, onSelect, Modifier.fillMaxWidth().height(mapHeight),
             )
         }
         TextButton({
-            encodedCamera = remoteMapPresentation(points, lines, points.map { it.coordinate }.boundingRegion(), locale, system, unit).camera?.encode()
+            val target = remoteMapPresentation(
+                points, lines, points.map { it.coordinate }.boundingRegion(), locale, system, unit,
+            ).camera
+            encodedCamera = target?.encode()
+            if (target != null) cameraCommandRevision++
         }, enabled = points.isNotEmpty()) { Text(stringResource(AppMapStrings.mapControlsCenterAll)) }
         RemoteToggle(AppMapStrings.mapControlsShowLabels, preferences.labels, onLabelsChanged)
         RemoteToggle(AppMapStrings.mapControlsClusterNodes, preferences.clustering, onClusteringChanged)

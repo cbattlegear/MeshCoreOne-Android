@@ -22,6 +22,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.BackupPreferenceSnapshot
@@ -216,8 +217,10 @@ class MapMountedConsumerTest {
         )
         assertEquals(listOf(contact.id), requireNotNull(latest).points.map { it.id })
         assertEquals(listOf(favorite.marker.position).boundingCamera(), requireNotNull(latest).camera)
+        val initialCommandRevision = requireNotNull(latest).cameraCommandRevision
         compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).assertIsEnabled().performClick()
         assertEquals(listOf(favorite.marker.position).boundingCamera(), requireNotNull(latest).camera)
+        assertTrue(requireNotNull(latest).cameraCommandRevision > initialCommandRevision)
     }
 
     @Test fun emptyMapHasNoCameraAndCannotCenter() {
@@ -247,6 +250,22 @@ class MapMountedConsumerTest {
                 "mapColorSchemePreference" to PreferenceValue.StringValue("dark"),
             )))
         }
+
+        @Test fun systemMapAppearanceFollowsEffectiveAppThemeAndKeepsExplicitMapOverrides() {
+            var latest: MapPresentationState? = null
+            mount(
+                MapFeatureDependencies(source { content() }, offline()),
+                onPresentation = { latest = it },
+                appColorSchemePreference = AppColorSchemePreference.DARK,
+            )
+            compose.waitUntil(5_000) { latest?.isDark == true }
+
+            val preferences = MeshCoreStorage.get(host.get()).preferences
+            runBlocking { preferences.set(AppStorageKey.mapColorSchemePreference, "light") }
+            compose.waitUntil(5_000) { latest?.isDark == false }
+            runBlocking { preferences.set(AppStorageKey.mapColorSchemePreference, "dark") }
+            compose.waitUntil(5_000) { latest?.isDark == true }
+        }
         compose.waitUntil(5_000) {
             requireNotNull(latest).isDark && requireNotNull(latest).points.any { it.id == node.id }
         }
@@ -272,13 +291,14 @@ class MapMountedConsumerTest {
         focus: () -> GeoPoint? = { null },
         onFocusConsumed: () -> Unit = {},
         onPresentation: (MapPresentationState) -> Unit = {},
+        appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM,
     ) {
         val bound = dependencies.copy(preferences = dependencies.preferences ?: AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,
             host.get().getSharedPreferences("shared-map", 0),
         ))
         host.get().setContent {
-            MeshCoreTheme(motionScale = 0f) {
+            MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false, motionScale = 0f) {
                 MapEntry(
                     FeatureRoute(FeatureId.MAP), { error("No generic navigation") },
                     bound,

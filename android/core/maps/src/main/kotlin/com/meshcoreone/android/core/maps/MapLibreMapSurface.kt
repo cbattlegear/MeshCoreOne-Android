@@ -131,6 +131,7 @@ private class MapLibreSurfaceController(
     private var pointsById = emptyMap<String, MapMarker>()
     private var lastReportedCamera: MapCamera? = null
     private var lastAppliedCamera: MapCamera? = null
+    private var lastAppliedCameraCommandRevision = Long.MIN_VALUE
     private var initialized = false
     private var destroyed = false
     private var projectionHandle: MapProjectionHandle? = null
@@ -322,8 +323,14 @@ private class MapLibreSurfaceController(
         style.getSourceAs<GeoJsonSource>(LINES_SOURCE)?.setGeoJson(FeatureCollection.fromFeatures(state.lines.map(::lineFeature)))
         style.getLayerAs<SymbolLayer>(LABELS_LAYER)?.setProperties(textSize(if (labels) 12f else 0f))
         style.getLayerAs<SymbolLayer>(CLUSTER_LABELS_LAYER)?.setProperties(textSize(if (labels) 12f else 0f))
-        state.camera?.takeIf { it != lastReportedCamera && it != lastAppliedCamera }?.let { camera ->
+        state.camera?.takeIf {
+            shouldApplyMapCamera(
+                it, lastReportedCamera, lastAppliedCamera,
+                state.cameraCommandRevision, lastAppliedCameraCommandRevision,
+            )
+        }?.let { camera ->
                 lastAppliedCamera = camera
+                lastAppliedCameraCommandRevision = state.cameraCommandRevision
                 val pose = camera.pose
                 if (pose != null) {
                     map?.moveCamera(

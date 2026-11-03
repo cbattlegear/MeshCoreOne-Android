@@ -29,11 +29,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -48,6 +48,8 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.meshcoreone.android.core.designsystem.ColorScheme
+import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as T
@@ -66,10 +68,6 @@ import com.meshcoreone.android.core.maps.MapPreferences
 import com.meshcoreone.android.core.maps.MapFilterHost
 import com.meshcoreone.android.core.maps.MapColorPreference
 import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
-import android.icu.text.MeasureFormat
-import android.icu.util.Measure
-import android.icu.util.MeasureUnit
-import java.text.NumberFormat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -390,23 +388,14 @@ internal fun TracePathMapContent(
     var preferenceError by remember(preferences) { mutableStateOf(false) }
     var retry by remember(preferences) { mutableStateOf(0) }
     var camera by remember(holder) { mutableStateOf<MapCamera?>(null) }
+    var cameraCommandRevision by remember(holder) { mutableLongStateOf(0L) }
     var presentation by remember(holder) { mutableStateOf(MapPresentationState()) }
     var confirmClear by remember { mutableStateOf(false) }
     val locale = LocalConfiguration.current.locales[0]
     val unit = stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesStatusSnrBadgeUnit)
-    val distanceFormat = remember(locale) { MeasureFormat.getInstance(locale, MeasureFormat.FormatWidth.SHORT) }
-    val snrFormat = remember(locale) { NumberFormat.getNumberInstance(locale).apply {
-        minimumFractionDigits = 1
-        maximumFractionDigits = 1
-    } }
-    val formatBadge: (Double, Double) -> String = remember(distanceFormat, snrFormat, unit) {
-        { meters, snr ->
-            val distance = if (meters >= 1_000) Measure(meters / 1_000, MeasureUnit.KILOMETER)
-            else Measure(meters, MeasureUnit.METER)
-            "${distanceFormat.formatMeasures(distance)} \u00b7 ${snrFormat.format(snr)} $unit"
-        }
-    }
-    val systemDark = isSystemInDarkTheme()
+    val badgeFormatter = remember(locale, unit) { TraceMapBadgeFormat(locale, unit) }
+    val formatBadge: (Double, Double) -> String = remember(badgeFormatter) { badgeFormatter::format }
+    val appIsDark = LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK
     LaunchedEffect(preferences, retry) {
         try {
             preferences.observe(MapFilterHost.TRACE_PATH).collect {
@@ -426,6 +415,12 @@ internal fun TracePathMapContent(
             points = map.mapMarkers(formatBadge), lines = map.lines,
         )
         if (camera == null && settings != null) camera = map.initialCamera()
+    }
+    fun requestCamera(target: MapCamera?) {
+        if (target != null) {
+            camera = target
+            cameraCommandRevision++
+        }
     }
     LaunchedEffect(state.availableNodes, state.discoveredRepeaters, state.outboundPath, state.result, settings, formatBadge) {
         settings?.let {
@@ -483,10 +478,10 @@ internal fun TracePathMapContent(
         }
         Box(Modifier.weight(1f)) {
             mapSurface(
-                presentation.copy(camera = camera, isDark = when (loaded?.appearance) {
+                presentation.copy(camera = camera, cameraCommandRevision = cameraCommandRevision, isDark = when (loaded?.appearance) {
                     MapColorPreference.DARK -> true
                     MapColorPreference.LIGHT -> false
-                    else -> systemDark
+                    else -> appIsDark
                 }),
                 loaded?.clustering ?: false, loaded?.labels ?: true, { camera = it },
                 { marker -> if (loaded != null) {
@@ -498,10 +493,10 @@ internal fun TracePathMapContent(
                 {
                     Column(Modifier.align(Alignment.BottomEnd).padding(12.dp)) {
                         TextButton(
-                            onClick = { camera = map.allPinsCamera() }, enabled = loaded != null && map.pins.isNotEmpty(),
+                            onClick = { requestCamera(map.allPinsCamera()) }, enabled = loaded != null && map.pins.isNotEmpty(),
                             modifier = Modifier.testTag("trace-map:center-all").sizeIn(minHeight = 48.dp),
                         ) { Text(stringResource(M.mapControlsCenterAll)) }
-                        TextButton(onClick = { camera = map.pathCamera() }, enabled = loaded != null && map.hasPath) {
+                        TextButton(onClick = { requestCamera(map.pathCamera()) }, enabled = loaded != null && map.hasPath) {
                             Text(stringResource(C.contactsTraceMapCenterOnPath))
                         }
                     }
@@ -514,7 +509,7 @@ internal fun TracePathMapContent(
                 Text(stringResource(C.contactsTraceMapClear))
             }
             Button(
-                onClick = { camera = map.pathCamera(); scope.launch { map.runTrace() } },
+                onClick = { requestCamera(map.pathCamera()); scope.launch { map.runTrace() } },
                 enabled = loaded != null && state.canRunTraceWhenConnected,
             ) { Text(stringResource(C.contactsTraceListRunTrace)) }
         }

@@ -4,7 +4,6 @@ package com.meshcoreone.android.feature.map
 
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -32,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,6 +44,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.meshcoreone.android.core.designsystem.ColorScheme
+import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.l10n.R
@@ -160,6 +162,7 @@ private fun MapContent(
     val filter = settings?.filter ?: MapFilterState.seed(MapFilterHost.MAIN_MAP)
     val clustering = settings?.clustering ?: true
     val labels = settings?.labels ?: true
+    val appIsDark = LocalMeshTheme.current.frame.colorScheme == ColorScheme.DARK
     val scope = rememberCoroutineScope()
     val holder = remember(dependencies, scope) { MapFeatureStateHolder(dependencies, scope, filter) }
     val feature by holder.state.collectAsStateWithLifecycle()
@@ -174,6 +177,7 @@ private fun MapContent(
             if (focus == null) preferences.getString(CAMERA_KEY, null)?.let(MapCamera::decode) else null,
         )
     }
+    var cameraCommandRevision by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(preferenceStore, preferenceRetry) {
         try {
@@ -214,6 +218,7 @@ private fun MapContent(
             focusedPoint = focus
             selectedFocus = null
             camera = MapCamera(focus, 0.01, 0.01)
+            cameraCommandRevision++
             onFocusConsumed()
         }
     }
@@ -233,9 +238,12 @@ private fun MapContent(
         availability = MapAvailability.Available(MapLibreOpenFreeMap.catalog),
         style = MapStyle.STANDARD,
         camera = camera,
+        cameraCommandRevision = cameraCommandRevision,
         points = filtered,
         lines = feature.content.lines,
-        isDark = settings?.let { resolvedMapIsDark(it.appearance, isSystemInDarkTheme()) } ?: false,
+        isDark = settings?.let {
+            resolvedMapIsDark(it.appearance, appIsDark)
+        } ?: false,
     )
 
     mapSurface(
@@ -267,7 +275,12 @@ private fun MapContent(
             onRefresh = holder::refresh,
             onOffline = { offlineVisible = !offlineVisible },
             canCenterAll = filtered.isNotEmpty(),
-            onCenterAll = { camera = filtered.map { it.position }.boundingCamera() },
+            onCenterAll = {
+                filtered.map { it.position }.boundingCamera()?.let {
+                    camera = it
+                    cameraCommandRevision++
+                }
+            },
             modifier = Modifier.align(Alignment.TopCenter),
         )
         if ((feature.loading || settings == null) && feature.error == null && preferenceError == null) {

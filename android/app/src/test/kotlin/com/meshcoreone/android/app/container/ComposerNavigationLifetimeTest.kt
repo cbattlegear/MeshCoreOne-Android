@@ -42,6 +42,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
     @get:Rule val compose = createEmptyComposeRule()
     private lateinit var host: ActivityController<ComponentActivity>
     private enum class Boundary { BEFORE_START, BEFORE_CREATE, AFTER_CREATE, BEFORE_QUEUE, AFTER_QUEUE }
+    private enum class RecoveryFailure { PENDING_READ, STATUS_WRITE }
 
     @Before fun createHost() {
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
@@ -107,6 +108,24 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         exercise(true, Boundary.BEFORE_START, lookupFailure = true)
     @Test fun channelUnreadableRecoveryDoesNotRestoreIntoReplacementSlot() =
         exercise(true, Boundary.BEFORE_START, lookupFailure = true, replaceSlot = true, preserveNewer = false)
+    @Test fun directCommittedFailureRepairsFirstMessageListVisibility() =
+        exercise(false, Boundary.AFTER_CREATE, creationFailure = true, dispose = false)
+    @Test fun directFailurePreservesNewerLiveWhitespace() =
+        exercise(false, Boundary.AFTER_CREATE, creationFailure = true, dispose = false, newerLiveText = " \n ")
+    @Test fun channelFailurePreservesNewerLiveWhitespace() =
+        exercise(true, Boundary.AFTER_CREATE, creationFailure = true, dispose = false, newerLiveText = " \n ")
+    @Test fun directCommittedRecoveryRetriesFailedPendingReadWithoutSending() =
+        exercise(false, Boundary.AFTER_CREATE, creationFailure = true, dispose = false,
+            recoveryFailure = RecoveryFailure.PENDING_READ)
+    @Test fun channelCommittedRecoveryRetriesFailedPendingReadWithoutSending() =
+        exercise(true, Boundary.AFTER_CREATE, creationFailure = true, dispose = false,
+            recoveryFailure = RecoveryFailure.PENDING_READ)
+    @Test fun directCommittedRecoveryRetriesFailedStatusWriteWithoutSending() =
+        exercise(false, Boundary.AFTER_CREATE, creationFailure = true, dispose = false,
+            recoveryFailure = RecoveryFailure.STATUS_WRITE)
+    @Test fun channelCommittedRecoveryRetriesFailedStatusWriteWithoutSending() =
+        exercise(true, Boundary.AFTER_CREATE, creationFailure = true, dispose = false,
+            recoveryFailure = RecoveryFailure.STATUS_WRITE)
 
     private fun exercise(
         channel: Boolean, boundary: Boundary, replaceSession: Boolean = false, legacyScreenOwner: Boolean = false,
@@ -114,6 +133,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         creationFailure: Boolean = false, reconciliationFailure: Boolean = false, queueFailure: Boolean = false,
         dispose: Boolean = true, replaceSlot: Boolean = false,
         lookupFailure: Boolean = false,
+        newerLiveText: String? = null, recoveryFailure: RecoveryFailure? = null,
     ) = runTest {
         val peerKey = key(4)
         val gate = CompletableDeferred<Unit>()
@@ -129,6 +149,8 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         var abortSlotWrite = false
         var unreadableChannel = false
         var failedChannelReads = 0
+        var recoveryUnavailable = false
+        var failedRecoveryOperations = 0
         suspend fun pause(at: Boundary) {
             if (boundary == at) {
                 reached.complete(Unit)
@@ -151,13 +173,34 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 creations++
                 captured = dto
                 pause(Boundary.AFTER_CREATE)
-                if (creationFailure) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                if (creationFailure) {
+                    recoveryUnavailable = recoveryFailure != null
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
             }
             override suspend fun fetchMessage(key: EntityKey): MessageDTO? {
                 if (reconciliationFailure && key.id == captured?.id) {
                     throw PersistenceStoreException(PersistenceStoreError.InvalidData)
                 }
                 return store.fetchMessage(key)
+            }
+            override suspend fun fetchPendingSendsForMessage(key: EntityKey): SnapshotList<PendingSendDTO> {
+                if (recoveryUnavailable && recoveryFailure == RecoveryFailure.PENDING_READ &&
+                    key.id == captured?.id
+                ) {
+                    failedRecoveryOperations++
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
+                return store.fetchPendingSendsForMessage(key)
+            }
+            override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
+                if (recoveryUnavailable && recoveryFailure == RecoveryFailure.STATUS_WRITE &&
+                    key.id == captured?.id
+                ) {
+                    failedRecoveryOperations++
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
+                return store.updateMessageStatusUnlessDelivered(key, status)
             }
             override suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long {
                 pause(Boundary.BEFORE_QUEUE)
@@ -182,6 +225,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             val initiating = requireNotNull(h.sessions.current)
             val radio = requireNotNull(h.appState.currentRadioId)
             val contact = requireNotNull(store.fetchContact(radio, peerKey))
+            if (!channel && creationFailure) assertNull("First outgoing message has no list metadata", contact.lastMessageDate)
             val slot = ChannelDTO(radioId = radio, index = 0u, name = "Lifetime channel")
             store.saveChannel(slot)
             val target = if (channel) ComposerTarget.Channel(slot) else ComposerTarget.Direct(contact)
@@ -280,8 +324,12 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 target, feature.environment(target, backgroundScope, location), backgroundScope,
             ).also { replacement = it }
             if (preserveNewer) {
-                nextComposer.onDraftChanged(newer)
-                if (typeThenClear) nextComposer.onDraftChanged("")
+                if (newerLiveText != null) {
+                    compose.runOnIdle { holder.onDraftChanged(newerLiveText) }
+                } else {
+                    nextComposer.onDraftChanged(newer)
+                    if (typeThenClear) nextComposer.onDraftChanged("")
+                }
             }
             if (replaceSession) {
                 h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
@@ -309,7 +357,20 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             h.eventually("accepted operation settles after disposal") {
                 holder.state.value.sendPhase !is ComposerSendPhase.Sending
             }
+            if (recoveryFailure != null) {
+                h.eventually("local committed recovery reports its storage failure") { failedRecoveryOperations > 0 }
+                val saved = requireNotNull(captured)
+                assertEquals(MessageStatus.PENDING, requireNotNull(store.fetchMessage(EntityKey(radio, saved.id))).status)
+                assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, saved.id)).isEmpty())
+                recoveryUnavailable = false
+                h.appState.refreshConversations()
+                h.eventually("an invalidation recovers the same committed row without queueing") {
+                    runBlocking { store.fetchMessage(EntityKey(radio, saved.id))?.status == MessageStatus.FAILED }
+                }
+            }
+            if (newerLiveText != null) assertEquals(newerLiveText, holder.state.value.draft)
             val expectedDraft = when {
+                newerLiveText != null -> null
                 preserveNewer -> if (typeThenClear) null else newer
                 lookupFailure && !replaceSlot -> original
                 replaceSession && boundary == Boundary.BEFORE_CREATE -> original
@@ -354,6 +415,12 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                         timeline.state.value.messages.any {
                             it.id == rows.single().id && it.status == MessageStatus.FAILED
                         }
+                    }
+                    if (!channel && !reconciliationFailure) {
+                        assertTrue("First-message failure remains reachable from Chats",
+                            store.fetchConversations(radio).any { it.id == contact.id })
+                        assertEquals(java.time.Instant.ofEpochSecond(rows.single().timestamp.toLong()),
+                            requireNotNull(store.fetchContact(EntityKey(radio, contact.id))).lastMessageDate)
                     }
                 }
             } else if (queueFailure) {

@@ -57,6 +57,13 @@ reported rather than silently interpreted as an absent channel.
 Committed text is not restored or created again; its exact row is retained.
 Recovered committed creation failures explicitly publish the exact saved message
 to the mounted timeline, rather than only publishing an unknown-ID status change.
+Direct recovery recomputes contact list metadata from persisted messages so a
+first-message failure remains reachable from Chats. Transient local queue-read
+or status-write failures retain the committed ID and original slot identity.
+Real App invalidations retry only local status recovery and row publication,
+serialized against the initial attempt; they never create or enqueue a message.
+Newer live whitespace/newline editor content is preserved even though the
+shared DraftStore deliberately does not persist whitespace-only drafts.
 An uncertain creation is not treated as rollback: the original receipt and
 allocated DTO/text are retained in the process adapter, the existing localized
 failure is surfaced, and no automatic restore, enqueue or retry occurs.
@@ -74,6 +81,12 @@ old text. This App guard is not an atomic queue/firmware slot lease: a slot chan
 after queue entry while service-owned persistence/drain is suspended still needs
 coordination with the WP-405/channel and queue producer. That lower-level review
 finding is explicitly unresolved, not claimed fixed by a preflight check.
+The same prerequisite includes a held pre-commit save that succeeds after slot
+replacement: its old text must not become an ordinary retryable row under the
+replacement key. The existing pre-commit slot test forces the old save to fail;
+neither it nor the post-commit no-enqueue test proves safe successful-write
+reconciliation or subsequent Retry. The producer must supply a settled slot
+identity/creation boundary; no App preflight or green aggregate claims it.
 On creation cancellation, only bounded local recovery completes noncancellably;
 the original cancellation propagates. An interrupted enqueue is not blindly
 failed because the queue may still own durable acceptance. A generic enqueue

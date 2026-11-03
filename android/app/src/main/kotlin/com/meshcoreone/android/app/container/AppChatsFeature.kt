@@ -128,6 +128,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         val target: ComposerTarget, val text: String, val revision: Long, val slotGeneration: Int,
     )
     private val deferredDrafts = java.util.concurrent.ConcurrentHashMap<UUID, DeferredDraft>()
+    private data class DeferredCommitted(
+        val target: ComposerTarget, val slotGeneration: Int, val messageId: UUID,
+    )
+    private val deferredCommitted = java.util.concurrent.ConcurrentHashMap<UUID, DeferredCommitted>()
+    private val committedRecoveryMutex = Mutex()
     val drafts = object : ComposerDraftStore {
         override val changes = MutableStateFlow(0L)
         override fun get(conversationId: ChatConversationID) = synchronized(draftLock) {
@@ -185,8 +190,49 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                         report("Deferred composer draft recovery could not read its channel", failure)
                     }
                 }
+                for ((id, recovery) in deferredCommitted) {
+                    try {
+                        val target = recovery.target
+                        if (target is ComposerTarget.Channel) {
+                            if ((app.channelSlotGenerations.value[target.conversationId] ?: 0) !=
+                                recovery.slotGeneration
+                            ) continue
+                            val current = store.fetchChannel(target.channel.radioId, target.channel.index)
+                            if (current == null || current.id != target.channel.id ||
+                                current.secret != target.channel.secret || !current.isEnabled
+                            ) continue
+                        }
+                        recoverCommittedCreation(recovery)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: PersistenceStoreException) {
+                        report("Committed composer recovery could not update its saved row", failure)
+                    } catch (failure: MessageServiceException) {
+                        report("Committed composer recovery could not find its saved row or contact", failure)
+                    }
+                }
             }
         }
+    }
+
+    private suspend fun recoverCommittedCreation(recovery: DeferredCommitted) = committedRecoveryMutex.withLock {
+        if (deferredCommitted[recovery.messageId] != recovery) return@withLock
+        val radio = recovery.target.conversationId.radioId
+        val committed = savedMessage(radio, recovery.messageId)
+        committed.contactID?.let { store.recomputeContactLastMessageDate(EntityKey(radio, it)) }
+        sender(radio).recordLocalEnqueueFailure(recovery.messageId)
+        val saved = savedMessage(radio, recovery.messageId)
+        val channelIndex = saved.channelIndex
+        if (channelIndex != null) {
+            app.messageEventStream.send(MessageEvent.ChannelMessageReceived(saved, channelIndex))
+        } else {
+            val contact = saved.contactID?.let { store.fetchContact(EntityKey(radio, it)) }
+                ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
+            app.messageEventStream.send(MessageEvent.DirectMessageReceived(saved, contact))
+        }
+        app.refreshConversations()
+        deferredCommitted.remove(recovery.messageId, recovery)
+        Unit
     }
 
     internal fun restoreNotificationDraft(
@@ -740,16 +786,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                         )
                     }
                     override suspend fun recordCommittedCreationFailure(messageId: UUID) {
-                        pinned.recordLocalEnqueueFailure(messageId)
-                        val saved = savedMessage(radio, messageId)
-                        val channelIndex = saved.channelIndex
-                        if (channelIndex != null) {
-                            app.messageEventStream.send(MessageEvent.ChannelMessageReceived(saved, channelIndex))
-                        } else {
-                            val contact = saved.contactID?.let { store.fetchContact(EntityKey(radio, it)) }
-                                ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
-                            app.messageEventStream.send(MessageEvent.DirectMessageReceived(saved, contact))
-                        }
+                        val recovery = DeferredCommitted(target, slotGeneration, messageId)
+                        deferredCommitted[messageId] = recovery
+                        recoverCommittedCreation(recovery)
                     }
                     override suspend fun canRestoreDraft(): Boolean {
                         if (!isSameSlot()) return false

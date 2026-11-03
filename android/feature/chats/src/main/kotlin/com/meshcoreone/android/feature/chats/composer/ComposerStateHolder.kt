@@ -283,7 +283,7 @@ class ComposerStateHolder(
         }
         mutableState.update { current ->
             withMentions(current.copy(
-                draft = drafts.get(target.conversationId).orEmpty(),
+                draft = current.draft.ifEmpty { drafts.get(target.conversationId).orEmpty() },
                 sendPhase = ComposerSendPhase.Failed(classify(failure), savedId != null),
             ))
         }

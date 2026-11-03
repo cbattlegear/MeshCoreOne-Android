@@ -504,11 +504,16 @@ class ContactWriteRecoveryTests {
             assertEquals("Radio B", store.fetchContact(radioB, contactsKey(1))?.name)
             assertTrue(otherService.needsContactWriteReconciliation(radioA))
             assertFalse(otherService.needsContactWriteReconciliation(radioB))
+            val replacementRadio = radio.replacementView()
+            val replacementService = service(newSession(replacementRadio))
             assertFailsWith<ContactServiceError.SyncInterrupted> {
-                service(newSession(radio)).syncContacts(radioA, Instant.ofEpochSecond(50))
+                replacementService.syncContacts(radioA, Instant.ofEpochSecond(50))
             }
-            assertTrue(service(newSession(radio)).needsContactWriteReconciliation(radioA))
-            assertTrue(radio.contactRequests.isEmpty(), "A full snapshot is not proof that the old write drained")
+            assertTrue(replacementService.needsContactWriteReconciliation(radioA))
+            assertTrue(
+                replacementRadio.contactRequests.isEmpty(),
+                "A full snapshot is not proof that the old write drained",
+            )
             assertNull(store.fetchContact(radioA, contactsKey(1)))
             assertEquals("Radio B", store.fetchContact(radioB, contactsKey(1))?.name)
         }

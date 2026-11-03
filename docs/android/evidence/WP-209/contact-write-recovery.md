@@ -148,6 +148,14 @@ passing SwiftData restore/export oracle is not an iOS-device run.
   session had been torn down, without physical-drain proof. The producer
   correctly rejected that sync; the test now asserts the marker remains set,
   no snapshot is requested, and neither radio's local contact is misattributed.
+- Candidate `26cda3e6a441dc787f5fe0465b34ccbb6c98beb6`, run
+  [41605428589, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41605428589),
+  passed the scope classifier, Swift codec oracle and controller/policy jobs.
+  The Android build discovered 2,821 service tests but failed the same
+  replacement test because it attempted to reuse the old transport object;
+  `SessionTransportOwnership` correctly rejected that second owner before the
+  recovery assertion. The test now uses a distinct replacement transport view
+  over the same simulated radio state, without treating teardown as drain proof.
 - Candidate `8841480ad2603c1d5c8184934c92af8761707d7c`, run
   [41592559682, attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41592559682),
   completed successfully. It predates the serialized-admission and sync-fence

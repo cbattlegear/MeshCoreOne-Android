@@ -31,6 +31,7 @@ class ChannelQueryAccountingTest {
             val pending = h.pending(message, 2)
             val queryFailure = ChannelServiceError.SessionError(MeshCoreException.Timeout())
             val accounting = mutableListOf<ChannelQueryAccountingEvent>()
+            var parked = false
             val timerEntered = CompletableDeferred<Unit>()
             val timerCancelled = CompletableDeferred<Unit>()
             val releaseTimer = CompletableDeferred<Unit>()
@@ -38,6 +39,10 @@ class ChannelQueryAccountingTest {
             val releaseSubscription = CompletableDeferred<Unit>()
             val clock = object : SessionClock by h.clock {
                 override suspend fun sleepFor(duration: Duration) {
+                    if (!parked) {
+                        h.clock.sleepFor(duration)
+                        return
+                    }
                     timerEntered.complete(Unit)
                     try {
                         awaitCancellation()
@@ -72,7 +77,10 @@ class ChannelQueryAccountingTest {
                 h.token, h.store, h.service, MessagingChannelQuery { throw queryFailure },
                 OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, h.scope,
                 ChatSendQueueConfig(maxConsecutiveFetchChannelFailures = 2), clock,
-                MessagingIssueReporter { h.diagnostics += it }, onQueryAccounting = accounting::add,
+                MessagingIssueReporter { h.diagnostics += it }, onQueryAccounting = {
+                    parked = true
+                    accounting += it
+                },
             )
             try {
                 start(h, queue)

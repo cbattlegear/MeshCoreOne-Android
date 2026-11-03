@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.protocol.session.SessionCorrelationException
+import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.contacts.ChannelServiceClock
 import com.meshcoreone.android.core.services.contacts.ChannelServiceError
@@ -16,12 +17,109 @@ import kotlin.random.Random
 import kotlin.test.*
 import kotlin.time.Duration
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.test.*
 import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelQueryAccountingTest {
     @TestFactory fun recovery() = listOf(
+        native("selected park wake racing shutdown retains only its persisted query failure") {
+            val h = connection()
+            val message = h.message(MessageStatus.PENDING, 0u)
+            val pending = h.pending(message, 2)
+            val queryFailure = ChannelServiceError.SessionError(MeshCoreException.Timeout())
+            val accounting = mutableListOf<ChannelQueryAccountingEvent>()
+            var parked = false
+            val timerEntered = CompletableDeferred<Unit>()
+            val timerCancelled = CompletableDeferred<Unit>()
+            val releaseTimer = CompletableDeferred<Unit>()
+            val subscriptionCancelled = CompletableDeferred<Unit>()
+            val releaseSubscription = CompletableDeferred<Unit>()
+            val clock = object : SessionClock by h.clock {
+                override suspend fun sleepFor(duration: Duration) {
+                    if (!parked) {
+                        h.clock.sleepFor(duration)
+                        return
+                    }
+                    timerEntered.complete(Unit)
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        withContext(NonCancellable) {
+                            timerCancelled.complete(Unit)
+                            releaseTimer.await()
+                        }
+                    }
+                }
+            }
+            val signals = object : ConnectionSignals by h.signals {
+                override suspend fun subscribeTransitions(): ConnectionSubscription {
+                    val source = h.signals.subscribeTransitions()
+                    return object : ConnectionSubscription {
+                        override val initial = source.initial
+                        override val transitions = flow {
+                            try {
+                                emitAll(source.transitions)
+                            } finally {
+                                withContext(NonCancellable) {
+                                    subscriptionCancelled.complete(Unit)
+                                    releaseSubscription.await()
+                                }
+                            }
+                        }
+                        override fun close() = source.close()
+                    }
+                }
+            }
+            val queue = ChatSendQueueService(
+                h.token, h.store, h.service, MessagingChannelQuery { throw queryFailure },
+                OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, h.scope,
+                ChatSendQueueConfig(maxConsecutiveFetchChannelFailures = 2), clock,
+                MessagingIssueReporter { h.diagnostics += it }, onQueryAccounting = {
+                    parked = true
+                    accounting += it
+                },
+            )
+            try {
+                start(h, queue)
+                assertTrue(timerEntered.isCompleted, "The real sender must be parked on its transport deadline")
+                val receipt = accounting.single()
+                assertEquals(ChannelQueryAccountingOutcome.PARKED, receipt.outcome)
+                assertSame(queryFailure, receipt.queryFailure)
+                assertEquals(pending.id, receipt.pendingID)
+                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                queue.transportDidOpen()
+                runCurrent()
+                assertTrue(timerCancelled.isCompleted, "A successful transport wake must win before shutdown")
+
+                val stopping = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { queue.shutdown() }
+                runCurrent()
+                assertTrue(subscriptionCancelled.isCompleted, "Shutdown must seal ownership before the sender resumes")
+                assertFalse(stopping.isCompleted)
+                releaseTimer.complete(Unit)
+                runCurrent()
+                releaseSubscription.complete(Unit)
+                runCurrent()
+                val report = stopping.await()
+                val failures = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                assertEquals(1, report.issues.size, "Retain only the persisted park cause; diagnostics=$failures")
+                assertSame(queryFailure, report.issues.single().cause)
+                assertEquals(LifecycleStage.STOP_SERVICES, report.issues.single().stage)
+                assertTrue(failures.none { it.operation == "terminal.${message.id}" ||
+                    it.operation == "channelQueueCallback" }, "Retirement must not terminalize a parked envelope: $failures")
+                assertEquals(pending.id, h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)).single().id)
+                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                assertEquals(listOf(receipt), accounting)
+                assertSame(report, queue.shutdown(), "Repeated shutdown must return the same retained report")
+            } finally {
+                releaseTimer.complete(Unit)
+                releaseSubscription.complete(Unit)
+                queue.shutdown()
+                h.close()
+            }
+        },
         native("early recovery waits through real ChannelService retry and terminal deletion across generations") {
             val progress = ChatSendQueueProgress()
             val store = RecordingStore()

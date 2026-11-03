@@ -142,8 +142,13 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
         val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
         val h = ContainerHarness(this, store, mainScope = mainScope)
         val lookupRelease = CompletableDeferred<Unit>()
+        val replacementHandshake = CompletableDeferred<Unit>()
         val reads = AtomicInteger()
-        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved peer") }
+        var replacing = false
+        h.links.configureRadio = {
+            if (replacing) it.connectGate = replacementHandshake
+            it.knownContacts += contactFrame(key(20), "Saved peer")
+        }
         try {
             val started = h.container.start()
             h.eventually("external fixture starts") { uiScheduler.runCurrent(); started.isCompleted }
@@ -197,7 +202,14 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
             h.eventually("real external found and absent lookups are held") { reads.get() == 2 }
             val boundA = n.currentState.boundSessionToken
             assertEquals(first.token, boundA)
+            replacing = true
             val rebuilding = async { h.manager.rebuildSession(assertNotNull(h.appState.connectedDevice).id) }
+            h.eventually("retiring callbacks drain before the held replacement handshake") {
+                uiScheduler.runCurrent()
+                h.links.radios.size == 2 && h.sessions.current == null
+            }
+            val retiredNavigation = n.currentState
+            replacementHandshake.complete(Unit)
             h.eventually("same-radio runtime B precedes its queued navigation binding") {
                 val next = h.sessions.current
                 next != null && next !== first && h.manager.snapshot.value.token == next.token
@@ -205,7 +217,9 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
             val second = assertNotNull(h.sessions.current)
             assertEquals(radio, second.token.radioId)
             assertNotEquals(first.token, second.token)
-            assertEquals(boundA, n.currentState.boundSessionToken)
+            assertNotEquals(second.token, n.currentState.boundSessionToken)
+            assertEquals(retiredNavigation.boundSessionToken, n.currentState.boundSessionToken)
+            assertEquals(retiredNavigation.generation, n.currentState.generation)
             val before = n.currentState
 
             lookupRelease.complete(Unit)
@@ -235,7 +249,13 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
             rebuilding.await()
         } finally {
             lookupRelease.complete(Unit)
-            h.container.close()
+            replacementHandshake.complete(Unit)
+            val closing = async { h.container.close() }
+            h.eventually("external fixture cleanup drains its controlled UI queue") {
+                uiScheduler.runCurrent()
+                closing.isCompleted
+            }
+            closing.await()
         }
     }
 

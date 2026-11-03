@@ -51,6 +51,18 @@ publication condition also applies if these consumer hunks are combined into
 #495; source transfer cannot waive it. Existing PRs/runs are preserved, and no
 push, independent consumer landing or combined acceptance occurred.
 
+WP-302's later frozen source exploration
+`28883bb7995e1179a8b13878309863b7861cb2af` was inspected through the shared Git
+object database. Only its attributable external replacement-fixture correction
+is adopted on this lineage: hold the physical successor handshake, drain
+retirement, snapshot actual retired navigation identity/generation, then assert
+the runtime successor is still unbound without assuming A remains bound.
+The exact no-mutation/no-extra-read assertions remain. Test cleanup progresses
+its separate UI scheduler while closing the real container. No new method or
+runtime result is claimed, and no producer/environment/lifecycle implementation
+is imported from that source exploration. Existing admission covers this test;
+no claim mutation, product execution or publication occurred.
+
 ## Terminal-ID producer seam: source-only follow-up
 
 The existing coordinator assigned the exact-ID restoration support seam

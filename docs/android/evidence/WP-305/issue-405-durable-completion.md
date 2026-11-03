@@ -9,6 +9,9 @@
   repair is `3a552f5fbfc41b29a9e18b93bc11b65d4f262c5e`; its exact PR successor
   `d073659d35df83166af2c7a5fa7a814897b55a0c` passed hosted Android CI. Intermediate findings and
   corrections are recorded below.
+- **Local-only completion-handoff follow-up:** based on published
+  `c277a10ac1fe657e4b48cfa32fdad4ae26298518`; prepared for independent source review before push
+  or hosted CI. The added mounted control has not been executed.
 - **Worktree branch:** `cbattlegear-wp-305-onboarding-recovery`
 - **PR:** [#532](https://github.com/cbattlegear/MeshCoreOne-Android/pull/532) (open draft)
 - **Manifest / policy:** `e81605857f5aa7b893dcd63224fb27a45d7b0f3a` / `b12794157978d6d90ab7508d4e2852fdc2d5e4a4`
@@ -75,6 +78,45 @@
   eleventh navigation-default source family remains in WP-302-owned `OriginalNavigationCases.kt`.
   New cases are additional regression coverage, not original-case credit. No pinned source or source
   case inventory was changed.
+
+## Local-only completion-before-effect investigation
+
+At published `c277a10ac1fe657e4b48cfa32fdad4ae26298518`, the no-device operation can finish its
+actual preference write, publish `hasCompletedOnboarding`, and clear `completing` before the mounted
+completion effect runs. The synchronous shell guard then permits Up. An immediate setup callback can
+push another entry while `Rerun` still retains the completed flow A; the new host would observe A's
+completed flag. This is a source-derived ordering, not an executed reproduction or a device finding.
+The prior rapid-replacement test explicitly retires A and does not discriminate this interval.
+
+The local candidate treats a completed flow as non-leaveable until its existing host completion
+callback navigates and retires it. The shell observes the existing completed StateFlow with
+composition-lifecycle collection so the enabled presentation has the same fence. The programmatic
+completion path remains ungated; no per-flow process job or entry-provider/identity seam is added.
+Failures still have `hasCompletedOnboarding == false` and retain normal retry/navigation behavior.
+
+The new mounted control pauses the Compose clock, calls the real `confirmNoDevice` operation, and
+checks that completion is published, the write is no longer busy, and A is still owned. In that same
+UI-thread turn it invokes the previously mounted Up/setup/tab callbacks and Activity Back, without
+calling `onFlowCompletionHandled` or inserting a frame. The candidate must retain A's original route,
+entry ID and step until the actual effect runs. After resuming frames, it must navigate to Chats,
+retire A, and allow a fresh entry/coordinator B to advance and leave normally. Against c277's source,
+the callback sequence can pop/reopen and switch tabs before those assertions. That negative control
+has not been executed; no failing or passing Kotlin result is claimed for this candidate.
+
+Source-only checks for the local follow-up:
+
+- Trusted `reserve.py admit` rules passed on default-base
+  `99479711bfdb7c621765f09d671068ca8b8318ce`: shell `modify-related-consumer` ->
+  `reviewed-support-consumer`, coordinator `modify` -> `wp-owned`, and mounted test
+  `add-or-update-related-test` -> `reviewed-support-test`. No foreign reservation was borrowed,
+  evolved or cleared.
+- Documented native Windows `ci.py preflight --local --state $env:ANDROID_CI_STATE --output <fresh absolute directory>`
+  passed using Python 3.12.4 and existing same-host state; it did not run Gradle.
+- `python tools\android-port\controller\validate.py` passed (64 WPs / 1,866 tracked reference files).
+- `python tools\android-port\test_inventory.py --check` passed (468 pinned paths / 5,133 declarations);
+  this checks frozen-source inventory, not discovery or execution of the new Android test.
+- `git diff --check` passed. No local Gradle, hosted CI, device verification or independent review of
+  the local successor has occurred. The shared Gradle execution hold remains unchanged.
 
 ## Verification
 

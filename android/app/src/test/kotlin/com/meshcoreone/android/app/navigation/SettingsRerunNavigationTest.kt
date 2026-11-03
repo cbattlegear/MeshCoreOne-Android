@@ -5,6 +5,7 @@ import android.content.Context
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
@@ -58,6 +59,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -482,6 +484,82 @@ class SettingsRerunNavigationTest {
             assertEquals(0, completionCallbacks)
             assertTrue(dependencies.ownsFlowCoordinator(checkNotNull(flowB)))
         } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `completed rerun blocks pre-frame exit until host retires it then setup opens fresh`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val dependencies = appOnboarding(
+                processScope,
+                object : OnboardingPresetPort {
+                    override val canApply = MutableStateFlow(true)
+                    override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+                },
+            ).forRerun()
+            val flowA = checkNotNull(dependencies.retainedFlowCoordinator())
+            flowA.onboarding.replacePath(listOf(OnboardingStep.PAIR))
+            val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
+            mountShell(navigation, dependencies)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            compose.waitForIdle()
+            val firstEntryId = navigation.state.value.activeStack.last().id
+            val up = checkNotNull(
+                compose.onNodeWithTag("navigation-back").assertIsEnabled()
+                    .fetchSemanticsNode().config[SemanticsActions.OnClick].action,
+            )
+            val openSetup = checkNotNull(
+                compose.onNodeWithTag("open-radio-setup").assertIsEnabled()
+                    .fetchSemanticsNode().config[SemanticsActions.OnClick].action,
+            )
+            val selectMap = checkNotNull(
+                compose.onNodeWithTag("tab:MAP").assertIsEnabled()
+                    .fetchSemanticsNode().config[SemanticsActions.OnClick].action,
+            )
+
+            compose.mainClock.autoAdvance = false
+            compose.runOnUiThread {
+                flowA.confirmNoDevice()
+                assertTrue(flowA.onboarding.hasCompletedOnboarding)
+                assertFalse(flowA.isCompletingWithoutDevice.value)
+                assertTrue(dependencies.ownsFlowCoordinator(flowA))
+                assertSame(flowA, dependencies.retainedFlowCoordinator())
+
+                // Invoke the mounted callbacks without a frame/effect or explicit completion handling.
+                assertTrue(up())
+                assertTrue(openSetup())
+                assertTrue(selectMap())
+                host.get().onBackPressedDispatcher.onBackPressed()
+                assertRerunStillMounted(navigation)
+                assertEquals(firstEntryId, navigation.state.value.activeStack.last().id)
+                assertEquals(OnboardingStep.PAIR, flowA.currentStep)
+                assertSame(flowA, dependencies.retainedFlowCoordinator())
+                assertFalse(flowA.canLeaveCurrentFlow())
+            }
+            compose.mainClock.autoAdvance = true
+            compose.waitUntil { navigation.state.value.selectedTab == AppTab.CHATS }
+            assertFalse(dependencies.ownsFlowCoordinator(flowA))
+
+            compose.onNodeWithTag("tab:SETTINGS").assertIsEnabled().performClick()
+            compose.onNodeWithTag("open-radio-setup").assertIsEnabled().performClick()
+            val secondEntryId = navigation.state.value.activeStack.last().id
+            val flowB = checkNotNull(dependencies.retainedFlowCoordinator())
+            assertFalse(firstEntryId == secondEntryId)
+            assertNotSame(flowA, flowB)
+            assertFalse(flowB.onboarding.hasCompletedOnboarding)
+            assertTrue(flowB.canLeaveCurrentFlow())
+            compose.onNodeWithText(
+                ApplicationProvider.getApplicationContext<Context>().getString(O.welcomeGetStarted),
+            ).assertIsDisplayed().performClick()
+            assertRerunStillMounted(navigation)
+            assertEquals(secondEntryId, navigation.state.value.activeStack.last().id)
+            assertEquals(OnboardingStep.PERMISSIONS, flowB.currentStep)
+            compose.onNodeWithTag("navigation-back").assertIsEnabled().performClick()
+            assertEquals(AppTab.SETTINGS, navigation.state.value.selectedTab)
+            assertEquals(NavigationDestination.Root(AppTab.SETTINGS), navigation.state.value.activeStack.last().destination)
+        } finally {
+            compose.mainClock.autoAdvance = true
             processScope.cancel()
         }
     }

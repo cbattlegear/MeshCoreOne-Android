@@ -50,7 +50,9 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
 
     fun getStarted() = onboarding.append(OnboardingStep.PERMISSIONS)
     fun continueFromPermissions() = onboarding.append(OnboardingStep.PAIR)
-    fun canLeaveCurrentFlow(): Boolean = !completing && !preset.state.value.isApplying
+    // Completion remains owned by the mounted host until it delivers navigation and retires this flow.
+    fun canLeaveCurrentFlow(): Boolean =
+        !completing && !preset.state.value.isApplying && !onboarding.hasCompletedOnboarding
     fun back(): Boolean = canLeaveCurrentFlow() && onboarding.pop()
 
     /** Just-in-time Bluetooth permission: ask on first "Add device", then resume pairing from the result. */

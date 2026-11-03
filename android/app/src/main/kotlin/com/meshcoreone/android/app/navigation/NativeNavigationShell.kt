@@ -155,8 +155,10 @@ fun NativeNavigationShell(
     val presetState = onboardingFlow?.preset?.state?.collectAsStateWithLifecycle()?.value
     val completingWithoutDevice = onboardingFlow?.isCompletingWithoutDevice
         ?.collectAsStateWithLifecycle()?.value ?: false
+    val completed = onboardingFlow?.onboarding?.hasCompletedOnboardingFlow
+        ?.collectAsStateWithLifecycle()?.value ?: false
     val canNavigateFromCurrentRoute = !onboardingRouteActive ||
-        (!completingWithoutDevice && presetState?.isApplying != true &&
+        (!completed && !completingWithoutDevice && presetState?.isApplying != true &&
             onboardingFlow?.canLeaveCurrentFlow() != false)
     val canNavigateFromCurrentRouteNow by rememberUpdatedState {
         val activeRouteIsOnboarding = coordinator.state.value.activeStack.lastOrNull()?.destination ==

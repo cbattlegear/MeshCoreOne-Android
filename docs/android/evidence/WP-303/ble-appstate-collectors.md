@@ -10,10 +10,12 @@ controls to WP-303, not WP-205 completion or a new receipt for the historical
 ## Binding and custody
 
 - Trusted main for the reviewed source: `99479711bfdb7c621765f09d671068ca8b8318ce`.
-- Reconciled current main: `cd8a315ebe08e2b38d7817dc159a95314d1d6c67`.
+- Reconciled current main: `024dfd11e95a59f33ef4e7abe1865e36673e68f3`.
 - Current-main reconciliation merge: `4ceb50dfd0048f3fe0a8208d71d0e8ab62771d31`,
   with `cd8a315e` as its second parent. It preserves the exact reviewed test
-  blob; the final evidence refresh is a descendant of this merge.
+  blob. Later controller-only main commit `024dfd11` was merged as
+  `55778f1dc06b9e2e32d7b0211c7a87faf15c0e6b`; the final evidence refresh is
+  a descendant of that merge.
 - Retained owner parent: `ba7a02e5927b2cad22f9c92cbe808dbccf26a8ce`.
 - Actual producer: session `b33644ad-3a9a-4a37-af40-9a50b34ced2a`, managed
   branch `cbattlegear-ble-integration`.
@@ -22,6 +24,8 @@ controls to WP-303, not WP-205 completion or a new receipt for the historical
 - Read-only specification: `db14559b39d32322b06477c6ae676112f583db50`.
 - Manifest SHA-256:
   `11120a20d04408b3d21fac09180412df0490cabf1dafb8a3c98fe83e0fad31e4`.
+- Trusted policy revision on current main:
+  `f6f9e0850550b7fea570d43701fb89828e121820c3ef2c4fb36d682cf7d17def`.
 
 The reviewed source commit `944f87d51da7e8cb1fdc229688910191ecf22337`
 was directly based on `99479711`. Its test blob
@@ -155,7 +159,7 @@ Observed with pinned native Windows Python `3.12.4`:
 - `python tools\android-port\portmap.py`: passed, exit 0.
 - `git diff --check`: passed.
 - Current-main reconciliation check: passed; the candidate diff from
-  `cd8a315e` contains only the BLE collector test and this evidence file, and
+  `024dfd11` contains only the BLE collector test and this evidence file, and
   the reviewed test blob remains `968979214fa3fb203b0c3761237f06796462a4f2`.
 
 `python tools\android-port\controller\execution_recovery.py status` still reports

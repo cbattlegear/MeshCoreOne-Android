@@ -133,7 +133,8 @@ class AppRemoteNodeCliCopyTest {
             container.performMouseInput {
                 moveTo(Offset(first.left + 1f, first.center.y) - origin)
                 press()
-                moveTo(Offset(last.right - 1f, last.center.y) - origin, durationMillis = 500)
+                advanceEventTime(500)
+                moveTo(Offset(last.right - 1f, last.center.y) - origin)
                 release()
             }
             compose.waitForIdle()

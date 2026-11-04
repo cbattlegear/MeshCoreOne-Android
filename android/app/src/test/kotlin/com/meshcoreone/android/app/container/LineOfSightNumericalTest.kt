@@ -107,7 +107,7 @@ class LineOfSightNumericalTest {
     @OriginalCase("RelayAnalysisTests::analyzeWithRepeater produces relay result()")
     fun originalRelayWithRealAnalyzer() = runTest {
         val fixture = fixture()
-        fixture.loadProfileThroughAnalysis(flatProfile101())
+        loadProfileThroughAnalysis(fixture, flatProfile101())
         fixture.holder.setRepeaterPoint(RepeaterPoint(testRepeaterCoordinate, additionalHeight = 10.0, pathFraction = 0.5))
         fixture.holder.analyzeWithRepeater()
 
@@ -139,7 +139,7 @@ class LineOfSightNumericalTest {
     @OriginalCase("RelayAnalysisTests::analyzeWithRepeater updates when repeater position changes()")
     fun originalMovedRelayWithRealAnalyzer() = runTest {
         val fixture = fixture()
-        fixture.loadProfileThroughAnalysis(flatProfile101())
+        loadProfileThroughAnalysis(fixture, flatProfile101())
         fixture.holder.setRepeaterPoint(RepeaterPoint(testRepeaterCoordinate, additionalHeight = 10.0, pathFraction = 0.5))
         fixture.holder.analyzeWithRepeater()
         val initialARDistance = fixture.relay().segmentAR.distanceMeters
@@ -254,15 +254,15 @@ class LineOfSightNumericalTest {
         return fixture
     }
 
-    private suspend fun Fixture.loadProfileThroughAnalysis(profile: List<ElevationSample>) {
-        elevation.profileToReturn = profile
-        holder.analyze()
+    private suspend fun TestScope.loadProfileThroughAnalysis(fixture: Fixture, profile: List<ElevationSample>) {
+        fixture.elevation.profileToReturn = profile
+        fixture.holder.analyze()
         advanceUntilIdle()
-        assertEquals(profile.size, holder.state.value.elevationProfile.size)
-        assertEquals(profile.map { it.distanceFromAMeters }, holder.state.value.elevationProfile.map { it.distanceFromAMeters })
-        assertEquals(profile.map { it.elevation }, holder.state.value.elevationProfile.map { it.elevation })
-        assertTrue(holder.state.value.analysisStatus is AnalysisStatus.Result)
-        analyzer.observations.clear()
+        assertEquals(profile.size, fixture.holder.state.value.elevationProfile.size)
+        assertEquals(profile.map { it.distanceFromAMeters }, fixture.holder.state.value.elevationProfile.map { it.distanceFromAMeters })
+        assertEquals(profile.map { it.elevation }, fixture.holder.state.value.elevationProfile.map { it.elevation })
+        assertTrue(fixture.holder.state.value.analysisStatus is AnalysisStatus.Result)
+        fixture.analyzer.observations.clear()
     }
 
     private fun assertDirect(fixture: Fixture) {

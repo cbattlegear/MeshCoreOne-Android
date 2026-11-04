@@ -99,10 +99,15 @@ interface ContactSessionOps {
 
 /** Android-only cancellation fence for a contact write, using the existing serialized-write accounting. */
 class ContactWriteDispatch(
-    private val beforeDispatchAction: (ContactWriteDispatch) -> Unit = {},
-    private val onExchangeFinishedAction: (ContactWriteDispatch) -> Unit = {},
+    beforeDispatchAction: (ContactWriteDispatch) -> Unit = {},
+    onExchangeFinishedAction: (ContactWriteDispatch) -> Unit = {},
 ) {
-    internal val exchangeDispatch = ChannelWriteDispatch { onExchangeFinishedAction(this) }
+    private val beforeDispatchCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(beforeDispatchAction)
+    private val onExchangeFinishedCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(onExchangeFinishedAction)
+    internal val exchangeDispatch = ChannelWriteDispatch {
+        beforeDispatchCallback.set(null)
+        onExchangeFinishedCallback.getAndSet(null)?.invoke(this)
+    }
 
     private val terminalOutcome = java.util.concurrent.atomic.AtomicReference<ContactWriteDispatchOutcome?>(null)
     private val failure = java.util.concurrent.atomic.AtomicReference<Exception?>(null)
@@ -133,7 +138,7 @@ class ContactWriteDispatch(
 
     internal fun beforeDispatch() {
         try {
-            beforeDispatchAction(this)
+            beforeDispatchCallback.get()?.invoke(this)
         } catch (failure: Exception) {
             markDefinitelyUnsent(failure)
             throw failure

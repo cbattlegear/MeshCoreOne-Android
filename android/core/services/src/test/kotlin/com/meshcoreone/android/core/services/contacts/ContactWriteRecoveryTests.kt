@@ -411,6 +411,33 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
+    fun twoQueuedAddsRetainSerializerOrderAfterTheActiveExchangeSucceeds() = runTest {
+        withFixture {
+            val producer = service()
+            val active = async { session.addContact(frame(1, "Raw").toMeshContact()) }
+            runCurrent()
+            val first = async { producer.addOrUpdateContact(radioA, frame(2, "First queued")) }
+            val second = async { producer.addOrUpdateContact(radioA, frame(3, "Second queued")) }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            active.await()
+            assertEquals(2, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            first.await()
+            assertEquals(3, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            second.await()
+            assertEquals("First queued", store.fetchContact(radioA, contactsKey(2))?.name)
+            assertEquals("Second queued", store.fetchContact(radioA, contactsKey(3))?.name)
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+        }
+    }
+
+    @Test
     fun cancellationQueuedBehindAnActualExchangeIsDefinitelyUnsent() = runTest {
         withFixture {
             val blocking = async { session.addContact(frame(1, "Blocking").toMeshContact()) }
@@ -1983,7 +2010,7 @@ class ContactWriteRecoveryTests {
                 val producer = service(flags = flags, cleanup = cleanup, coordinator = coordinator)
                 val subscription = producer.events()
                 val events = async { subscription.events.toList() }
-                val transportFailure = IOException("Removal outcome unknown")
+                val transportFailure = MarkerRecordingFailure("Removal outcome unknown")
                 radio.removeFailure = transportFailure
                 assertSame(transportFailure, assertFailsWith<IOException> {
                     producer.removeContact(radioA, row.publicKey)

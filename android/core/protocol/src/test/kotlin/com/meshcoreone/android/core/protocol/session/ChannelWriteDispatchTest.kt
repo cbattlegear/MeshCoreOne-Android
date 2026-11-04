@@ -32,6 +32,25 @@ import org.junit.jupiter.api.TestFactory
 class ChannelWriteDispatchTest {
     @TestFactory
     fun realSessionCases() = listOf(
+        nativeCase("finished contact dispatch detaches both connection callbacks while retaining provenance") {
+            var admissions = 0
+            var completions = 0
+            val dispatch = ContactWriteDispatch(
+                beforeDispatchAction = { admissions++ },
+                onExchangeFinishedAction = { completions++ },
+            )
+            dispatch.beforeDispatch()
+            val failure = IllegalStateException("Still uncertain")
+            dispatch.markUncertain(failure)
+            dispatch.exchangeDispatch.cancelled(ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN)
+            dispatch.exchangeDispatch.exchangeFinished()
+            dispatch.beforeDispatch()
+            dispatch.exchangeDispatch.exchangeFinished()
+            assertEquals(1, admissions)
+            assertEquals(1, completions)
+            assertEquals(ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN, dispatch.outcome)
+            assertSame(failure, dispatch.terminalFailure)
+        },
         nativeCase("contact uncertainty yields only to definitive serializer no-send proof") {
             for (sent in listOf(false, true)) {
                 var completionOutcome: ContactWriteDispatchOutcome? = null
@@ -277,7 +296,7 @@ class ChannelWriteDispatchTest {
             val write = checkedRequest { f.session.setChannel(0u, "valid", filled(1, 16), dispatch) }; runCurrent()
             f.transport.error(42); runCurrent()
             assertEquals(42u.toUByte(), assertFailsWith<MeshCoreException.DeviceError> { write.await() }.code)
-            assertEquals(ChannelWriteCancellationDisposition.UNKNOWN, dispatch.cancellationDisposition)
+            assertEquals(ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN, dispatch.cancellationDisposition)
             f.session.stop()
         },
         nativeCase("an alternate implementation without dispatch accounting cannot claim definitely unsent") {

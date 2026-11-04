@@ -2,9 +2,14 @@
 package com.meshcoreone.android.core.data.repository
 
 import androidx.room.Room
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.*
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Proxy
 import java.util.UUID
 import java.util.concurrent.Executor
 import java.util.concurrent.CountDownLatch
@@ -30,6 +35,43 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 class ChannelSubmissionPersistenceTest : RepositoryTest() {
+    private fun observingBeginFactory(onBeginAttempt: () -> Unit): SupportSQLiteOpenHelper.Factory {
+        val factory = FrameworkSQLiteOpenHelperFactory()
+        return SupportSQLiteOpenHelper.Factory { configuration ->
+            val helper = factory.create(configuration)
+            Proxy.newProxyInstance(
+                SupportSQLiteOpenHelper::class.java.classLoader,
+                arrayOf(SupportSQLiteOpenHelper::class.java),
+            ) { _, method, args ->
+                val value = invokeDelegate(method, helper, args)
+                if (method.name == "getWritableDatabase" || method.name == "getReadableDatabase") {
+                    observeBegin(value as SupportSQLiteDatabase, onBeginAttempt)
+                } else value
+            } as SupportSQLiteOpenHelper
+        }
+    }
+
+    private fun observeBegin(
+        database: SupportSQLiteDatabase,
+        onBeginAttempt: () -> Unit,
+    ): SupportSQLiteDatabase = Proxy.newProxyInstance(
+        SupportSQLiteDatabase::class.java.classLoader,
+        arrayOf(SupportSQLiteDatabase::class.java),
+    ) { _, method, args ->
+        if (method.name.startsWith("beginTransaction")) onBeginAttempt()
+        invokeDelegate(method, database, args)
+    } as SupportSQLiteDatabase
+
+    private fun invokeDelegate(
+        method: java.lang.reflect.Method,
+        delegate: Any,
+        args: Array<out Any?>?,
+    ): Any? = try {
+        method.invoke(delegate, *(args ?: emptyArray()))
+    } catch (failure: InvocationTargetException) {
+        throw failure.targetException
+    }
+
     private fun row(radio: RadioId = RADIO_A) =
         message(radio = radio, contactID = null, channelIndex = 5u, text = "retained original\n", status = MessageStatus.PENDING)
             .copy(channelOccupantID = UUID.randomUUID())
@@ -315,11 +357,9 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
             }, immediate).build()
         val secondDatabase = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
             .setQueryExecutor(secondQueryExecutor)
-            .setTransactionExecutor(Executor { command ->
-                secondTransactionExecutor.execute {
-                    if (armed.get()) secondBegin.countDown()
-                    command.run()
-                }
+            .setTransactionExecutor(secondTransactionExecutor)
+            .openHelperFactory(observingBeginFactory {
+                if (armed.get()) secondBegin.countDown()
             }).build()
         val firstStore = RoomPersistenceStore(firstDatabase, lifetime, clock)
         val secondStore = RoomPersistenceStore(secondDatabase, lifetime, clock)
@@ -349,7 +389,7 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
                 }
             }
             val reachedBegin = withContext(Dispatchers.IO) { secondBegin.await(10, TimeUnit.SECONDS) }
-            assertTrue(reachedBegin, "Second Room handle must attempt BEGIN while the first writer is held")
+            assertTrue(reachedBegin, "Second Room handle must reach beginTransaction while the first writer is held")
             assertFalse(first.isCompleted)
             assertFalse(second.isCompleted, "Contender must not finish while the first write transaction is open")
             releaseFirst.countDown()

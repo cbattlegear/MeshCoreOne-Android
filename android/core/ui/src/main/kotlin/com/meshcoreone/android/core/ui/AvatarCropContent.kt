@@ -162,7 +162,8 @@ fun AvatarCropView(
                         Slider(geometry.scale.toFloat(), onValueChange = {
                             onGeometryChange(geometry.zoomBy(it - geometry.scale))
                         }, valueRange = 1f..4f, steps = 11,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("avatar-crop-zoom")
+                            modifier = Modifier.fillMaxWidth().sharedTouchTarget()
+                                .padding(horizontal = 16.dp).testTag("avatar-crop-zoom")
                                 .semantics { contentDescription = preview })
                         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                             TextButton(onClick = { onGeometryChange(geometry.panBy(CropOffset(0.0, -geometry.cropSize / 8))) },

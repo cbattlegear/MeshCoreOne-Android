@@ -2,6 +2,7 @@
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.content.ComponentName
+import android.content.ActivityNotFoundException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -80,6 +81,7 @@ class NotificationOpenActivityTest {
     @After
     fun tearDown() {
         ReplacementDuringLaunchShadow.afterLaunch = null
+        ReplacementDuringLaunchShadow.launchFailure = null
         NotificationActionDispatcher.resetForTesting()
     }
 
@@ -355,7 +357,8 @@ class NotificationOpenActivityTest {
                 assertEquals(launcher, shadowOf(controller.get()).nextStartedActivity.component)
                 assertTrue(NotificationActionDispatcher.drainOnce())
                 assertEquals(replacementPayload, received.last().payload)
-                assertTrue(manager.activeNotifications.isEmpty())
+                assertEquals(1, manager.activeNotifications.size)
+                delivery.removeDelivered(SnapshotList.of(original.id))
             } finally {
                 controller.destroy()
             }
@@ -460,10 +463,10 @@ class NotificationOpenActivityTest {
         delivery.post(original.copy(payload = NotificationPayload.DirectMessage(contact, UUID(0, 102))))
         val replacementPostId = manager.activeNotifications.single().notification.extras
             .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)
-        AndroidMessagingNotificationDelivery.retireContentNotification(
-            context, original.id.value,
-            requireNotNull(originalLaunch.getStringExtra(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)),
-        )
+        originalNotification.contentIntent.send()
+        val retainedLaunch = shadowOf(context).nextStartedActivity
+        val retainedController = Robolectric.buildActivity(NotificationOpenActivity::class.java, retainedLaunch).create()
+        retainedController.destroy()
         assertEquals(
             replacementPostId,
             manager.activeNotifications.single().notification.extras
@@ -565,24 +568,118 @@ class NotificationOpenActivityTest {
         assertTrue(NotificationActionDispatcher.drainOnce())
         assertEquals(queued, received)
         tap()
-        assertEquals(0, manager.activeNotifications.count { it.tag == tag })
+        assertEquals(1, manager.activeNotifications.count { it.tag == tag })
         assertTrue(NotificationActionDispatcher.drainOnce())
         assertEquals(queued + NotificationResponse(payload, null, null), received)
     }
 
     @Test
+    fun processStateLossModelRetainsPostedTokenForFreshDispatcherBeforeAndAfterMemoryRouting() = runTest {
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        var received = mutableListOf<NotificationResponse>()
+        var ready = false
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) {
+            if (!ready) false else true.also { received += it }
+        }
+        delivery.post(request("restart-retry").copy(threadIdentifier = null))
+        val posted = manager.activeNotifications.single().notification
+        val postId = posted.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)
+        assertEquals(0, posted.flags and Notification.FLAG_AUTO_CANCEL)
+
+        fun tapPostedToken() {
+            manager.activeNotifications.single().notification.contentIntent.send()
+            val launch = shadowOf(context).nextStartedActivity
+            assertEquals(payload, NotificationPayloadCodec.read(launch))
+            assertEquals(postId, launch.getStringExtra(AndroidMessagingNotificationDelivery.EXTRA_POST_ID))
+            val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, launch).create()
+            try {
+                assertTrue(controller.get().isFinishing)
+                assertEquals(launcher, shadowOf(controller.get()).nextStartedActivity.component)
+            } finally {
+                controller.destroy()
+            }
+        }
+
+        tapPostedToken()
+        assertFalse(NotificationActionDispatcher.drainOnce())
+        assertTrue(received.isEmpty())
+        for (loseAfterMemoryRouting in listOf(false, true)) {
+            if (loseAfterMemoryRouting) {
+                ready = true
+                assertTrue(NotificationActionDispatcher.drainOnce())
+                assertEquals(listOf(NotificationResponse(payload, null, null)), received)
+            }
+            // Model loss of app-process state, not termination of Android's notification service.
+            NotificationActionDispatcher.resetForTesting()
+            ReflectionHelpers.getStaticField<MutableMap<String, String>>(
+                AndroidMessagingNotificationDelivery::class.java, "submittedPosts",
+            ).clear()
+            received = mutableListOf()
+            ready = true
+            AndroidMessagingNotificationDelivery(context, backgroundScope) { received += it; true }
+            assertTrue(NotificationActionDispatcher.drainOnce())
+            assertTrue(received.isEmpty()) // No automatic durable replay is claimed.
+            assertEquals(postId, manager.activeNotifications.single().notification.extras
+                .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID))
+            tapPostedToken()
+            assertTrue(NotificationActionDispatcher.drainOnce())
+            assertEquals(listOf(NotificationResponse(payload, null, null)), received)
+            assertEquals(1, manager.activeNotifications.size)
+        }
+    }
+
+    @Test
+    @Config(shadows = [ReplacementDuringLaunchShadow::class])
+    fun launcherFailuresKeepPostedRetryTokenAndFinishWithoutClaimingDelivery() = runTest {
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { false }
+        val manager = context.getSystemService(NotificationManager::class.java)
+        delivery.post(request("launcher-failure").copy(threadIdentifier = null))
+        val posted = manager.activeNotifications.single().notification
+        val postId = posted.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID)
+        for (failure in listOf(ActivityNotFoundException(), SecurityException())) {
+            ReplacementDuringLaunchShadow.launchFailure = { throw failure }
+            posted.contentIntent.send()
+            val launch = shadowOf(context).nextStartedActivity
+            val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, launch).create()
+            try {
+                assertTrue(controller.get().isFinishing)
+                assertNull(shadowOf(controller.get()).nextStartedActivity)
+                assertFalse(NotificationActionDispatcher.drainOnce())
+                assertEquals(postId, manager.activeNotifications.single().notification.extras
+                    .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID))
+            } finally {
+                controller.destroy()
+            }
+        }
+    }
+
+    @Test
     fun malformedAndUnexpectedIntentsDoNotQueueOrLaunch() = runTest {
         val received = mutableListOf<NotificationResponse>()
-        AndroidMessagingNotificationDelivery(context, backgroundScope) { received += it; true }
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { received += it; true }
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        delivery.post(request("malformed-retention").copy(threadIdentifier = null))
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val posted = manager.activeNotifications.single().notification
+        posted.contentIntent.send()
+        val authentic = shadowOf(context).nextStartedActivity
         val intents = listOf(
             Intent().setAction("com.meshcoreone.android.notification.OPEN"),
             NotificationPayloadCodec.write(Intent().setAction(Intent.ACTION_VIEW), payload),
+            Intent(authentic).apply { removeExtra(AndroidMessagingNotificationDelivery.EXTRA_POST_ID) },
         )
         intents.forEach { intent ->
             val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, intent).create()
             try {
                 assertTrue(controller.get().isFinishing)
                 assertNull(shadowOf(controller.get()).nextStartedActivity)
+                assertEquals(
+                    posted.extras.getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+                    manager.activeNotifications.single().notification.extras
+                        .getString(AndroidMessagingNotificationDelivery.EXTRA_POST_ID),
+                )
             } finally {
                 controller.destroy()
             }
@@ -682,6 +779,7 @@ class NotificationOpenActivityTest {
 
         @Implementation
         fun startActivity(intent: Intent) {
+            launchFailure?.invoke()
             Shadow.directlyOn<Unit, Activity>(
                 activity,
                 Activity::class.java,
@@ -693,6 +791,7 @@ class NotificationOpenActivityTest {
 
         companion object {
             var afterLaunch: (() -> Unit)? = null
+            var launchFailure: (() -> Unit)? = null
         }
     }
 

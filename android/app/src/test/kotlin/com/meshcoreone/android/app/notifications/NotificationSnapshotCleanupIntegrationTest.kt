@@ -36,7 +36,6 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -136,7 +135,9 @@ class NotificationSnapshotCleanupIntegrationTest {
                 assertEquals(launcher, shadowOf(controller.get()).nextStartedActivity.component)
                 runCurrent()
                 assertEquals(NotificationResponse(replacementPayload, null, null), received.last())
-                assertTrue(manager.activeNotifications.isEmpty())
+                assertEquals(1, manager.activeNotifications.size)
+                assertEquals(replacementSnapshot.postIdentity, delivery.deliveredNotifications().single().postIdentity)
+                delivery.removeDelivered(SnapshotList.of(original.id))
             } finally {
                 controller.destroy()
             }

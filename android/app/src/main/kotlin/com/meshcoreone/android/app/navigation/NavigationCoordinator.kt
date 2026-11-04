@@ -4,6 +4,7 @@
 package com.meshcoreone.android.app.navigation
 
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -46,6 +47,22 @@ internal data class NavigationCleanupOwner(
     val generation: Long,
 )
 
+internal sealed interface MountedOnboardingProducer {
+    data object NoDevice : MountedOnboardingProducer
+    data class Preset(val token: SessionToken) : MountedOnboardingProducer
+}
+
+internal class MountedOnboardingCompletion internal constructor(
+    private val owner: Any,
+    internal val presented: NavigationStateStore.PublishedSnapshot,
+    internal val entryId: Long,
+    private val sessionCurrent: (MountedOnboardingProducer) -> Boolean,
+) {
+    internal fun belongsTo(owner: Any): Boolean = this.owner === owner
+    internal fun isCurrent(owner: Any, producer: MountedOnboardingProducer): Boolean =
+        belongsTo(owner) && sessionCurrent(producer)
+}
+
 class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private val mutableState = NavigationStateStore(initial)
     val state: StateFlow<NavigationState> = mutableState.state
@@ -55,10 +72,32 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private val notificationMutex = Mutex()
     private val drainMutex = Mutex()
     private val localCommitLock = Any()
+    private val onboardingIdentity = Any()
     private var commitBoundary: (() -> Unit) -> Unit = { action -> synchronized(localCommitLock, action) }
+    private var onboardingSessionCapture: (NavigationState) -> (MountedOnboardingProducer) -> Boolean = { { false } }
 
     internal fun installCommitBoundary(boundary: (() -> Unit) -> Unit) {
         commitBoundary = boundary
+    }
+
+    internal fun installOnboardingSessionCapture(
+        capture: (NavigationState) -> (MountedOnboardingProducer) -> Boolean,
+    ) {
+        onboardingSessionCapture = capture
+    }
+
+    internal fun captureMountedOnboarding(
+        presented: NavigationStateStore.PublishedSnapshot,
+        entryId: Long,
+    ): MountedOnboardingCompletion? {
+        if (!mutableState.owns(presented)) return null
+        val entry = presented.value.activeStack.last()
+        if (entry.id != entryId || entry.destination != NavigationDestination.Auxiliary(FeatureId.ONBOARDING)) {
+            return null
+        }
+        return MountedOnboardingCompletion(
+            onboardingIdentity, presented, entryId, onboardingSessionCapture(presented.value),
+        )
     }
 
     internal fun retireBinding(action: () -> Unit) = commitBoundary(action)
@@ -877,6 +916,61 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     fun back(): Boolean = back(publishedNavigation.value)
 
+    internal fun completeMountedOnboarding(
+        completion: MountedOnboardingCompletion?, producer: MountedOnboardingProducer,
+    ): Boolean {
+        if (completion == null || !completion.belongsTo(onboardingIdentity)) return false
+        val presented = completion.presented
+        val source = presented.value
+        val entry = source.activeStack.last()
+        if (entry.id != completion.entryId || entry.destination != NavigationDestination.Auxiliary(FeatureId.ONBOARDING)) {
+            return false
+        }
+        fun sameSession(state: NavigationState): Boolean {
+            val unchanged = state.generation == source.generation && state.radioId == source.radioId &&
+                state.boundSessionToken == source.boundSessionToken
+            val firstBinding = source.radioId == null && source.boundSessionToken == null &&
+                source.generation < Long.MAX_VALUE && state.generation == source.generation + 1 &&
+                state.radioId != null && state.boundSessionToken?.radioId == state.radioId
+            return unchanged || firstBinding
+        }
+
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
+            if (snapshot.revision < presented.revision || snapshot.activeEntryEpoch != presented.activeEntryEpoch ||
+                !sameSession(current) ||
+                current.selectedTab != source.selectedTab || current.activeStack.last() != entry
+            ) return false
+            val next = current.withRetainedStack(current.selectedTab, current.activeStack.dropLast(1))
+                .select(AppTab.CHATS)
+            when (commitIfCurrent(snapshot, next) {
+                sameSession(mutableState.value) && completion.isCurrent(onboardingIdentity, producer)
+            }) {
+                true -> return true
+                null -> return false
+                false -> Unit
+            }
+        }
+    }
+
+    internal fun reportMountedOnboardingFailure(completion: MountedOnboardingCompletion?): Boolean {
+        if (completion == null || !completion.belongsTo(onboardingIdentity)) return false
+        val source = completion.presented
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
+            if (snapshot.activeEntryEpoch != source.activeEntryEpoch ||
+                current.selectedTab != source.value.selectedTab ||
+                current.activeStack.last() != source.value.activeStack.last()
+            ) return false
+            if (current.failure != null) return true
+            if (mutableState.compareAndSet(snapshot, current.copy(failure = NavigationFailure.StaleGeneration))) {
+                return true
+            }
+        }
+    }
+
     internal fun back(presented: NavigationStateStore.PublishedSnapshot): Boolean {
         val source = presented.value
         if (!source.canGoBack) return false
@@ -892,33 +986,35 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             if (currentStack.take(presentedStack.size).map { it.id } != presentedStack.map { it.id }) return false
             // Leave the presented entry rather than an unseen descendant.
             val next = if (presentedStack.size == 1) current.select(AppTab.CHATS)
-                else {
-                    val stack = currentStack.take(presentedStack.size - 1).snapshot()
-                    val destination = stack.last().destination
-                    current.copy(
-                        selectedTab = tab,
-                        stacks = (current.stacks + (tab to stack)).snapshotMap(),
-                        tabBarVisible = stack.size == 1,
-                        chatsSelectedRoute = if (tab == AppTab.CHATS)
-                            (destination as? NavigationDestination.Chat)?.selection else current.chatsSelectedRoute,
-                        selectedContact = if (tab == AppTab.NODES)
-                            (destination as? NavigationDestination.ContactDetail)?.contact else current.selectedContact,
-                        nodesShowingDiscovery = if (tab == AppTab.NODES)
-                            destination == NavigationDestination.Discovery else current.nodesShowingDiscovery,
-                        selectedTool = if (tab == AppTab.TOOLS)
-                            (destination as? NavigationDestination.Tool)?.selection else current.selectedTool,
-                        selectedSetting = if (tab == AppTab.SETTINGS)
-                            (destination as? NavigationDestination.Setting)?.selection else current.selectedSetting,
-                        pendingChatContact = if (tab == AppTab.CHATS) null else current.pendingChatContact,
-                        pendingChannel = if (tab == AppTab.CHATS) null else current.pendingChannel,
-                        pendingRoomSession = if (tab == AppTab.CHATS) null else current.pendingRoomSession,
-                        pendingMessageScroll = if (tab == AppTab.CHATS) null else current.pendingMessageScroll,
-                        pendingContactDetail = if (tab == AppTab.NODES) null else current.pendingContactDetail,
-                        pendingDiscoveryNavigation = if (tab == AppTab.NODES) false else current.pendingDiscoveryNavigation,
-                    )
-                }
+                else current.withRetainedStack(tab, currentStack.take(presentedStack.size - 1))
             if (mutableState.compareAndSet(snapshot, next)) return true
         }
+    }
+
+    private fun NavigationState.withRetainedStack(tab: AppTab, entries: List<NavigationEntry>): NavigationState {
+        val stack = entries.snapshot()
+        val destination = stack.last().destination
+        return copy(
+            selectedTab = tab,
+            stacks = (stacks + (tab to stack)).snapshotMap(),
+            tabBarVisible = stack.size == 1,
+            chatsSelectedRoute = if (tab == AppTab.CHATS)
+                (destination as? NavigationDestination.Chat)?.selection else chatsSelectedRoute,
+            selectedContact = if (tab == AppTab.NODES)
+                (destination as? NavigationDestination.ContactDetail)?.contact else selectedContact,
+            nodesShowingDiscovery = if (tab == AppTab.NODES)
+                destination == NavigationDestination.Discovery else nodesShowingDiscovery,
+            selectedTool = if (tab == AppTab.TOOLS)
+                (destination as? NavigationDestination.Tool)?.selection else selectedTool,
+            selectedSetting = if (tab == AppTab.SETTINGS)
+                (destination as? NavigationDestination.Setting)?.selection else selectedSetting,
+            pendingChatContact = if (tab == AppTab.CHATS) null else pendingChatContact,
+            pendingChannel = if (tab == AppTab.CHATS) null else pendingChannel,
+            pendingRoomSession = if (tab == AppTab.CHATS) null else pendingRoomSession,
+            pendingMessageScroll = if (tab == AppTab.CHATS) null else pendingMessageScroll,
+            pendingContactDetail = if (tab == AppTab.NODES) null else pendingContactDetail,
+            pendingDiscoveryNavigation = if (tab == AppTab.NODES) false else pendingDiscoveryNavigation,
+        )
     }
 
     suspend fun handleNotification(

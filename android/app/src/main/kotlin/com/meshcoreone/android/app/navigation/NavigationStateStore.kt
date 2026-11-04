@@ -18,6 +18,7 @@ internal class NavigationStateStore(initial: NavigationState) {
         val revision: Long,
         val value: NavigationState,
         internal val pending: List<Publication>,
+        internal val activeEntryEpoch: Long = 0,
         internal val handoffs: ChatContactHandoffs = ChatContactHandoffs(),
     )
 
@@ -25,20 +26,23 @@ internal class NavigationStateStore(initial: NavigationState) {
     data class PublishedSnapshot internal constructor(
         val revision: Long,
         val value: NavigationState,
+        internal val owner: Any,
+        internal val activeEntryEpoch: Long,
     )
 
+    private val owner = Any()
     private val current = AtomicReference(Snapshot(0, initial, emptyList()))
     private val published = MutableStateFlow(current.get())
     val publishedSnapshots: StateFlow<PublishedSnapshot> = object : StateFlow<PublishedSnapshot> {
         override val value: PublishedSnapshot
-            get() = published.value.let { PublishedSnapshot(it.revision, it.value) }
+            get() = published.value.let { PublishedSnapshot(it.revision, it.value, owner, it.activeEntryEpoch) }
         override val replayCache: List<PublishedSnapshot> get() = listOf(value)
 
         @OptIn(InternalCoroutinesApi::class)
         override suspend fun collect(collector: FlowCollector<PublishedSnapshot>): Nothing =
             published.collect(object : FlowCollector<Snapshot> {
                 override suspend fun emit(value: Snapshot) {
-                    collector.emit(PublishedSnapshot(value.revision, value.value))
+                    collector.emit(PublishedSnapshot(value.revision, value.value, owner, value.activeEntryEpoch))
                 }
             })
     }
@@ -64,6 +68,7 @@ internal class NavigationStateStore(initial: NavigationState) {
     val value: NavigationState get() = current.get().value
 
     fun snapshot(): Snapshot = current.get()
+    fun owns(snapshot: PublishedSnapshot): Boolean = snapshot.owner === owner
     fun publishedHandoffs(): ChatContactHandoffs = published.value.handoffs
 
     fun compareAndSet(
@@ -78,6 +83,10 @@ internal class NavigationStateStore(initial: NavigationState) {
             value = next,
             // Later commits must not expose a guarded commit before its lifecycle boundary exits.
             pending = expected.pending.filterNot { it.released.get() } + listOfNotNull(deferred),
+            activeEntryEpoch = if (
+                expected.value.selectedTab == next.selectedTab &&
+                expected.value.activeStack.last().id == next.activeStack.last().id
+            ) expected.activeEntryEpoch else Math.incrementExact(expected.activeEntryEpoch),
             handoffs = handoffs,
         )
         if (!current.compareAndSet(expected, updated)) return false

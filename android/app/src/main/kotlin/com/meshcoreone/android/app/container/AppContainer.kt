@@ -7,11 +7,13 @@ import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
 import com.meshcoreone.android.app.navigation.ChatContactMount
+import com.meshcoreone.android.app.navigation.MountedOnboardingProducer
 import com.meshcoreone.android.app.navigation.NavigationCleanupOwner
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationDestination
 import com.meshcoreone.android.app.navigation.NavigationFailure
 import com.meshcoreone.android.app.navigation.NavigationOutcome
+import com.meshcoreone.android.app.navigation.NavigationState
 import com.meshcoreone.android.app.navigation.NotificationNavigationBinding
 import com.meshcoreone.android.app.navigation.NotificationNavigationReceipt
 import com.meshcoreone.android.app.navigation.PersistenceNavigationLookup
@@ -207,6 +209,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     val sessions = SessionRegistry()
     val navigation = NavigationCoordinator().also { coordinator ->
         coordinator.installCommitBoundary { action -> withNavigationCommitBoundary(action) }
+        coordinator.installOnboardingSessionCapture(::captureOnboardingNavigationSession)
     }
     private val contactHandoffSettlement = processScope.launch(Dispatchers.Default) {
         navigation.contactHandoffUpdates.collect { navigation.settlePublishedChatContactReceipts() }
@@ -334,6 +337,49 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             current != null && current === session && !current.isTornDown &&
                 connectionManager.isNavigationSessionCurrent(session.token)
         }
+
+    private fun captureOnboardingNavigationSession(
+        source: NavigationState,
+    ): (MountedOnboardingProducer) -> Boolean {
+        val (initiating, lifecycle, aligned) = withNavigationCommitBoundary {
+            val graph = sessions.current
+            val stamp = connectionManager.captureNavigationLifecycle()
+            val current = if (graph != null) {
+                !graph.isTornDown &&
+                    (graph.token == source.boundSessionToken ||
+                        source.radioId == null && source.boundSessionToken == null) &&
+                    connectionManager.isInitialNavigationSession(stamp, graph.token, sessions.publicationIdentity, graph)
+            } else {
+                source.boundSessionToken == null && (
+                    connectionManager.isNavigationLifecycleCurrent(stamp) ||
+                        connectionManager.isOfflineNavigationLifecycleCurrent(stamp)
+                    )
+            }
+            Triple(graph, stamp, current)
+        }
+        return { producer ->
+            withNavigationCommitBoundary {
+                val graph = sessions.current
+                val token = navigation.currentState.boundSessionToken
+                when {
+                    !aligned -> false
+                    producer is MountedOnboardingProducer.Preset && graph?.token != producer.token -> false
+                    graph == null -> initiating == null && token == null &&
+                        (connectionManager.isNavigationLifecycleCurrent(lifecycle) ||
+                            connectionManager.isOfflineNavigationLifecycleCurrent(lifecycle))
+                    graph.isTornDown || token != null && token != graph.token -> false
+                    initiating != null -> graph === initiating &&
+                        connectionManager.isInitialNavigationSession(
+                            lifecycle, graph.token, sessions.publicationIdentity, graph,
+                        )
+                    else -> source.radioId == null && source.boundSessionToken == null &&
+                        connectionManager.isInitialNavigationSession(
+                            lifecycle, graph.token, sessions.publicationIdentity, graph,
+                        )
+                }
+            }
+        }
+    }
 
     internal fun captureContactNavigationSession(generation: Long): () -> Boolean {
         val (initiating, stamp) = withNavigationCommitBoundary {

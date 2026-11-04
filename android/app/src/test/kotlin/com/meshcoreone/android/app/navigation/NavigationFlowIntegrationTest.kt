@@ -36,11 +36,14 @@ import com.meshcoreone.android.app.state.AppSession
 import com.meshcoreone.android.app.state.AppStatePlatform
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.FeatureId
+import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.MonitoringOptions
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.NotificationId
@@ -410,6 +413,194 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         h.eventually("real graph finishes its initial contact/channel synchronization") {
             h.appState.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced &&
                 h.container.navigation.state.value.navigationReady
+        }
+    }
+
+    @Test fun offlineOnboardingRequiresAnExplicitNoDeviceProducer() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            val n = h.container.navigation
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+            val fabricated = SessionToken(ProcessEpoch(UUID(0, 991)), Generation(1), RadioId(UUID(0, 992)))
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(fabricated)))
+            assertEquals(presented.value, n.currentState)
+            assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+        } finally {
+            h.container.close()
+        }
+    }
+
+    @Test fun onboardingCompletionAcceptsActualFirstBindingBehindHeldPublication() = runTest {
+        val h = ContainerHarness(this, store)
+        val n = h.container.navigation
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        val entry = presented.value.activeStack.last()
+        val completion = n.captureMountedOnboarding(presented, entry.id)
+        assertNotNull(completion)
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        try {
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("first real graph binds navigation while publication is held") {
+                connecting.isCompleted && h.sessions.current != null &&
+                    n.currentState.boundSessionToken == h.sessions.current?.token
+            }
+            connecting.await()
+            val graph = assertNotNull(h.sessions.current)
+            assertEquals(presented, n.publishedNavigation.value)
+            val before = n.currentState
+            val wrongToken = graph.token.copy(generation = Generation(graph.token.generation.value + 1))
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(wrongToken)))
+            assertEquals(before, n.currentState)
+            assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(graph.token)))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(graph.token, n.currentState.boundSessionToken)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+            h.container.close()
+        }
+        assertEquals(AppTab.CHATS, n.state.value.selectedTab)
+    }
+
+    @Test fun newlyMountedOnboardingCanCaptureTheLiveGraphBeforeItsFirstNavigationBinding() = runTest {
+        val uiScheduler = TestCoroutineScheduler()
+        val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
+        val h = ContainerHarness(this, store, mainScope = mainScope)
+        try {
+            val started = h.container.start()
+            h.eventually("production activation completes") {
+                uiScheduler.runCurrent()
+                started.isCompleted
+            }
+            val n = h.container.navigation
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val entryId = presented.value.activeStack.last().id
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("first graph is exposed before the controlled UI binding") {
+                val graph = h.sessions.current
+                graph != null && h.manager.snapshot.value.token == graph.token
+            }
+            val graph = assertNotNull(h.sessions.current)
+            assertNull(n.currentState.boundSessionToken)
+            val completion = n.captureMountedOnboarding(presented, entryId)
+            assertNotNull(completion)
+            assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(graph.token)))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            h.eventually("the same graph binds after completion") {
+                uiScheduler.runCurrent()
+                connecting.isCompleted && n.currentState.boundSessionToken == graph.token
+            }
+            connecting.await()
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+        } finally {
+            val closing = async { h.container.close() }
+            h.eventually("process cleanup drains the controlled UI queue") {
+                uiScheduler.runCurrent()
+                closing.isCompleted
+            }
+            closing.await()
+        }
+    }
+
+    @Test fun onboardingCompletionRejectsAWithdrawnOrReplacedGraphBeforeNavigationBinding() = runTest {
+        val uiScheduler = TestCoroutineScheduler()
+        val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
+        val h = ContainerHarness(this, store, mainScope = mainScope)
+        val retiredTransport = CompletableDeferred<Unit>()
+        val replacementHandshake = CompletableDeferred<Unit>()
+        var holdReplacement = false
+        h.links.configureRadio = { if (holdReplacement) it.connectGate = replacementHandshake }
+        try {
+            val started = h.container.start()
+            h.eventually("production activation completes") {
+                uiScheduler.runCurrent()
+                started.isCompleted
+            }
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("first graph and navigation binding become ready") {
+                uiScheduler.runCurrent()
+                connecting.isCompleted && h.manager.connectionState == DeviceConnectionState.READY &&
+                    h.container.navigation.currentState.navigationReady
+            }
+            connecting.await()
+            val n = h.container.navigation
+            val retired = assertNotNull(h.sessions.current)
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val readyControl = n.publishedNavigation.value
+            assertTrue(n.completeMountedOnboarding(
+                n.captureMountedOnboarding(readyControl, readyControl.value.activeStack.last().id),
+                MountedOnboardingProducer.Preset(retired.token),
+            ))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val entryId = presented.value.activeStack.last().id
+            val completion = n.captureMountedOnboarding(presented, entryId)
+            assertEquals(retired.token, presented.value.boundSessionToken)
+            assertNotNull(completion)
+            holdReplacement = true
+            h.links.radios.first().disconnectGate = retiredTransport
+            val rebuilding = async { h.manager.rebuildSession(assertNotNull(h.appState.connectedDevice).id) }
+            h.eventually("graph is withdrawn while its transport remains held", virtualBudgetMillis = 0) {
+                h.sessions.current == null && h.links.radios.first().disconnecting
+            }
+            val withdrawn = n.currentState
+            assertEquals(retired.token, withdrawn.boundSessionToken)
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(retired.token)))
+            assertEquals(withdrawn, n.currentState)
+
+            uiScheduler.runCurrent()
+            h.eventually("the retired binding is detached") {
+                uiScheduler.runCurrent()
+                !n.currentState.navigationReady
+            }
+            retiredTransport.complete(Unit)
+            h.eventually("replacement handshake is held") { h.links.radios.size == 2 && h.sessions.current == null }
+            replacementHandshake.complete(Unit)
+            h.eventually("replacement graph is live before its navigation binding") {
+                val graph = h.sessions.current
+                graph != null && graph !== retired && h.manager.snapshot.value.token == graph.token
+            }
+            val replacement = assertNotNull(h.sessions.current)
+            assertNotEquals(replacement.token, n.currentState.boundSessionToken)
+            val beforeBinding = n.currentState
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(retired.token)))
+            assertEquals(beforeBinding, n.currentState)
+            h.eventually("replacement navigation binding becomes ready") {
+                uiScheduler.runCurrent()
+                rebuilding.isCompleted && n.currentState.boundSessionToken == replacement.token &&
+                    n.currentState.navigationReady
+            }
+            rebuilding.await()
+            val current = n.publishedNavigation.value
+            val replacementCompletion = n.captureMountedOnboarding(current, entryId)
+            assertFalse(n.completeMountedOnboarding(
+                replacementCompletion, MountedOnboardingProducer.Preset(retired.token),
+            ))
+            assertEquals(current.value, n.currentState)
+            assertTrue(n.completeMountedOnboarding(
+                replacementCompletion, MountedOnboardingProducer.Preset(replacement.token),
+            ))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+        } finally {
+            retiredTransport.complete(Unit)
+            replacementHandshake.complete(Unit)
+            val closing = async { h.container.close() }
+            h.eventually("process cleanup drains the controlled UI queue") {
+                uiScheduler.runCurrent()
+                closing.isCompleted
+            }
+            closing.await()
         }
     }
 

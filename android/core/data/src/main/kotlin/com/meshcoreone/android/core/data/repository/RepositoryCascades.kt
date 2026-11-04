@@ -61,7 +61,7 @@ internal suspend fun RepositoryTransaction.deleteMessageDependents(
 internal suspend fun RepositoryTransaction.deleteContactMessages(
     key: EntityKey, preserveLocalOccurrences: Boolean = false,
 ) {
-    val (preserved, messages) = database.messages().newestForContact(key.radioId.value, key.id, -1).partition { row ->
+    val (preserved, messages) = database.messages().forContactRemoval(key.radioId.value, key.id).partition { row ->
         preserveLocalOccurrences && row.directionRawValue == MessageDirection.INCOMING.rawValue &&
             row.channelIndex == null && row.channelOccupantID == null &&
             LocalDirectMessageProvenance.of(row.toDTO()) != null

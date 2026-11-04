@@ -3,9 +3,9 @@
 ## Scope and provenance
 
 Repository: `cbattlegear/MeshCoreOne-Android`.
-Current refreshed candidate base: `d933cc8d08f8d9cb19fab14236535065871ec642`.
+Current refreshed candidate base: `e9b924752f085533a349eda07de4527eba40dc56`.
 Current-main merge commit before the evidence refresh:
-`b50e430afb897795aab772489c419fafdfe983aa`.
+`67cf8ae09485162895f04268c89c84e1ea584ca5`.
 Swift specification remains `db14559b39d32322b06477c6ae676112f583db50`;
 this contract and its additional assertions are Android-only.
 This is the existing open PR #537 prerequisite, not a WP-215 completion claim.
@@ -126,3 +126,11 @@ test methods were included in the hosted contracts test results. The exact-head
 review was approved by `copilot-pull-request-reviewer[bot]`; the independent
 source-review comment found no new issue. This tuple is superseded by the
 current-main refresh above and does not verify its new merge commit.
+
+The d933-based candidate `f5bd607aed9194e3cb66c0b943ac301586be55b7` ran
+`41875574752`; its Android build, controller/policy, scope classification and
+exact-head reviewer check completed successfully, and the 10 receipt methods
+were present in the hosted results. However, the required aggregate
+`android-ci` check `126746950751` still reported `in_progress` with no
+completion, despite the run summary reporting success. It is not accepted as a
+fully green candidate. This candidate is superseded by the e9-based refresh.

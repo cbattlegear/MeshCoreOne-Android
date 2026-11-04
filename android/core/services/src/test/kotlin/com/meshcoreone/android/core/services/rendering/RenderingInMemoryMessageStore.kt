@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.MessagePersisting
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
+import com.meshcoreone.android.core.contracts.domain.PendingDirectMessageIntent
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.PendingSendDTO
@@ -14,6 +15,7 @@ import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.SnapshotMap
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 
@@ -23,6 +25,10 @@ import kotlinx.coroutines.CompletableDeferred
  * oldest first, `hasMore` when older rows remain). Every other contract method fails loudly.
  */
 internal class RenderingInMemoryMessageStore : MessagePersisting {
+    override suspend fun createOrReconcilePendingDirectMessage(
+        intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO = error("Direct-message creation is not a rendering test operation")
+
     private val lock = Any()
     private var rows: Map<EntityKey, MessageDTO> = emptyMap()
 

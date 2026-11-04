@@ -4069,9 +4069,14 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     assertIs<ChatSelection.Direct>(navigation.currentState.chatsSelectedRoute).route(),
                 ))
                 mount(h)
+                shadowOf(android.os.Looper.getMainLooper()).idle()
+                compose.onNodeWithTag("entry:${origin.entryId}").assertIsDisplayed()
                 compose.waitForIdle()
-                h.settle()
-                compose.waitForIdle()
+                await(h) {
+                    shadowOf(android.os.Looper.getMainLooper()).idle()
+                    navigation.currentState.widthDp == width.value.value &&
+                        navigation.currentState.pendingChatContact == null
+                }
                 assertEquals(width.value.value, navigation.currentState.widthDp)
                 assertNull(navigation.currentState.pendingChatContact)
                 val underlying = feature.linksForMount(origin)

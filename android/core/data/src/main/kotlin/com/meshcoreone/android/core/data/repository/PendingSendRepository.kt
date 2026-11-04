@@ -236,7 +236,8 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             reject(pending, QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)
         }
         database.pendingSends().forMessage(key.radioId.value, key.messageID)
-            .filterNot { it.id == key.pendingID }.forEach(::requireRemovable)
+            .firstOrNull { it.id != key.pendingID && it.isChannel }
+            ?.let { reject(it, QueuedChannelAttemptConflict.RETAINED_SUBMISSION) }
         val index = pending.channelIndex
         val message = database.messages().byId(key.radioId.value, key.messageID)
         if (!pending.isChannel || pending.contactID != null || index == null || pending.channelOccupantID != expectedOccupantID ||
@@ -378,7 +379,8 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             database.queuedChannelAttempts().forPending(row.radioId, row.id).isNotEmpty()
         ) reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
         database.pendingSends().forMessage(row.radioId, row.messageID)
-            .filterNot { it.id in replacing }.forEach(::requireRemovable)
+            .firstOrNull { it.id !in replacing && it.isChannel }
+            ?.let { reject(it, QueuedChannelAttemptConflict.RETAINED_SUBMISSION) }
         if (dto.channelDispatchState != null || dto.channelAttemptID != null) {
             reject(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
         }

@@ -568,8 +568,32 @@ was compared with the fake's nullable `Bytes?` list element type. The expected
 list now explicitly declares `Pair<EntityKey, Bytes?>`, preserving the same
 identity and byte assertions. This is a compile correction, not test execution.
 
-The current local candidate integrates the producer correction and this
-test-only fix; it has not yet been published or run by hosted CI. Producer
-follow-up hosted validation and independent review are also pending. Until
-both exact-candidate results are positive, no favorite/avatar write consistency
-or merge readiness is claimed.
+The current consumer candidate is
+`aadee631b6ecbdf6eab5620307ae82d26256aafa`. Hosted run
+[41868433539](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41868433539)
+has passed classification and controller policy. Its Linux Gradle validation
+step failed at 17:36Z: `verify_candidate_task_graph.gradle` timed out after
+3,600 seconds before the selected Gradle tasks executed. The timeout diagnostics
+reported that mandatory JUnit reports were missing for the failed command.
+Cached report summaries are not counted as current-candidate test evidence.
+This is a candidate task-graph timeout, not a product test failure.
+Producer candidate `76920597c259903b2cffcbfbe2f733d0a52b4e7a` was superseded
+when its owner merged current main; exact run
+[41867785182](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41867785182)
+was cancelled. The reconciled producer head is
+`528f4cbc20bb96e722950975d012f8cf4e53a7e1`; its new exact run
+[41874809733](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41874809733)
+passed all jobs, including the Linux Android build, APK inspection,
+backup-byte transfer, and SwiftData restore/export oracle. That head was
+superseded by `ae80cce2eb06a6536e05c013c699b5af81d5dfd7`, which integrates the
+latest main base. New exact run
+[41881246966](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41881246966)
+has passed controller and Linux Android build jobs, including the candidate
+Room/service tests. Its SwiftData restore/export oracle is queued, so the exact
+workflow is not complete. Source inspection at the current producer head
+confirms the captured-identity avatar API and field-specific favorite
+persistence remain present; current-head hosted verification is still pending.
+Both PRs remain open and the consumer PR remains draft. Independent review,
+exact producer and consumer results, and correct dependency merge order remain
+required; no favorite/avatar write-consistency acceptance or merge readiness
+is claimed.

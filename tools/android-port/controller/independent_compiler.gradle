@@ -1,0 +1,50 @@
+// AndroidOnly: WP-003 Observations are meaningful only in the trusted-base source projection.
+import groovy.json.JsonOutput
+import java.security.MessageDigest
+import java.nio.file.Files
+
+def expected = [":app:compileBenchmarkKotlin", ":app:compileProfileKotlin"] as Set
+def completed = [] as Set
+def destination = new File(gradle.startParameter.currentDir.parentFile, "compiler-observations.jsonl")
+if (destination.exists()) throw new GradleException("Independent compiler observations must be fresh")
+
+gradle.taskGraph.afterTask { task, state ->
+    if (task.path in expected) {
+        if (!task.class.name.startsWith("org.jetbrains.kotlin.gradle.tasks.KotlinCompile") ||
+                state.failure != null || !state.executed || !state.didWork || state.skipped ||
+                state.upToDate || state.noSource || state.skipMessage != null ||
+                !completed.add(task.path)) {
+            throw new GradleException("Independent compiler action did not execute: ${task.path}")
+        }
+        def sources = task.sources.files.collect { it.canonicalFile } as Set
+        [
+            "benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt",
+            "benchmark/dataset/kotlin/com/meshcoreone/android/benchmark/Workload.kt",
+        ].each { relative ->
+            if (!sources.contains(task.project.rootProject.file(relative).canonicalFile)) {
+                throw new GradleException("Independent compiler omitted consumer source: ${relative}")
+            }
+        }
+        def classes = []
+        task.outputs.files.files.findAll { it.isDirectory() }.each { root ->
+            root.eachFileRecurse { file ->
+                if (file.isFile() && file.name.endsWith(".class")) classes.add(file)
+            }
+        }
+        if (classes.isEmpty()) throw new GradleException("Independent compiler has no class outputs")
+        def digest = MessageDigest.getInstance("SHA-256")
+        classes.sort { it.path }.each { file ->
+            if (Files.isSymbolicLink(file.toPath())) throw new GradleException("Linked compiler output")
+            digest.update(file.name.getBytes("UTF-8"))
+            digest.update(MessageDigest.getInstance("SHA-256").digest(file.bytes))
+        }
+        destination.append(JsonOutput.toJson([
+            task: task.path, classes: classes.size(), output_sha256: digest.digest().encodeHex().toString(),
+        ]) + "\n", "UTF-8")
+    }
+}
+gradle.buildFinished { result ->
+    if (result.failure == null && completed != expected) {
+        throw new GradleException("Missing independent compiler actions")
+    }
+}

@@ -14,6 +14,12 @@ guarded execution; a candidate checkout is not live authority.
 
 ## Candidate execution contract
 
+The proposed [isolated compiler experiment](bounded-infrastructure-review.md#proposed-isolated-compiler-experiment-not-deployed)
+uses trusted-base executable configuration with candidate source data in a
+credential-free offline container, followed by authenticated original-run
+inspection. It is not deployed, required or a substitute for the live/historical
+consumer-acceptance blockers or the WP-003 bootstrap gate.
+
 ### Hosted CI latency
 
 Pull-request scope classification compares the PR head with its unique Git

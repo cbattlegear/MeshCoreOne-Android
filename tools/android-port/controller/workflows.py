@@ -624,10 +624,13 @@ def validate_publisher(value: dict, text: str):
 
 
 def validate_workflows(repo: Path):
+    from controller.compiler_verification import validate_workflow as validate_compiler
+
     directory = repo / ".github" / "workflows"
     for name, validator in (
         ("android-ci.yml", validate_candidate), ("copilot-setup-steps.yml", validate_setup),
         ("android-parity-review.yml", validate_publisher),
+        ("android-compiler-verification.yml", validate_compiler),
         *((name, validate_trusted) for name in TRUSTED_WORKFLOWS),
     ):
         text = (directory / name).read_text(encoding="utf-8")

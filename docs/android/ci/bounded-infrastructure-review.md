@@ -116,8 +116,8 @@ map: the CI README, WP-003 deviation, `local_scope.py`,
 `test_local_scope.py`. Omitting them from the declared scope is not a workaround.
 A new `.github/workflows/android-compiler-verification.yml` can be authored under
 `trusted-workflows/update-directly-required-job-or-input`, but this finite
-publication route rejects it too. No new workflow or compiler verifier has been
-created, deployed or dispatched by this investigation.
+publication route rejects it too. At that investigation revision, no new
+workflow or compiler verifier had been created, deployed or dispatched.
 
 The supported alternative is a separately reviewed, explicitly authorized
 exact-candidate bootstrap into trusted default-branch infrastructure, as required
@@ -132,3 +132,61 @@ the candidate cannot authorize that expansion or mint its own receipt.
 Any new check must remain non-required until it has passed end to end on a
 representative real PR. Do not change protection or treat a unit-test fixture,
 workflow dispatch or source-review publication as that operational proof.
+
+## Proposed isolated compiler experiment (not deployed)
+
+The subsequent source candidate adds `compiler_verification.py`,
+`independent_compiler.gradle` and the manual
+`android-compiler-verification.yml` workflow. This is a proposed independently
+controlled executable boundary, not evidence that the trusted default branch
+has installed it. It adds no required check, check-writing credential, merge
+action, acceptance override or autonomous dispatch.
+
+The supervisor must run from the exact deployed default-branch commit. It
+reconstructs that immutable tree, retaining its wrapper, settings, build logic,
+plugins, dependency checksums and task actions. Only candidate production
+Kotlin/Java source data in existing modules and the two consumer fixtures is
+overlaid. Candidate Android configuration, resources, processors and new modules
+are refused; candidate controller/workflow bytes are never executed. Candidate
+test changes are not executed or claimed as verified. This intentionally cannot
+verify arbitrary build-graph changes or serve as full Android acceptance.
+
+A disposable credential-free Docker container first compiles the trusted base
+to populate a private dependency cache. A fresh projection then compiles the
+candidate sources offline with build/configuration caches disabled and tasks
+forced to run. The init script is meaningful only with those base-owned task
+actions: it refuses skipped/up-to-date/no-source/failed actions, requires both
+fixture inputs and nonempty class outputs for each consumer variant, and hashes
+the outputs. The supervisor binds base/head/source/projection/toolchain pins,
+actual Java runtime/platform/tool binary digests, run and attempt. It checks
+source and runtime input stability. Read-only host tool mounts contain no home,
+checkout credentials, Docker socket or arbitrary host environment; only the
+isolated project and private Gradle home are writable.
+
+The report file is written by the trusted host outside every container mount.
+Only a separate final workflow step prints it. The authenticated `inspect`
+command reads the original Actions run/job/log through the existing native
+transport; it requires the exact deployed base, current PR/head, authorized
+dispatch/rerun identities, workflow/check-suite provenance, successful job,
+single report-step object, source projection and run/attempt. Compiler stdout,
+candidate receipts and copied report JSON are not accepted as that channel.
+For a future authorized deployed experiment:
+
+```text
+python tools/android-port/controller/compiler_verification.py inspect --pr <number> --head <full-sha> --run-id <original-run-id> --attempt <attempt>
+```
+
+`ANDROID_PORT_GITHUB_TOKEN` supplies read-only server/log access, not acceptance
+authority. A stale base or closed/changed PR is refused rather than silently
+rebinding an old run. This bounded reader is separate from WP acceptance:
+the existing live and historical consumer-acceptance readers still fail closed.
+Neither the optional workflow's ordinary Actions job result nor `inspect`
+publishes `parity-review`, accepts a WP or unlocks dependencies.
+
+The finite `wp003-ci-reader-route-v1` map still excludes the new verifier,
+guard, test and workflow as well as the earlier eight successor paths. No
+candidate-authored expansion is treated as deployed authority. Independent
+source review is not an authenticated coordinator receipt or the protected
+WP-003 acceptance/bootstrap decision. A real admitted exact-candidate deployment
+and representative PR run are still required before operational proof or
+integration into acceptance; keep this check non-required until then.

@@ -257,7 +257,13 @@ class ChatSendQueueService(
         }
         val attempt = try {
             preflightAndBump(dataStore, key(id)).also { ownership.check("dm.bump") }
-        } catch (failure: PersistenceStoreException) { parkBeforeSend(id, failure) }
+        } catch (failure: PersistenceStoreException) {
+            if (failure.error == PersistenceStoreError.InvalidData) {
+                record("directRetained.$id", failure)
+                return
+            }
+            parkBeforeSend(id, failure)
+        }
         if (attempt == null) { complete(id); return }
         checkSendAdmission()
         synchronized(lock) { directClaimIDs[id] = attempt.pendingID }

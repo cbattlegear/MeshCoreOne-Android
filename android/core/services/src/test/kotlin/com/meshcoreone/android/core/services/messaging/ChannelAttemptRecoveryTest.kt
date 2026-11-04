@@ -14,6 +14,55 @@ import org.junit.jupiter.api.TestFactory
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelAttemptRecoveryTest {
     @TestFactory fun recovery() = listOf(
+        native("direct-invalid-data-preflight-retains-prior-status-and-pending-identity") {
+            val h = Harness(this); h.start()
+            val message = h.message(MessageStatus.RETRYING)
+            val row = h.pending(message, 2)
+            val rejection = QueuedChannelAttemptRejected(EntityKey(RADIO, row.id),
+                QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+            val failure = PersistenceStoreException(PersistenceStoreError.InvalidData, rejection)
+            h.store.faults["incrementPendingSendAttemptCount"] = failure
+            val queue = h.queue()
+            queue.hydrate(); runCurrent(); queue.awaitDrainCompletion()
+            assertEquals(message, h.stored(message.id))
+            assertEquals(row, h.store.pending.getValue(EntityKey(RADIO, row.id)))
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            assertFalse(h.store.calls.any { it == "updateMessageStatusUnlessDelivered" ||
+                it == "deletePendingSendsForMessage" || it == "deletePendingSend" })
+            assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                it.operation == "directRetained.${message.id}" && it.cause === failure && it.cause.cause === rejection
+            })
+            assertEquals(1, queue.queuedEnvelopeCount)
+        },
+        native("direct-transient-preflight-still-remaps-pending-and-parks-without-wire") {
+            val h = Harness(this); h.start()
+            val message = h.message(MessageStatus.RETRYING)
+            val row = h.pending(message, 2)
+            val failure = storageFailure()
+            h.store.faults["incrementPendingSendAttemptCount"] = failure
+            val queue = h.queue()
+            queue.hydrate(); runCurrent()
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+            assertEquals(row, h.store.pending.getValue(EntityKey(RADIO, row.id)))
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            assertFalse(h.store.calls.any { it == "deletePendingSendsForMessage" || it == "deletePendingSend" })
+            assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                it.operation == "park.${message.id}" && it.cause === failure
+            })
+            assertEquals(1, queue.queuedEnvelopeCount)
+        },
+        native("uncontested-direct-preflight-counts-sends-and-cleans-up") {
+            val h = Harness(this); h.start()
+            h.transport.acknowledge = true
+            val message = h.message(MessageStatus.PENDING)
+            h.pending(message)
+            val queue = h.queue()
+            queue.hydrate(); runCurrent(); queue.awaitDrainCompletion()
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertTrue(h.store.pending.isEmpty())
+            assertEquals(1, h.store.calls.count { it == "incrementPendingSendAttemptCount" })
+            assertEquals(MessageStatus.DELIVERED, h.stored(message.id).status)
+        },
         native("two-ready-siblings-are-retained-before-count-or-wire") {
             val h = Harness(this); h.start()
             val message = h.message(MessageStatus.PENDING, 0u)

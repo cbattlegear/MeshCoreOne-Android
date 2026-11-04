@@ -312,7 +312,10 @@ class SessionLifecycleTest : RoomProcessTest() {
             for (issue in report.issues) {
                 assertEquals(LifecycleStage.STOP_SERVICES, issue.stage, "$description: unexpected teardown stage")
                 val receipt = expected.singleOrNull { it.queryFailure === issue.cause }
-                assertNotNull(receipt, "$description: teardown cause must be the exact persisted park cause of a proven generation")
+                assertNotNull(receipt,
+                    "$description: teardown cause must be the exact persisted park cause of a proven generation; " +
+                        "issue=$issue; retained=$expected; " +
+                        "operations=${synchronized(h.messagingDiagnostics) { h.messagingDiagnostics.toList() }}")
                 assertTrue(seen.add(receipt.token), "$description: duplicate teardown issue for ${receipt.token}")
             }
         }
@@ -509,7 +512,8 @@ class SessionLifecycleTest : RoomProcessTest() {
                         queueReport?.let { report ->
                             val token = assertNotNull(initialToken)
                             assertEquals(ChannelQueryAccountingOutcome.PARKED, assertNotNull(provenReceipts[token]).outcome)
-                            assertEquals(1, report.issues.size, "Initial queue must return its same single retained park issue")
+                            assertEquals(1, report.issues.size,
+                                "Initial queue must return its same single retained park issue; issues=${report.issues}")
                             assertExpectedTeardownIssues(report, setOf(token), "Repeated initial queue shutdown")
                         }
                     }

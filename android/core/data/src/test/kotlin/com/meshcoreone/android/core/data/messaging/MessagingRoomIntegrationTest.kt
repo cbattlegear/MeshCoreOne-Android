@@ -39,6 +39,10 @@ import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.messaging.MessagePollingService
 import com.meshcoreone.android.core.services.messaging.PoolBackoffConfig
 import com.meshcoreone.android.core.services.contacts.ChannelService
+import com.meshcoreone.android.core.services.contacts.AdvertisementService
+import com.meshcoreone.android.core.services.contacts.AdvertisementClock
+import com.meshcoreone.android.core.services.sync.*
+import java.lang.reflect.Proxy
 import java.security.MessageDigest
 import java.time.Clock
 import java.time.Instant
@@ -2127,6 +2131,131 @@ class MessagingRoomIntegrationTest {
             status = MessageStatus.DELIVERED)
         store.saveMessage(message)
         return message
+    }
+
+    private inline fun <reified T> forbiddenCandidateCollaborator(): T =
+        T::class.java.cast(Proxy.newProxyInstance(T::class.java.classLoader, arrayOf(T::class.java)) { _, method, _ ->
+            error("Unproved receive must not call ${T::class.java.simpleName}.${method.name}")
+        })
+
+    private suspend fun candidateDependencies(
+        p: MessagePollingService,
+        adverts: AdvertisementService,
+        beforeScope: suspend () -> Unit = {},
+    ): SyncDependencies {
+        val port = object : SyncAdvertisementServicing by forbiddenCandidateCollaborator<SyncAdvertisementServicing>(),
+            SyncLocalDirectAdvertisementServicing {
+            override suspend fun <T> withPendingAdvertContactOperation(
+                radioId: RadioId, prefix: Bytes, observed: LocalDirectContactResolution,
+                block: suspend (LocalDirectContactAdmission) -> T,
+            ): T {
+                beforeScope()
+                return adverts.withPendingAdvertContactOperation(radioId, prefix, observed, block)
+            }
+        }
+        return SyncDependencies(
+            dataStore = store,
+            contactService = forbiddenCandidateCollaborator(),
+            channelService = forbiddenCandidateCollaborator(),
+            messagePollingService = p,
+            notificationService = forbiddenCandidateCollaborator(),
+            reactionService = forbiddenCandidateCollaborator(),
+            advertisementService = port,
+            rxLogService = forbiddenCandidateCollaborator(),
+            heardRepeatsService = forbiddenCandidateCollaborator(),
+            roomServerService = forbiddenCandidateCollaborator(),
+            roomAdminService = forbiddenCandidateCollaborator(),
+            repeaterAdminService = forbiddenCandidateCollaborator(),
+            codecs = SyncMessageCodecs(
+                forbiddenCandidateCollaborator(), forbiddenCandidateCollaborator(), forbiddenCandidateCollaborator(),
+                forbiddenCandidateCollaborator(), forbiddenCandidateCollaborator(), forbiddenCandidateCollaborator(),
+            ),
+            startEventMonitoring = { _, _ -> error("Candidate must not activate monitoring") },
+            exportPrivateKey = { error("Candidate must not export keys") },
+        )
+    }
+
+    @Test fun realRoomPollerSyncRetainsCollisionsPendingAdvertsAndRosterInterleavings() = runTest(scheduler) {
+        val collision = contact.copy(id = UUID.randomUUID(), publicKey = target.prefix(6) + Bytes(ByteArray(26) { 0x33 }))
+        val scenarios = listOf("collision", "reversed", "shrink", "deleted", "added", "materialized", "pending", "two-pending", "unique")
+        for ((index, scenario) in scenarios.withIndex()) {
+            val g = RadioGeneration(100L + index)
+            g.start()
+            g.signals.set(DeviceConnectionState.READY)
+            val adverts = AdvertisementService(g.session, g.session, store, g.scope, clock = object : AdvertisementClock {
+                override fun now() = clock.now
+                override suspend fun sleepUntil(deadline: Duration) { delay(deadline - now()) }
+                override fun wallNow() = clock.wallClock.instant()
+            })
+            adverts.startEventMonitoring(radio)
+            runCurrent()
+            val p = g.poller()
+            when (scenario) {
+                "collision", "shrink" -> { store.saveContact(contact); store.saveContact(collision) }
+                "reversed" -> { store.saveContact(collision); store.saveContact(contact) }
+                "deleted", "added", "pending", "unique" -> store.saveContact(contact)
+            }
+            if (scenario == "pending" || scenario == "two-pending") {
+                g.firmware.pushPacket(Bytes.of(ResponseCode.ADVERTISEMENT.rawValue.toInt()) + collision.publicKey)
+                if (scenario == "two-pending") {
+                    g.firmware.pushPacket(Bytes.of(ResponseCode.ADVERTISEMENT.rawValue.toInt()) + target)
+                }
+                runCurrent()
+            }
+            val before = store.fetchContacts(radio)
+            var changed = false
+            val dependencies = candidateDependencies(p, adverts) {
+                if (!changed) {
+                    changed = true
+                    when (scenario) {
+                        "shrink" -> store.deleteContact(EntityKey(radio, collision.id))
+                        "deleted" -> store.deleteContact(EntityKey(radio, contact.id))
+                        "added" -> store.saveContact(collision)
+                        "materialized" -> store.materializeLocalDirectContactIfAbsent(
+                            radio, target.prefix(6), contact.toContactFrame(), clock.wallClock.instant(),
+                        )
+                    }
+                }
+            }
+            val coordinator = SyncCoordinator(g.scope, object : SyncClock {
+                override fun now() = clock.wallClock.instant()
+                override fun elapsed() = clock.now
+                override suspend fun sleep(duration: Duration) { delay(duration) }
+            })
+            coordinator.wireLocalDirectCandidateForTest(dependencies, g.token)
+            p.startMessageEventMonitoring()
+            val body = "Original \uD83D\uDE80 $scenario"
+            val previousIDs = store.fetchUnprovedDirectMessages(radio).map { it.occurrenceID }.toSet()
+            val count = if (scenario in listOf("shrink", "deleted", "added", "materialized")) 1 else 2
+            g.firmware.incomingMessages += incomingContactPacket(body)
+            if (count == 2) g.firmware.incomingMessages += incomingContactPacket(body)
+            try {
+                assertEquals(count.toLong(), p.pollAllMessages())
+                runCurrent()
+                val added = store.fetchUnprovedDirectMessages(radio).filter { it.occurrenceID !in previousIDs }
+                assertEquals(count, added.size, scenario)
+                assertEquals(count, added.map { it.occurrenceID }.toSet().size)
+                assertTrue(added.all { it.text == body && it.wireTimestamp == 42u }, scenario)
+                val rows = added.map { assertNotNull(store.fetchMessage(EntityKey(radio, it.occurrenceID))) }
+                assertEquals(count, rows.map { it.deduplicationKey }.toSet().size)
+                if (scenario == "unique") {
+                    assertTrue(added.all { it.provenance == UnprovedDirectMessageProvenance.LOCAL_CANDIDATE })
+                    assertTrue(rows.all { it.contactID == contact.id })
+                } else {
+                    assertTrue(rows.all { it.contactID == null }, scenario)
+                }
+                if (scenario in listOf("pending", "two-pending", "unique")) {
+                    assertEquals(before, store.fetchContacts(radio), "Candidate receive must not touch contact metadata")
+                }
+                assertEquals(0, p.undeliveredCount)
+            } finally {
+                adverts.stopEventMonitoring()
+                p.close()
+                g.stop()
+                store.deleteContact(EntityKey(radio, contact.id))
+                store.deleteContact(EntityKey(radio, collision.id))
+            }
+        }
     }
 
     private fun incomingContactPacket(text: String, type: UByte = 0u): Bytes =

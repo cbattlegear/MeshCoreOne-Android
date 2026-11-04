@@ -257,6 +257,59 @@ class NotificationOpenHandoffStoreTest {
     }
 
     @Test
+    fun failedStageTransactionRollsBackIdentityAndSequenceBeforeRetry() = runTest {
+        SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL(
+                """CREATE TRIGGER reject_stage BEFORE UPDATE ON notification_open_metadata
+                   BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END""",
+            )
+        }
+        val post = UUID.randomUUID().toString()
+        assertEquals(
+            NotificationOpenHandoffStore.StageResult.Rejected(NotificationOpenHandoffStore.Failure.STORAGE_UNAVAILABLE),
+            store.stage(post, direct),
+        )
+        val snapshot = (store.beginInventory() as NotificationOpenHandoffStore.InventoryResult.Snapshot).value
+        val empty = store.readInventoryPage(snapshot, null, 32) as NotificationOpenHandoffStore.InventoryResult.Page
+        assertTrue(empty.complete)
+        assertTrue(empty.entries.isEmpty())
+        SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL("DROP TRIGGER reject_stage")
+        }
+        val staged = (store.stage(post, direct) as NotificationOpenHandoffStore.StageResult.Staged).handoff
+        assertEquals(1L, staged.identity.sequence)
+        assertEquals(
+            staged.identity,
+            (store.stage(post, direct) as NotificationOpenHandoffStore.StageResult.AlreadyPending).handoff.identity,
+        )
+    }
+
+    @Test
+    fun failedAckTransactionRetainsOriginalPendingIdentityAndPayloadForRetry() = runTest {
+        val post = UUID.randomUUID().toString()
+        val staged = (store.stage(post, direct) as NotificationOpenHandoffStore.StageResult.Staged).handoff
+        SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL(
+                """CREATE TRIGGER reject_ack BEFORE UPDATE ON notification_open_metadata
+                   BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END""",
+            )
+        }
+        assertEquals(
+            NotificationOpenHandoffStore.AcknowledgeResult.Failed(NotificationOpenHandoffStore.Failure.STORAGE_UNAVAILABLE),
+            store.acknowledge(staged.identity),
+        )
+        assertEquals(
+            staged,
+            (store.stage(post, direct) as NotificationOpenHandoffStore.StageResult.AlreadyPending).handoff,
+        )
+        SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL("DROP TRIGGER reject_ack")
+        }
+        assertEquals(NotificationOpenHandoffStore.AcknowledgeResult.Acknowledged, store.acknowledge(staged.identity))
+        assertEquals(NotificationOpenHandoffStore.AcknowledgeResult.AlreadyAcknowledged, store.acknowledge(staged.identity))
+    }
+
+    @Test
     fun corruptDatabaseIsReportedWithoutRecreatingOrErasingIt() = runTest {
         val bytes = "not-a-sqlite-database".toByteArray()
         databaseFile.writeBytes(bytes)

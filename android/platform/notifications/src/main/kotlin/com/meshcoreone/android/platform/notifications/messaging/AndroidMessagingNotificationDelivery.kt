@@ -19,6 +19,8 @@ import android.os.Build
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.notifications.DeliveredNotification
+import com.meshcoreone.android.core.contracts.notifications.DeliveredPostIdentity
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
@@ -33,6 +35,7 @@ import com.meshcoreone.android.core.model.SnapshotList
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 
@@ -90,7 +93,10 @@ class AndroidMessagingNotificationDelivery(
         }
         val notification = buildNotification(request)
         return try {
-            manager.notify(tag(request.id), NOTIFICATION_ID, notification)
+            synchronized(postingLock) {
+                manager.notify(tag(request.id), NOTIFICATION_ID, notification)
+                submittedPosts[tag(request.id)] = requireNotNull(notification.extras.getString(EXTRA_POST_ID))
+            }
             publishConversationShortcut(request)
             NotificationPostResult.Posted
         } catch (_: SecurityException) {
@@ -107,11 +113,39 @@ class AndroidMessagingNotificationDelivery(
             val platformTag = active.tag?.takeIf { it.startsWith(TAG_PREFIX) } ?: return@mapNotNull null
             val tag = platformTag.removePrefix(TAG_PREFIX)
             val payload = NotificationPayloadCodec.read(Intent().putExtras(active.notification.extras))
-            DeliveredNotification(NotificationId(tag), payload)
+            val rawIdentity = active.notification.extras.getString(EXTRA_POST_ID)
+            val identity = rawIdentity?.let {
+                try { DeliveredPostIdentity(UUID.fromString(it)) } catch (_: IllegalArgumentException) { null }
+            }
+            DeliveredNotification(NotificationId(tag), payload, identity)
         })
 
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+    ): SnapshotList<SnapshotRemovalOutcome> = SnapshotList(selected.map { notification ->
+        synchronized(postingLock) {
+            val identity = notification.postIdentity?.value?.toString()
+            val key = tag(notification.id)
+            val submitted = submittedPosts[key]
+            when {
+                identity == null || submitted == null -> SnapshotRemovalOutcome.UNKNOWN_IDENTITY
+                submitted != identity -> SnapshotRemovalOutcome.SUPERSEDED
+                else -> {
+                    manager.cancel(key, NOTIFICATION_ID)
+                    submittedPosts.remove(key)
+                    SnapshotRemovalOutcome.REMOVED
+                }
+            }
+        }
+    })
+
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) {
-        ids.forEach { manager.cancel(tag(it), NOTIFICATION_ID) }
+        synchronized(postingLock) {
+            ids.forEach {
+                manager.cancel(tag(it), NOTIFICATION_ID)
+                submittedPosts.remove(tag(it))
+            }
+        }
     }
 
     fun retryPendingActions() {
@@ -119,14 +153,16 @@ class AndroidMessagingNotificationDelivery(
     }
 
     internal fun buildNotification(request: NotificationRequest): Notification {
-        val contentIntent = actionPendingIntent(request, action = null, mutable = false)
-        val payloadExtras = NotificationPayloadCodec.write(Intent(), request.payload).extras
+        val launchIntent = contentLaunchIntent(request)
+        val postId = requireNotNull(launchIntent.getStringExtra(EXTRA_POST_ID))
+        val contentIntent = contentPendingIntent(request, launchIntent)
+        val payloadExtras = launchIntent.extras
         val builder = Notification.Builder(context, channelFor(request.payload, request.soundEnabled))
             .setSmallIcon(context.applicationInfo.icon)
             .setContentTitle(request.title)
             .setContentText(request.body)
             .setContentIntent(contentIntent)
-            .setAutoCancel(true)
+            .setAutoCancel(false)
             .setOnlyAlertOnce(false)
             .setShowWhen(true)
             .setWhen(System.currentTimeMillis())
@@ -162,7 +198,7 @@ class AndroidMessagingNotificationDelivery(
                         Notification.Action.Builder(
                             null,
                             definition.title,
-                            actionPendingIntent(request, definition.action, mutable = true),
+                            actionPendingIntent(request, definition.action, postId, mutable = true),
                         ).addRemoteInput(remoteInput).build(),
                     )
                 }
@@ -170,7 +206,7 @@ class AndroidMessagingNotificationDelivery(
                     Notification.Action.Builder(
                         null,
                         definition.title,
-                        actionPendingIntent(request, definition.action, mutable = false),
+                        actionPendingIntent(request, definition.action, postId, mutable = false),
                     ).build(),
                 )
                 NotificationAction.DISMISS -> Unit
@@ -193,20 +229,52 @@ class AndroidMessagingNotificationDelivery(
 
     internal fun actionPendingIntent(
         request: NotificationRequest,
-        action: NotificationAction?,
+        action: NotificationAction,
+        postId: String,
         mutable: Boolean,
     ): PendingIntent {
-        val actionName = action?.rawValue ?: ACTION_OPEN
+        val actionName = action.rawValue
         val intent = NotificationPayloadCodec.write(
             Intent(context, NotificationActionReceiver::class.java)
                 .setAction(ACTION_PREFIX + actionName)
-                .setData(Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$actionName"))
-                .putExtra(NotificationActionReceiver.EXTRA_ACTION, action?.rawValue),
+                .setData(
+                    Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$actionName")
+                        .buildUpon().appendQueryParameter("post", postId).build(),
+                )
+                .putExtra(EXTRA_POST_ID, postId)
+                .putExtra(NotificationActionReceiver.EXTRA_ACTION, action.rawValue),
             request.payload,
         )
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or
             if (mutable) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getBroadcast(context, requestCode(request.id, actionName), intent, flags)
+    }
+
+    internal fun contentPendingIntent(
+        request: NotificationRequest,
+        launchIntent: Intent = contentLaunchIntent(request),
+    ): PendingIntent {
+        return PendingIntent.getActivity(
+            context,
+            requestCode(request.id, ACTION_OPEN),
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    internal fun contentLaunchIntent(request: NotificationRequest): Intent {
+        val postId = UUID.randomUUID().toString()
+        return NotificationPayloadCodec.write(
+            Intent(context, NotificationOpenActivity::class.java)
+                .setAction(ACTION_PREFIX + ACTION_OPEN)
+                .putExtra(EXTRA_POST_ID, postId)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .setData(
+                    Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$ACTION_OPEN")
+                        .buildUpon().appendQueryParameter("post", postId).build(),
+                ),
+            request.payload,
+        )
     }
 
     private fun publishConversationShortcut(request: NotificationRequest) {
@@ -257,6 +325,27 @@ class AndroidMessagingNotificationDelivery(
     private fun requestCode(id: NotificationId, action: String) = 31 * id.value.hashCode() + action.hashCode()
 
     companion object {
+        private val postingLock = Any()
+        private const val MAX_TRACKED_POSTS = 256
+        private val submittedPosts = object : LinkedHashMap<String, String>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
+                size > MAX_TRACKED_POSTS
+        }
+        internal const val EXTRA_POST_ID = "mc1.notification.post-id"
+
+        internal fun retireContentNotification(context: Context, notificationId: String, postId: String) {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            val tag = TAG_PREFIX + notificationId
+            // notify() returns before Android necessarily exposes the replacement as active.
+            // Unknown process history retains the notification rather than cancelling a newer post.
+            synchronized(postingLock) {
+                if (submittedPosts[tag] == postId) {
+                    manager.cancel(tag, NOTIFICATION_ID)
+                    submittedPosts.remove(tag)
+                }
+            }
+        }
+
         internal const val CHANNEL_MESSAGES = "mesh_messages"
         internal const val CHANNEL_MESSAGES_SILENT = "mesh_messages_silent"
         internal const val CHANNEL_ACTIVITY = "mesh_activity"

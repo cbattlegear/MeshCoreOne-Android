@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationAuthoriz
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
@@ -404,6 +405,62 @@ class NotificationPolicyNativeTests {
 
     @TestFactory
     fun removal(): List<DynamicTest> = listOf(
+        nativeCase("snapshot cleanup preserves same-ID posts arriving after contact channel and room selection") {
+            val contact = EntityKey(RADIO_A, contactID)
+            val session = UUID.randomUUID()
+            data class RemovalCase(
+                val payload: NotificationPayload,
+                val cleanup: suspend (NotificationService) -> Unit,
+            )
+            val cases = listOf(
+                RemovalCase(NotificationPayload.NewContact(contact)) { it.removeDeliveredNotifications(contactID) },
+                RemovalCase(NotificationPayload.ChannelMessage(RADIO_A, 2u, messageID)) {
+                    it.removeDeliveredNotifications(2u, RADIO_A)
+                },
+                RemovalCase(NotificationPayload.RoomMessage("Ops", EntityKey(RADIO_A, session), messageID)) {
+                    it.removeDeliveredNotificationsForRoom(session)
+                },
+            )
+            for ((payload, cleanup) in cases) {
+                val h = NotificationHarness(this)
+                h.delivery.show("reused", payload)
+                val selected = CompletableDeferred<Unit>()
+                val resume = CompletableDeferred<Unit>()
+                h.delivery.beforeSnapshotRemoval = { selected.complete(Unit); resume.await() }
+                val job = launch { cleanup(h.service) }
+                selected.await()
+                h.delivery.show("reused", payload)
+                resume.complete(Unit)
+                job.join()
+                assertEquals(listOf(NotificationId("reused")), h.delivery.shownIds)
+                assertEquals(listOf(SnapshotRemovalOutcome.SUPERSEDED), h.delivery.lastSnapshotOutcomes)
+                assertTrue(h.delivery.removals.isEmpty())
+            }
+        },
+        nativeCase("unknown snapshot identity is retained while explicit logical-ID removal still removes replacement") {
+            val h = NotificationHarness(this)
+            val id = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+            h.delivery.show(id, NotificationPayload.NewContact(EntityKey(RADIO_A, contactID)))
+            h.delivery.forgetPostIdentity(id)
+            h.service.removeDeliveredNotifications(contactID)
+            assertEquals(listOf(SnapshotRemovalOutcome.UNKNOWN_IDENTITY), h.delivery.lastSnapshotOutcomes)
+            assertEquals(listOf(NotificationId(id)), h.delivery.shownIds)
+            h.delivery.show(id, NotificationPayload.NewContact(EntityKey(RADIO_A, contactID)))
+            h.service.removeDeliveredNotification(messageID)
+            assertTrue(h.delivery.shownIds.isEmpty())
+            assertEquals(listOf(listOf(NotificationId(id))), h.delivery.removals)
+        },
+        nativeCase("snapshot cleanup failure is contained and cancellation propagates without logical fallback") {
+            val h = NotificationHarness(this)
+            h.delivery.show("reused", NotificationPayload.NewContact(EntityKey(RADIO_A, contactID)))
+            h.delivery.failing += "removeDeliveredSnapshot"
+            h.service.removeDeliveredNotifications(contactID)
+            assertEquals(listOf(NotificationId("reused")), h.delivery.shownIds)
+            assertTrue(h.delivery.removals.isEmpty())
+            h.delivery.failing.clear()
+            h.delivery.cancelling = "removeDeliveredSnapshot"
+            assertFailsWith<CancellationException> { h.service.removeDeliveredNotifications(contactID) }
+        },
         nativeCase("contact removal lists once and removes every contact-keyed notification only") {
             val h = NotificationHarness(this)
             val contact = EntityKey(RADIO_A, contactID)

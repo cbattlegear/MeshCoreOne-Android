@@ -599,3 +599,27 @@ Both PRs remain open and the consumer PR remains draft. Independent review,
 exact producer and consumer results, and correct dependency merge order remain
 required; no favorite/avatar write-consistency acceptance or merge readiness
 is claimed.
+
+## Follow-up provider lifetime and consumer review
+
+Independent source review 5774231180 identified external-provider runtime
+exceptions, cancellation during a stalled read, crop-selection drift on resize,
+and an unusable preview in short windows. The provider path now maps runtime
+failures only at external open/read/close calls to the existing media error
+surface; cancellation and security failures retain their separate paths.
+Decoder argument failures also surface as invalid media.
+
+The selection owns a cancellation cleanup child before opening the stream.
+Reads/opening are interruptible and cancellation closes an already-owned stream
+on the IO dispatcher, rather than waiting for the blocking read's `use` to finish.
+A provider that ignores both interruption and close cannot be guaranteed to
+release its worker; an uninterruptible open likewise cannot be forcibly stopped.
+A stream returned after cancellation is still closed before any decoding.
+No URI grants or original media enter persistent state.
+
+Added narrow open/read failure and exactly-once-close controls, a held stream
+that deliberately ignores interruption but is released by close, and mounted
+failure/chooser-recovery and screen-exit/no-mutation controls. These additions
+are authored assertions, not passed test evidence until the exact hosted run
+executes them. Shared crop fixes are assigned to the WP-304 owner; this consumer
+does not edit that owner's files or duplicate geometry logic.

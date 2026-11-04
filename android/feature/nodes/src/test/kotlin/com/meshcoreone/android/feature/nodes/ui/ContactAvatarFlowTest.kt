@@ -382,6 +382,63 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     }
 
     @Test
+    fun uncheckedProviderReadFailureIsVisibleAndDoesNotMutateTheContact() {
+        start()
+        pick(file = true)
+        val closed = java.util.concurrent.atomic.AtomicBoolean()
+        Shadows.shadowOf(controller.get().contentResolver).registerInputStream(uri, object : java.io.InputStream() {
+            override fun read(): Int = throw IllegalArgumentException("Provider unavailable")
+            override fun close() { closed.set(true) }
+        })
+        result(data = null)
+        awaitText(controller.get().getString(C.contactsDetailAvatarInvalidImage))
+        assertTrue(closed.get())
+        assertTrue(harness.contactService.avatars.isEmpty())
+        assertNull(harness.store.contacts.single().avatarImageData)
+        action(C.contactsCommonOk)
+        action(C.contactsDetailAvatarChooseSource)
+        action(C.contactsCommonCancel)
+    }
+
+    @Test
+    fun leavingContactDuringAStalledProviderReadClosesTheStreamWithoutMutation() {
+        start()
+        pick(file = true)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val released = java.util.concurrent.CountDownLatch(1)
+        val closed = java.util.concurrent.atomic.AtomicBoolean()
+        Shadows.shadowOf(controller.get().contentResolver).registerInputStream(uri, object : java.io.InputStream() {
+            override fun read(): Int {
+                entered.countDown()
+                val deadline = System.nanoTime() + 5_000_000_000L
+                while (released.count != 0L && System.nanoTime() < deadline) {
+                    try {
+                        released.await(20, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        // Closing, rather than interruption, releases this provider fixture.
+                    }
+                }
+                check(released.count == 0L) { "Contact exit did not close the provider stream" }
+                return -1
+            }
+            override fun close() {
+                closed.set(true)
+                released.countDown()
+            }
+        })
+        try {
+            result(data = null)
+            awaitAvatarState("the provider read to start") { entered.count == 0L }
+            controller.get().runOnUiThread { showSelected.value = false }
+            awaitAvatarState("contact exit to release its provider stream") { closed.get() }
+            assertTrue(harness.contactService.avatars.isEmpty())
+            assertNull(harness.store.contacts.single().avatarImageData)
+        } finally {
+            released.countDown()
+        }
+    }
+
+    @Test
     fun latePickerResultDoesNotTargetAReplacementContactEvenWithTheSameUuid() {
         start()
         pick(file = true)

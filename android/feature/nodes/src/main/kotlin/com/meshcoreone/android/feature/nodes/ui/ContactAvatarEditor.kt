@@ -49,15 +49,23 @@ import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 
 /** Configuration-only retention: private image state never enters a Bundle or persistent store. */
@@ -136,11 +144,15 @@ internal object ContactAvatarMedia {
 
     suspend fun decode(resolver: ContentResolver, uri: Uri): ImageBitmap = withContext(Dispatchers.IO) {
         if (uri.scheme != ContentResolver.SCHEME_CONTENT) throw IOException("Expected a granted content URI")
-        val bytes = resolver.openInputStream(uri)?.use { readBounded(it) }
-            ?: throw IOException("Unable to open the selected image")
+        val bytes = readSelection { resolver.openInputStream(uri) }
         val cache = AvatarImageCache()
         try {
-            when (val decoded = cache.decode(Bytes(bytes))) {
+            val decoded = try {
+                cache.decode(Bytes(bytes))
+            } catch (failure: IllegalArgumentException) {
+                throw IOException("Unable to decode the selected image", failure)
+            }
+            when (decoded) {
                 is AvatarImageState.Ready -> decoded.image
                 is AvatarImageState.Failed -> throw decoded.failure
                 AvatarImageState.Absent -> throw IOException("The selected image is empty")
@@ -150,12 +162,54 @@ internal object ContactAvatarMedia {
         }
     }
 
-    internal suspend fun readBounded(input: java.io.InputStream): ByteArray {
+    internal suspend fun readSelection(open: () -> InputStream?): ByteArray = coroutineScope {
+        val owned = AtomicReference<InputStream?>()
+        val closer = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    owned.getAndSet(null)?.let { input -> providerCall { input.close() } }
+                }
+            }
+        }
+        val context = currentCoroutineContext()
+        try {
+            runInterruptible(Dispatchers.IO) {
+                val input = providerCall(open) ?: throw IOException("Unable to open the selected image")
+                owned.set(input)
+                try {
+                    readBounded(input) { context.ensureActive() }
+                } finally {
+                    if (owned.compareAndSet(input, null)) providerCall { input.close() }
+                }
+            }
+        } finally {
+            withContext(NonCancellable) { closer.cancelAndJoin() }
+        }
+    }
+
+    private inline fun <T> providerCall(action: () -> T): T = try {
+        action()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: SecurityException) {
+        throw failure
+    } catch (failure: RuntimeException) {
+        throw IOException("Unable to read the selected image", failure)
+    }
+
+    internal suspend fun readBounded(input: InputStream): ByteArray {
+        val context = currentCoroutineContext()
+        return readBounded(input) { context.ensureActive() }
+    }
+
+    private fun readBounded(input: InputStream, checkActive: () -> Unit): ByteArray {
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(8192)
         while (true) {
-            currentCoroutineContext().ensureActive()
-            val count = input.read(buffer, 0, minOf(buffer.size, MAX_INPUT_BYTES - output.size() + 1))
+            checkActive()
+            val count = providerCall { input.read(buffer, 0, minOf(buffer.size, MAX_INPUT_BYTES - output.size() + 1)) }
             if (count < 0) break
             if (count > MAX_INPUT_BYTES - output.size()) throw IOException("Selected image exceeds the 20 MiB input limit")
             output.write(buffer, 0, count)

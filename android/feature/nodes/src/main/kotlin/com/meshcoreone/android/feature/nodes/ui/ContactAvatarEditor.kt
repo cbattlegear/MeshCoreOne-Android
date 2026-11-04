@@ -191,6 +191,7 @@ internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Compos
     var loading by detail::loading
     var image by detail::image
     var geometry by detail::geometry
+    var avatarIdentity by detail::avatarIdentity
     val cache = remember { AvatarImageCache() }
     var avatar by remember { mutableStateOf<AvatarImageState>(AvatarImageState.Absent) }
     androidx.compose.runtime.LaunchedEffect(state.contact.avatarImageData) {

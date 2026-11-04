@@ -814,7 +814,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         val lifetimes = type.getMethod("getLifetimes").invoke(retained) as List<*>
         val lifetime = lifetimes.single { value ->
             val holder = requireNotNull(value).javaClass.getMethod("getHolder").invoke(value) as ContactDetailStateHolder
-            holder.state.value.contact.key == key
+            EntityKey(holder.state.value.contact.radioId, holder.state.value.contact.id) == key
         } ?: return null
         return lifetime.javaClass.getMethod("getAvatarIdentity").invoke(lifetime) as? Pair<EntityKey, Bytes>
     }

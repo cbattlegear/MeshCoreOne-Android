@@ -39,6 +39,8 @@ class MessagePollingService(
         val matchesChannelOccurrence: Boolean,
         var failure: Exception? = null,
         val occurrenceID: UUID = UUID.randomUUID(),
+        val matchesDirectOccurrence: Boolean = false,
+        var localResolution: LocalDirectContactResolution? = null,
     ) {
         fun inContext(context: DeliveryContext): Delivery =
             copy(context = context, channelEnvelope = channelEnvelope?.copy(context = context))
@@ -52,6 +54,7 @@ class MessagePollingService(
     private val observedDuringPoll = ArrayDeque<Delivery>()
     private val expectedEchoes = mutableMapOf<MeshEvent, Long>()
     private val expectedChannelEchoes = mutableMapOf<ChannelMessage, ArrayDeque<Delivery>>()
+    private val expectedDirectEchoes = mutableMapOf<ContactMessage, ArrayDeque<Delivery>>()
     private var contactHandler: (suspend (ContactMessage, ContactDTO?, DeliveryContext) -> Unit)? = null
     private var localDirectHandler: (suspend (LocalDirectMessageEnvelope) -> Unit)? = null
     private var channelHandler: (suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit)? = null
@@ -166,7 +169,7 @@ class MessagePollingService(
         stopAutoLocked()
         val task = synchronized(lock) { monitorActive = false; listener.also { listener = null } }
         task?.cancelAndJoin()
-        synchronized(lock) { expectedEchoes.clear(); expectedChannelEchoes.clear() }
+        synchronized(lock) { expectedEchoes.clear(); expectedChannelEchoes.clear(); expectedDirectEchoes.clear() }
     }
 
     override suspend fun startAutoFetch(radioId: RadioId) {
@@ -303,9 +306,10 @@ class MessagePollingService(
                     if (seen >= 0) {
                         repeat(seen) { pending.addLast(observedDuringPoll.removeFirst()) }
                         val observed = observedDuringPoll.removeFirst()
-                        if (sameChannelOccurrence(observed, delivery)) {
+                        if (sameChannelOccurrence(observed, delivery) || sameDirectOccurrence(observed, delivery)) {
                             delivery = observed.inContext(delivery.context).copy(
                                 matchesChannelOccurrence = observed.matchesChannelOccurrence || delivery.matchesChannelOccurrence,
+                                matchesDirectOccurrence = observed.matchesDirectOccurrence || delivery.matchesDirectOccurrence,
                             )
                         }
                     } else {
@@ -358,6 +362,8 @@ class MessagePollingService(
             ChannelReceiveEnvelope(UUID.randomUUID(), token, it.message, context, ChannelReceiveOrigin.Unproved)
         },
         channelEnvelopeHandler != null,
+        matchesDirectOccurrence = localDirectHandler != null && event is MeshEvent.ContactMessageReceived &&
+            event.message.textType.toInt() !in 1..2,
     )
 
     private fun matchesEcho(first: Delivery, second: Delivery): Boolean {
@@ -367,6 +373,9 @@ class MessagePollingService(
             if (left.origin != right.origin) return false
             if (first.matchesChannelOccurrence || second.matchesChannelOccurrence) {
                 return left.message === right.message
+            }
+            if (first.matchesDirectOccurrence || second.matchesDirectOccurrence) {
+                return sameDirectOccurrence(first, second)
             }
         }
         return first.event == second.event
@@ -381,6 +390,12 @@ class MessagePollingService(
             val exact = deliveries.indexOfFirst { sameChannelOccurrence(it, incoming) }
             if (exact >= 0) return exact
         }
+        if (incoming.matchesDirectOccurrence ||
+            deliveries.any { it.matchesDirectOccurrence && it.event == incoming.event }
+        ) {
+            val exact = deliveries.indexOfFirst { sameDirectOccurrence(it, incoming) }
+            if (exact >= 0) return exact
+        }
         return deliveries.indexOfFirst { matchesEcho(it, incoming) }
     }
 
@@ -390,7 +405,20 @@ class MessagePollingService(
         return left.message === right.message && left.origin == right.origin
     }
 
+    private fun sameDirectOccurrence(first: Delivery, second: Delivery): Boolean {
+        val left = (first.event as? MeshEvent.ContactMessageReceived)?.message ?: return false
+        val right = (second.event as? MeshEvent.ContactMessageReceived)?.message ?: return false
+        return left === right
+    }
+
+    private fun directEchoMessage(delivery: Delivery): ContactMessage? =
+        (delivery.event as? MeshEvent.ContactMessageReceived)?.message?.takeIf { it.textType.toInt() !in 1..2 }
+
     private fun expectEcho(delivery: Delivery) {
+        directEchoMessage(delivery)?.let { message ->
+            expectedDirectEchoes.getOrPut(message) { ArrayDeque() }.addLast(delivery)
+            return
+        }
         val envelope = delivery.channelEnvelope
         if (envelope == null) {
             expectedEchoes[delivery.event] = Math.incrementExact(expectedEchoes[delivery.event] ?: 0)
@@ -400,6 +428,14 @@ class MessagePollingService(
     }
 
     private fun takeEcho(delivery: Delivery): Boolean {
+        directEchoMessage(delivery)?.let { message ->
+            val echoes = expectedDirectEchoes[message] ?: return false
+            val index = matchingIndex(echoes, delivery)
+            if (index < 0) return false
+            echoes.removeAt(index)
+            if (echoes.isEmpty()) expectedDirectEchoes.remove(message)
+            return true
+        }
         val envelope = delivery.channelEnvelope
         if (envelope != null) {
             val echoes = expectedChannelEchoes[envelope.message] ?: return false
@@ -432,7 +468,9 @@ class MessagePollingService(
                         }
                         if (localHandler != null) {
                             val producer = checkNotNull(dataStore as? LocalDirectContactPersisting)
-                            val resolution = producer.classifyLocalDirectContact(token.radioId, event.message.senderPublicKeyPrefix)
+                            val resolution = delivery.localResolution ?: producer.classifyLocalDirectContact(
+                                token.radioId, event.message.senderPublicKeyPrefix,
+                            ).also { delivery.localResolution = it }
                             checkPolling("dispatchLocalDirect.lookup")
                             invokeConsumer {
                                 localHandler(LocalDirectMessageEnvelope(
@@ -440,17 +478,17 @@ class MessagePollingService(
                                 ))
                             }
                         } else {
-                        val contact = dataStore.fetchContactByPrefix(token.radioId, event.message.senderPublicKeyPrefix)
-                        checkPolling("dispatchContact.lookup")
-                        val handler = synchronized(lock) {
-                            when (event.message.textType.toInt()) {
-                                1 -> cliHandler?.let { callback -> suspend { callback(event.message, contact) } }
-                                2 -> signedHandler?.let { callback -> suspend { callback(event.message, contact) } }
-                                else -> contactHandler?.let { callback -> suspend { callback(event.message, contact, delivery.context) } }
-                            }
-                        } ?: throw MessagePollingException(MessagePollingError.PollingFailed,
-                            IllegalStateException("Contact handler is not installed"))
-                        invokeConsumer(handler)
+                            val contact = dataStore.fetchContactByPrefix(token.radioId, event.message.senderPublicKeyPrefix)
+                            checkPolling("dispatchContact.lookup")
+                            val handler = synchronized(lock) {
+                                when (event.message.textType.toInt()) {
+                                    1 -> cliHandler?.let { callback -> suspend { callback(event.message, contact) } }
+                                    2 -> signedHandler?.let { callback -> suspend { callback(event.message, contact) } }
+                                    else -> contactHandler?.let { callback -> suspend { callback(event.message, contact, delivery.context) } }
+                                }
+                            } ?: throw MessagePollingException(MessagePollingError.PollingFailed,
+                                IllegalStateException("Contact handler is not installed"))
+                            invokeConsumer(handler)
                         }
                     }
                     is MeshEvent.ChannelMessageReceived -> {
@@ -562,7 +600,7 @@ class MessagePollingService(
             for ((task, invocation) in work) joinUnlessConsumerClosing(task, invocation)
             synchronized(lock) {
                 polling = null; listener = null; monitorActive = false
-                expectedEchoes.clear(); expectedChannelEchoes.clear()
+                expectedEchoes.clear(); expectedChannelEchoes.clear(); expectedDirectEchoes.clear()
             }
             clearMessageHandlers()
             ownership.job.cancel()

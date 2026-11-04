@@ -402,10 +402,11 @@ class TracePathStateHolder(
         }
     }
 
-    /** Switches to a pasted uniform width the radio can honor, unless it already matches. */
+    /** Accepts a supported uniform-width paste; rebuilds the path only when its width changes. */
     fun adoptHashSize(forPastedCodes: String) {
         if (!supportsTraceHashOverride) return
         val mode = TraceHashModes.inferredTraceHashMode(forPastedCodes) ?: return
+        notifyHashModeAction()
         applySupportedTraceHashMode(mode, preserveOverride = false)
     }
 
@@ -431,7 +432,7 @@ class TracePathStateHolder(
         effectiveMode: UByte = effectiveTraceMode,
     ) {
         if (mode != effectiveMode) {
-            if (preserveOverride) applyTraceHashMode(mode) else setTraceHashMode(mode)
+            applyTraceHashMode(mode)
         } else if (preserveOverride && current.traceHashMode != mode) {
             update { it.copy(traceHashMode = mode) }
         }

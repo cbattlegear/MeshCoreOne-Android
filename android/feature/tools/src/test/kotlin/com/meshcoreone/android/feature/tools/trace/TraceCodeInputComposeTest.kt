@@ -499,6 +499,33 @@ class TraceCodeInputComposeTest {
         assertTrue(host.get().sender.sent.isEmpty())
     }
 
+    @Test fun sameWidthPasteSupersedesPendingRestorationBeforeTheRadioSignalCatchesUp() {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        val activeRadio = RadioId(UUID.fromString("00000000-0000-0000-0000-0000000000b2"))
+        host.get().runOnUiThread { host.get().reconnectWithStaleRadioSignal(activeRadio, RADIO) }
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        paste("AA,BB")
+        host.get().runOnUiThread { host.get().publishActiveRadioSignal() }
+        settle()
+        assertEquals("AA,BB", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().containsAll(listOf("AA will be added", "BB will be added")))
+        click("Add nodes: AA, BB")
+        assertTrue(announcementTexts().contains("Adding as hop 3"))
+        assertEquals(2, host.get().recents.values.values.single().size)
+        scrollToIndex(47)
+        assertTrue(button("1 B").config[SemanticsProperties.Selected])
+        assertTrue(host.get().sender.sent.isEmpty())
+    }
+
     @Test fun disconnectBetweenSignalCheckAndRestorationRetainsTheSavedWidth() {
         val fixture = changeDeviceAfterRestoreCheck(null)
         val pendingMode = fixture.entry.restoredHashMode.takeIf { fixture.entry.restoringDraft }
@@ -837,6 +864,26 @@ class TraceCodeInputComposeTest {
         assertEquals(previous, harness.state.result)
         harness.deps.device = device(pathHashMode = 1u)
         assertEquals(1, harness.holder.hashSize)
+    }
+
+    @Test fun sameWidthPasteNotifiesOnceWithoutInvalidatingAnExistingPathOrResult() {
+        val harness = configured()
+        harness.holder.loadSavedPath(savedPath(Bytes.of(0xAA), hashSize = 1))
+        val previous = result(emptyList())
+        harness.holder.editStateForTesting { it.copy(result = previous) }
+        val before = harness.state
+        var actions = 0
+        val stopObserving = harness.holder.observeHashModeActions { actions++ }
+        try {
+            harness.holder.adoptHashSize("AA,BB")
+            assertEquals(1, actions)
+            assertEquals(before, harness.state)
+            harness.holder.adoptHashSize("AA00,BB00")
+            assertEquals(2, actions)
+            assertEquals(2, harness.holder.hashSize)
+        } finally {
+            stopObserving()
+        }
     }
 
     private fun assertRecreatedDraft(draft: String, mode: String) {

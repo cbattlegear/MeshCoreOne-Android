@@ -839,7 +839,34 @@ the first value. If `beforeSend` ran, cancellation is permanently
 pre-send and serializer controls cover the latter case. No synthetic late-unsent
 transition is asserted.
 
-At this evidence revision the integrated source candidate is authored but has
-not been executed. Exact-head hosted CI and independent source review remain
-required; no local Gradle result or older-head check is a pass, and no duplicate
-CI-result bundle is retained.
+Candidate `3ebb99d017eedc993bd95c47d744c819b8baa41e` ran in hosted CI
+[41882543558](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41882543558).
+Attempt 1 failed the datastore identity import/export control with an
+`IllegalStateException at FileStorage.kt:52`, before services JUnit discovery.
+The run uploaded no Actions artifact, so neither the full exception message nor
+its JUnit stack was available; no root cause or intermittent-failure claim is made.
+The ordinary same-SHA failed-job rerun (attempt 2) passed that datastore task,
+but executed and failed six services recovery controls. It is not a candidate pass.
+
+Source review on that exact head identified late-report retirement races, loss
+of an incoming obligation before a failed preference read, unrelated queued-write
+registrations removed by settlement, and stale pending-marker deduplication.
+The repair retains weak exact-dispatch terminal/local-completion evidence after
+retirement, registers incoming uncertainty before fallible preference access,
+defers provenance resolution without claiming ownership of a stored marker, and
+clears only the matching recovery owners rather than unrelated queued writes.
+Pending and reported receipts share the same deduplication check.
+
+New real-session controls delay cancellation reporting until after successful
+terminal/local completion or rejection, retry marker clearing from an immediately
+resumed subscriber before the failure callback, fail preference reads only after
+dispatch with and without a pre-existing stored marker, and cancel a resumed
+queued write during its held persistence tail while a replacement graph attempts
+sync. Existing safety controls now use genuinely unanswered or superseded writes
+where continued blocking is essential; the queued marker-error identity controls
+retain their error assertions and permit exact settlement only after true then
+false marker commits succeed.
+
+This repair requires fresh exact-head hosted CI and source review. No local
+Gradle result or older-head check is a pass, and no duplicate CI-result bundle
+is retained.

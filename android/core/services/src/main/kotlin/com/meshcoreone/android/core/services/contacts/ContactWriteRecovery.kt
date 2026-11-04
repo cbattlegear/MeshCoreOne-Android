@@ -43,6 +43,7 @@ class ContactWriteAdmissionBlocked(
 internal object ContactWriteRecovery {
     private class RadioState {
         var epoch: Any? = null
+        var epochProvenanceReadPending = false
         var epochLoadedWithoutProvenance = false
         var uncertaintyWithoutDispatch = false
         var markerRecordingPending = false
@@ -58,6 +59,8 @@ internal object ContactWriteRecovery {
         val reportedUncertainties = linkedSetOf<ContactWriteDispatch>()
         val pendingUncertainties = linkedSetOf<ContactWriteDispatch>()
         val settledUncertainties = linkedSetOf<ContactWriteDispatch>()
+        // A delayed caller/failure report may arrive after all strong receipt references retire.
+        val provenDispatches = WeakHashMap<ContactWriteDispatch, Unit>()
     }
 
     private class Subscriber(
@@ -237,6 +240,7 @@ internal object ContactWriteRecovery {
             val uncertainty = when (dispatch.outcome) {
                 ContactWriteDispatchOutcome.DEFINITELY_UNSENT,
                 ContactWriteDispatchOutcome.REJECTED -> {
+                    state.provenDispatches[dispatch] = Unit
                     val settled = try {
                         settleProvenDispatch(preferences, radioId, state, dispatch)
                     } catch (failure: Exception) {
@@ -251,6 +255,7 @@ internal object ContactWriteRecovery {
                 ContactWriteDispatchOutcome.ACCEPTED -> {
                     val locallyCompleted = state.locallyCompletedWrites.remove(dispatch)
                     if (locallyCompleted) {
+                        state.provenDispatches[dispatch] = Unit
                         if (dispatch in state.reportedUncertainties || dispatch in state.pendingUncertainties) {
                             try {
                                 settleProvenDispatch(preferences, radioId, state, dispatch)
@@ -296,15 +301,16 @@ internal object ContactWriteRecovery {
 
     fun require(preferences: ContactPreferenceFlags, radioId: RadioId, dispatch: ContactWriteDispatch? = null) = mutate {
         val state = state(preferences, radioId)
-        val alreadyReported = dispatch != null && dispatch in state.reportedUncertainties
-        val alreadySettled = dispatch != null && dispatch in state.settledUncertainties
-        loadEpoch(preferences, radioId, state)
-        if (alreadyReported || alreadySettled) {
-            if (!clearSettledEpoch(preferences, radioId, state)) {
-                recordPendingMarker(preferences, radioId, state)
-            }
+        val alreadyKnown = dispatch != null && (
+            dispatch in state.pendingUncertainties || dispatch in state.reportedUncertainties ||
+                dispatch in state.provenDispatches
+            )
+        if (alreadyKnown) {
+            if (state.epoch != null) loadEpoch(preferences, radioId, state)
             return@mutate
         }
+        // Register before reading preferences or retrying an older receipt: either can fail.
+        if (state.epoch == null) state.epochProvenanceReadPending = true
         state.epoch = Any()
         state.markerRecordingPending = true
         if (dispatch != null) {
@@ -312,7 +318,8 @@ internal object ContactWriteRecovery {
         } else {
             state.uncertaintyWithoutDispatch = true
         }
-        recordPendingMarker(preferences, radioId, state)
+        publishTrackedState(preferences, radioId, state)
+        loadEpoch(preferences, radioId, state)
     }
 
     fun reconciled(preferences: ContactPreferenceFlags, radioId: RadioId, epoch: Any): Boolean = mutate {
@@ -346,7 +353,11 @@ internal object ContactWriteRecovery {
         radioId: RadioId,
         state: RadioState,
     ): Any? {
-        if (state.epoch == null && preferences.bool(key(radioId))) {
+        if (state.epochProvenanceReadPending) {
+            if (preferences.bool(key(radioId))) state.epochLoadedWithoutProvenance = true
+            state.epochProvenanceReadPending = false
+            publishTrackedState(preferences, radioId, state)
+        } else if (state.epoch == null && preferences.bool(key(radioId))) {
             state.epoch = Any()
             state.epochLoadedWithoutProvenance = true
             publishTrackedState(preferences, radioId, state)
@@ -379,7 +390,7 @@ internal object ContactWriteRecovery {
         radioId: RadioId,
         state: RadioState,
     ): Boolean {
-        if (state.epoch == null || state.epochLoadedWithoutProvenance ||
+        if (state.epoch == null || state.epochProvenanceReadPending || state.epochLoadedWithoutProvenance ||
             state.uncertaintyWithoutDispatch || state.syncing
         ) return false
         val uncertainties = state.pendingUncertainties + state.reportedUncertainties
@@ -410,17 +421,18 @@ internal object ContactWriteRecovery {
     }
 
     private fun clearRecoveryState(state: RadioState) {
+        val owners = state.pendingUncertainties + state.reportedUncertainties
+        owners.forEach {
+            state.provenDispatches[it] = Unit
+            abandon(state, it)
+        }
         state.markerRecordingPending = false
         state.markerClearingPending = false
         state.markerClearRetryPending = false
         state.epoch = null
+        state.epochProvenanceReadPending = false
         state.epochLoadedWithoutProvenance = false
         state.uncertaintyWithoutDispatch = false
-        state.writes.clear()
-        state.dispatchingWrites.clear()
-        state.finishedWrites.clear()
-        state.invalidatedWrites.clear()
-        state.locallyCompletedWrites.clear()
         state.reportedUncertainties.clear()
         state.pendingUncertainties.clear()
         state.settledUncertainties.clear()

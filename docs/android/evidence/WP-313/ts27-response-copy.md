@@ -30,6 +30,11 @@ across two rows and Ctrl+C, requiring exact clipboard text without action labels
 It also checks compact row height, the per-line accessibility Copy action and
 keyboard activation of the 48dp chooser control. These cases are authored,
 not claimed as executed while hosted CI is queued.
+The chooser opens at the reading log's first visible item rather than restarting
+at the oldest line. A 1,000-line mounted control scrolls the reading log near its
+end and requires the recent response to be immediately visible in the chooser.
+Large-font height is compared with equivalent Text-only content at the same
+font scale, not a fixed pixel limit.
 
 Typed admissions on the base: renderer `modify-related-consumer` uses
 `reviewed-support-consumer`; separate mounted test `add-or-update-related-test`

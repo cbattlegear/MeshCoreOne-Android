@@ -5,6 +5,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -64,6 +65,7 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
     val terminal by controller.state.collectAsStateWithLifecycle()
     var pending by remember { mutableStateOf<String?>(null) }
     var choosingCopy by remember { mutableStateOf(false) }
+    val outputScroll = rememberLazyListState()
     val historyUp = stringResource(AppToolsStrings.toolsCliHistoryUp)
     val historyDown = stringResource(AppToolsStrings.toolsCliHistoryDown)
     val tabComplete = stringResource(AppToolsStrings.toolsCliTabComplete)
@@ -80,7 +82,7 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
     DisposableEffect(holder) { onDispose { holder.cancelCurrentCommand(); controller.onDisappear() } }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SelectionContainer(Modifier.weight(1f).testTag("remote-cli-output")) {
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = outputScroll) {
                 items(state.terminal.outputLines, key = { it.id }) { line ->
                         Text(
                             line.text,
@@ -148,7 +150,9 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
         onDismissRequest = { choosingCopy = false },
         title = { Text(copy) },
         text = {
-            LazyColumn {
+            LazyColumn(state = rememberLazyListState(
+                initialFirstVisibleItemIndex = outputScroll.firstVisibleItemIndex,
+            )) {
                 items(state.terminal.outputLines, key = { it.id }) { line ->
                     TextButton(
                         onClick = {

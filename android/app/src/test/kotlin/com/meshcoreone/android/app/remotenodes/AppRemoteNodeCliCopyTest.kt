@@ -9,10 +9,14 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -98,7 +102,8 @@ class AppRemoteNodeCliCopyTest {
                     LocalDensity provides Density(1f, 2f),
                 ) {
                     MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
-                        Box(Modifier.width(320.dp)) {
+                        Column(Modifier.width(320.dp)) {
+                            Text("alpha", Modifier.testTag("terminal-text-baseline"), fontFamily = FontFamily.Monospace)
                             AppRemoteNodeCli(fixture.session, { _, _, _ -> "alpha\nbeta" }, true)
                         }
                     }
@@ -108,7 +113,7 @@ class AppRemoteNodeCliCopyTest {
             input.performClick().performTextReplacement("probe")
             input.performKeyInput { pressKey(Key.Enter) }
             compose.onNodeWithTag("remote-cli-confirm").performClick()
-            val alpha = compose.onNodeWithText("alpha").performScrollTo()
+            val alpha = compose.onNode(hasText("alpha") and !hasTestTag("terminal-text-baseline")).performScrollTo()
             val beta = compose.onNodeWithText("beta")
             compose.waitForIdle()
             val first = alpha.fetchSemanticsNode().boundsInRoot
@@ -129,9 +134,15 @@ class AppRemoteNodeCliCopyTest {
             }
             compose.runOnIdle {
                 assertEquals("alpha\nbeta", clipboard.primaryClip!!.getItemAt(0).text.toString())
-                assertTrue("Reading rows must remain compact", first.height < 48f)
+                assertEquals(
+                    "Reading rows must match Text-only height at the same font scale",
+                    compose.onNodeWithTag("terminal-text-baseline").fetchSemanticsNode().boundsInRoot.height,
+                    first.height,
+                    .1f,
+                )
             }
-            beta.performSemanticsAction(SemanticsActions.CustomActions) { actions ->
+            compose.runOnIdle {
+                val actions = beta.fetchSemanticsNode().config[SemanticsActions.CustomActions]
                 assertEquals(host.get().getString(AppToolsStrings.toolsRxLogCopy), actions.single().label)
                 assertTrue(actions.single().action())
             }
@@ -142,6 +153,37 @@ class AppRemoteNodeCliCopyTest {
                 .performSemanticsAction(SemanticsActions.RequestFocus) { it() }
             compose.onNodeWithTag("remote-cli-copy").performKeyInput { pressKey(Key.Enter) }
             compose.onNode(isDialog()).assertExists()
+        } finally {
+            host.pause().stop().destroy()
+        }
+    }
+
+    @Test fun chooserStartsAtTheVisibleRecentResponseInLongHistory() {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        try {
+            host.get().setContent {
+                MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
+                    AppRemoteNodeCli(RemoteNodesFixture().session, { _, _, _ ->
+                        (0 until 1_000).joinToString("\n") { "response-$it" }
+                    }, true)
+                }
+            }
+            val input = compose.onNodeWithTag("remote-cli-input")
+            input.performClick().performTextReplacement("long")
+            input.performKeyInput { pressKey(Key.Enter) }
+            compose.onNodeWithTag("remote-cli-confirm").performClick()
+            compose.waitForIdle()
+            compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex) and !hasAnyAncestor(isDialog()))
+                .performScrollToIndex(990)
+            compose.onNodeWithText("response-990").assertIsDisplayed()
+            compose.onNodeWithTag("remote-cli-copy").performClick()
+            compose.onNode(hasText("response-990") and hasAnyAncestor(isDialog()))
+                .assertIsDisplayed().performClick()
+            compose.runOnIdle {
+                val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                assertEquals((0 until 1_000).joinToString("\n") { "response-$it" },
+                    clipboard.primaryClip!!.getItemAt(0).text.toString())
+            }
         } finally {
             host.pause().stop().destroy()
         }

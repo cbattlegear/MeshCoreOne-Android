@@ -178,14 +178,18 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         }
         assertEquals("expired save: shared deadline expired", expired.message)
         assertFalse(polled)
-        var samples = 0
+        var conditionEvaluated = false
         val late = assertFailsWith<AssertionError> {
             awaitAvatarWrite(
                 "late holder completion", 2_000_000_000L, { "late control" },
-                nanoTime = { if (samples++ == 0) 1_000_000_000L else 2_000_000_000L },
-            ) { true }
+                nanoTime = { if (conditionEvaluated) 2_000_000_000L else 1_000_000_000L },
+            ) {
+                conditionEvaluated = true
+                true
+            }
         }
         assertEquals("late holder completion: condition completed after shared deadline", late.message)
+        assertTrue(conditionEvaluated, "The late-completion branch must follow a successful condition")
     }
 
     @Test
@@ -600,13 +604,13 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         diagnostic: () -> String,
         nanoTime: () -> Long = System::nanoTime,
     ) {
-        val scheduler = Shadows.shadowOf(Looper.getMainLooper()).scheduler
-        while (scheduler.areAnyRunnable()) {
+        val mainLooper = Shadows.shadowOf(Looper.getMainLooper())
+        while (!mainLooper.isIdle) {
             if (nanoTime() >= deadline) {
                 failWithDiagnostics("$stage: shared deadline expired during Main task pumping", null, diagnostic)
             }
-            scheduler.runOneTask()
-            if (nanoTime() >= deadline && scheduler.areAnyRunnable()) {
+            mainLooper.runOneTask()
+            if (nanoTime() >= deadline && !mainLooper.isIdle) {
                 failWithDiagnostics("$stage: shared deadline expired during Main task pumping", null, diagnostic)
             }
         }

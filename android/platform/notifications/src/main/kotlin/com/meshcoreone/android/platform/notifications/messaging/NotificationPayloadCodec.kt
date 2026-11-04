@@ -6,6 +6,8 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
+import org.json.JSONException
+import org.json.JSONObject
 
 internal object NotificationPayloadCodec {
     private const val TYPE = "mc1.notification.type"
@@ -61,6 +63,66 @@ internal object NotificationPayloadCodec {
                 putExtra(CHANNEL, payload.channelIndex.toInt())
             }
         }
+    }
+
+    fun encode(payload: NotificationPayload): String {
+        val extras = write(Intent(), payload).extras ?: error("Notification payload has no encoded fields")
+        val fields = JSONObject()
+        extras.keySet().sorted().forEach { key ->
+            val taggedValue = when (val value = extras.get(key)) {
+                is String -> JSONObject().put("kind", "string").put("value", value)
+                is Int -> JSONObject().put("kind", "int").put("value", value)
+                is Long -> JSONObject().put("kind", "long").put("value", value)
+                else -> error("Unsupported notification payload field")
+            }
+            fields.put(key, taggedValue)
+        }
+        return JSONObject().put("version", 1).put("fields", fields).toString()
+    }
+
+    fun decode(encoded: String): NotificationPayload? = try {
+        val root = JSONObject(encoded)
+        if (root.keys().asSequence().toSet() != setOf("version", "fields") || root.opt("version") != 1) {
+            return null
+        }
+        val fields = root.getJSONObject("fields")
+        val intent = Intent()
+        val keys = fields.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (key !in PERSISTED_KEYS) return null
+            val taggedValue = fields.getJSONObject(key)
+            if (taggedValue.keys().asSequence().toSet() != setOf("kind", "value")) return null
+            when (taggedValue.opt("kind")) {
+                "string" -> {
+                    val value = taggedValue.opt("value")
+                    if (value !is String) return null
+                    intent.putExtra(key, value)
+                }
+                "int" -> {
+                    val value = taggedValue.opt("value")
+                    if (value !is Number) return null
+                    val longValue = value.toLong()
+                    if (value.toDouble() != longValue.toDouble() ||
+                        longValue !in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()
+                    ) return null
+                    intent.putExtra(key, longValue.toInt())
+                }
+                "long" -> {
+                    val value = taggedValue.opt("value")
+                    if (value !is Number) return null
+                    val longValue = value.toLong()
+                    if (value.toDouble() != longValue.toDouble()) return null
+                    intent.putExtra(key, longValue)
+                }
+                else -> return null
+            }
+        }
+        read(intent)
+    } catch (_: JSONException) {
+        null
+    } catch (_: IllegalArgumentException) {
+        null
     }
 
     fun read(intent: Intent): NotificationPayload? = try {
@@ -139,4 +201,9 @@ internal object NotificationPayloadCodec {
 
     private fun optionalChannel(intent: Intent): UByte? =
         if (intent.hasExtra(CHANNEL)) channel(intent) else null
+
+    private val PERSISTED_KEYS = setOf(
+        TYPE, RADIO, MESSAGE, CHANNEL, ROOM, BATTERY,
+        "$CONTACT.radio", "$CONTACT.id", "$SESSION.radio", "$SESSION.id",
+    )
 }

@@ -4,6 +4,9 @@ package com.meshcoreone.android.core.services.contacts
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
 import com.meshcoreone.android.core.contracts.domain.ContactFavoriteUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactBlockTransition
+import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdate
+import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdateResult
 import com.meshcoreone.android.core.contracts.domain.ContactServiceProtocol
 import com.meshcoreone.android.core.contracts.domain.ContactSyncResult
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
@@ -573,31 +576,17 @@ class ContactService(
     ) {
         val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
 
-        // null => leave unchanged; empty/whitespace => clear; otherwise trim and set.
-        val resolvedNickname = if (nickname != null) {
-            nickname.trimSwiftWhitespacesAndNewlines().ifEmpty { null }
-        } else {
-            existing.nickname
-        }
-
-        // Check blocking state transitions
-        val isBeingBlocked = isBlocked == true && !existing.isBlocked
-        val isBeingUnblocked = isBlocked == false && existing.isBlocked
-
-        contacts.saveContact(
-            existing.rebuiltThroughContactModel().copy(
-                nickname = resolvedNickname,
-                isBlocked = isBlocked ?: existing.isBlocked,
-                isFavorite = isFavorite ?: existing.isFavorite,
-                unreadCount = if (isBeingBlocked) 0 else existing.unreadCount,
-            ),
+        val result = applyLocalUpdate(
+            contact, existing.publicKey,
+            ContactLocalUpdate.Preferences(nickname?.trimSwiftWhitespacesAndNewlines(), isBlocked, isFavorite),
         )
 
-        // Trigger cleanup for blocking state changes
-        if (isBeingBlocked) {
-            cleanupCoordinator?.handleCleanup(contact, ContactCleanupReason.BLOCKED, existing.publicKey)
-        } else if (isBeingUnblocked) {
-            cleanupCoordinator?.handleCleanup(contact, ContactCleanupReason.UNBLOCKED, existing.publicKey)
+        when (result.blockTransition) {
+            ContactBlockTransition.BLOCKED ->
+                cleanupCoordinator?.handleCleanup(contact, ContactCleanupReason.BLOCKED, existing.publicKey)
+            ContactBlockTransition.UNBLOCKED ->
+                cleanupCoordinator?.handleCleanup(contact, ContactCleanupReason.UNBLOCKED, existing.publicKey)
+            ContactBlockTransition.NONE -> Unit
         }
 
         syncCoordinator?.notifyContactsChanged()
@@ -606,9 +595,7 @@ class ContactService(
     /** Updates OCV settings for a contact. */
     suspend fun updateContactOCVSettings(contact: EntityKey, preset: String, customArray: String?) {
         val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
-        contacts.saveContact(
-            existing.rebuiltThroughContactModel().copy(ocvPreset = preset, customOCVArrayString = customArray),
-        )
+        applyLocalUpdate(contact, existing.publicKey, ContactLocalUpdate.OCVSettings(preset, customArray))
     }
 
     /** Updates a contact's locally stored profile picture; `null` removes it. */
@@ -658,8 +645,17 @@ class ContactService(
         pushFlags(existing, newFlags)
 
         // Device confirmed - update local storage
-        contacts.saveContact(existing.rebuiltThroughContactModel().copy(flags = newFlags))
+        applyLocalUpdate(contact, existing.publicKey, ContactLocalUpdate.TelemetryPermissions(granted))
     }
+
+    private suspend fun applyLocalUpdate(
+        contact: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+    ): ContactLocalUpdateResult.Updated =
+        when (val result = contacts.updateContactLocalFields(contact, expectedPublicKey, update)) {
+            is ContactLocalUpdateResult.Updated -> result
+            ContactLocalUpdateResult.ContactNotFound,
+            ContactLocalUpdateResult.IdentityMismatch -> throw ContactServiceError.ContactNotFound()
+        }
 
     /** Push [newFlags] for [existing] to the device and wait for confirmation. */
     private suspend fun pushFlags(existing: ContactDTO, newFlags: UByte) {
@@ -778,12 +774,6 @@ private fun MeshCoreException.isDeviceError(code: ErrorCode): Boolean =
     this is MeshCoreException.DeviceError && this.code == code.rawValue
 
 private fun UByte.withBits(mask: UByte, set: Boolean): UByte = if (set) this or mask else this and mask.inv()
-
-/**
- * Swift rebuilds these DTOs through the SwiftData `Contact` model, whose `lastHeardTimestamp` is a
- * non-optional `UInt32`: a `nil` value is persisted back as `0`.
- */
-private fun ContactDTO.rebuiltThroughContactModel(): ContactDTO = copy(lastHeardTimestamp = lastHeardTimestamp ?: 0u)
 
 /**
  * Foundation `trimmingCharacters(in: .whitespacesAndNewlines)`: Unicode `Zs`, `Zl`, `Zp`, TAB,

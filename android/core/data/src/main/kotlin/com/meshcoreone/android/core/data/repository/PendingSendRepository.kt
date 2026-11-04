@@ -16,6 +16,9 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             rejectSubmission(EntityKey(dto.radioId, dto.id), ChannelSubmissionConflict.IDENTITY_CONFLICT)
         }
         val candidate = dto.toEntity()
+        if (existing != null && existing.messageID != candidate.messageID) {
+            reject(candidate, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        }
         if (existing == null &&
             database.queuedChannelAttempts().forPending(candidate.radioId, candidate.id).isNotEmpty()
         ) reject(candidate, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
@@ -245,17 +248,49 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
     }
 
     override suspend fun purgeOrphanPendingSends(): Long = context.write("purgeOrphanPendingSends") {
-        val rows = database.pendingSends().orphanedRadioRows().filterNot { it.isChannel }
-        for (row in rows) database.pendingSends().delete(row.radioId, row.id)
-        if (rows.isNotEmpty()) save()
-        rows.size.toLong()
+        val removable = mutableListOf<PendingSendEntity>()
+        for (row in database.pendingSends().orphanedRadioRows()) {
+            if (!row.isDirect) {
+                if (!row.isChannel) context.reporter.report(
+                    "purgeOrphanPendingSends", rejection(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION),
+                )
+                continue
+            }
+            if (findConflictingSibling(row) != null) {
+                context.reporter.report(
+                    "purgeOrphanPendingSends", rejection(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION),
+                )
+            } else {
+                removable += row
+            }
+        }
+        var deleted = 0L
+        for (row in removable) deleted += database.pendingSends().delete(row.radioId, row.id).toLong()
+        if (deleted > 0) save()
+        deleted
     }
 
     override suspend fun purgeLegacyAttemptCountRows(): Long = context.write("purgeLegacyAttemptCountRows") {
-        val rows = database.pendingSends().legacyAttemptRows().filterNot { it.isChannel }
-        for (row in rows) database.pendingSends().delete(row.radioId, row.id)
-        if (rows.isNotEmpty()) save()
-        rows.size.toLong()
+        val removable = mutableListOf<PendingSendEntity>()
+        for (row in database.pendingSends().legacyAttemptRows()) {
+            if (!row.isDirect) {
+                if (!row.isChannel) context.reporter.report(
+                    "purgeLegacyAttemptCountRows", rejection(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION),
+                )
+                continue
+            }
+            if (findConflictingSibling(row) != null) {
+                context.reporter.report(
+                    "purgeLegacyAttemptCountRows", rejection(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION),
+                )
+            } else {
+                removable += row
+            }
+        }
+        var deleted = 0L
+        for (row in removable) deleted += database.pendingSends().delete(row.radioId, row.id).toLong()
+        if (deleted > 0) save()
+        deleted
     }
 
     override suspend fun beginQueuedChannelAttempt(
@@ -403,6 +438,9 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         if (existing != null && PendingSendKind.fromRawValue(existing.kindRawValue) == null) {
             reject(existing, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
         }
+        if (existing != null && existing.messageID != row.messageID) {
+            reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        }
         if (!row.isChannel) {
             if (existing?.isChannel == true) reject(existing, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
             rejectConflictingSibling(row, replacing + row.id)
@@ -437,14 +475,24 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
     private val PendingSendEntity.isChannel: Boolean get() = kindRawValue == PendingSendKind.CHANNEL.rawValue
     private val PendingSendEntity.isDirect: Boolean get() = kindRawValue == PendingSendKind.DM.rawValue
 
+    private suspend fun RepositoryTransaction.findConflictingSibling(
+        row: PendingSendEntity, excludedIDs: Set<UUID> = setOf(row.id),
+    ): PendingSendEntity? =
+        database.pendingSends().forMessage(row.radioId, row.messageID).firstOrNull {
+            it.id !in excludedIDs && (row.isChannel || !it.isDirect)
+        }
+
     private suspend fun RepositoryTransaction.rejectConflictingSibling(
         row: PendingSendEntity, excludedIDs: Set<UUID> = setOf(row.id),
     ) {
-        val conflict = database.pendingSends().forMessage(row.radioId, row.messageID).firstOrNull {
-            it.id !in excludedIDs && (row.isChannel || !it.isDirect)
-        } ?: return
-        reject(conflict, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        findConflictingSibling(row, excludedIDs)?.let {
+            reject(it, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        }
     }
+
+    private fun rejection(row: PendingSendEntity, reason: QueuedChannelAttemptConflict) =
+        PersistenceStoreException(PersistenceStoreError.InvalidData,
+            QueuedChannelAttemptRejected(EntityKey(RadioId(row.radioId), row.id), reason))
 
     private fun requireRemovable(row: PendingSendEntity) {
         if (row.isChannel && (row.channelDispatchStateRawValue != QueuedChannelDispatchState.READY.rawValue || row.channelAttemptID != null)) {
@@ -453,8 +501,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
     }
 
     private fun reject(row: PendingSendEntity, reason: QueuedChannelAttemptConflict): Nothing =
-        throw PersistenceStoreException(PersistenceStoreError.InvalidData,
-            QueuedChannelAttemptRejected(EntityKey(RadioId(row.radioId), row.id), reason))
+        throw rejection(row, reason)
 
     private fun reject(key: QueuedChannelAttemptKey, reason: QueuedChannelAttemptConflict): Nothing =
         throw PersistenceStoreException(PersistenceStoreError.InvalidData,

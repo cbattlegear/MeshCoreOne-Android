@@ -197,6 +197,31 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         assertEquals(listOf(updated), store.fetchPendingSends(RADIO_A))
     }
 
+    @Test fun directPendingIdentityCannotBeReboundToAnotherMessage() = runTest {
+        val firstMessageID = UUID.randomUUID()
+        val otherMessageID = UUID.randomUUID()
+        val pendingID = UUID.randomUUID()
+        val original = pending(messageID = firstMessageID, sequence = 1).copy(id = pendingID)
+        store.upsertPendingSend(original)
+        val sameMessageUpdate = original.copy(messageText = "same-message update", attemptCount = 3)
+        store.upsertPendingSend(sameMessageUpdate)
+        val rebind = pending(messageID = otherMessageID, sequence = 2).copy(id = pendingID)
+
+        rejection(QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION) {
+            store.upsertPendingSend(rebind)
+        }
+        rejection(QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION) {
+            store.insertPendingSendAssigningSequence(rebind)
+        }
+        rejection(QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION) {
+            store.replacePendingSendForRetry(otherMessageID, rebind)
+        }
+
+        assertEquals(listOf(sameMessageUpdate),
+            store.fetchPendingSendsForMessage(EntityKey(RADIO_A, firstMessageID)))
+        assertTrue(store.fetchPendingSendsForMessage(EntityKey(RADIO_A, otherMessageID)).isEmpty())
+    }
+
     @Test fun explicitChannelUpsertPreservesUnknownDispatchStateAndCannotBeginOrBump() = runTest {
         val row = channelMessage()
         val explicit = queued(row).copy(sequence = 9)
@@ -367,6 +392,52 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         assertEquals(0L, store.fetchPendingSends(RADIO_A).single { it.id == active.id }.attemptCount)
         assertEquals(QueuedChannelDispatchState.DISPATCHING,
             store.fetchPendingSends(RADIO_A).single { it.id == active.id }.channelDispatchState)
+    }
+
+    @Test fun standalonePurgesStillRemoveUnambiguousDirectOrphanAndLegacyRows() = runTest {
+        store.saveDevice(device())
+        val orphan = pending(RADIO_B)
+        val legacy = pending(attempt = null)
+        store.upsertPendingSend(orphan)
+        store.upsertPendingSend(legacy)
+
+        assertEquals(1L, store.purgeOrphanPendingSends())
+        assertEquals(0L, store.purgeOrphanPendingSends())
+        assertTrue(store.fetchPendingSends(RADIO_B).isEmpty())
+        assertEquals(1L, store.purgeLegacyAttemptCountRows())
+        assertEquals(0L, store.purgeLegacyAttemptCountRows())
+        assertTrue(store.fetchPendingSends(RADIO_A).isEmpty())
+    }
+
+    @Test fun warmUpRetainsAndReportsAmbiguousAndUnknownPurgeCandidates() = runTest {
+        store.saveDevice(device())
+        val orphanChannel = channelMessage().copy(radioId = RADIO_B)
+        val channel = queued(orphanChannel)
+        seed(orphanChannel, channel)
+        val orphanDirect = pending(RADIO_B, messageID = orphanChannel.id, attempt = null)
+        val directEntity = orphanDirect.toEntity()
+        db.pendingSends().insert(directEntity)
+        val unknownEntity = pending(RADIO_B, messageID = orphanChannel.id, attempt = null).toEntity()
+            .copy(kindRawValue = 99, contactID = null)
+        db.pendingSends().insert(unknownEntity)
+        val standaloneOrphan = pending(RADIO_B)
+        store.upsertPendingSend(standaloneOrphan)
+        val standaloneLegacy = pending(attempt = null)
+        store.upsertPendingSend(standaloneLegacy)
+
+        store.warmUp()
+
+        assertEquals(directEntity, db.pendingSends().byId(RADIO_B.value, directEntity.id))
+        assertEquals(channel.toEntity().copy(
+            sequence = 1,
+            channelDispatchStateRawValue = QueuedChannelDispatchState.READY.rawValue,
+        ), db.pendingSends().byId(RADIO_B.value, channel.id))
+        assertEquals(unknownEntity, db.pendingSends().byId(RADIO_B.value, unknownEntity.id))
+        assertNull(db.pendingSends().byId(RADIO_B.value, standaloneOrphan.id))
+        assertNull(db.pendingSends().byId(RADIO_A.value, standaloneLegacy.id))
+        val reported = issues.mapNotNull { it.cause as? QueuedChannelAttemptRejected }.map { it.reason }
+        assertTrue(QueuedChannelAttemptConflict.RETAINED_SUBMISSION in reported)
+        assertTrue(QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION in reported)
     }
 
     @Test fun acceptedCompletionPreservesAcceptedEvidenceAndDirectSiblingWithoutCompleting() = runTest {

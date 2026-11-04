@@ -584,15 +584,16 @@ class SharedUiComposeTest {
             }
         }
         resizeDp(840, 280, density)
-        val canvasBounds = compose.onNodeWithTag(
+        val canvasNode = compose.onNodeWithTag(
             "avatar-crop-canvas", useUnmergedTree = true,
-        ).fetchSemanticsNode().boundsInRoot
+        ).performScrollTo().assertIsDisplayed().fetchSemanticsNode()
         compose.runOnIdle {
             val actualCanvas = CropSize(
-                canvasBounds.width.toDouble() / density,
-                canvasBounds.height.toDouble() / density,
+                canvasNode.size.width.toDouble() / density,
+                canvasNode.size.height.toDouble() / density,
             )
             assertEquals(AvatarCropGeometry.cropSize(actualCanvas, true), geometry.value.cropSize, 2.0)
+            assertVisibleCropGuide(canvasNode, geometry.value.cropSize, density)
             assertTrue(geometry.value.cropSize < 300.0,
                 "The crop should fit the measured short canvas, not the raw window height")
             assertEquals(2.0, geometry.value.scale)
@@ -709,16 +710,10 @@ class SharedUiComposeTest {
         val node = preview.fetchSemanticsNode()
         compose.runOnIdle {
             assertTrue(geometry.value.cropSize >= 128.0)
-            val radius = (geometry.value.cropSize * density / 2).toFloat()
-            val center = node.positionInRoot + androidx.compose.ui.geometry.Offset(
-                node.size.width / 2f, node.size.height / 2f,
-            )
-            assertTrue(center.y - radius >= node.boundsInRoot.top - 1f)
-            assertTrue(center.y + radius <= node.boundsInRoot.bottom + 1f)
-            assertTrue(center.x - radius >= node.boundsInRoot.left - 1f)
-            assertTrue(center.x + radius <= node.boundsInRoot.right + 1f)
+            assertVisibleCropGuide(node, geometry.value.cropSize, density)
         }
         compose.onNodeWithTag("avatar-crop-zoom").performScrollTo().assertIsDisplayed()
+            .assertHeightIsAtLeast(49.dp).assertWidthIsAtLeast(49.dp)
             .performSemanticsAction(SemanticsActions.SetProgress) { it(2f) }
         for (label in listOf(
             AppContactsStrings.contactsDetailAvatarCropMoveRight, AppContactsStrings.contactsDetailAvatarCropMoveDown,
@@ -744,6 +739,17 @@ class SharedUiComposeTest {
         }
         compose.waitForIdle()
         bitmap.recycle()
+    }
+
+    private fun assertVisibleCropGuide(node: SemanticsNode, cropSizeDp: Double, density: Float) {
+        val radius = (cropSizeDp * density / 2).toFloat()
+        val center = node.positionInRoot + androidx.compose.ui.geometry.Offset(
+            node.size.width / 2f, node.size.height / 2f,
+        )
+        assertTrue(center.y - radius >= node.boundsInRoot.top - 1f)
+        assertTrue(center.y + radius <= node.boundsInRoot.bottom + 1f)
+        assertTrue(center.x - radius >= node.boundsInRoot.left - 1f)
+        assertTrue(center.x + radius <= node.boundsInRoot.right + 1f)
     }
 
     private fun resizeDp(widthDp: Int, heightDp: Int, density: Float) {

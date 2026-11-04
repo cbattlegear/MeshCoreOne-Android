@@ -128,7 +128,8 @@ class AppMapPreferencesTest {
         )
         for (legacyDiscovered in listOf(false, true)) {
             storage.preferences.resetAppPreferences()
-            assertTrue(legacy.edit().clear().putString("filter-v1", privateFilter.encode()).commit())
+            val storedPrivateFilter = privateFilter.copy(showDiscovered = !legacyDiscovered)
+            assertTrue(legacy.edit().clear().putString("filter-v1", storedPrivateFilter.encode()).commit())
             storage.preferences.set(AppStorageKey.showDiscoveredNodesOnMap, legacyDiscovered)
 
             val expected = privateFilter.copy(showDiscovered = legacyDiscovered)

@@ -30,6 +30,26 @@ internal class ChannelRepository(
                 ?.let { ChannelOccupantSnapshot(channel.toDTO(), it) }
         }
 
+    override suspend fun applyChannelMessageMetadataIfCurrentOccupant(
+        scope: ChannelHistoryScope,
+        lastMessageDate: Instant?,
+        incrementUnreadCount: Boolean,
+    ): ChannelOccupantMetadataMutationOutcome = context.channelWrite(
+        "applyChannelMessageMetadataIfCurrentOccupant", identityScope = identityScope,
+    ) {
+        val channel = database.channels().forIndex(scope.radioId.value, scope.channelIndex.toLong()).singleOrNull()
+        val occupantID = database.channelOccupants().forIndex(scope.radioId.value, scope.channelIndex.toLong())
+        if (channel == null || !channel.isEnabled || occupantID != scope.expectedOccupantID) {
+            return@channelWrite ChannelOccupantMetadataMutationOutcome.STALE_OR_UNPROVED
+        }
+        database.channels().upsert(channel.copy(
+            lastMessageDate = lastMessageDate?.let(StoredInstant::from),
+            unreadCount = if (incrementUnreadCount) checkedIncrement(channel.unreadCount) else channel.unreadCount,
+        ))
+        save()
+        ChannelOccupantMetadataMutationOutcome.APPLIED
+    }
+
     override suspend fun invalidateChannelOccupant(radioId: RadioId, index: UByte) =
         context.channelWrite("invalidateChannelOccupant", identityScope = identityScope) {
             if (database.channelOccupants().invalidate(radioId.value, index.toLong()) > 0) save()

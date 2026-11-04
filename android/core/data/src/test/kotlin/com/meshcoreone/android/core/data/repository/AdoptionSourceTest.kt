@@ -65,6 +65,28 @@ class AdoptionSourceTest : RepositoryTest() {
         assertNull(assertNotNull(store.fetchMessage(entity(id = m.id))).contactID)
     }
 
+    // AndroidOnly: WP-202 Delta subsets cannot resolve a prefix that matches multiple persisted contacts.
+    @Test
+    fun deltaSubsetCannotResolvePersistedPrefixCollision() = runTest {
+        val supplied = contact()
+        val bytes = supplied.publicKey.toByteArray()
+        bytes[6] = 0x45
+        val omitted = contact(id = UUID.randomUUID(), publicKey = Bytes(bytes), name = "Omitted")
+        store.saveContact(supplied)
+        store.saveContact(omitted)
+        val orphan = message(contactID = null, direction = MessageDirection.INCOMING)
+            .copy(senderKeyPrefix = supplied.publicKey.prefix(6))
+        store.saveMessage(orphan)
+
+        assertTrue(
+            store.adoptOrphanedDirectMessages(
+                RADIO_A,
+                SnapshotList.of(ContactIdentity(supplied.id, supplied.publicKey)),
+            ).isEmpty(),
+        )
+        assertNull(assertNotNull(store.fetchMessage(entity(id = orphan.id))).contactID)
+    }
+
     @Test @OriginalCase("PersistenceStoreTests::adoptOrphanedDirectMessages adopts blocked contact without unread bump()")
     fun blockedContactCanRecoverHistoryButNotUnreadOrMentionBadges() = runTest {
         val c = contact().copy(isBlocked = true)

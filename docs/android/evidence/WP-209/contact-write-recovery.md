@@ -651,3 +651,23 @@ This is an injected stable-identity regression for a source-level defect, not
 a reproduced production-device failure. The current Android adapter creates
 fresh recording exceptions. Device acceptance is a separate later run, not a
 prerequisite for this repair. Other owners' worktrees and held drafts are unchanged.
+
+Verification on native Windows used Python 3.12.4 and the existing explicit
+`ANDROID_CI_STATE`:
+
+- `python .\tools\android-port\controller\ci.py preflight --local --state
+  $env:ANDROID_CI_STATE --output <fresh absolute temporary directory>` passed.
+- `python .\tools\android-port\controller\validate.py` and `git diff --check`
+  passed.
+- `python .\tools\android-port\local\check.py --commit HEAD --affected-base
+  cb4a79ab906db851800bcf93f7c2ebfb5aa34571`, at implementation commit
+  `9632ed16888ea6ae0551d4487bbd26dcbdb5c6f6`, was blocked before execution:
+  `Hard-lock collision for external resource gradle-execution: gradle-execution held`.
+- `python .\tools\android-port\controller\execution_recovery.py status` refused
+  candidate recovery code: `Recovery requires reviewed default-base source:
+  tools/android-port/controller/authority.py`.
+
+No Kotlin tests were discovered or executed for this repair. The two new
+regressions are authored, not passing evidence. The coordinator received the
+execution-lane blocker for trusted recovery/allocation; no interlock or retained
+execution owner was bypassed, and no new CI-result bundle was created.

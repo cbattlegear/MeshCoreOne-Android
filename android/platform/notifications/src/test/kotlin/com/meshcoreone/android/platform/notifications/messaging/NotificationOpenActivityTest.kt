@@ -16,6 +16,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategoryDefinition
@@ -588,6 +589,67 @@ class NotificationOpenActivityTest {
         }
         assertTrue(NotificationActionDispatcher.drainOnce())
         assertTrue(received.isEmpty())
+    }
+
+    @Test
+    fun retainedChannelTokensKeepTheirOwnDisplayOccupantThroughPrivateActivity() = runTest {
+        val received = mutableListOf<NotificationResponse>()
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { received += it; true }
+        val firstTarget = ChannelNotificationTarget.Proven(contact.radioId, 7u, UUID(0, 40))
+        val secondTarget = firstTarget.copy(occupantId = UUID(0, 41))
+        val first = NotificationPayload.ChannelMessage(contact.radioId, 7u, UUID(0, 42), firstTarget)
+        val second = first.copy(displayTarget = secondTarget)
+        val original = delivery.buildNotification(request("channel").copy(payload = first))
+        val replacement = delivery.buildNotification(request("channel").copy(payload = second))
+        listOf(original, replacement, original).forEach { notification ->
+            notification.contentIntent.send()
+            val intent = shadowOf(context).nextStartedActivity
+            val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, intent).create()
+            try {
+                assertNotNull(shadowOf(controller.get()).nextStartedActivity)
+            } finally {
+                controller.destroy()
+            }
+            assertTrue(NotificationActionDispatcher.drainOnce())
+        }
+        assertEquals(listOf(first, second, first), received.map { it.payload })
+        assertEquals(first, NotificationPayloadCodec.decode(NotificationPayloadCodec.encode(first)))
+    }
+
+    @Test
+    fun legacyTargetsAreUnprovedAndSuppliedMalformedOrMismatchedProofIsRejected() = runTest {
+        val received = mutableListOf<NotificationResponse>()
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { received += it; true }
+        val target = ChannelNotificationTarget.Proven(contact.radioId, 7u, UUID(0, 40))
+        val channel = NotificationPayload.ChannelMessage(contact.radioId, 7u, UUID(0, 42), target)
+        val original = delivery.contentLaunchIntent(request("channel").copy(payload = channel))
+        val legacy = Intent(original).apply {
+            extras!!.keySet().filter { it.startsWith("mc1.notification.display-target.") }.forEach(::removeExtra)
+        }
+        assertEquals(channel.copy(displayTarget = ChannelNotificationTarget.Unproved), NotificationPayloadCodec.read(legacy))
+        val malformed = listOf(
+            Intent(original).putExtra("mc1.notification.display-target.occupant", "invalid"),
+            Intent(original).putExtra("mc1.notification.display-target.version", 2),
+            Intent(original).putExtra("mc1.notification.display-target.channel", 8),
+            Intent(original).putExtra("mc1.notification.display-target.radio", UUID(0, 99).toString()),
+            Intent(original).apply { removeExtra("mc1.notification.display-target.state") },
+        )
+        malformed.forEach { intent ->
+            assertNull(NotificationPayloadCodec.read(intent))
+            val controller = Robolectric.buildActivity(NotificationOpenActivity::class.java, intent).create()
+            try {
+                assertNull(shadowOf(controller.get()).nextStartedActivity)
+            } finally {
+                controller.destroy()
+            }
+        }
+        assertTrue(NotificationActionDispatcher.drainOnce())
+        assertTrue(received.isEmpty())
+        val reaction = NotificationPayload.Reaction(UUID(0, 43), null, 7u, contact.radioId)
+        assertEquals(
+            reaction,
+            NotificationPayloadCodec.decode(NotificationPayloadCodec.encode(reaction)),
+        )
     }
 
     @Test

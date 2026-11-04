@@ -248,11 +248,18 @@ class CommitRecoveryTest {
                 firstSaveEntered.await()
                 advanceTimeBy(1_000)
                 runCurrent()
-                val second = backgroundScope.async(receipt) { destination.send(h.service) }
+                val second = backgroundScope.async(receipt) {
+                    try {
+                        destination.send(h.service)
+                        null
+                    } catch (failure: MessageServiceException) {
+                        failure
+                    }
+                }
                 runCurrent()
 
                 assertTrue(second.isCompleted)
-                assertFailsWith<MessageServiceException> { second.await() }
+                assertNotNull(second.await(), "overlapping ${destination.name.lowercase()} action must be rejected")
                 assertTrue(h.store.messages.isEmpty())
                 assertTrue(h.sends(destination.wire).isEmpty())
                 assertEquals(NotificationActionReceipt.State.READY, receipt.state)
@@ -260,7 +267,7 @@ class CommitRecoveryTest {
                 first.await()
 
                 assertEquals(1, h.store.messages.size)
-                assertEquals(BASE_TIME.epochSecond.toUInt(), h.store.messages.values.single().timestamp)
+                assertTrue(h.store.messages.values.all { it.timestamp == BASE_TIME.epochSecond.toUInt() })
                 assertEquals(1, h.sends(destination.wire).size)
                 assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
             },
@@ -294,6 +301,46 @@ class CommitRecoveryTest {
                 assertEquals(1, h.store.messages.size)
                 assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
             },
+            native("${destination}_receiptClaimSpansServiceInstances") {
+                val h = Harness(this); h.start()
+                val firstSaveEntered = CompletableDeferred<Unit>()
+                val releaseFirstSave = CompletableDeferred<Unit>()
+                h.store.before = {
+                    if (it == "saveMessage") {
+                        firstSaveEntered.complete(Unit)
+                        releaseFirstSave.await()
+                    }
+                }
+                withService(h, h.store, h.session) { otherService ->
+                    val receipt = NotificationActionReceipt()
+                    val first = backgroundScope.async(receipt) { destination.send(h.service) }
+                    firstSaveEntered.await()
+                    advanceTimeBy(1_000)
+                    runCurrent()
+                    val second = backgroundScope.async(receipt) {
+                        try {
+                            destination.send(otherService)
+                            null
+                        } catch (failure: MessageServiceException) {
+                            failure
+                        }
+                    }
+                    runCurrent()
+
+                    assertTrue(second.isCompleted)
+                    assertNotNull(second.await())
+                    assertTrue(h.store.messages.isEmpty())
+                    assertTrue(h.sends(destination.wire).isEmpty())
+                    assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+                    releaseFirstSave.complete(Unit)
+                    first.await()
+
+                    assertEquals(1, h.store.messages.size)
+                    assertEquals(BASE_TIME.epochSecond.toUInt(), h.store.messages.values.single().timestamp)
+                    assertEquals(1, h.sends(destination.wire).size)
+                    assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
+                }
+            },
             native("${destination}_cancelBehindActualSerializerProvesUnsentAndAllowsOneRetry") {
                 val h = Harness(this); h.start()
                 val holding = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
@@ -307,15 +354,32 @@ class CommitRecoveryTest {
                 runCurrent()
                 assertEquals(NotificationActionReceipt.State.IN_FLIGHT, receipt.state)
                 assertTrue(h.sends(destination.wire).isEmpty())
+                val overlapping = backgroundScope.async(receipt) {
+                    try {
+                        destination.send(h.service)
+                        null
+                    } catch (failure: MessageServiceException) {
+                        failure
+                    }
+                }
+                runCurrent()
+                assertTrue(overlapping.isCompleted)
+                assertNotNull(overlapping.await())
+                assertEquals(1, h.store.messages.size)
+                assertTrue(h.sends(destination.wire).isEmpty())
                 call.cancelAndJoin()
                 assertEquals(NotificationActionReceipt.State.READY, receipt.state)
                 assertFalse(receipt.preventsReplay)
+                assertEquals(MessageStatus.FAILED, h.store.messages.values.single().status)
                 assertTrue(h.sends(destination.wire).isEmpty())
                 release.complete(Unit); priorCommand.await(); runCurrent()
                 assertTrue(h.sends(destination.wire).isEmpty())
                 withContext(receipt) { destination.send(h.service) }
                 assertTrue(receipt.isAccepted)
                 assertEquals(1, h.sends(destination.wire).size)
+                assertEquals(2, h.store.messages.size)
+                assertEquals(1, h.store.messages.values.count { it.status == MessageStatus.FAILED })
+                assertFalse(h.store.messages.values.any { it.status == MessageStatus.PENDING })
             },
             native("${destination}_acceptedBeforeCallerCancelIsNotFailedOrReplayed") {
                 val h = Harness(this); h.start()
@@ -373,6 +437,7 @@ class CommitRecoveryTest {
                 assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
                 assertTrue(receipt.preventsReplay); assertFalse(receipt.isAccepted)
                 assertEquals(1, h.sends(destination.wire).size)
+                assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
                 h.transport.beforeReply = null
                 assertFailsWith<MessageServiceException> {
                     withContext(receipt) { destination.send(h.service) }
@@ -387,6 +452,7 @@ class CommitRecoveryTest {
                 val receipt = NotificationActionReceipt()
                 assertFailsWith<MessageServiceException> { withContext(receipt) { destination.send(h.service) } }
                 assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+                assertEquals(MessageStatus.FAILED, h.store.messages.values.single().status)
                 assertFalse(receipt.preventsReplay); assertEquals(1, h.sends(destination.wire).size)
             },
             native("${destination}_teardownAfterObservedAcceptanceCannotMakeItUnsent") {

@@ -64,7 +64,6 @@ class MessageService(
     private val directClaims = mutableMapOf<UUID, DirectSendClaim>()
     private val activeDirectClaims = mutableMapOf<UUID, DirectSendClaim>()
     private val inFlightRetries = mutableSetOf<UUID>()
-    private val notificationActionClaims = mutableSetOf<NotificationActionReceipt>()
     private val activeOperations = mutableSetOf<Deferred<*>>()
     private val retainedFailures = linkedMapOf<String, Throwable>()
     private val failedNotifications = mutableSetOf<UUID>()
@@ -357,24 +356,32 @@ class MessageService(
         if (row?.status == MessageStatus.FAILED) broadcastFailed(messageID)
     }
 
-    internal suspend fun failMessageAndRethrow(failure: Exception, messageID: UUID, notify: Boolean = false): Nothing {
+    internal suspend fun failMessageAndRethrow(
+        failure: Exception,
+        messageID: UUID,
+        notify: Boolean = false,
+        failDefinitelyUnsentInline: Boolean = false,
+    ): Nothing {
         // Complete only the already-persisted send's failure before teardown returns, never a successor's work.
         val notificationReceipt = currentCoroutineContext()[NotificationActionReceipt]
         withContext(NonCancellable) {
             try {
-                if (notificationReceipt == null) {
-                    mutation(messageID).withLock {
-                        if (pendingAck(messageID)?.acknowledgement == null) {
-                            ownership.checkPersistenceCompletion("failMessage")
-                            synchronized(lock) { pendingAcks.remove(messageID) }
-                            val changed = dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
-                            ownership.checkPersistenceCompletion("failMessage.saved")
-                            if (notify && changed) broadcastFailed(messageID)
-                            recovered("failPending.$messageID")
+                val failUnsentInlineRow = notificationReceipt == null || failDefinitelyUnsentInline
+                if (notificationReceipt == null || notificationReceipt.state == NotificationActionReceipt.State.READY) {
+                    if (failUnsentInlineRow) {
+                        mutation(messageID).withLock {
+                            if (pendingAck(messageID)?.acknowledgement == null) {
+                                ownership.checkPersistenceCompletion("failMessage")
+                                synchronized(lock) { pendingAcks.remove(messageID) }
+                                val changed = dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
+                                ownership.checkPersistenceCompletion("failMessage.saved")
+                                if (notify && changed) broadcastFailed(messageID)
+                                recovered("failPending.$messageID")
+                            }
                         }
+                    } else {
+                        synchronized(lock) { pendingAcks.remove(messageID) }
                     }
-                } else if (notificationReceipt.state == NotificationActionReceipt.State.READY) {
-                    synchronized(lock) { pendingAcks.remove(messageID) }
                 }
             } catch (storage: PersistenceStoreException) {
                 remember("failMessage.$messageID", storage)
@@ -388,13 +395,18 @@ class MessageService(
         throw failure
     }
 
-    private suspend fun <T> sendBoundary(id: UUID, notify: Boolean, block: suspend () -> T): T =
+    private suspend fun <T> sendBoundary(
+        id: UUID,
+        notify: Boolean,
+        failDefinitelyUnsentInline: Boolean = false,
+        block: suspend () -> T,
+    ): T =
         try { block() }
-        catch (cancelled: CancellationException) { failMessageAndRethrow(cancelled, id, notify) }
-        catch (failure: MeshCoreException) { failMessageAndRethrow(failure, id, notify) }
-        catch (failure: MeshTransportError) { failMessageAndRethrow(failure, id, notify) }
-        catch (failure: MessageServiceException) { failMessageAndRethrow(failure, id, notify) }
-        catch (failure: PersistenceStoreException) { failMessageAndRethrow(failure, id, notify) }
+        catch (cancelled: CancellationException) { failMessageAndRethrow(cancelled, id, notify, failDefinitelyUnsentInline) }
+        catch (failure: MeshCoreException) { failMessageAndRethrow(failure, id, notify, failDefinitelyUnsentInline) }
+        catch (failure: MeshTransportError) { failMessageAndRethrow(failure, id, notify, failDefinitelyUnsentInline) }
+        catch (failure: MessageServiceException) { failMessageAndRethrow(failure, id, notify, failDefinitelyUnsentInline) }
+        catch (failure: PersistenceStoreException) { failMessageAndRethrow(failure, id, notify, failDefinitelyUnsentInline) }
 
     private fun validate(text: String, contact: ContactDTO) {
         if (contact.radioId != token.radioId) throw MessageServiceException(MessageServiceError.ContactNotFound)
@@ -447,7 +459,7 @@ class MessageService(
 
     private suspend fun <T> withFreshNotificationAction(operation: String, block: suspend () -> T): T {
         val receipt = currentCoroutineContext()[NotificationActionReceipt] ?: return block()
-        val claimed = synchronized(lock) {
+        val claimed = synchronized(notificationActionLock) {
             receipt.state == NotificationActionReceipt.State.READY && notificationActionClaims.add(receipt)
         }
         if (!claimed) {
@@ -458,7 +470,7 @@ class MessageService(
         try {
             return block()
         } finally {
-            synchronized(lock) { notificationActionClaims.remove(receipt) }
+            synchronized(notificationActionLock) { notificationActionClaims.remove(receipt) }
         }
     }
 
@@ -509,7 +521,7 @@ class MessageService(
             owned("sendDirectMessage") {
                 validate(text, contact)
                 val message = outgoing(text, contact, textType, replyToID)
-                val (info, tracking, predicted) = sendBoundary(message.id, true) {
+                val (info, tracking, predicted) = sendBoundary(message.id, true, failDefinitelyUnsentInline = true) {
                     dataStore.saveMessage(message)
                     ownership.check("sendDirectMessage.saved")
                     checkIdentity("sendDirectMessage")
@@ -865,7 +877,7 @@ class MessageService(
         withFreshNotificationAction("sendChannelMessage") {
             owned("sendChannelMessage", channelOperations) {
                 val dto = outgoingChannel(text, channelIndex, radioId, textType)
-                sendBoundary(dto.id, true) {
+                sendBoundary(dto.id, true, failDefinitelyUnsentInline = true) {
                     dataStore.saveMessage(dto)
                     ownership.check("sendChannelMessage.persisted")
                     withPoolBackoff(2u) {
@@ -1002,6 +1014,12 @@ class MessageService(
             receipt.complete(report)
             report
         }
+    }
+
+    private companion object {
+        // A caller receipt must have one active top-level owner across service instances.
+        private val notificationActionLock = Any()
+        private val notificationActionClaims = mutableSetOf<NotificationActionReceipt>()
     }
 }
 

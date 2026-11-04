@@ -88,8 +88,13 @@ class PresetSessionFencingTest {
         val flags = object : OnboardingFlagStore {
             override fun getBoolean(key: String) = durable
             override fun setBoolean(key: String, value: Boolean) { durable = value }
-            override suspend fun persistBoolean(key: String, value: Boolean) {
+            override suspend fun persistBoolean(
+                key: String, value: Boolean, requireCurrent: () -> Unit,
+                seal: (com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt) -> Boolean,
+            ) {
                 releaseWrite.await()
+                requireCurrent()
+                check(seal(com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt()))
                 durable = value
             }
         }
@@ -103,7 +108,7 @@ class PresetSessionFencingTest {
         assertTrue(coordinator.state.value.isApplying)
         port.target = first.copy(generation = 2)
         releaseWrite.complete(Unit)
-        assertTrue(durable, "A committed preference must not be misreported as rolled back")
+        assertFalse(durable, "A retired staged completion must never become a valid durable completion")
         assertFalse(state.hasCompletedOnboarding)
         assertEquals(0, coordinator.state.value.commitTick)
         assertFalse(coordinator.state.value.completionNeedsRetry)

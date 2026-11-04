@@ -74,8 +74,23 @@ internal class FakeDevices : DevicePersisting {
     override suspend fun fetchDevice(publicKey: Bytes): DeviceDTO? = rows.values.firstOrNull { it.publicKey == publicKey }
     override suspend fun fetchDevices(): SnapshotList<DeviceDTO> = rows.values.snapshot()
     override suspend fun fetchActiveDevice(): DeviceDTO? = rows.values.firstOrNull { it.isActive }
-    override suspend fun saveDevice(dto: DeviceDTO) { calls += "save"; rows[dto.id] = dto }
-    override suspend fun setActiveDevice(id: UUID) { rows.replaceAll { key, row -> row.copy(isActive = key == id) } }
+    private var deviceRevision = 0L
+    var beforeConditionalSave: suspend () -> Unit = {}
+    var conditionalSaveFailure: Exception? = null
+    override suspend fun saveDevice(dto: DeviceDTO) { calls += "save"; rows[dto.id] = dto; deviceRevision++ }
+    override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
+        rows[id]?.let { DeviceWriteSnapshot(it, deviceRevision) }
+    override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        beforeConditionalSave()
+        conditionalSaveFailure?.let { throw it }
+        if (deviceRevision != expected.revision || rows[dto.id] != expected.device) return false
+        saveDevice(dto)
+        return true
+    }
+    override suspend fun setActiveDevice(id: UUID) {
+        rows.replaceAll { key, row -> row.copy(isActive = key == id) }
+        deviceRevision++
+    }
     override suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt) = Unit
     override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String) { calls += "addRegion:$region" }
     override suspend fun removeDeviceKnownRegion(radioId: RadioId, region: String) { calls += "removeRegion:$region" }

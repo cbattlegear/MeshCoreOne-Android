@@ -23,6 +23,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * The live connected-device value. Accepted replacements return their connection, sequence and
@@ -43,6 +45,8 @@ interface ContactRemovalPort {
 
 /** The radio has no such contact; the caller cleans it up locally instead. */
 class ContactNotFoundException : Exception("Contact not found on device")
+
+class DeviceEditPersistenceConflict : IllegalStateException("Connected device changed before the edit was persisted")
 
 /** Radio preset catalog lookup (WP-211 owns the catalog); returns ids whose RF matches. */
 fun interface RadioPresetMatcher {
@@ -68,6 +72,7 @@ class ConnectedDeviceEditor(
     private val onKnownRegionsChanged: (ConnectedDeviceEdit, List<String>) -> Unit = { _, _ -> },
     private val clearDefaultFloodScope: suspend () -> Unit = {},
 ) {
+    private val sessionEdits = Mutex()
     val connectedDevice: DeviceDTO? get() = access.connectedDevice
 
     fun updateDevice(info: SelfInfo, appliedRadioPresetID: String?): Job? {
@@ -84,15 +89,35 @@ class ConnectedDeviceEditor(
         return replaceAndSave(updated, "updateDevice")
     }
 
-    fun updateDevice(info: SelfInfo, appliedRadioPresetID: String, expectedToken: SessionToken): Job? {
-        val device = access.connectedDevice ?: return null
-        if (device.radioId != expectedToken.radioId) return null
-        val updated = device.updating(info).copy(appliedRadioPresetID = appliedRadioPresetID)
-        val edit = access.replaceConnectedDevice(updated, expectedToken) ?: return null
+    suspend fun updateDevice(info: SelfInfo, appliedRadioPresetID: String, expectedToken: SessionToken): Boolean =
+        sessionEdit("updateDevice", expectedToken) { it.updating(info).copy(appliedRadioPresetID = appliedRadioPresetID) }
+
+    suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
+        sessionEdit("pathHashMode", expectedToken) { it.copy(pathHashMode = mode) }
+
+    private suspend fun sessionEdit(
+        operation: String,
+        expectedToken: SessionToken,
+        transform: (DeviceDTO) -> DeviceDTO,
+    ): Boolean = sessionEdits.withLock {
+        val device = access.connectedDevice ?: return@withLock false
+        if (device.radioId != expectedToken.radioId) return@withLock false
+        val snapshot = devices.fetchDeviceWriteSnapshot(device.id) ?: return@withLock false
+        currentCoroutineContext().ensureActive()
+        val updated = transform(device)
+        val edit = access.replaceConnectedDevice(updated, expectedToken) ?: return@withLock false
         if (edit.previousKnownRegions != updated.knownRegions) {
             onKnownRegionsChanged(edit, updated.knownRegions.toList())
         }
-        return scope.launch { report("updateDevice") { devices.saveDevice(updated) } }
+        try {
+            if (!devices.saveDeviceIfUnchanged(updated, snapshot)) throw DeviceEditPersistenceConflict()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            diagnostics.report("device.$operation", failure)
+            throw failure
+        }
+        true
     }
 
     fun updateDevice(device: DeviceDTO) {

@@ -32,7 +32,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     val preset = PresetStepCoordinator(scope, deps.region, deps.presets, ::completePreset)
 
     private suspend fun completePreset() {
-        onboarding.completeOnboarding(preset.completionTargetGuard())
+        onboarding.completeOnboardingWithSeal(preset.completionTargetGuard(), preset.completionSealer())
     }
 
     private val clearing = MutableStateFlow(false)

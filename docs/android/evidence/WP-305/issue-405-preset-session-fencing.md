@@ -36,6 +36,51 @@ closed and the caller receives its rejection. A later successful attempt can ret
 restart reads the actual durable preference. These guards do not make persistence transactional
 with radio lifecycle changes, and are not the separate navigation owner's atomic entry transition.
 
+The paragraph above describes the reviewed `84519286f` predecessor, not a sufficient durable
+completion contract. Independent source review found that its canonical true could survive a
+retired completion on reload, along with unordered device persistence, missing path-hash token
+guard, CONNECTING eligibility and unpropagated save failures.
+
+## Review-repair successor (execution outstanding)
+
+Assignment: `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_IGedaZqVFDPAdeSu6ekSJu3s`.
+Parent: `8583254273d85d44c3ce2a9fc48a8b0503c59595`. The separately retained receipt draft
+is preserved in stash `4c14a23d3b467819286982aa9e768c77887d819c` and is not part of this patch.
+
+- A staged completion writes only an internal pending-attempt marker; it neither overwrites
+  prior true nor donates a tip. The ordered process writer seals the originating attempt before
+  the final atomic canonical-true/tip/attempt-ID transaction. Pending/Sealed/Rejected CAS is the
+  decision authority. Original preset-token/current-connected-state validation and sealing share
+  the runtime lock. Reset/newer queued writes reject unsealed older attempts; a sealed finalizer
+  completes before the next queued write. No suspending or reentrant callbacks run under the writer
+  queue lock. A lost write acknowledgement is reconciled using exact attempt-ID readback; unavailable
+  readback reports the original error with its readback error, not fabricated rollback.
+- The process close path rejects pending decisions and drains accepted finalizers before cancelling
+  the process Job. Activity recreation remains attachment-only, not cancellation. Arbitrary external
+  ancestor Job cancellation is not claimed to be ordered by a delayed child handler: that broader
+  guarantee remains blocked until its actual cancellation authority is wired/proved.
+- Token-bound connected-device and path-hash updates await an error-bearing save. The existing
+  Room transaction compares an optimistic device snapshot and process revision, invalidated by
+  device writes/activation, before applying the edit; no schema change. It cannot reactivate A after
+  B's activation or overwrite an intervening same-radio write, including restored-identical fields.
+  Stale storage tickets raise an explicit persistence conflict; they do not return applied success.
+- Both original-token settings events are guarded; non-preset device updates keep their existing
+  API. Event-storage errors are logged without killing the stream; the direct preset adapter
+  receives the error and exposes failure/retry. CONNECTING rejects token-bound mutations even
+  while the old token is still published.
+
+Authored additional controls cover real Room versioned compare/write and activation, editor held
+save/failure and same-radio ABA, actual adapter save failure/readback retry, non-null preset
+pathHashSize forwarding, reconnect-before-teardown, real preference staging/reload and uncertain
+commit readback, reset/parallel-attempt order, and pre/post-actual-seal cancellation.
+These controls are unexecuted at authoring time. No second CI-result bundle is retained.
+
+The existing AppRoot raw-flag live navigation is still an explicit integration blocker in this
+successor. Valid sealed durability does not grant authority over a replacement graph. WP-302 owns
+the supplied immutable mounted/first-run witness operations; none is silently composed here.
+First-run true-at-startup behavior, retired-witness liveness and immutable receipt delivery require
+the separately attributable gate/receipt composition and exact-candidate tests before acceptance.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

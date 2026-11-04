@@ -27,6 +27,11 @@ import com.meshcoreone.android.core.connectivity.permissions.AndroidPermissionSt
 import com.meshcoreone.android.core.connectivity.permissions.PermissionSnapshot
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.app.content.LocationPermissionResultReporting
 import com.meshcoreone.android.core.services.content.RegionResolver
 import com.meshcoreone.android.core.services.device.RadioPreset
@@ -128,11 +133,23 @@ class AppStateOnboardingHost(private val container: AppContainer) : OnboardingCo
 
 /** [OnboardingRadioConfigurator] over the live session's settings service and the connected-device editor. */
 class AppStateRadioConfigurator(private val container: AppContainer) : OnboardingRadioConfigurator {
+    override fun sealCompletion(
+        target: OnboardingPresetTarget?,
+        attempt: OnboardingCompletionAttempt,
+    ): Boolean {
+        if (target == null) return false
+        return container.connectionManager.sealOnboardingCompletion(
+            SessionToken(
+                ProcessEpoch(target.epoch), Generation(target.generation), RadioId(target.radioId),
+            ),
+            attempt,
+        )
+    }
     override fun connectionStates(): Flow<DeviceConnectionState> =
         container.connectionManager.snapshot.map { it.state }.distinctUntilChanged()
     override val isDemoRadio: Boolean get() = container.connectionManager.isSimulatorConnection
     override fun currentTarget(): OnboardingPresetTarget? =
-        container.connectionManager.snapshot.value.token?.let { token ->
+        container.connectionManager.snapshot.value.takeIf { it.state.isConnected }?.token?.let { token ->
             OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
         }
 
@@ -144,10 +161,16 @@ class AppStateRadioConfigurator(private val container: AppContainer) : Onboardin
         if (expectedTarget != OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)) {
             throw SettingsServiceException(SettingsServiceError.NotConnected)
         }
+        val pathHashMode = preset.pathHashMode.takeIf { container.connectionManager.connectedDevice?.supportsPathHashMode == true }
         val info = session.settingsService.applyRadioPresetVerified(preset)
         kotlinx.coroutines.currentCoroutineContext().ensureActive()
         if (!container.connectionPort.updateDevice(info, preset.id, token)) {
             throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
+        pathHashMode?.let { mode ->
+            if (!container.connectionPort.updatePathHashMode(mode, token)) {
+                throw SettingsServiceException(SettingsServiceError.NotConnected)
+            }
         }
     }
 }

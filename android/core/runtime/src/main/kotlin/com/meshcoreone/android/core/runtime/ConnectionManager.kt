@@ -1608,8 +1608,14 @@ class ConnectionManager(
     fun clearSurfacedAuthenticationFailure() { synchronized(lock) { authFailureDevice = null } }
 
     /** A suspended producer must supply its originating token, never the token observed on return. */
+    fun sealOnboardingCompletion(expectedToken: SessionToken, attempt: OnboardingCompletionAttempt): Boolean =
+        synchronized(lock) {
+            val owner = active ?: return@synchronized false
+            owner.token == expectedToken && values.value.state.isConnected && isCurrent(owner) && attempt.trySeal()
+        }
+
     fun replaceConnectedDevice(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? = synchronized(lock) {
-        if (active?.token != expectedToken) return@synchronized null
+        if (active?.token != expectedToken || !values.value.state.isConnected) return@synchronized null
         replaceConnectedDevice(device)
     }
 

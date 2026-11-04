@@ -540,8 +540,10 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                             val presetId = event.appliedRadioPresetID
                             if (presetId == null) {
                                 connection.updateDevice(event.info, null)
-                            } else if (!connection.updateDevice(event.info, presetId, wrapped.token)) {
-                                logger.fine("Ignored radio preset update from a retired session")
+                            } else {
+                                persistSessionDeviceEdit("radio preset") {
+                                    connection.updateDevice(event.info, presetId, wrapped.token)
+                                }
                             }
                         }
                         is SettingsEvent.AutoAddConfigUpdated -> {
@@ -552,7 +554,11 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                             }
                         }
                         is SettingsEvent.ClientRepeatUpdated -> connection.updateClientRepeat(event.enabled)
-                        is SettingsEvent.PathHashModeUpdated -> connection.updatePathHashMode(event.mode)
+                        is SettingsEvent.PathHashModeUpdated -> {
+                            persistSessionDeviceEdit("path hash") {
+                                connection.updatePathHashMode(event.mode, wrapped.token)
+                            }
+                        }
                         is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges)
                         is SettingsEvent.DefaultFloodScopeUpdated -> connection.updateDefaultFloodScopeName(event.name)
                     }
@@ -561,6 +567,16 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                 subscription.close()
             }
         })
+    }
+
+    private suspend fun persistSessionDeviceEdit(operation: String, edit: suspend () -> Boolean) {
+        try {
+            if (!edit()) logger.fine("Ignored $operation update from a retired session")
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.log(Level.WARNING, "Failed to persist $operation update", failure)
+        }
     }
 
     private fun wireDeviceUpdateCallbacks(session: AppSession) {

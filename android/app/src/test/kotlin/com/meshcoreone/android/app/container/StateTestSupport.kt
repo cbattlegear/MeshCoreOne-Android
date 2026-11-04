@@ -95,7 +95,7 @@ internal class FakeConnectionPort : AppConnectionPort {
         return RemoveUnfavoritedResult(0, 0)
     }
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) { calls += "updateDeviceInfo" }
-    override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean {
+    override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean {
         presetTokens += expectedToken
         beforePresetUpdate()
         if (presetToken != expectedToken) return false
@@ -106,6 +106,13 @@ internal class FakeConnectionPort : AppConnectionPort {
     override fun updateAutoAddConfig(config: AutoAddConfig) { calls += "autoAdd" }
     override fun updateClientRepeat(enabled: Boolean) { calls += "clientRepeat:$enabled" }
     override fun updatePathHashMode(mode: UByte) { calls += "pathHash:$mode" }
+    override suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean {
+        presetTokens += expectedToken
+        beforePresetUpdate()
+        if (presetToken != expectedToken) return false
+        calls += "pathHash:$mode"
+        return true
+    }
     override fun updateDefaultFloodScopeName(name: String?) { calls += "floodScope:$name" }
     override fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>) { calls += "repeatRanges" }
 }

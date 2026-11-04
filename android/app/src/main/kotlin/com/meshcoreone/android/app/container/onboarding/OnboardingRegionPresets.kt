@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.container.onboarding
 
 import android.content.res.Resources
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.services.device.RadioPreset
 import com.meshcoreone.android.core.services.device.RadioPresets
@@ -99,6 +100,10 @@ interface OnboardingRadioConfigurator {
     fun connectionStates(): Flow<DeviceConnectionState>
     val isDemoRadio: Boolean
     fun currentTarget(): OnboardingPresetTarget? = null
+    fun sealCompletion(
+        target: OnboardingPresetTarget?,
+        attempt: OnboardingCompletionAttempt,
+    ): Boolean = currentTarget() == target && attempt.trySeal()
 
     /** Throws [SettingsServiceException] (or a runtime failure) when the radio cannot be configured. */
     suspend fun applyPreset(preset: RadioPreset)
@@ -116,6 +121,10 @@ class AppOnboardingPresetPort(
     override val canApply: StateFlow<Boolean> =
         radio.connectionStates().map { it.isOperational }.stateIn(scope, SharingStarted.Eagerly, false)
     override fun currentTarget(): OnboardingPresetTarget? = radio.currentTarget()
+    override fun sealCompletion(
+        target: OnboardingPresetTarget?,
+        attempt: OnboardingCompletionAttempt,
+    ): Boolean = radio.sealCompletion(target, attempt)
 
     override suspend fun apply(presetId: String): OnboardingPresetOutcome = apply(presetId, currentTarget())
 

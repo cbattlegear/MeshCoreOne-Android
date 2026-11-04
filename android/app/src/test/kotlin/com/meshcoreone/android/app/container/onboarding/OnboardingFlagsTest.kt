@@ -13,6 +13,8 @@ import com.meshcoreone.android.core.ui.TipHostState
 import com.meshcoreone.android.feature.onboarding.OnboardingState
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,12 +35,259 @@ import org.junit.runner.RunWith
 import kotlinx.coroutines.CoroutineScope
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31])
 class OnboardingFlagsTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    private fun storage(): MeshCoreStorage {
+        val directory = temporary.newFolder()
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val context = object : ContextWrapper(application) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File = directory
+        }
+        return MeshCoreStorage.get(context)
+    }
+
+    @Test fun `process shutdown rejects staged attempts before parent job cancellation and drains finalizers`() = runTest {
+        val parent = SupervisorJob()
+        val scope = CoroutineScope(parent + UnconfinedTestDispatcher(testScheduler))
+        val staged = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var durable = false
+        val flags = WriteBehindOnboardingFlags(
+            emptyMap(), scope, { _, value -> durable = value },
+            stageCompletion = { staged.complete(Unit); release.await() },
+        )
+        try {
+            val completion = async { runCatching { OnboardingState(flags).completeOnboarding() } }
+            staged.await()
+            val stopping = async { flags.shutdown() }
+            runCurrent()
+            assertFalse(stopping.isCompleted)
+            release.complete(Unit)
+            stopping.await()
+            parent.cancel()
+            assertTrue(completion.await().isFailure)
+            assertFalse(durable)
+            assertFalse(flags.hasCompleted.value)
+            assertFailsWith<kotlinx.coroutines.CancellationException> { OnboardingState(flags).completeOnboarding() }
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `retirement during real staging remains incomplete on preference reload and can retry`() =
+        kotlinx.coroutines.runBlocking {
+            val storage = storage()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            val staged = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var current = true
+            try {
+                val tips = ShowOnceTips(storage.preferences)
+                val flags = WriteBehindOnboardingFlags(
+                    emptyMap(), scope, { key, value ->
+                        check(key == OnboardingState.KEY_HAS_COMPLETED)
+                        storage.preferences.set(AppStorageKey.hasCompletedOnboarding, value)
+                    },
+                    stageCompletion = { id ->
+                        tips.stageOnboardingCompletion(id)
+                        staged.complete(Unit)
+                        release.await()
+                    },
+                    persistCompletion = { tips.completeOnboarding(it) },
+                    reconcileCompletion = { tips.isOnboardingCompletionFinalized(it) },
+                )
+                val completion = async {
+                    runCatching { OnboardingState(flags).completeOnboarding { check(current) { "retired" } } }
+                }
+                staged.await()
+                current = false
+                release.complete(Unit)
+                assertEquals("retired", completion.await().exceptionOrNull()?.message)
+                assertFalse(storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+                assertFalse(WriteBehindOnboardingFlags.load(storage.preferences, scope).hasCompleted.value)
+                current = true
+                OnboardingState(flags).completeOnboarding { check(current) }
+                assertTrue(storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+                assertTrue(WriteBehindOnboardingFlags.load(storage.preferences, scope).hasCompleted.value)
+            } finally { scope.cancel(); storage.close() }
+        }
+
+    @Test fun `real committed finalization with lost acknowledgement is reconciled with its atomic tip`() =
+        kotlinx.coroutines.runBlocking {
+            val storage = storage()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            val failures = mutableListOf<Throwable>()
+            try {
+                val tips = ShowOnceTips(storage.preferences)
+                val flags = WriteBehindOnboardingFlags(
+                    emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") }, failures::add,
+                    stageCompletion = { tips.stageOnboardingCompletion(it) },
+                    persistCompletion = { id -> tips.completeOnboarding(id); throw IOException("lost acknowledgement") },
+                    reconcileCompletion = { tips.isOnboardingCompletionFinalized(it) },
+                )
+                OnboardingState(flags).completeOnboarding()
+                assertTrue(flags.hasCompleted.value)
+                assertTrue(WriteBehindOnboardingFlags.load(storage.preferences, scope).hasCompleted.value)
+                assertEquals(listOf("lost acknowledgement"), failures.map { it.message })
+                assertTrue(tips.claim(SharedTip.DEVICE_MENU) { TipHostState(AppTab.CHATS, true, true, false) })
+            } finally { scope.cancel(); storage.close() }
+        }
+
+    @Test fun `unavailable uncertain-commit readback surfaces both errors without claiming rollback`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        var committed: String? = null
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") },
+                persistCompletion = { id -> committed = id; throw IOException("unknown commit outcome") },
+                reconcileCompletion = { throw IOException("readback unavailable") },
+            )
+            val failure = assertFailsWith<IOException> { OnboardingState(flags).completeOnboarding() }
+            assertEquals("unknown commit outcome", failure.message)
+            assertEquals(listOf("readback unavailable"), failure.suppressed.map { it.message })
+            assertTrue(committed != null)
+            assertFalse(flags.hasCompleted.value)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `cancellation immediately before the seal wins without finalizing`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        var durable = false
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, value -> durable = value })
+            val state = OnboardingState(flags)
+            lateinit var completion: Deferred<Unit>
+            completion = async(start = CoroutineStart.LAZY) {
+                state.completeOnboardingWithSeal({}) { attempt ->
+                    completion.cancel()
+                    attempt.trySeal()
+                }
+            }
+            completion.start()
+            completion.join()
+            runCurrent()
+            assertTrue(completion.isCancelled)
+            assertFalse(durable)
+            assertFalse(flags.hasCompleted.value)
+            state.completeOnboarding()
+            assertTrue(flags.hasCompleted.value)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `seal immediately before cancellation wins and the process finalizer completes`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        var durable = false
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, value -> durable = value })
+            val state = OnboardingState(flags)
+            lateinit var completion: Deferred<Unit>
+            completion = async(start = CoroutineStart.LAZY) {
+                state.completeOnboardingWithSeal({}) { attempt ->
+                    attempt.trySeal().also { completion.cancel() }
+                }
+            }
+            completion.start()
+            completion.join()
+            runCurrent()
+            assertTrue(completion.isCancelled)
+            assertTrue(durable)
+            assertTrue(flags.hasCompleted.value)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `reset and newer attempts supersede an unsealed stage in write order`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val release = CompletableDeferred<Unit>()
+        var durable = false
+        var stages = 0
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, value -> durable = value },
+                stageCompletion = { if (++stages == 1) release.await() },
+            )
+            val old = async { runCatching { OnboardingState(flags).completeOnboarding() } }
+            runCurrent()
+            val reset = async { OnboardingState(flags).resetOnboarding() }
+            runCurrent()
+            val newer = async { OnboardingState(flags).completeOnboarding() }
+            runCurrent()
+            release.complete(Unit)
+            assertTrue(old.await().isFailure)
+            reset.await()
+            newer.await()
+            assertTrue(durable)
+            assertTrue(flags.hasCompleted.value)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `a sealed finalization remains valid after later target retirement`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val release = CompletableDeferred<Unit>()
+        var current = true
+        var durable = false
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, value -> release.await(); durable = value },
+            )
+            val state = OnboardingState(flags)
+            val completion = async { state.completeOnboarding { check(current) } }
+            runCurrent()
+            current = false
+            release.complete(Unit)
+            completion.await()
+            assertTrue(durable)
+            assertTrue(flags.hasCompleted.value)
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `staging preserves prior true and restart honors only finalized durable completion`() =
+        kotlinx.coroutines.runBlocking {
+            val directory = temporary.newFolder()
+            val application = ApplicationProvider.getApplicationContext<Context>()
+            val context = object : ContextWrapper(application) {
+                override fun getApplicationContext(): Context = this
+                override fun getNoBackupFilesDir(): File = directory
+            }
+            val storage = MeshCoreStorage.get(context)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            try {
+                val tips = ShowOnceTips(storage.preferences)
+                tips.stageOnboardingCompletion("unsealed")
+                assertFalse(WriteBehindOnboardingFlags.load(storage.preferences, scope).hasCompleted.value)
+                tips.completeOnboarding("valid")
+                tips.stageOnboardingCompletion("later-unsealed")
+                assertTrue(WriteBehindOnboardingFlags.load(storage.preferences, scope).hasCompleted.value)
+                assertTrue(tips.isOnboardingCompletionFinalized("valid"))
+                assertFalse(tips.isOnboardingCompletionFinalized("later-unsealed"))
+                assertTrue(tips.claim(SharedTip.DEVICE_MENU) {
+                    TipHostState(AppTab.CHATS, true, true, false)
+                })
+            } finally { scope.cancel(); storage.close() }
+        }
+
+    @Test fun `uncertain finalization reconciles the exact committed attempt instead of assuming rollback`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        var committed: String? = null
+        val failures = mutableListOf<Throwable>()
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") }, failures::add,
+                persistCompletion = { id -> committed = id; throw IOException("acknowledgement lost") },
+                reconcileCompletion = { id -> id == committed },
+            )
+            val state = OnboardingState(flags)
+            state.completeOnboarding()
+            assertTrue(state.hasCompletedOnboarding)
+            assertTrue(flags.hasCompleted.value)
+            assertEquals(listOf("acknowledgement lost"), failures.map { it.message })
+        } finally { scope.cancel() }
+    }
 
     @Test fun `completion persists in order and publishes the gate immediately`() = runTest {
         val writes = mutableListOf<Pair<String, Boolean>>()
@@ -150,10 +399,11 @@ class OnboardingFlagsTest {
         var durable = false
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         try {
-            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, persist = { _, value ->
-                release.await()
-                durable = value
-            })
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope,
+                persist = { _, value -> durable = value },
+                stageCompletion = { release.await() },
+            )
             val state = OnboardingState(flags)
             val result = async {
                 runCatching { state.completeOnboarding { check(current) { "retired producer" } } }
@@ -162,7 +412,7 @@ class OnboardingFlagsTest {
             current = false
             release.complete(Unit)
             assertEquals("retired producer", result.await().exceptionOrNull()?.message)
-            assertTrue("Do not pretend a completed disk write was rolled back", durable)
+            assertFalse("A staged retired completion must not survive process reload", durable)
             assertFalse(flags.hasCompleted.value)
             assertFalse(state.hasCompletedOnboarding)
             assertFalse(flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
@@ -178,10 +428,11 @@ class OnboardingFlagsTest {
         var writes = 0
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         try {
-            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, persist = { _, _ ->
-                writes++
-                if (writes == 1) release.await()
-            })
+            var stages = 0
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, persist = { _, _ -> writes++ },
+                stageCompletion = { if (++stages == 1) release.await() },
+            )
             val state = OnboardingState(flags)
             val completion = async { state.completeOnboarding() }
             runCurrent()
@@ -192,7 +443,7 @@ class OnboardingFlagsTest {
             assertFalse(flags.hasCompleted.value)
             assertFalse(state.hasCompletedOnboarding)
             state.completeOnboarding()
-            assertEquals(2, writes)
+            assertEquals(1, writes)
             assertTrue(flags.hasCompleted.value)
             assertTrue(state.hasCompletedOnboarding)
         } finally { scope.cancel() }

@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +19,20 @@ import kotlinx.coroutines.flow.StateFlow
 @JvmInline value class ProcessEpoch(val value: UUID)
 @JvmInline value class Generation(val value: Long) { init { require(value >= 0) { "Generation must not be negative" } } }
 data class SessionToken(val epoch: ProcessEpoch, val generation: Generation, val radioId: RadioId)
+
+/** AndroidOnly: WP-305 Cancellation and durable completion compete at one irrevocable decision. */
+class OnboardingCompletionAttempt {
+    val id: UUID = UUID.randomUUID()
+    private sealed interface Phase {
+        data object Pending : Phase
+        data object Sealed : Phase
+        data class Rejected(val failure: Exception) : Phase
+    }
+    private val phase = AtomicReference<Phase>(Phase.Pending)
+    fun trySeal(): Boolean = phase.compareAndSet(Phase.Pending, Phase.Sealed)
+    fun reject(failure: Exception) { phase.compareAndSet(Phase.Pending, Phase.Rejected(failure)) }
+    fun rejection(): Exception? = (phase.get() as? Phase.Rejected)?.failure
+}
 
 /** An accepted device replacement, ordered within its connection generation. */
 data class ConnectedDeviceEdit(

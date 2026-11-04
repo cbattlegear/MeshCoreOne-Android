@@ -44,12 +44,27 @@ data class TipHostState(
 }
 
 class ShowOnceTips(private val preferences: PreferenceStore) {
+    private val pendingCompletion = PreferenceKey.StringKey("onboarding.completion.pending", "")
+    private val finalizedCompletion = PreferenceKey.StringKey("onboarding.completion.finalized", "")
+
+    suspend fun stageOnboardingCompletion(attemptId: String) {
+        preferences.set(pendingCompletion, attemptId)
+    }
+
     /** Commits the first-run gate and its pending show-once event as one preference transaction. */
-    suspend fun completeOnboarding() {
+    suspend fun completeOnboarding(attemptId: String? = null) {
         preferences.update {
             this[AppStorageKey.hasCompletedOnboarding] = true
             this[SharedTip.DEVICE_MENU.eventKey] = true
+            if (attemptId != null) this[finalizedCompletion] = attemptId
+            remove(pendingCompletion)
         }
+    }
+
+    suspend fun isOnboardingCompletionFinalized(attemptId: String): Boolean {
+        val snapshot = preferences.snapshot()
+        return snapshot[finalizedCompletion] == attemptId && snapshot[AppStorageKey.hasCompletedOnboarding] &&
+            snapshot[SharedTip.DEVICE_MENU.eventKey]
     }
 
     suspend fun donateCompletedOnboarding() = donate(SharedTip.DEVICE_MENU)

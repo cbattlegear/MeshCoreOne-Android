@@ -31,12 +31,33 @@ class PresetDeviceEventSessionTest : RoomProcessTest() {
         collectPreset { null }
     }
 
-    private suspend fun TestScope.collectPreset(replace: (SessionToken) -> SessionToken?) {
+    @Test fun presetWithPathHashCarriesItsOriginalTokenToBothMutations() = runTest {
+        collectPreset(pathHashSize = 2) { it }
+    }
+
+    @Test fun retiredPresetPathHashCannotUseReplacementGeneration() = runTest {
+        collectPreset(pathHashSize = 2) { it.copy(generation = Generation(it.generation.value + 1)) }
+    }
+
+    private suspend fun TestScope.collectPreset(pathHashSize: Long? = null, replace: (SessionToken) -> SessionToken?) {
         val h = ContainerHarness(this, store)
         try {
             h.links.configureRadio = { radio ->
+                var mode = 0
                 radio.respond = { command ->
-                    if (command[0].toInt() == 0x0b) listOf(Bytes.of(0)) else null
+                    when (command[0].toInt()) {
+                        0x0b -> listOf(Bytes.of(0))
+                        0x3d -> {
+                            mode = command[2].toInt()
+                            listOf(Bytes.of(0))
+                        }
+                        0x16 -> if (pathHashSize == null) null else listOf(
+                            Bytes.of(13, 10, 50, 8) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +
+                                Bytes.utf8("T-Deck").paddedOrTruncated(40) +
+                                Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(mode),
+                        )
+                        else -> null
+                    }
                 }
             }
             h.connect()
@@ -53,13 +74,17 @@ class PresetDeviceEventSessionTest : RoomProcessTest() {
             try {
                 val preset = RadioPresets.all.first().copy(
                     frequencyMHz = 915.0, bandwidthKHz = 250.0,
-                    spreadingFactor = 10u, codingRate = 5u, pathHashSize = null,
+                    spreadingFactor = 10u, codingRate = 5u, pathHashSize = pathHashSize,
                 )
                 session.settingsService.applyRadioPresetVerified(preset)
-                h.eventually("preset event reaches token-bound port") { port.presetTokens.isNotEmpty() }
-                assertEquals(listOf(token), port.presetTokens)
+                val count = if (pathHashSize == null) 1 else 2
+                h.eventually("preset events reach token-bound port") { port.presetTokens.size == count }
+                assertEquals(List(count) { token }, port.presetTokens)
                 assertEquals(if (port.presetToken == token) 1 else 0,
                     port.calls.count { it == "updateDeviceInfo" })
+                if (pathHashSize != null) {
+                    assertEquals(if (port.presetToken == token) 1 else 0, port.calls.count { it == "pathHash:1" })
+                }
             } finally { state.tearDownAppStateSessionState() }
         } finally { h.container.close() }
     }

@@ -95,6 +95,33 @@ class RuntimeSeamTest {
                 assertEquals(updated, manager.connectedDevice)
             }
         },
+        nativeCase("preset completion cancellation and reconnect are ordered against the actual seal") {
+            withFixture {
+                connect()
+                val token = assertNotNull(manager.snapshot.value.token)
+                val cancelled = OnboardingCompletionAttempt()
+                cancelled.reject(CancellationException("cancel won"))
+                assertFalse(manager.sealOnboardingCompletion(token, cancelled))
+                val committed = OnboardingCompletionAttempt()
+                assertTrue(manager.sealOnboardingCompletion(token, committed))
+                committed.reject(CancellationException("seal won"))
+                assertNull(committed.rejection())
+                manager.setConnectionState(DeviceConnectionState.CONNECTING)
+                assertFalse(manager.sealOnboardingCompletion(token, OnboardingCompletionAttempt()))
+                assertFalse(manager.sealOnboardingCompletion(token, committed))
+            }
+        },
+        nativeCase("token-bound device replacement rejects connecting before old token teardown") {
+            withFixture {
+                connect()
+                val original = assertNotNull(manager.snapshot.value.token)
+                val device = assertNotNull(manager.connectedDevice)
+                manager.setConnectionState(DeviceConnectionState.CONNECTING)
+                assertEquals(original, manager.snapshot.value.token)
+                assertNull(manager.replaceConnectedDevice(device.copy(nodeName = "Late preset"), original))
+                assertEquals(device, manager.connectedDevice)
+            }
+        },
         nativeCase("token-bound device replacement rejects disconnect and same-radio rebuilt generation") {
             withFixture {
                 connect()

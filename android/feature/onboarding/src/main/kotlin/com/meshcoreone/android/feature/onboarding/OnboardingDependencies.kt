@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.onboarding
 
 import androidx.compose.runtime.Composable
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.RSSITuning
 import com.meshcoreone.android.core.ui.UiText
@@ -131,6 +132,10 @@ sealed interface OnboardingPresetOutcome {
 interface OnboardingPresetPort {
     val canApply: StateFlow<Boolean>
     fun currentTarget(): OnboardingPresetTarget? = null
+    fun sealCompletion(
+        target: OnboardingPresetTarget?,
+        attempt: OnboardingCompletionAttempt,
+    ): Boolean = currentTarget() == target && attempt.trySeal()
     suspend fun apply(presetId: String): OnboardingPresetOutcome
     suspend fun apply(presetId: String, expectedTarget: OnboardingPresetTarget?): OnboardingPresetOutcome {
         if (currentTarget() != expectedTarget) return OnboardingPresetOutcome.NotConnected

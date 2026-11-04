@@ -1,6 +1,7 @@
 // PortedFrom: MC1/Views/Onboarding/PresetStepView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.onboarding
 
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.ui.UiText
@@ -112,6 +113,15 @@ class PresetStepCoordinator(
         val target = appliedPresetTarget
         return {
             if (presets.currentTarget() != target) throw OnboardingPresetTargetChangedException()
+        }
+    }
+
+    internal fun completionSealer(): (OnboardingCompletionAttempt) -> Boolean {
+        val target = appliedPresetTarget
+        return { attempt ->
+            val sealed = presets.sealCompletion(target, attempt)
+            if (!sealed && attempt.rejection() == null) throw OnboardingPresetTargetChangedException()
+            sealed
         }
     }
 

@@ -122,12 +122,14 @@ class ConnectionManagerAppPort(
     override suspend fun removeStaleNodes(olderThanDays: Int): RemoveUnfavoritedResult = editor.removeStaleNodes(olderThanDays)
 
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) { editor.updateDevice(info, appliedRadioPresetId) }
-    override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean =
-        editor.updateDevice(info, appliedRadioPresetId, expectedToken) != null
+    override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean =
+        editor.updateDevice(info, appliedRadioPresetId, expectedToken)
     override fun updateDevice(device: DeviceDTO) = editor.updateDevice(device)
     override fun updateAutoAddConfig(config: AutoAddConfig) { editor.updateAutoAddConfig(config) }
     override fun updateClientRepeat(enabled: Boolean) { editor.updateClientRepeat(enabled) }
     override fun updatePathHashMode(mode: UByte) { editor.updatePathHashMode(mode) }
+    override suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
+        editor.updatePathHashMode(mode, expectedToken)
     override fun updateDefaultFloodScopeName(name: String?) { editor.updateDefaultFloodScopeName(name) }
 
     /** The runtime exposes the ranges read-only; the settings stream's latest value is kept here (see WP-303.md). */

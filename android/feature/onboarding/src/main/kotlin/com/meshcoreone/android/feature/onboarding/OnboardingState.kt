@@ -1,6 +1,7 @@
 // PortedFrom: MC1/State/OnboardingState.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.onboarding
 
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +25,16 @@ interface OnboardingFlagStore {
         requireCurrent()
         persistBoolean(key, value)
         requireCurrent()
+    }
+
+    suspend fun persistBoolean(
+        key: String, value: Boolean, requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean,
+    ) {
+        requireCurrent()
+        val attempt = OnboardingCompletionAttempt()
+        check(seal(attempt)) { "Onboarding completion was retired before finalization" }
+        persistBoolean(key, value)
     }
 }
 
@@ -63,13 +74,17 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         return true
     }
 
-    suspend fun completeOnboarding(requireCurrent: () -> Unit = {}) {
+    suspend fun completeOnboarding(requireCurrent: () -> Unit = {}) =
+        completeOnboardingWithSeal(requireCurrent) { it.trySeal() }
+
+    suspend fun completeOnboardingWithSeal(
+        requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean,
+    ) {
         val caller = currentCoroutineContext()
         val validate = { caller.ensureActive(); requireCurrent() }
         validate()
-        store.persistBoolean(KEY_HAS_COMPLETED, true, validate)
-        // A committed preference is not rolled back; a retired producer must not publish live completion.
-        validate()
+        store.persistBoolean(KEY_HAS_COMPLETED, true, validate, seal)
         completed.value = true
     }
 

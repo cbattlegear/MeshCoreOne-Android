@@ -50,12 +50,14 @@ interface AppConnectionPort {
 
     // Connected-device edits driven by the settings event stream (Swift `connectionManager.update*`).
     fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?)
-    fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean =
+    suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean =
         throw UnsupportedOperationException("Session-bound radio preset updates are not supported")
     fun updateDevice(device: DeviceDTO)
     fun updateAutoAddConfig(config: AutoAddConfig)
     fun updateClientRepeat(enabled: Boolean)
     fun updatePathHashMode(mode: UByte)
+    suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
+        throw UnsupportedOperationException("Session-bound path hash replacement is not supported")
     fun updateDefaultFloodScopeName(name: String?)
     fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>)
 }

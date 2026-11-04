@@ -12,6 +12,7 @@ import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class SyncChannelNotificationTargetTest {
@@ -29,14 +30,15 @@ class SyncChannelNotificationTargetTest {
             val coordinator = coordinator()
             coordinator.wireMessageHandlers(services.dependencies(), radioId)
             checkNotNull(services.polling.capturedChannelMessageHandler)(
-                channelMessage("Peer: hello", clock.now(), channel.index), channel, DeliveryContext.Live,
+                channelMessage("Peer: hello @[TestDevice]", clock.now(), channel.index), channel, DeliveryContext.Live,
             )
 
             val post = services.notifications.posts.single()
             assertEquals(channel.name, post.title)
             assertEquals(channel.notificationLevel, post.notificationLevel)
+            assertEquals(true, post.hasSelfMention)
             assertEquals(ChannelNotificationTarget.Proven(radioId, channel.index, channel.id), post.displayTarget)
-            assertEquals(listOf("hello"), store.allMessages().map { it.text })
+            assertEquals(listOf("hello @[TestDevice]"), store.allMessages().map { it.text })
         },
         nativeCase("unresolved receive remains saved without inventing a display target or notification") {
             val radioId = newRadio()
@@ -85,11 +87,21 @@ class SyncChannelNotificationTargetTest {
         nativeCase("held and reordered notifications retain each displayed occupant across ${if (sameKey) "same-key ABA" else "replacement"}") {
             val radioId = newRadio()
             val old = ChannelDTO(radioId = radioId, index = 2u, name = "Old", secret = Bytes(ByteArray(16) { 1 }))
-            val replacement = ChannelDTO(
-                radioId = radioId, index = old.index, name = "Replacement",
-                secret = if (sameKey) old.secret else Bytes(ByteArray(16) { 2 }),
+            val middle = ChannelDTO(
+                radioId = radioId, index = old.index, name = if (sameKey) "Middle" else "Replacement",
+                secret = Bytes(ByteArray(16) { 2 }),
                 notificationLevel = NotificationLevel.MENTIONS_ONLY,
             )
+            val replacement = if (sameKey) {
+                ChannelDTO(
+                    radioId = radioId, index = old.index, name = "Replacement", secret = old.secret,
+                    notificationLevel = NotificationLevel.MENTIONS_ONLY,
+                )
+            } else middle
+            assertNotEquals(old.id, middle.id)
+            assertNotEquals(old.id, replacement.id)
+            assertNotEquals(old.secret, middle.secret)
+            if (sameKey) assertEquals(old.secret, replacement.secret)
             val services = SyncTestServices(SyncInMemoryStore.createTestDataStore(radioId))
             services.dataStore.saveChannel(old)
             val entered = CompletableDeferred<Unit>()
@@ -113,9 +125,12 @@ class SyncChannelNotificationTargetTest {
             }
             entered.await()
             assertFalse(held.isCompleted)
-            services.dataStore.saveChannel(replacement)
+            services.dataStore.replaceChannelSlotForTest(middle)
+            assertEquals(listOf(middle.id), services.dataStore.fetchChannels(radioId).map { it.id })
+            if (sameKey) services.dataStore.replaceChannelSlotForTest(replacement)
+            assertEquals(listOf(replacement.id), services.dataStore.fetchChannels(radioId).map { it.id })
             handler(
-                channelMessage("Peer: replacement", clock.now().plusSeconds(1), replacement.index),
+                channelMessage("Peer: replacement @[TestDevice]", clock.now().plusSeconds(1), replacement.index),
                 replacement, DeliveryContext.Live,
             )
             release.complete(Unit)
@@ -131,7 +146,8 @@ class SyncChannelNotificationTargetTest {
                 posts.map { it.displayTarget },
             )
             assertEquals(listOf(replacement.notificationLevel, old.notificationLevel), posts.map { it.notificationLevel })
-            assertEquals(setOf("old", "replacement"), services.dataStore.allMessages().map { it.text }.toSet())
+            assertEquals(listOf(true, false), posts.map { it.hasSelfMention })
+            assertEquals(setOf("old", "replacement @[TestDevice]"), services.dataStore.allMessages().map { it.text }.toSet())
         }
     }
 }

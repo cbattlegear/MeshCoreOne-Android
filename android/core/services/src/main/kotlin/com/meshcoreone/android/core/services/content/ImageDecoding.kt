@@ -26,9 +26,9 @@ interface DecodedImageHandle {
     val height: Int
 
     /**
-     * Approximate decoded pixel byte cost for this handle, matching [ImageByteCost]'s
-     * row-stride branch (`rowBytes * height`) when the native adapter has that precise figure,
-     * or its width/height fallback otherwise.
+     * Retained decoded pixel byte cost. Native adapters report allocation capacity when
+     * available (summed across animation frames); [ImageByteCost] provides a row-stride or
+     * width/height estimate for handles without a platform allocation measurement.
      */
     val costBytes: Int
 }

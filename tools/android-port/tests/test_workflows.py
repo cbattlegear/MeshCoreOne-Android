@@ -206,12 +206,34 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(current.count("--include-tests tools/android-port/local"), 1)
         self.assertEqual(current.count("--candidate-event-name"), 1)
         self.assertEqual(current.count("--candidate-event-path"), 1)
-        for command in (current, current.replace(" --include-tests android/parity-tests", "", 1)):
+        legacy = current.replace(" --include-tests tools/android-port/oracle", "", 1)
+        for command in (current, legacy, legacy.replace(" --include-tests android/parity-tests", "", 1)):
             changed = copy.deepcopy(original)
             step = next(step for step in changed["jobs"]["controller"]["steps"]
                         if "controller/test_runner.py" in step.get("run", ""))
             step["run"] = step["run"].replace(current, command)
             validate_candidate(changed, text)
+
+    def test_infrastructure_controller_discovers_oracle_once_without_arbitrary_commands(self):
+        original, text = self.read("android-ci.yml")
+        runner = next(step for step in original["jobs"]["controller"]["steps"]
+                      if "controller/test_runner.py" in step.get("run", ""))
+        command = next(line for line in runner["run"].splitlines() if "controller/test_runner.py" in line)
+        self.assertEqual(command.count("--include-tests tools/android-port/oracle"), 1)
+        validate_candidate(original, text)
+        for bad in (
+            command + " --include-tests tools/android-port/oracle",
+            command.replace("tools/android-port/oracle", "tools/android-port/unknown"),
+            command.replace(" --include-tests android/parity-tests", "", 1),
+            command.replace(' --candidate-event-path "${{ github.event_path }}"', ""),
+            command + " || true",
+        ):
+            changed = copy.deepcopy(original)
+            step = next(step for step in changed["jobs"]["controller"]["steps"]
+                        if "controller/test_runner.py" in step.get("run", ""))
+            step["run"] = step["run"].replace(command, bad)
+            with self.subTest(command=bad), self.assertRaises(PortError):
+                validate_candidate(changed, text)
 
     def test_combined_controller_discovery_rejects_duplicates_and_unknown_families(self):
         original, text = self.read("android-ci.yml")

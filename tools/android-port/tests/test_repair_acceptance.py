@@ -10,7 +10,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from unittest.mock import patch
 
-from fixtures import BASE, HEAD, MERGE, REPO, base_manifest, bundle, policy
+from fixtures import BASE, HEAD, MERGE, REPO, base_manifest, bundle, policy, test_manifest
 from controller.engine import GateBundle
 from controller.errors import PortError
 from controller.gates import Binding, policy_revision, verify_completion, verify_pr_gates
@@ -20,6 +20,9 @@ from controller.repair_acceptance import (
     COMPRESSED_SCOPE_MARKER, SCOPE_MARKER, authenticated_scope, instrumentation_results, validate_build_log,
     validate_hosted_methods as validate_compiled_hosted_methods, validate_scope, verify_native, verify_repair,
     retained_repairs_execution, scoped_candidate_sources, scoped_retained_sources,
+    INFRASTRUCTURE_ACCEPTANCE, INFRASTRUCTURE_PATH_OPERATIONS, INFRASTRUCTURE_SCOPE_ID,
+    INFRASTRUCTURE_SCOPE_KIND, INFRASTRUCTURE_VERIFICATION, verify_infrastructure_acceptance,
+    validate_infrastructure_scope,
 )
 from controller.schema import digest, load_json
 from controller.publication import encode_structured_body
@@ -106,6 +109,46 @@ def whole_fixture():
     return manifest, rules, replace(value, evidence=evidence, review=review, catalog=catalog), scope
 
 
+def infrastructure_fixture():
+    manifest, rules = test_manifest("WP-003"), policy()
+    paths = sorted((
+        ".github/workflows/android-ci.yml",
+        "docs/android/ci/bounded-infrastructure-review.md",
+        "tools/android-port/controller/authority.py",
+        "tools/android-port/controller/gates.py",
+        "tools/android-port/controller/merged_acceptance.py",
+        "tools/android-port/controller/native_review.py",
+        "tools/android-port/controller/repair_acceptance.py",
+        "tools/android-port/controller/runtime_inputs.py",
+        "tools/android-port/controller/test_runner.py",
+        "tools/android-port/controller/workflows.py",
+        "tools/android-port/tests/test_merged_acceptance.py",
+        "tools/android-port/tests/test_native_review.py",
+        "tools/android-port/tests/test_repair_acceptance.py",
+        "tools/android-port/tests/test_runner.py",
+        "tools/android-port/tests/test_workflows.py",
+    ))
+    value = bundle(manifest, rules, "WP-003", changed_paths=paths, merged=False)
+    scope = {
+        "schema_version": 1, "kind": INFRASTRUCTURE_SCOPE_KIND, "scope_id": INFRASTRUCTURE_SCOPE_ID,
+        "binding": asdict(value.binding), "paths": paths,
+        "verification": copy.deepcopy(INFRASTRUCTURE_VERIFICATION),
+    }
+    url = f"https://github.com/{rules['repository']}/actions/runs/1/attempts/1"
+    acceptance = [
+        {"id": item["id"], "result": "PASS", "evidence": [url]}
+        for item in INFRASTRUCTURE_ACCEPTANCE
+    ]
+    evidence = {
+        "schema_version": 5, **asdict(value.binding), "changed_paths": paths,
+        "runs": [{"check": "android-ci", "run_id": 1, "run_attempt": 1}],
+        "retained_artifacts": [], "acceptance": acceptance,
+        "verification_scope": scope,
+    }
+    review = {**value.review, "acceptance": copy.deepcopy(acceptance), "human_gate_required": True}
+    return manifest, rules, replace(value, evidence=evidence, review=review), scope
+
+
 def build_log(modules, **changes):
     from controller.ci import TASKS
 
@@ -125,6 +168,117 @@ def build_log(modules, **changes):
 
 
 class RepairContractTests(unittest.TestCase):
+    def test_infrastructure_scope_admits_only_exact_paths_and_capability_operations(self):
+        manifest, rules, value, scope = infrastructure_fixture()
+        self.assertEqual(
+            validate_infrastructure_scope(scope, value.binding, manifest, rules, value.pr["changed_paths"]),
+            {path: INFRASTRUCTURE_PATH_OPERATIONS[path][0] for path in scope["paths"]},
+        )
+        self.assertEqual(
+            INFRASTRUCTURE_PATH_OPERATIONS["tools/android-port/oracle/workflow_scope.py"],
+            ("add-or-update-validator-rule", "traceability-validation"),
+        )
+        self.assertEqual(
+            INFRASTRUCTURE_PATH_OPERATIONS["tools/android-port/oracle/test_ci.py"],
+            ("add-regression-fixture-or-test", "traceability-validation"),
+        )
+        for path in (
+            "tools/android-port/controller/workflows.py",
+            "tools/android-port/tests/test_workflows.py",
+            "tools/android-port/tests/test_runner.py",
+            "tools/android-port/oracle/test_ci.py",
+            "tools/android-port/oracle/test_workflow_scope.py",
+            "tools/android-port/oracle/workflow_scope.py",
+        ):
+            manifest, rules, value, scope = infrastructure_fixture()
+            scope["paths"] = sorted(set(scope["paths"]) | {path})
+            self.assertEqual(
+                validate_infrastructure_scope(scope, value.binding, manifest, rules, scope["paths"]),
+                {item: INFRASTRUCTURE_PATH_OPERATIONS[item][0] for item in scope["paths"]},
+            )
+
+    def test_infrastructure_reader_and_test_roles_follow_declared_operations(self):
+        for paths, allowed in (
+            (["tools/android-port/controller/native_review.py", "tools/android-port/controller/test_runner.py"], False),
+            (["tools/android-port/controller/test_runner.py", "tools/android-port/tests/test_runner.py"], True),
+        ):
+            manifest, rules, value, scope = infrastructure_fixture()
+            scope["paths"] = sorted(paths)
+            with self.subTest(paths=paths):
+                if allowed:
+                    self.assertEqual(
+                        set(validate_infrastructure_scope(scope, value.binding, manifest, rules, scope["paths"])),
+                        set(paths),
+                    )
+                else:
+                    with self.assertRaises(PortError):
+                        validate_infrastructure_scope(scope, value.binding, manifest, rules, scope["paths"])
+
+    def test_infrastructure_scope_rejects_unknown_stale_or_untested_contracts(self):
+        for mutation in ("scope-id", "scope-kind", "unknown-path", "missing-test", "stale-head", "unknown-verification"):
+            manifest, rules, value, scope = infrastructure_fixture()
+            paths = list(scope["paths"])
+            if mutation == "scope-id":
+                scope["scope_id"] += "-other"
+            elif mutation == "scope-kind":
+                scope["kind"] = "whole-wp"
+            elif mutation == "unknown-path":
+                paths.append("tools/android-port/controller/unreviewed_reader.py")
+                paths.sort()
+                scope["paths"] = paths
+            elif mutation == "missing-test":
+                paths = [
+                    path for path in paths
+                    if INFRASTRUCTURE_PATH_OPERATIONS[path][0] not in ("test", "add-regression-fixture-or-test")
+                ]
+                scope["paths"] = paths
+            elif mutation == "stale-head":
+                scope["binding"]["head_sha"] = BASE
+            else:
+                scope["verification"]["job_name"] = "candidate-selected-job"
+            with self.subTest(mutation=mutation), self.assertRaises(PortError):
+                validate_infrastructure_scope(scope, value.binding, manifest, rules, value.pr["changed_paths"])
+
+    def test_infrastructure_acceptance_is_typed_bounded_and_requires_positive_actual_ci(self):
+        manifest, rules, value, scope = infrastructure_fixture()
+        result = verify_infrastructure_acceptance(value, scope, manifest, rules)
+        self.assertEqual(result["kind"], "bounded-infrastructure-verification")
+        self.assertFalse(result["wp_complete"])
+        self.assertFalse(result["dependency_unlock"])
+        for consumer in (verify_pr_gates, verify_completion):
+            with self.assertRaisesRegex(PortError, "Bounded"):
+                consumer(
+                    value.pr, value.evidence, value.review, value.approvals,
+                    value.binding, manifest, rules, value.catalog,
+                )
+        for mutation in ("zero-runs", "duplicate-run", "stale-attempt", "wrong-check",
+                         "missing-acceptance", "duplicate-acceptance", "retained-bundle",
+                         "malformed-paths", "stale-evidence-binding"):
+            manifest, rules, value, scope = infrastructure_fixture()
+            evidence = copy.deepcopy(value.evidence)
+            if mutation == "zero-runs":
+                evidence["runs"] = []
+            elif mutation == "duplicate-run":
+                evidence["runs"].append(copy.deepcopy(evidence["runs"][0]))
+            elif mutation == "stale-attempt":
+                evidence["runs"][0]["run_attempt"] = 0
+            elif mutation == "wrong-check":
+                evidence["runs"][0]["check"] = "candidate-publisher"
+            elif mutation == "missing-acceptance":
+                evidence["acceptance"].pop()
+            elif mutation == "duplicate-acceptance":
+                evidence["acceptance"].append(copy.deepcopy(evidence["acceptance"][0]))
+            elif mutation == "retained-bundle":
+                evidence["retained_artifacts"] = [{"path": "ci-results.zip", "sha256": "a" * 64}]
+            elif mutation == "stale-evidence-binding":
+                evidence["head_sha"] = BASE
+            else:
+                evidence["changed_paths"] = ["tools/android-port/controller/native_review.py", {}]
+            with self.subTest(mutation=mutation), self.assertRaises(PortError):
+                verify_infrastructure_acceptance(
+                    replace(value, evidence=evidence), scope, manifest, rules,
+                )
+
     def test_scoped_candidate_sources_include_consumer_tests_and_native_bindings_without_conflicts(self):
         _, _, _, scope = fixture()
         scope["coverage"][0]["production_bindings"] = {PATH: "5" * 40}
@@ -276,8 +430,11 @@ class RepairContractTests(unittest.TestCase):
         proof = verify_repair(value, scope, manifest, rules, None)
         self.assertFalse(proof["wp_complete"])
         self.assertFalse(proof["dependency_unlock"])
-        for verifier in (verify_pr_gates, verify_completion):
-            with self.subTest(verifier=verifier), self.assertRaisesRegex(PortError, "[Bb]ounded repair"):
+        for verifier, message in (
+            (verify_pr_gates, "Bounded acceptance is not full-WP gate/completion evidence"),
+            (verify_completion, "Bounded acceptance cannot complete a WP or unlock dependencies"),
+        ):
+            with self.subTest(verifier=verifier), self.assertRaisesRegex(PortError, message):
                 verifier(value.pr, value.evidence, value.review, [], value.binding, manifest, rules)
         self.assertFalse(manifest.wp("WP-312")["verification"]["configured"])
 
@@ -566,6 +723,137 @@ class RepairExecutionTests(unittest.TestCase):
                     else:
                         with self.assertRaises(PortError):
                             validate_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_anonymous_collaborators_preserve_complete_named_hosted_coverage(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        sources = {
+            TEST: b"package sample\nimport org.junit.Before\nclass MapTest : Parent() { "
+                  b"val renderer = object : Renderer<Bitmap> { override fun render() = bitmap() }; "
+                  b"@Before fun setup() {} @Test fun keepsListReachable() { "
+                  b"val http = object : HttpFetching { override fun fetch() = response() } }; "
+                  b"@Test fun collaboratorsKeepTheirLexicalScope() { "
+                  b"use(object : Renderer<Bitmap> { override fun render() = bitmap() }) } }",
+            base: b"package sample\nopen class Parent {}",
+        }
+        names = (METHOD["id"], "collaboratorsKeepTheirLexicalScope")
+        for whole in (False, True):
+            manifest, scope, blobs, contents, _, compiled = self.lineage_inputs(sources, whole=whole)
+            scope["coverage"][0]["hosted_methods"] = [
+                {**METHOD, "blob_sha": blobs[TEST], "id": name} for name in names
+            ]
+            executed = {"core/maps": [
+                {"class": "sample.MapTest", "method": name + "[" + sdk + "]"}
+                for name in names for sdk in ("31", "37")
+            ]}
+            with self.subTest(whole=whole), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                for mutation in ("wrong-class", "unexecuted", "uncompiled", "stale-compiled",
+                                 "omitted", "collaborator-method"):
+                    changed_scope, records, inventory = map(copy.deepcopy, (scope, executed, compiled))
+                    if mutation == "wrong-class":
+                        for record in records["core/maps"]:
+                            record["class"] = "sample.OtherTest"
+                    elif mutation == "unexecuted":
+                        records["core/maps"] = records["core/maps"][:2]
+                    elif mutation == "uncompiled":
+                        del inventory["core/maps"][TEST]
+                    elif mutation == "stale-compiled":
+                        inventory["core/maps"][TEST] = "7" * 40
+                    elif mutation == "omitted":
+                        if not whole:
+                            continue
+                        changed_scope["coverage"][0]["hosted_methods"].pop()
+                    else:
+                        changed_scope["coverage"][0]["hosted_methods"].append(
+                            {**METHOD, "blob_sha": blobs[TEST], "id": "render"},
+                        )
+                    with self.subTest(mutation=mutation), self.assertRaises(PortError):
+                        validate_compiled_hosted_methods(
+                            changed_scope, blobs, manifest.repo, records, inventory,
+                        )
+
+    def test_anonymous_objects_are_not_suites_but_annotations_keep_lexical_inheritance(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        collaborator = "val fake = object : Collaborator { override fun call() {} }; "
+        for placement in ("top-level", "member", "method"):
+            source = "class MapTest { @Test fun keepsListReachable() {} }"
+            if placement == "top-level":
+                source = collaborator + source
+            elif placement == "member":
+                source = "class MapTest { " + collaborator + "@Test fun keepsListReachable() {} }"
+            else:
+                source = "class MapTest { @Test fun keepsListReachable() { " + collaborator + "} }"
+            for resolver in (None, lambda record, complete: self.fail("Anonymous suite resolved")):
+                classes = {}
+                with self.subTest(placement=placement, resolver=resolver):
+                    self.assertEqual(_kotlin_junit_methods(
+                        source, classes, reject_inherited=True, inheritance=resolver,
+                    ), {METHOD["id"]: "test"})
+                    self.assertEqual(classes, {METHOD["id"]: "MapTest"})
+        for body in (
+            "@Test fun hidden() {}",
+            "@Before fun hidden() {}",
+            "@get:Rule val rule = example",
+            "@Other fun hidden() {}",
+            "@[Test] fun hidden() {}",
+        ):
+            for reject_inherited in (False, True):
+                source = (
+                    "import org.junit.Before\nimport org.junit.Rule\n"
+                    "class MapTest { val fake = object : Collaborator { " + body + " }; "
+                    "@Test fun keepsListReachable() {} }"
+                )
+                with self.subTest(body=body, reject_inherited=reject_inherited), self.assertRaises(PortError):
+                    _kotlin_junit_methods(
+                        source, {}, reject_inherited=reject_inherited,
+                        inheritance=lambda record, complete: set(),
+                    )
+
+    def test_collaborators_do_not_hide_named_or_ambiguous_inherited_suites(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        collaborator = "val fake = object : Collaborator { override fun call() {} }; "
+        for declaration in (
+            "class Hidden : Parent() {}",
+            "class Hidden : Parent()",
+            "class Hidden : Missing() {}",
+            "class Hidden : Parent(), Marker by object : Marker {} {}",
+            "object Hidden : Parent() {}",
+            "class Hidden { companion object : Parent() {} }",
+            "class Hidden { companion object : Parent() }",
+            "class Hidden { class Nested : Parent() {} }",
+            "val broken = object : Parent()",
+        ):
+            sources = {
+                TEST: (
+                    "package sample\nclass MapTest { " + collaborator
+                    + "@Test fun keepsListReachable() {} }\n" + declaration
+                ).encode(),
+                base: b"package sample\nopen class Parent { @Test fun inheritedCase() {} }",
+            }
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=True)
+            with self.subTest(declaration=declaration), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ), self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_collaborators_do_not_clear_inherited_annotation_shadowing(self):
+        base = TEST.replace("MapTest.kt", "Parent.kt")
+        for member in ("annotation class Before", "companion object { annotation class Before }"):
+            sources = {
+                TEST: b"package sample\nimport org.junit.Before\nclass MapTest : Parent() { "
+                      b"val fake = object : Collaborator { override fun call() {} }; "
+                      b"@Before fun setup() {} @Test fun keepsListReachable() {} }",
+                base: ("package sample\nopen class Parent { " + member + " }").encode(),
+            }
+            for whole in (False, True):
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=whole)
+                with self.subTest(member=member, whole=whole), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaisesRegex(PortError, "Ambiguous Kotlin function annotation"):
+                    validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
 
     def test_known_superclass_cannot_hide_inherited_tests_from_complete_coverage(self):
         base = TEST.replace("MapTest.kt", "Parent.kt")

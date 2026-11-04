@@ -4126,6 +4126,93 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun actualConnectionLossRejectsPreLossLookupButFreshOfflineLinksStillReachMountedDestinations() = runTest {
+        for (knownBeforeLoss in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Retained offline peer") }
+            val entered = CompletableDeferred<Unit>()
+            val releaseLookup = CompletableDeferred<Unit>()
+            var oldRoute: kotlinx.coroutines.Deferred<DeepLinkRouteOutcome>? = null
+            try {
+                connect(h)
+                val oldGraph = assertNotNull(h.sessions.current)
+                val radio = oldGraph.token.radioId
+                val saved = assertNotNull(store.fetchContact(radio, key(20)))
+                val navigation = h.container.navigation
+                val base = ContainerDeepLinkEnvironment(h.container, navigation)
+                val oldRouter = AppDeepLinkRouter(object : AppDeepLinkEnvironment by base {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        entered.complete(Unit)
+                        releaseLookup.await()
+                        return base.fetchContact(radioId, publicKey)
+                    }
+                })
+                val codec = h.container.nodesFeature.uriCodec
+                val oldUri = codec.exportContactUri(
+                    "Pre-loss claim", if (knownBeforeLoss) key(20) else key(30), ContactType.REPEATER,
+                )
+                val routing = backgroundScope.async(Dispatchers.Default) { oldRouter.routeExternal(oldUri) }
+                oldRoute = routing
+                h.eventually("initiating live graph lookup is suspended", virtualBudgetMillis = 0) { entered.isCompleted }
+                assertNotNull(h.links.links.last().callbacks).onDisconnected(IllegalStateException("actual link loss"))
+                h.eventually("actual loss retires both graph and navigation binding", virtualBudgetMillis = 0) {
+                    h.manager.connectionState == DeviceConnectionState.DISCONNECTED &&
+                        h.sessions.current == null && navigation.currentState.boundSessionToken == null
+                }
+                assertTrue(oldGraph.isTornDown)
+                val offline = h.manager.captureNavigationLifecycle()
+                assertFalse(h.manager.isNavigationLifecycleCurrent(offline), "Historical graph exposure is not first binding")
+                assertTrue(h.manager.isOfflineNavigationLifecycleCurrent(offline))
+                val afterLoss = navigation.currentState
+                releaseLookup.complete(Unit)
+                h.eventually("old lookup finishes without navigating or staging", virtualBudgetMillis = 0) {
+                    routing.isCompleted
+                }
+                assertEquals(DeepLinkRouteOutcome.ContactLookupRejected, routing.await())
+                assertEquals(afterLoss, navigation.currentState)
+
+                val fresh = AppDeepLinkRouter(base)
+                assertEquals(
+                    DeepLinkRouteOutcome.Navigated,
+                    fresh.routeExternal(codec.exportContactUri("Fresh alias", saved.publicKey, ContactType.ROOM)),
+                )
+                assertEquals(saved.id, navigation.state.value.selectedContact?.id)
+                assertEquals(radio, navigation.state.value.selectedContact?.radioId)
+                mount(h)
+                compose.waitForIdle()
+                compose.onAllNodesWithText(saved.displayName).onFirst().assertIsDisplayed()
+                val unknownUri = codec.exportContactUri("Fresh offline confirmation", key(31), ContactType.REPEATER)
+                assertEquals(DeepLinkRouteOutcome.ConfirmationStaged, fresh.routeExternal(unknownUri))
+                val pending = assertNotNull(navigation.state.value.pendingContactLink)
+                assertEquals(radio, pending.targetRadioId)
+                assertEquals(ContactType.REPEATER, pending.type)
+                compose.waitForIdle()
+                compose.onNodeWithTag("contact-link-confirmation").assertIsDisplayed()
+                compose.onNodeWithTag("contact-link-cancel").performClick()
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(store.fetchContact(radio, key(31)))
+
+                navigation.clearPendingContactDetailNavigation()
+                assertNull(navigation.currentState.pendingContactDetail)
+                assertTrue(ChatLinkRouter(h.container.chatsFeature.list.links, backgroundScope).route(
+                    codec.exportContactUri("Fresh chat alias", saved.publicKey, ContactType.CHAT),
+                ))
+                h.eventually("fresh chat link resolves the cached contact after actual loss", virtualBudgetMillis = 0) {
+                    navigation.state.value.pendingContactDetail?.id == saved.id
+                }
+                assertNull(h.sessions.current)
+                assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+                connect(h)
+                assertFalse(h.manager.isOfflineNavigationLifecycleCurrent(offline), "Offline authority cannot follow reconnection")
+            } finally {
+                releaseLookup.complete(Unit)
+                oldRoute?.cancelAndJoin()
+                unmount()
+                h.container.close()
+            }
+        }
+    }
+
     @Test fun savedOfflineContactDestinationSurvivesCompatibleInitialAssignmentButNotAnotherRadio() = runTest {
         for (compatible in listOf(true, false)) {
             val h = ContainerHarness(this, store, identity = { if (compatible) key(7) else key(8) })

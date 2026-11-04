@@ -107,6 +107,51 @@ class NavigationStateTest {
         assertFalse(store.compareAndSet(original, initial.copy(selectedTab = AppTab.TOOLS)))
     }
 
+    @Test fun finiteSnapshotWriterContentionCannotReopenASealedChatMountOrReleaseItsPredecessor() = runTest {
+        val coordinator = NavigationCoordinator()
+        val mount = ChatContactMount()
+        coordinator.registerChatContactMount(mount).release()
+        val held = ContactLinkPublications()
+        coordinator.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, held, mount)
+        val before = coordinator.state.value
+        val start = CompletableDeferred<Unit>()
+        val writers = List(4) { writer ->
+            async(Dispatchers.Default) {
+                start.await()
+                repeat(500) { turn ->
+                    coordinator.selectTab(AppTab.entries[(turn + writer) % AppTab.entries.size])
+                }
+            }
+        }
+        val sealing = async(Dispatchers.Default) {
+            start.await()
+            coordinator.sealChatContactMount(mount)
+        }
+        try {
+            start.complete(Unit)
+            // Finite writers permit eventual completion; this is not a wait-free latency assertion.
+            writers.forEach { it.await() }
+            sealing.await().release()
+            repeat(50) {
+                coordinator.registerChatContactMount(mount).release()
+                val revision = coordinator.currentState.contactLookupRevision
+                val capture = ContactLinkPublications().use { publications ->
+                    coordinator.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, publications, mount)
+                }
+                assertEquals(ContactLinkCaptureDisposition.StaleContext, capture.disposition)
+                assertEquals(revision, coordinator.currentState.contactLookupRevision)
+            }
+            assertEquals(before, coordinator.state.value)
+            held.release()
+            assertEquals(coordinator.currentState, coordinator.state.value)
+        } finally {
+            start.complete(Unit)
+            writers.forEach { it.cancelAndJoin() }
+            sealing.cancelAndJoin()
+            held.release()
+        }
+    }
+
     @Test fun publishedRevisionDoesNotExposeADeferredNavigationCommit() {
         val initial = NavigationState()
         val store = NavigationStateStore(initial)

@@ -385,7 +385,8 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         CapturedContactLinkContext(
             navigation.captureContactLinkLookup(
                 publicKey, radio, selfKey, graph?.token, connectionManager.snapshot.value.token,
-                if (graph == null) connectionManager.isNavigationLifecycleCurrent(lifecycle)
+                if (graph == null) connectionManager.isNavigationLifecycleCurrent(lifecycle) ||
+                    connectionManager.isOfflineNavigationLifecycleCurrent(lifecycle)
                 else !graph.isTornDown &&
                     connectionManager.isInitialNavigationSession(
                         lifecycle, graph.token, sessions.publicationIdentity, graph,
@@ -519,7 +520,8 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             lookup.owner !== navigation -> false
             current != null && lookup.radioId != null && lookup.radioId != current.token.radioId -> false
             current == null -> captured.graph == null &&
-                connectionManager.isNavigationLifecycleCurrent(captured.lifecycle)
+                (connectionManager.isNavigationLifecycleCurrent(captured.lifecycle) ||
+                    connectionManager.isOfflineNavigationLifecycleCurrent(captured.lifecycle))
             current.isTornDown -> false
             captured.graph != null -> current === captured.graph &&
                 (lookup.boundToken == current.token || lookup.allowsInitialBinding) &&

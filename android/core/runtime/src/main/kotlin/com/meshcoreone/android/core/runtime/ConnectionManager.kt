@@ -202,6 +202,17 @@ class ConnectionManager(
         }
     }
 
+    /** A fresh offline capture can retain historical exposure, but cannot follow any new submission or owner. */
+    fun isOfflineNavigationLifecycleCurrent(stamp: NavigationLifecycleStamp): Boolean = synchronized(lock) {
+        stamp.managerIdentity === navigationIdentity && !closed && shutdown == null &&
+            stamp.activeGeneration == null && stamp.submission == null &&
+            revision == stamp.revision && nextGeneration == stamp.lastGeneration &&
+            active == null && retained?.number == stamp.retainedGeneration &&
+            pending == null && pendingNavigationSubmission == null &&
+            values.value.state == DeviceConnectionState.DISCONNECTED && values.value.token == null &&
+            deviceValue == null
+    }
+
     fun isNavigationSessionCurrent(token: SessionToken, allowUnpublished: Boolean = false): Boolean =
         synchronized(lock) {
             val owner = active

@@ -434,16 +434,17 @@ class AdvertisementService(
     }
 
     /**
-     * Creates a local contact from a pending 0x80 key so a DM that arrives inside the debounce window
-     * can notify and list normally. Exactly one pending key must match [prefix]; the key stays pending
-     * so the debounced round still reconciles Discover and may announce the contact. Storage failures
+     * Materializes a local cache candidate from a pending 0x80 key inside the debounce window.
+     * This does not authorize sender attribution or notification. Exactly one pending key must match
+     * [prefix]; the key stays pending so the debounced round still reconciles Discover. Storage failures
      * and cancellation propagate. NotFound means genuine absence, not ambiguity or a failed lookup.
      */
     suspend fun materializeContactForPendingAdvert(prefix: Bytes, radioId: RadioId): LocalDirectContactResolution {
         require(prefix.size == 6) { "Pending advert materialization requires a six-byte receive prefix" }
         val initial = withPendingAdvertGate {
+            if (!isCurrentPendingRadio(radioId)) return@withPendingAdvertGate LocalDirectContactResolution.Stale
             val local = localDirectContacts.classifyLocalDirectContact(radioId, prefix)
-            unionPendingResolution(prefix, local)
+            unionPendingResolution(radioId, prefix, local)
         }
         if (initial != LocalDirectContactResolution.NotFound) return initial
         val pending = pendingLocked {
@@ -452,7 +453,7 @@ class AdvertisementService(
             if (keys.size != 1) return@pendingLocked null
             Triple(keys.single(), pendingAdvertReceiveTimes[keys.single()], eventMonitorJob)
         } ?: return withPendingAdvertGate {
-            unionPendingResolution(prefix, LocalDirectContactResolution.NotFound)
+            unionPendingResolution(radioId, prefix, LocalDirectContactResolution.NotFound)
         }
         val meshContact = advertising.getContact(pending.first)
         return withPendingAdvertGate {
@@ -466,7 +467,7 @@ class AdvertisementService(
                 return@withPendingAdvertGate LocalDirectContactResolution.Stale
             }
             val local = localDirectContacts.classifyLocalDirectContact(radioId, prefix)
-            val resolution = unionPendingResolution(prefix, local)
+            val resolution = unionPendingResolution(radioId, prefix, local)
             if (resolution != LocalDirectContactResolution.NotFound) return@withPendingAdvertGate resolution
             if (meshContact == null) {
                 logger(DebugLogLevel.INFO, "materialize pending advert: radio contact unavailable")
@@ -479,7 +480,7 @@ class AdvertisementService(
             val receivedAt = locked { pendingAdvertReceiveTimes[pending.first] } ?: pending.second
                 ?: clock.wallNow()
             val materialized = unionPendingResolution(
-                prefix, localDirectContacts.materializeLocalDirectContactIfAbsent(
+                radioId, prefix, localDirectContacts.materializeLocalDirectContactIfAbsent(
                     radioId, prefix, meshContact.advertContactFrame(), receivedAt,
                 ),
             )
@@ -505,16 +506,23 @@ class AdvertisementService(
         require(prefix.size == 6) { "Pending advert admission requires a six-byte receive prefix" }
         val current = localDirectContacts.classifyLocalDirectContact(radioId, prefix)
         val combined = when {
+            !isCurrentPendingRadio(radioId) -> LocalDirectContactResolution.Stale
             observed == LocalDirectContactResolution.Ambiguous || observed == LocalDirectContactResolution.Stale -> observed
-            unionPendingResolution(prefix, current) == LocalDirectContactResolution.Ambiguous ->
+            unionPendingResolution(radioId, prefix, current) == LocalDirectContactResolution.Ambiguous ->
                 LocalDirectContactResolution.Ambiguous
-            else -> unionPendingResolution(prefix, observed)
+            else -> unionPendingResolution(radioId, prefix, observed)
         }
         localDirectContacts.withLocalDirectContactOperation(radioId, prefix, combined, block)
     }
 
-    private fun unionPendingResolution(prefix: Bytes, local: LocalDirectContactResolution): LocalDirectContactResolution =
+    private fun isCurrentPendingRadio(radioId: RadioId): Boolean =
+        locked { currentRadioId == radioId && eventMonitorJob != null }
+
+    private fun unionPendingResolution(
+        radioId: RadioId, prefix: Bytes, local: LocalDirectContactResolution,
+    ): LocalDirectContactResolution =
         locked {
+            if (currentRadioId != radioId || eventMonitorJob == null) return@locked LocalDirectContactResolution.Stale
             val keys = pendingAdvertKeys.filter { it.advertStartsWith(prefix) }
             if (keys.size > 1 || local is LocalDirectContactResolution.Unique &&
                 keys.any { it != local.contact.publicKey }

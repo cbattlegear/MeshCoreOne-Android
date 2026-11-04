@@ -220,6 +220,7 @@ class AdvertisementServiceStoreTest {
             val keyB = prefix + Bytes(ByteArray(26) { 0x90.toByte() })
             assertNotEquals(keyA, keyB)
 
+            startMonitoring(service)
             service.recordPendingAdvertKey(keyA)
             service.recordPendingAdvertKey(keyB)
             assertEquals(
@@ -227,6 +228,7 @@ class AdvertisementServiceStoreTest {
                 service.materializeContactForPendingAdvert(prefix, radioId),
             )
             assertTrue(session.getContactPublicKeys.isEmpty())
+            service.stopEventMonitoring()
         },
 
         advertCase("empty schedule with no pending work does not call the handler") {

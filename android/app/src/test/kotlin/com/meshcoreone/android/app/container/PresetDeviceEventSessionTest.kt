@@ -13,6 +13,12 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class PresetDeviceEventSessionTest : RoomProcessTest() {
+    private suspend fun ContainerHarness.connect() {
+        manager.connect(target())
+        settle()
+        assertReady()
+    }
+
     @Test fun currentPresetEventCarriesItsOriginalToken() = runTest {
         collectPreset { it }
     }

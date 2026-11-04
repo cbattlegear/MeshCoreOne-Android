@@ -162,7 +162,7 @@ class OnboardingFlagsTest {
             current = false
             release.complete(Unit)
             assertEquals("retired producer", result.await().exceptionOrNull()?.message)
-            assertTrue(durable, "Do not pretend a completed disk write was rolled back")
+            assertTrue("Do not pretend a completed disk write was rolled back", durable)
             assertFalse(flags.hasCompleted.value)
             assertFalse(state.hasCompletedOnboarding)
             assertFalse(flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))

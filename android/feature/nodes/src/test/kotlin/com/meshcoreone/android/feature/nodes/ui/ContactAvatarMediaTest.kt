@@ -1,6 +1,7 @@
 // AndroidOnly: WP-311 Provider failure and owned-stream cancellation controls.
 package com.meshcoreone.android.feature.nodes.ui
 
+import android.os.CancellationSignal
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.io.InputStream
@@ -18,7 +19,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31])
 class ContactAvatarMediaTest {
     private fun assertCauseChainContains(expected: Throwable, actual: Throwable) {
         assertTrue(generateSequence(actual) { it.cause }.take(16).any { it === expected },
@@ -79,6 +85,99 @@ class ContactAvatarMediaTest {
             assertEquals(1, cancellations.get())
         } finally {
             released.countDown()
+            pending.cancelAndJoin()
+        }
+    }
+
+    @Test fun cancellationSignalReleasesAProviderOpenThatIgnoresInterruptionAndClosesItsLateStream() = runBlocking {
+        val signal = CancellationSignal()
+        val entered = CountDownLatch(1)
+        val cancelled = CountDownLatch(1)
+        val released = CountDownLatch(1)
+        val closes = AtomicInteger()
+        val reads = AtomicInteger()
+        val stream = object : InputStream() {
+            override fun read(): Int {
+                reads.incrementAndGet()
+                return -1
+            }
+            override fun close() {
+                closes.incrementAndGet()
+            }
+        }
+        val pending = launch {
+            ContactAvatarMedia.readSelection(cancelOpen = { signal.cancel() }) {
+                signal.setOnCancelListener {
+                    cancelled.countDown()
+                    released.countDown()
+                }
+                entered.countDown()
+                while (released.count != 0L) {
+                    try {
+                        released.await(20, TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        // Opening models a provider that responds only to CancellationSignal.
+                    }
+                }
+                stream
+            }
+        }
+        try {
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            pending.cancelAndJoin()
+            assertTrue(pending.isCancelled)
+            assertEquals(0L, cancelled.count, "The active open must receive signal cancellation")
+            assertEquals(0, reads.get(), "A stream returned after cancellation must not be read")
+            assertEquals(1, closes.get(), "The late stream must be closed exactly once")
+        } finally {
+            released.countDown()
+            signal.cancel()
+            pending.cancelAndJoin()
+        }
+    }
+
+    @Test fun throwingCancellationSignalListenerCannotReplaceCancellationOrLeakItsLateStream() = runBlocking {
+        val signal = CancellationSignal()
+        val entered = CountDownLatch(1)
+        val released = CountDownLatch(1)
+        val closes = AtomicInteger()
+        val reads = AtomicInteger()
+        val stream = object : InputStream() {
+            override fun read(): Int {
+                reads.incrementAndGet()
+                return -1
+            }
+            override fun close() {
+                closes.incrementAndGet()
+            }
+        }
+        val pending = launch {
+            ContactAvatarMedia.readSelection(cancelOpen = { signal.cancel() }) {
+                signal.setOnCancelListener {
+                    released.countDown()
+                    throw IllegalStateException("Provider cancellation failed")
+                }
+                entered.countDown()
+                while (released.count != 0L) {
+                    try {
+                        released.await(20, TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        // The open responds to the signal listener, not thread interruption.
+                    }
+                }
+                stream
+            }
+        }
+        try {
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            pending.cancelAndJoin()
+            assertTrue(pending.isCancelled)
+            assertEquals(0, reads.get())
+            assertEquals(1, closes.get())
+            assertTrue(signal.isCanceled)
+        } finally {
+            released.countDown()
+            signal.cancel()
             pending.cancelAndJoin()
         }
     }

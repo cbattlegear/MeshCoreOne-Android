@@ -531,7 +531,8 @@ class SharedUiComposeTest {
                 assertEquals(widthDp.toFloat(), hostWidthDp, 0.5f)
                 assertEquals(expectedCropSize, geometry.value.cropSize, 0.01)
                 assertEquals(2.0, geometry.value.scale)
-                assertEquals(CropOffset(10.0, 0.0), geometry.value.offset)
+                assertEquals(10.0 * expectedCropSize / 300.0, geometry.value.offset.x, 0.000001)
+                assertEquals(0.0, geometry.value.offset.y)
                 assertEquals(CropSize(200.0, 100.0), geometry.value.imageSize)
             }
             val canvasNode = compose.onNodeWithTag("avatar-crop-canvas", useUnmergedTree = true)
@@ -625,6 +626,124 @@ class SharedUiComposeTest {
             assertTrue(shown.not())
         }
         compose.onNodeWithText(resources.getString(AppContactsStrings.contactsCommonCancel)).assertDoesNotExist()
+    }
+
+    @Test fun cropSelectionSurvivesMountedWidthAndOrientationResizeAfterZoomAndPanControls() {
+        val bitmap = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888)
+        for (y in 0 until 200) for (x in 0 until 200) {
+            bitmap.setPixel(x, y, android.graphics.Color.rgb(x, y, 100))
+        }
+        val image = bitmap.asImageBitmap()
+        val geometry = mutableStateOf(AvatarCropGeometry(300.0, CropSize(200.0, 200.0)))
+        var shown by mutableStateOf(true)
+        var density = 1f
+        content {
+            SideEffect { density = resources.displayMetrics.density }
+            MeshCoreTheme(motionScale = 0f) {
+                if (shown) AvatarCropView(image, geometry.value, { geometry.value = it }, {}, {})
+            }
+        }
+        resizeDp(360, 900, density)
+        compose.onNodeWithTag("avatar-crop-zoom").performSemanticsAction(SemanticsActions.SetProgress) { it(2f) }
+        compose.onNodeWithText(resources.getString(AppContactsStrings.contactsDetailAvatarCropMoveRight)).performClick()
+        compose.onNodeWithText(resources.getString(AppContactsStrings.contactsDetailAvatarCropMoveUp)).performClick()
+        val selected = compose.runOnIdle { geometry.value }
+        val expected = selected.imageDrawRect()
+        val expectedPixels = cropAvatarImage(image, selected).asAndroidBitmap()
+        try {
+            for ((width, height) in listOf(840 to 900, 840 to 220, 360 to 220, 360 to 900)) {
+                resizeDp(width, height, density)
+                compose.onNodeWithTag("avatar-crop-canvas", useUnmergedTree = true).let {
+                    if (height == 220) it.performScrollTo()
+                    it.assertIsDisplayed()
+                }
+                compose.runOnIdle {
+                    val actual = geometry.value.imageDrawRect()
+                    assertEquals(expected.x, actual.x, 0.000001)
+                    assertEquals(expected.y, actual.y, 0.000001)
+                    assertEquals(expected.width, actual.width, 0.000001)
+                    assertEquals(expected.height, actual.height, 0.000001)
+                    assertEquals(2.0, geometry.value.scale)
+                    assertTrue(geometry.value.cropSize >= 128.0)
+                    val output = cropAvatarImage(image, geometry.value).asAndroidBitmap()
+                    try {
+                        for ((x, y) in listOf(128 to 128, 256 to 256, 384 to 384)) {
+                            assertEquals(expectedPixels.getPixel(x, y), output.getPixel(x, y))
+                        }
+                    } finally {
+                        output.recycle()
+                    }
+                }
+            }
+        } finally {
+            expectedPixels.recycle()
+            compose.runOnIdle { shown = false }
+            compose.waitForIdle()
+            bitmap.recycle()
+        }
+    }
+
+    @Test fun shortWindowAtFont200HasUsableCropAndReachableZoomPanConfirmAndCancel() {
+        configureSystemFontAndDirection(2f, LayoutDirection.Ltr)
+        val bitmap = Bitmap.createBitmap(200, 100, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(android.graphics.Color.BLUE)
+        }
+        val geometry = mutableStateOf(AvatarCropGeometry(300.0, CropSize(200.0, 100.0)))
+        var shown by mutableStateOf(true)
+        var confirmations = 0
+        var cancellations = 0
+        var density = 1f
+        var fontScale = 0f
+        content {
+            val currentDensity = LocalDensity.current
+            SideEffect { density = currentDensity.density; fontScale = currentDensity.fontScale }
+            MeshCoreTheme(motionScale = 0f) {
+                if (shown) AvatarCropView(bitmap.asImageBitmap(), geometry.value, { geometry.value = it },
+                    { cancellations++; shown = false }, { confirmations++; shown = false })
+            }
+        }
+        resizeDp(360, 220, density)
+        compose.runOnIdle { assertEquals(2f, fontScale) }
+        val preview = compose.onNodeWithTag("avatar-crop-canvas", useUnmergedTree = true)
+            .performScrollTo().assertIsDisplayed()
+        val node = preview.fetchSemanticsNode()
+        compose.runOnIdle {
+            assertTrue(geometry.value.cropSize >= 128.0)
+            val radius = (geometry.value.cropSize * density / 2).toFloat()
+            val center = node.positionInRoot + androidx.compose.ui.geometry.Offset(
+                node.size.width / 2f, node.size.height / 2f,
+            )
+            assertTrue(center.y - radius >= node.boundsInRoot.top - 1f)
+            assertTrue(center.y + radius <= node.boundsInRoot.bottom + 1f)
+            assertTrue(center.x - radius >= node.boundsInRoot.left - 1f)
+            assertTrue(center.x + radius <= node.boundsInRoot.right + 1f)
+        }
+        compose.onNodeWithTag("avatar-crop-zoom").performScrollTo().assertIsDisplayed()
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(2f) }
+        for (label in listOf(
+            AppContactsStrings.contactsDetailAvatarCropMoveRight, AppContactsStrings.contactsDetailAvatarCropMoveDown,
+            AppContactsStrings.contactsDetailAvatarCropMoveLeft, AppContactsStrings.contactsDetailAvatarCropMoveUp,
+        )) {
+            compose.onNodeWithText(resources.getString(label)).performScrollTo()
+                .assertIsDisplayed().assertHeightIsAtLeast(49.dp).performClick()
+        }
+        compose.runOnIdle {
+            assertEquals(2.0, geometry.value.scale)
+            assertEquals(CropOffset.ZERO, geometry.value.offset)
+        }
+        compose.onNodeWithText(resources.getString(AppContactsStrings.contactsDetailAvatarCropChoose))
+            .performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(49.dp).performClick()
+        compose.runOnIdle { assertEquals(1, confirmations); assertEquals(0, cancellations); shown = true }
+        resizeDp(360, 220, density)
+        compose.onNodeWithText(resources.getString(AppContactsStrings.contactsCommonCancel))
+            .performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(49.dp).performClick()
+        compose.runOnIdle {
+            assertEquals(1, confirmations)
+            assertEquals(1, cancellations)
+            assertFalse(shown)
+        }
+        compose.waitForIdle()
+        bitmap.recycle()
     }
 
     private fun resizeDp(widthDp: Int, heightDp: Int, density: Float) {

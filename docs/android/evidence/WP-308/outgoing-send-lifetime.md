@@ -12,7 +12,7 @@ reimplement its SQL or change canonical contracts.
 selection/copy state. It preserves rows and selection on storage/copy errors,
 propagates cancellation, serializes operations, reports failures, and clears
 selection only after explicit copy completion. The port requires copy-time
-exact-key eligibility validation and protection of an existing destination
+exact-key text read and protection of an existing destination
 draft. It has no sending or source-mutation operation.
 
 Six unit controls cover ordered pagination, failed refresh, explicit selection

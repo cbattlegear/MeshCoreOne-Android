@@ -14,7 +14,7 @@ import kotlinx.coroutines.sync.withLock
 interface RecoveredDraftPort {
     suspend fun fetchPage(radioId: RadioId, limit: Int, offset: Int): List<MessageDTO>
 
-    /** Revalidate eligibility by exact key; preserve the source and reject a nonempty destination. */
+    /** Re-read the exact source's current text; preserve the source and reject a nonempty destination. */
     suspend fun copyToDraft(source: EntityKey, destination: ComposerTarget)
 }
 

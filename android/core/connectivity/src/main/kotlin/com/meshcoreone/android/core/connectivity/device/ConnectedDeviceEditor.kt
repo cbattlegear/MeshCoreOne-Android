@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.connectivity.ConnectivityError
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
+import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DeviceDTO
@@ -102,7 +103,9 @@ class ConnectedDeviceEditor(
     ): Boolean = sessionEdits.withLock {
         val device = access.connectedDevice ?: return@withLock false
         if (device.radioId != expectedToken.radioId) return@withLock false
-        val snapshot = devices.fetchDeviceWriteSnapshot(device.id) ?: return@withLock false
+        val persistence = devices as? DeviceEditPersisting
+            ?: throw UnsupportedOperationException("Session-bound device edits require versioned device persistence")
+        val snapshot = persistence.fetchDeviceWriteSnapshot(device.id) ?: return@withLock false
         currentCoroutineContext().ensureActive()
         val updated = transform(device)
         val edit = access.replaceConnectedDevice(updated, expectedToken) ?: return@withLock false
@@ -110,7 +113,7 @@ class ConnectedDeviceEditor(
             onKnownRegionsChanged(edit, updated.knownRegions.toList())
         }
         try {
-            if (!devices.saveDeviceIfUnchanged(updated, snapshot)) throw DeviceEditPersistenceConflict()
+            if (!persistence.saveDeviceIfUnchanged(updated, snapshot)) throw DeviceEditPersistenceConflict()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {

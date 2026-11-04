@@ -15,6 +15,11 @@ import java.util.UUID
 /** A process-owned optimistic write ticket; device writers invalidate it inside their transaction. */
 data class DeviceWriteSnapshot(val device: DeviceDTO, val revision: Long)
 
+interface DeviceEditPersisting {
+    suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot?
+    suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean
+}
+
 interface DevicePersisting {
     suspend fun fetchDevice(id: UUID): DeviceDTO?
     suspend fun fetchDevice(radioId: RadioId): DeviceDTO?
@@ -22,10 +27,6 @@ interface DevicePersisting {
     suspend fun fetchDevices(): SnapshotList<DeviceDTO>
     suspend fun fetchActiveDevice(): DeviceDTO?
     suspend fun saveDevice(dto: DeviceDTO)
-    suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
-        throw UnsupportedOperationException("Versioned device writes are not supported")
-    suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean =
-        throw UnsupportedOperationException("Versioned device writes are not supported")
     suspend fun setActiveDevice(id: UUID)
     suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt)
     suspend fun addDeviceKnownRegion(radioId: RadioId, region: String)

@@ -62,7 +62,7 @@ internal class FakePreferences : ProcessConnectionPreferences {
 }
 
 /** Repository double with core:data's ghost-demotion semantics (new surrogate id, inactive, no methods). */
-internal class FakeDevices : DevicePersisting {
+internal class FakeDevices : DevicePersisting, DeviceEditPersisting {
     val rows = linkedMapOf<UUID, DeviceDTO>()
     val contacts = mutableListOf<ContactDTO>()
     val messages = mutableListOf<MessageDTO>()

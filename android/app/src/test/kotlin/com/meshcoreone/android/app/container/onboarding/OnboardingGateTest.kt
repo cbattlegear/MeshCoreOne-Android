@@ -118,8 +118,55 @@ class OnboardingGateTest {
         MeshCoreTheme { OnboardingGate(coordinator, bound) { Box(Modifier.testTag("shell")) { Text("shell") } } }
     }
 
-    private fun showFlow(dependencies: com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies) =
-        host.get().setContent { MeshCoreTheme { OnboardingFlow(dependencies, onCompleted = {}) } }
+    private fun showFlow(
+        dependencies: com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies,
+        onReceipt: ((com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt) -> Boolean)? = null,
+    ) = host.get().setContent {
+        MeshCoreTheme { OnboardingFlow(dependencies, onCompleted = {}, onCompletionReceipt = onReceipt) }
+    }
+
+    @Test fun `rejected delayed preset receipt survives Activity recreation without relabeling and retires only on acceptance`() =
+        runBlocking {
+            val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                host.setup().visible()
+                val original = OnboardingPresetTarget(java.util.UUID.randomUUID(), 1, java.util.UUID.randomUUID())
+                var target = original
+                val presets = object : OnboardingPresetPort {
+                    override val canApply = MutableStateFlow(true)
+                    override fun currentTarget() = target
+                    override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+                }
+                val dependencies = onboarding(
+                    InMemoryOnboardingFlagStore(), MutableStateFlow(false), processScope, presets = presets,
+                ).forRerun()
+                val flow = checkNotNull(dependencies.retainedFlowCoordinator())
+                val presetId = flow.preset.visiblePresets().first().id
+                flow.preset.apply(presetId)
+                assertTrue(flow.onboarding.hasCompletedOnboarding)
+                val originalReceipt = checkNotNull(flow.onboarding.completionReceipt)
+                target = original.copy(generation = 2, radioId = java.util.UUID.randomUUID())
+                val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+                showFlow(dependencies) { delivered += it; false }
+                compose.waitForIdle()
+                assertEquals(listOf(originalReceipt), delivered)
+                assertTrue(dependencies.ownsFlowCoordinator(flow))
+                host.recreate()
+                showFlow(dependencies) { delivered += it; true }
+                compose.waitForIdle()
+                assertEquals(2, delivered.size)
+                assertSame(originalReceipt, delivered[0])
+                assertSame(originalReceipt, delivered[1])
+                assertEquals(
+                    com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(presetId, original),
+                    delivered[1],
+                )
+                assertFalse(dependencies.ownsFlowCoordinator(flow))
+                assertFalse(checkNotNull(dependencies.retainedFlowCoordinator()).onboarding.hasCompletedOnboarding)
+                compose.waitForIdle()
+                assertEquals(2, delivered.size)
+            } finally { processScope.cancel() }
+        }
 
     private fun showPermissionRequester(
         dependencies: AppOnboarding,

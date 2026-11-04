@@ -20,6 +20,7 @@ import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.ui.SharedUiScaffold
 import com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies
+import com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt
 import com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionSnapshot
@@ -31,7 +32,12 @@ import kotlinx.coroutines.flow.emptyFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OnboardingFlow(dependencies: OnboardingFeatureDependencies, onCompleted: () -> Unit, modifier: Modifier = Modifier) {
+fun OnboardingFlow(
+    dependencies: OnboardingFeatureDependencies,
+    onCompleted: () -> Unit,
+    modifier: Modifier = Modifier,
+    onCompletionReceipt: ((OnboardingCompletionReceipt) -> Boolean)? = null,
+) {
     val scope = rememberCoroutineScope()
     val flow = remember(dependencies) {
         dependencies.retainedFlowCoordinator()
@@ -43,10 +49,20 @@ fun OnboardingFlow(dependencies: OnboardingFeatureDependencies, onCompleted: () 
     val permissionSnapshot by dependencies.permissions.snapshot.collectAsState()
     val completionError by flow.hasCompletionError.collectAsState()
     val completingWithoutDevice by flow.isCompletingWithoutDevice.collectAsState()
-    LaunchedEffect(completed) {
+    LaunchedEffect(flow, completed) {
         if (completed) {
-            if (dependencies.ownsFlowCoordinator(flow)) onCompleted()
-            dependencies.onFlowCompletionHandled(flow)
+            if (dependencies.ownsFlowCoordinator(flow)) {
+                val receipt = checkNotNull(flow.onboarding.completionReceipt)
+                val accepted = if (onCompletionReceipt != null) {
+                    onCompletionReceipt(receipt)
+                } else {
+                    onCompleted()
+                    true
+                }
+                if (accepted) dependencies.onFlowCompletionHandled(flow)
+            } else {
+                dependencies.onFlowCompletionHandled(flow)
+            }
         }
     }
     dependencies.InterceptBack(enabled = path.isNotEmpty()) { flow.back() }

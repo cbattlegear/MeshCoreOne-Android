@@ -16,6 +16,8 @@ import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertNull
+import kotlin.test.assertSame
 
 class PresetSessionFencingTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -36,6 +38,54 @@ class PresetSessionFencingTest {
             release.await()
             return outcome
         }
+    }
+
+    @Test fun delayedReceiptRetainsItsOriginalProducerAfterLaterReplacement() {
+        val port = HeldPreset(first)
+        val state = OnboardingState(InMemoryOnboardingFlagStore())
+        lateinit var coordinator: PresetStepCoordinator
+        coordinator = PresetStepCoordinator(scope, region, port) {
+            state.completeOnboardingWithReceipt(
+                coordinator.completionReceipt(), coordinator.completionTargetGuard(), coordinator.completionSealer(),
+            )
+        }
+        coordinator.apply(option.id)
+        port.release.complete(Unit)
+        val receipt = state.completionReceipt
+        assertEquals(OnboardingCompletionReceipt.Preset(option.id, first), receipt)
+        port.target = first.copy(generation = 2, radioId = UUID.randomUUID())
+        assertSame(receipt, state.completionReceipt)
+        assertEquals(first, (state.completionReceipt as OnboardingCompletionReceipt.Preset).target)
+    }
+
+    @Test fun receiptExistsBeforeTheDurableAdapterPublishesAndResetRemovesIt() = runBlocking {
+        lateinit var state: OnboardingState
+        val receipt = OnboardingCompletionReceipt.Preset(option.id, first)
+        val flags = object : OnboardingFlagStore {
+            var value = false
+            override fun getBoolean(key: String) = value
+            override fun setBoolean(key: String, value: Boolean) { this.value = value }
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                if (value) assertSame(receipt, state.completionReceipt)
+                this.value = value
+            }
+        }
+        state = OnboardingState(flags)
+        state.completeOnboardingWithReceipt(receipt, {}) { it.trySeal() }
+        assertSame(receipt, state.completionReceipt)
+        state.resetOnboarding()
+        assertNull(state.completionReceipt)
+    }
+
+    @Test fun explicitNoDeviceReceiptIsDistinctFromMissingIdentityAndRestoredCompletion() = runBlocking {
+        val fresh = OnboardingState(InMemoryOnboardingFlagStore())
+        assertNull(fresh.completionReceipt)
+        fresh.completeOnboarding()
+        assertEquals(OnboardingCompletionReceipt.WithoutDevice, fresh.completionReceipt)
+        val restored = OnboardingState(InMemoryOnboardingFlagStore(mapOf(OnboardingState.KEY_HAS_COMPLETED to true)))
+        assertEquals(OnboardingCompletionReceipt.Restored, restored.completionReceipt)
+        val missingTarget = OnboardingCompletionReceipt.Preset(option.id, null)
+        assertFalse(missingTarget == fresh.completionReceipt)
     }
 
     @Test fun disconnectedApplyCannotCompleteAndConnectedRetryAppliesAgain() {

@@ -81,6 +81,37 @@ the supplied immutable mounted/first-run witness operations; none is silently co
 First-run true-at-startup behavior, retired-witness liveness and immutable receipt delivery require
 the separately attributable gate/receipt composition and exact-candidate tests before acceptance.
 
+## Immutable feature receipt handoff (separate successor)
+
+The feature exposes `OnboardingCompletionReceipt.Preset(presetId, originalTarget)`,
+`WithoutDevice` (the explicit user decision, not proof that no graph exists) and `Restored`
+(startup preference state, not a new producer). `OnboardingState.completionReceipt` retains the
+original value before storage/live publication; it is not reconstructed from a later target.
+`completeOnboardingWithReceipt(receipt, requireCurrent, seal)` combines that identity with
+the decision-sealing path. Preset completion captures its already-applied preset/target and sealer.
+
+`OnboardingEntry` / `OnboardingFlow` add optional
+`onCompletionReceipt: ((OnboardingCompletionReceipt) -> Boolean)?`; legacy callbacks are preserved.
+False retains the owned completed flow for the host to retain/report its original witness.
+True acknowledges delivery and retires only that owned flow. Restored/missing preset identity
+must never be mapped to an app `NoDevice` producer. Feature controls cover original identity after
+replacement, receipt availability before durable publication, reset and explicit no-device versus
+restored state. The mounted JVM/Robolectric control rejects delivery, recreates the Activity,
+accepts the same original object and checks one retirement without rebinding to the later target.
+These controls require the successor's actual hosted result before execution credit.
+
+Read-only dependency comparison: first-run API `07e45af4f317b157c347da4aa954d24b85af2d83`
+depends on offline fix `0e8e1c0bfe692e430989c26b18100ddc2ff9ba65`, which follows the
+`611947f31` / `e0e7ffb7b` / `e4650ae4a` / `6893ef0ac` mounted-authority chain.
+That chain relies on the unlanded WP-302 baseline at `4d9d94c1f` (presented snapshots/state store,
+entry epochs, manager lifecycle stamp, registry/graph commit boundary and container wiring),
+itself beyond published baseline `9733776a9`. The retained WP-305 base lacks these authorities.
+Importing isolated method text would omit their atomic boundary, while a wholesale baseline merge
+imports the held WP-302 branch. Neither is performed. The controller explicitly retained the
+WP-302 source/reservation/publication and external-link holds. This is a concrete dependency blocker,
+not authority to replace the first-run gate with another raw flag effect. Gate/witness composition
+remains separate from this standalone receipt API and from device-tip display.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

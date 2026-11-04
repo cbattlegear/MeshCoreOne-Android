@@ -13,6 +13,12 @@ enum class OnboardingStep(val rawValue: String) {
     WELCOME("welcome"), PERMISSIONS("permissions"), PAIR("pair"), REGION("region"), PRESET("preset"),
 }
 
+sealed interface OnboardingCompletionReceipt {
+    data class Preset(val presetId: String, val target: OnboardingPresetTarget?) : OnboardingCompletionReceipt
+    data object WithoutDevice : OnboardingCompletionReceipt
+    data object Restored : OnboardingCompletionReceipt
+}
+
 /** Boolean persistence seam mirroring the `UserDefaults` calls the original state makes. */
 interface OnboardingFlagStore {
     fun getBoolean(key: String): Boolean
@@ -53,6 +59,10 @@ data class OnboardingResumeFacts(val pairedAccessoriesCount: Int, val hasLastCon
 class OnboardingState(private val store: OnboardingFlagStore) {
     private val completed = MutableStateFlow(store.getBoolean(KEY_HAS_COMPLETED))
     private val path = MutableStateFlow<List<OnboardingStep>>(emptyList())
+    @Volatile
+    var completionReceipt: OnboardingCompletionReceipt? =
+        if (completed.value) OnboardingCompletionReceipt.Restored else null
+        private set
 
     val hasCompletedOnboardingFlow: StateFlow<Boolean> = completed.asStateFlow()
     val onboardingPathFlow: StateFlow<List<OnboardingStep>> = path.asStateFlow()
@@ -61,6 +71,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         get() = completed.value
         set(value) {
             store.setBoolean(KEY_HAS_COMPLETED, value)
+            completionReceipt = if (value) OnboardingCompletionReceipt.Restored else null
             completed.value = value
         }
 
@@ -80,9 +91,19 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     suspend fun completeOnboardingWithSeal(
         requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean,
+    ) = completeOnboardingWithReceipt(OnboardingCompletionReceipt.WithoutDevice, requireCurrent, seal)
+
+    suspend fun completeOnboardingWithReceipt(
+        receipt: OnboardingCompletionReceipt,
+        requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean,
     ) {
         val caller = currentCoroutineContext()
-        val validate = { caller.ensureActive(); requireCurrent() }
+        val validate = {
+            caller.ensureActive()
+            requireCurrent()
+            completionReceipt = receipt
+        }
         validate()
         store.persistBoolean(KEY_HAS_COMPLETED, true, validate, seal)
         completed.value = true
@@ -90,6 +111,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
 
     suspend fun resetOnboarding() {
         store.persistBoolean(KEY_HAS_COMPLETED, false)
+        completionReceipt = null
         completed.value = false
         path.value = emptyList()
     }

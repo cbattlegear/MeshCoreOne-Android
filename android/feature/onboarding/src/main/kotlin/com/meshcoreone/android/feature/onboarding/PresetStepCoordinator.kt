@@ -124,6 +124,8 @@ class PresetStepCoordinator(
             sealed
         }
     }
+    internal fun completionReceipt(): OnboardingCompletionReceipt.Preset =
+        OnboardingCompletionReceipt.Preset(checkNotNull(appliedPresetId), appliedPresetTarget)
 
     private fun beginCompletionPersistence() {
         if (completionPersistenceJob?.isActive == true) return

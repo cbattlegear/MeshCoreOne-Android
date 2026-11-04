@@ -441,14 +441,15 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         if (existing != null && existing.messageID != row.messageID) {
             reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
         }
+        if (database.queuedChannelAttempts().forPending(row.radioId, row.id).isNotEmpty()) {
+            reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        }
         if (!row.isChannel) {
             if (existing?.isChannel == true) reject(existing, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
             rejectConflictingSibling(row, replacing + row.id)
             return row
         }
-        if (existing != null ||
-            database.queuedChannelAttempts().forPending(row.radioId, row.id).isNotEmpty()
-        ) reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        if (existing != null) reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
         rejectConflictingSibling(row, replacing + row.id)
         if (dto.channelDispatchState != null || dto.channelAttemptID != null) {
             reject(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)

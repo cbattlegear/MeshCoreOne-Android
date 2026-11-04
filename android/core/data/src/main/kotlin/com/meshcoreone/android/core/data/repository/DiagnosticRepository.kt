@@ -231,6 +231,7 @@ internal class DiagnosticRepository(private val context: RoomRepositoryContext) 
                     !(candidate.senderTimestamp == update.senderTimestamp.toLong() ||
                         (candidate.senderTimestamp == null && candidate.timestamp == update.senderTimestamp.toLong()))) continue
                 val row = requireNotNull(database.messages().byId(radioId.value, candidate.id))
+                if (LocalDirectMessageProvenance.of(row.toDTO()) != null) continue
                 database.messages().upsert(row.copy(regionScope = update.regionScope, regionScopeMatches = update.regionScopeMatches))
                 touched += row.id
             }

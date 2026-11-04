@@ -4,9 +4,17 @@ package com.meshcoreone.android.core.data.repository
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ConnectionState
+import com.meshcoreone.android.core.protocol.event.EventFilter
+import com.meshcoreone.android.core.protocol.event.MeshEvent
+import com.meshcoreone.android.core.protocol.event.PayloadType
+import com.meshcoreone.android.core.protocol.session.SessionEventStreaming
+import com.meshcoreone.android.core.services.diagnostics.RxLogService
+import com.meshcoreone.android.core.services.diagnostics.RxLogServiceStore
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
 import org.junit.Test
 
@@ -293,5 +301,71 @@ class LocalDirectAttributionRepositoryTest : RepositoryTest() {
         store.close()
         store = newStore()
         assertEquals(expected, store.fetchUnprovedDirectMessages(RADIO_A).map { it.occurrenceID })
+    }
+
+    @Test fun regionBackfillExcludesBothOccurrenceMarkersAndTouchedIdsButPreservesLegacyUpdates() = runTest(scheduler) {
+        val first = incoming().copy(regionScope = "Original", regionScopeMatches = SnapshotList.of("Original"))
+        val unresolved = store.saveIncomingDirectMessage(first, LocalDirectContactResolution.NotFound).message
+        store.saveContact(peer(10))
+        val unique = store.classifyLocalDirectContact(RADIO_A, prefix)
+        val candidate = store.saveIncomingDirectMessage(
+            first.copy(id = UUID.randomUUID(), senderTimestamp = null, timestampCorrected = false, timestamp = 42u), unique,
+        ).message
+        val legacy = first.copy(id = UUID.randomUUID(), contactID = peer(10).id)
+        val foreign = legacy.copy(id = UUID.randomUUID(), radioId = RADIO_B)
+        val differentByte = legacy.copy(id = UUID.randomUUID(), senderKeyPrefix = Bytes.of(9, 2, 3, 4, 5, 6))
+        for (dto in listOf(legacy, foreign, differentByte)) store.saveMessage(dto)
+        val touched = store.batchUpdateDMMessageRegion(RADIO_A, SnapshotList.of(
+            DirectRegionUpdate(prefix[0], 0u, "Heuristic", SnapshotList.of("Heuristic")),
+            DirectRegionUpdate(prefix[0], 42u, "Heuristic", SnapshotList.of("Heuristic")),
+        ))
+        assertEquals(listOf(legacy.id), touched)
+        assertEquals(unresolved, store.fetchMessage(EntityKey(RADIO_A, unresolved.id)))
+        assertEquals(candidate, store.fetchMessage(EntityKey(RADIO_A, candidate.id)))
+        assertEquals(legacy.copy(regionScope = "Heuristic", regionScopeMatches = SnapshotList.of("Heuristic")),
+            store.fetchMessage(EntityKey(RADIO_A, legacy.id)))
+        assertEquals(foreign, store.fetchMessage(EntityKey(RADIO_B, foreign.id)))
+        assertEquals(differentByte, store.fetchMessage(EntityKey(RADIO_A, differentByte.id)))
+    }
+
+    @Test fun actualRegionReprocessorCannotRewriteOrAnnounceOccurrenceLocalRows() = runTest(scheduler) {
+        val original = incoming().copy(regionScope = "Retained", regionScopeMatches = SnapshotList.of("Retained"))
+        val unresolved = store.saveIncomingDirectMessage(original, LocalDirectContactResolution.NotFound).message
+        store.saveContact(peer(10))
+        val candidate = store.saveIncomingDirectMessage(original.copy(id = UUID.randomUUID()),
+            store.classifyLocalDirectContact(RADIO_A, prefix)).message
+        val legacy = original.copy(id = UUID.randomUUID())
+        store.saveMessage(legacy)
+        val entry = rx(timestamp = 0u, channelIndex = null, payload = PayloadType.TEXT_MESSAGE).copy(
+            packetPayload = Bytes.of(0x99, prefix[0].toInt(), 0, 0, 0, 0),
+            transportCode = Bytes.of(0, 0), regionScope = "Old", regionScopeMatches = SnapshotList.of("Old"),
+        )
+        store.saveRxLogEntry(entry)
+        store.flushPendingRxLogEntries()
+        val events = object : SessionEventStreaming {
+            override val connectionState: Flow<ConnectionState> = flowOf(ConnectionState.Connected)
+            override fun events(): Flow<MeshEvent> = emptyFlow()
+            override fun events(filter: EventFilter): Flow<MeshEvent> = emptyFlow()
+        }
+        val service = RxLogService(events, RxLogServiceStore.from(store), null, owner, clock)
+        val announced = mutableListOf<UUID>()
+        val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+            service.regionUpdateEvents().collect { announced += it }
+        }
+        try {
+            service.startEventMonitoring(RADIO_A)
+            runCurrent()
+            service.updateKnownRegions(listOf("Germany"))
+            runCurrent()
+            assertNull(store.fetchRxLogEntries(RADIO_A).single().regionScope, "The real reprocessor must run")
+            assertEquals(listOf(legacy.id), announced)
+            assertEquals(unresolved, store.fetchMessage(EntityKey(RADIO_A, unresolved.id)))
+            assertEquals(candidate, store.fetchMessage(EntityKey(RADIO_A, candidate.id)))
+            assertNull(store.fetchMessage(EntityKey(RADIO_A, legacy.id))?.regionScope)
+        } finally {
+            service.stopEventMonitoring()
+            service.finishEntryStream()
+            collector.cancelAndJoin()
+        }
     }
 }

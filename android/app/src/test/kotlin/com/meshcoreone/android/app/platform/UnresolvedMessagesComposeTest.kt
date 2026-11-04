@@ -6,6 +6,12 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.app.container.ContainerHarness
@@ -150,6 +156,41 @@ class UnresolvedMessagesComposeTest : RoomProcessTest() {
             }) }
             compose.onNodeWithText(text(R.string.unresolved_messages_candidate)).assertExists()
             compose.onNodeWithText("Historical original").assertExists()
+        } finally { host.pause().stop().destroy() }
+    }
+
+    @Test
+    @Config(qualifiers = "de-rDE-w840dp-h1200dp-mdpi")
+    fun expandedLargeFontGermanSurfaceKeepsOriginalTextAndBackAccessible() {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.get().actionBar?.hide(); host.windowFocusChanged(true)
+        val configuration = android.content.res.Configuration(host.get().resources.configuration).apply {
+            setLocales(android.os.LocaleList(java.util.Locale.GERMAN))
+            fontScale = 2f
+        }
+        val localized = host.get().createConfigurationContext(configuration)
+        var backCount = 0
+        host.get().setContent {
+            CompositionLocalProvider(
+                LocalContext provides localized, LocalConfiguration provides configuration,
+                LocalResources provides localized.resources, LocalDensity provides Density(1f, 2f),
+            ) {
+                MeshCoreTheme {
+                    UnresolvedMessagesScreen(
+                        UnresolvedMessagesState(radio, listOf(UnprovedDirectMessage(
+                            UUID(0, 100), radio, "Original \u4f60\u597d \u05e9\u05dc\u05d5\u05dd",
+                            0u, Instant.EPOCH, UnprovedDirectMessageProvenance.UNRESOLVED,
+                        )), isLoading = false),
+                        { backCount++ }, {}, {},
+                    )
+                }
+            }
+        }
+        try {
+            compose.onNodeWithText("Original \u4f60\u597d \u05e9\u05dc\u05d5\u05dd").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText(localized.getString(R.string.unresolved_messages_back)).assertIsDisplayed().performClick()
+            assertEquals(1, backCount)
+            compose.onNodeWithText(localized.getString(R.string.unresolved_messages_title)).assertExists()
         } finally { host.pause().stop().destroy() }
     }
 }

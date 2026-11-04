@@ -102,7 +102,7 @@ fun ChatsListRoot(
         state.roomToAuthenticate?.let { onRoomAuthenticationRequested(it); holder.showRoomAuthentication(null) }
     }
 
-    val callbacks = remember(holder, actions) {
+    val callbacks = remember(holder, actions, radioId) {
         ChatsListCallbacks(
             onSearchChange = holder::setSearchText,
             onFilterChange = holder::setFilter,

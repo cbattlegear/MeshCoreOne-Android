@@ -56,6 +56,9 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
     @Test fun replyCancelledBeforeWireCanBeRetriedByReplacementDispatcher() = runTest {
         replyBoundary(channel = false, beforeWire = true)
     }
+    @Test fun channelReplyCancelledBeforeWireCanBeRetriedByReplacementDispatcher() = runTest {
+        replyBoundary(channel = true, beforeWire = true)
+    }
 
     @Test fun realRoomMarkReadRecordsCommitBeforeReturningToCancelledCaller() = runTest {
         val reached = CompletableDeferred<Unit>()
@@ -198,7 +201,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             if (beforeWire) {
                 assertEquals("one reply", session.notificationService.consumeDraft(contactKey))
                 assertFalse(requireNotNull(receipt).preventsReplay)
-                assertTrue(h.links.radios.single().sent.none { it[0].toInt() == 2 })
+                assertTrue(h.links.radios.single().sent.none { it[0].toInt() == sendCommand })
                 holdBeforeWire = false
             } else {
                 assertNull(session.notificationService.consumeDraft(contactKey))

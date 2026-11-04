@@ -441,7 +441,7 @@ class NotificationOpenHandoffStore internal constructor(private val databaseFile
             val metadataExists = tableExists(database, TABLE_METADATA)
             val opensExists = tableExists(database, TABLE_OPENS)
             val hasUserSchema = database.rawQuery(
-                """SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'
+                """SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'
                    AND NOT (type = 'table' AND name = 'android_metadata') LIMIT 1""", null,
             ).use { it.moveToFirst() }
             if (!metadataExists && !opensExists && allowInitialization &&

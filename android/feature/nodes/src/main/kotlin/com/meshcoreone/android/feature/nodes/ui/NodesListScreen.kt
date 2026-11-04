@@ -105,7 +105,7 @@ internal fun NodesListScreen(
     LaunchedEffect(state.hasLoadedOnce) {
         if (state.hasLoadedOnce && segment == NodeSegment.CONTACTS && state.hasFavorites) segment = NodeSegment.FAVORITES
     }
-    val contacts = remember(state.contacts, state.pendingRemovalIds, search, segment, sort) {
+    val contacts = remember(state.contacts, state.pendingRemovalIds, state.inboundHopByKey, search, segment, sort) {
         holder.filteredContacts(search, segment, sort, null)
     }
 

@@ -26,7 +26,7 @@ sealed interface ContactWriteRecoveryState {
 enum class ContactWriteRecoveryReason {
     /** A dispatched change may have reached the radio; cancellation did not roll it back. */
     RADIO_OUTCOME_UNCERTAIN,
-    /** Acceptance is known, but local completion or settlement has not been proved. */
+    /** Acceptance is known, but this observation cannot authorize settlement of local state. */
     RADIO_ACCEPTED_RECONCILIATION_REQUIRED,
     /** A terminal rejection is known, but its recorded uncertainty has not yet been settled. */
     RADIO_REJECTION_SETTLEMENT_PENDING,

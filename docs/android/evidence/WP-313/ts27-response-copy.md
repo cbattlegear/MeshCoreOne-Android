@@ -36,6 +36,14 @@ end and requires the recent response to be immediately visible in the chooser.
 Large-font height is compared with equivalent Text-only content at the same
 font scale, not a fixed pixel limit.
 
+Fixture correction: remote sender strings are single stored records even when
+they contain embedded newlines. The sender-boundary control therefore expects
+`alpha\n\n> beta` after stripping only the first prefix, matching Swift.
+Cross-row and 1,000-record tests instead inject a real node holder and append
+distinct output records through its existing API; production splitting rules
+are unchanged. Blank chooser rows show the existing localized `empty` label
+without changing clipboard bytes, with a corresponding mounted control.
+
 Typed admissions on the base: renderer `modify-related-consumer` uses
 `reviewed-support-consumer`; separate mounted test `add-or-update-related-test`
 uses `reviewed-support-test`. Evidence/deviation are WP-owned. The advisory claim

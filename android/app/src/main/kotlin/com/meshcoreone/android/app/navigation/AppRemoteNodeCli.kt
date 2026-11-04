@@ -43,7 +43,12 @@ import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.app.container.appCliErrors
 
 @Composable
-internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend, enabled: Boolean) {
+internal fun AppRemoteNodeCli(
+    session: RemoteNodeSessionDTO,
+    send: RemoteCliSend,
+    enabled: Boolean,
+    stateHolder: NodeCliStateHolder? = null,
+) {
     val scope = rememberCoroutineScope()
     val resources = LocalResources.current
     val clipboard = LocalClipboardManager.current
@@ -52,8 +57,8 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
     val noService by rememberUpdatedState(stringResource(L.remoteNodesSettingsNoService))
     val currentSend by rememberUpdatedState(send)
     val canSend by rememberUpdatedState(enabled && session.isAdmin)
-    val holder = remember(session.id) {
-        NodeCliStateHolder(scope, object : DiagnosticsText {
+    val holder = remember(session.id, stateHolder) {
+        stateHolder ?: NodeCliStateHolder(scope, object : DiagnosticsText {
             override val locale get() = diagnostics.locale
             override fun string(id: Int) = diagnostics.string(id)
             override fun format(id: Int, vararg args: Any) = diagnostics.format(id, *args)
@@ -160,7 +165,12 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
                             choosingCopy = false
                         },
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text(line.text, fontFamily = FontFamily.Monospace) }
+                    ) {
+                        Text(
+                            line.text.ifBlank { stringResource(AppToolsStrings.toolsCliChannelEmpty) },
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
                 }
             }
         },

@@ -20,6 +20,12 @@ data class ChatChannelKey(val radioId: RadioId, val channelIndex: UByte, val id:
 
 /** Persistence reads/writes the list needs (the iOS `DataStore` subset ChatViewModel used). */
 interface ChatListDataSource {
+    /** An unbound adapter fails explicitly; it must never impersonate a successful empty read. */
+    suspend fun fetchUnprovedDirectMessages(
+        radioId: RadioId, limit: Long, offset: Long,
+    ): List<com.meshcoreone.android.core.contracts.domain.UnprovedDirectMessage> =
+        throw UnsupportedOperationException("Unproved direct-message reading is not bound")
+
     suspend fun fetchConversations(radioId: RadioId): List<ContactDTO>
     suspend fun fetchChannels(radioId: RadioId): List<ChannelDTO>
     suspend fun fetchRemoteNodeSessions(radioId: RadioId): List<RemoteNodeSessionDTO>

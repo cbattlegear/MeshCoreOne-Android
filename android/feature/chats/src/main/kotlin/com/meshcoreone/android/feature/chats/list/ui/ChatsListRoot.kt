@@ -1,6 +1,8 @@
 // AndroidOnly: WP-306 Binds ChatListFeatureDependencies to the stateless list: holder lifecycle, pending navigation, dialogs.
 package com.meshcoreone.android.feature.chats.list.ui
 
+import androidx.activity.compose.BackHandler
+
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -13,6 +15,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -31,8 +34,13 @@ import com.meshcoreone.android.feature.chats.list.ChatListStateHolder
 import com.meshcoreone.android.feature.chats.list.ChatRoute
 import com.meshcoreone.android.feature.chats.list.ConversationActionError
 import com.meshcoreone.android.feature.chats.list.NewChatStateHolder
+import com.meshcoreone.android.feature.chats.list.UnresolvedMessagesStateHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onStart
 
 /**
  * Hosts the Chats list for an app that bound [dependencies]. Navigation is delegated: [onOpenChat]
@@ -65,6 +73,11 @@ fun ChatsListRoot(
     val connection by dependencies.connectionState.collectAsState()
     val radioId by dependencies.currentRadioId.collectAsState()
     var showingNewChat by remember { mutableStateOf(false) }
+    var showingUnresolved by rememberSaveable(radioId?.value?.toString()) { mutableStateOf(false) }
+    val unresolved = remember(dependencies, radioId) {
+        UnresolvedMessagesStateHolder(radioId, dependencies.data, dependencies.diagnostics)
+    }
+    val unresolvedState by unresolved.state.collectAsState()
     val view = LocalView.current
     val offlineAnnouncement = stringResource(AppChatsStrings.chatsAccessibilityOfflineAnnouncement)
 
@@ -104,11 +117,27 @@ fun ChatsListRoot(
             onNewChat = { showingNewChat = true },
             onNewChannel = onNewChannel,
             onDismissBanner = { holder.errorBannerMessage = null },
+            onOpenUnresolvedMessages = { showingUnresolved = true },
         )
     }
     val messageText: @Composable (ChatListMessage) -> UiText = { message -> chatMessageText(message, failureText) }
-    ChatsListScreen(state, connection == DeviceConnectionState.READY, selectedRoute, dependencies.clock, callbacks,
-        messageText, modifier, avatarCache)
+    if (showingUnresolved) {
+        BackHandler { showingUnresolved = false }
+        LaunchedEffect(unresolved) {
+            merge(dependencies.reloadRequests, dependencies.messageEvents.map { Unit })
+                .onStart { emit(Unit) }.collectLatest { unresolved.refresh() }
+        }
+        UnresolvedMessagesScreen(
+            unresolvedState,
+            onBack = { showingUnresolved = false },
+            onRefresh = { scope.launch { unresolved.refresh() } },
+            onLoadMore = { scope.launch { unresolved.loadMore() } },
+            modifier = modifier,
+        )
+    } else {
+        ChatsListScreen(state, connection == DeviceConnectionState.READY, selectedRoute, dependencies.clock, callbacks,
+            messageText, modifier, avatarCache)
+    }
 
     ChatsDialogs(state, holder, actions, messageText)
     if (showingNewChat) {

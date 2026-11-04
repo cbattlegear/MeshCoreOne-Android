@@ -31,6 +31,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 
 internal class FakeData : ChatListDataSource {
+    var unprovedRead: suspend (RadioId, Long, Long) -> List<com.meshcoreone.android.core.contracts.domain.UnprovedDirectMessage> =
+        { _, _, _ -> error("Unproved read must be configured by its test") }
+    override suspend fun fetchUnprovedDirectMessages(radioId: RadioId, limit: Long, offset: Long) =
+        unprovedRead(radioId, limit, offset)
+
     var contacts: List<ContactDTO> = emptyList()
     var channels: List<ChannelDTO> = emptyList()
     var rooms: List<RemoteNodeSessionDTO> = emptyList()

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-005 Native unresolved-message copy. -->
+<resources>
+    <string name="unresolved_messages_title">Onopgeloste berichten</string>
+    <string name="unresolved_messages_entry">Bewaarde privéberichten met een niet-geverifieerde afzender lezen</string>
+    <string name="unresolved_messages_notice">De identiteit van de afzender is niet geverifieerd. Je kunt hier niet op deze berichten antwoorden.</string>
+    <string name="unresolved_messages_radio">Radio: %1$s</string>
+    <string name="unresolved_messages_no_radio">Selecteer een radio in Instellingen om de bewaarde berichten te lezen.</string>
+    <string name="unresolved_messages_loading">Bewaarde berichten laden…</string>
+    <string name="unresolved_messages_empty">Geen onopgeloste berichten voor deze radio</string>
+    <string name="unresolved_messages_error">Bewaarde berichten konden niet worden geladen. Probeer het opnieuw.</string>
+    <string name="unresolved_messages_more">Oudere berichten laden</string>
+    <string name="unresolved_messages_refresh">Vernieuwen</string>
+    <string name="unresolved_messages_sender">Onopgeloste afzender</string>
+    <string name="unresolved_messages_candidate">Alleen lokale contactovereenkomst; afzender niet geverifieerd</string>
+    <string name="unresolved_messages_legacy">Historisch bericht; afzender onbekend</string>
+    <string name="unresolved_messages_wire_time">Oorspronkelijke verzendtijd: %1$s</string>
+    <string name="unresolved_messages_received_time">Ontvangen: %1$s</string>
+    <string name="unresolved_messages_wire_time_unknown">Oorspronkelijke verzendtijd niet beschikbaar</string>
+    <string name="unresolved_messages_received_time_unknown">Ontvangsttijd niet beschikbaar</string>
+    <string name="unresolved_messages_back">Terug</string>
+</resources>

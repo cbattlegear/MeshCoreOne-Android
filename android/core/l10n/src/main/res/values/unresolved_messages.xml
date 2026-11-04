@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-005 Native read-only unresolved-message surface; not generated from the Swift catalog. -->
+<resources>
+    <string name="unresolved_messages_title">Unresolved messages</string>
+    <string name="unresolved_messages_entry">Read retained direct messages with an unverified sender</string>
+    <string name="unresolved_messages_notice">Sender identity is not verified. These messages cannot be replied to here.</string>
+    <string name="unresolved_messages_radio">Radio: %1$s</string>
+    <string name="unresolved_messages_no_radio">Select a radio in Settings to read its retained messages.</string>
+    <string name="unresolved_messages_loading">Loading retained messages…</string>
+    <string name="unresolved_messages_empty">No unresolved messages for this radio</string>
+    <string name="unresolved_messages_error">Retained messages could not be loaded. Try again.</string>
+    <string name="unresolved_messages_more">Load older messages</string>
+    <string name="unresolved_messages_refresh">Refresh</string>
+    <string name="unresolved_messages_sender">Unresolved sender</string>
+    <string name="unresolved_messages_candidate">Local contact match only; sender unverified</string>
+    <string name="unresolved_messages_legacy">Historical message; sender unknown</string>
+    <string name="unresolved_messages_wire_time">Original wire time: %1$s</string>
+    <string name="unresolved_messages_received_time">Received: %1$s</string>
+    <string name="unresolved_messages_wire_time_unknown">Original wire time unavailable</string>
+    <string name="unresolved_messages_received_time_unknown">Receive time unavailable</string>
+    <string name="unresolved_messages_back">Back</string>
+</resources>

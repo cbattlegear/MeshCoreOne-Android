@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-005 Native unresolved-message copy. -->
+<resources>
+    <string name="unresolved_messages_title">Невизначені повідомлення</string>
+    <string name="unresolved_messages_entry">Читати збережені особисті повідомлення з непідтвердженим відправником</string>
+    <string name="unresolved_messages_notice">Особу відправника не підтверджено. Відповісти на ці повідомлення тут неможливо.</string>
+    <string name="unresolved_messages_radio">Радіостанція: %1$s</string>
+    <string name="unresolved_messages_no_radio">Виберіть радіостанцію в налаштуваннях, щоб читати її збережені повідомлення.</string>
+    <string name="unresolved_messages_loading">Завантаження збережених повідомлень…</string>
+    <string name="unresolved_messages_empty">Для цієї радіостанції немає невизначених повідомлень</string>
+    <string name="unresolved_messages_error">Не вдалося завантажити збережені повідомлення. Спробуйте ще раз.</string>
+    <string name="unresolved_messages_more">Завантажити старіші повідомлення</string>
+    <string name="unresolved_messages_refresh">Оновити</string>
+    <string name="unresolved_messages_sender">Відправника не визначено</string>
+    <string name="unresolved_messages_candidate">Лише локальний збіг контакту; відправника не підтверджено</string>
+    <string name="unresolved_messages_legacy">Історичне повідомлення; відправник невідомий</string>
+    <string name="unresolved_messages_wire_time">Початковий час передачі: %1$s</string>
+    <string name="unresolved_messages_received_time">Отримано: %1$s</string>
+    <string name="unresolved_messages_wire_time_unknown">Початковий час передачі недоступний</string>
+    <string name="unresolved_messages_received_time_unknown">Час отримання недоступний</string>
+    <string name="unresolved_messages_back">Назад</string>
+</resources>

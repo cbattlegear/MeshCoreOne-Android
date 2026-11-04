@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-005 Native unresolved-message copy. -->
+<resources>
+    <string name="unresolved_messages_title">Messages non résolus</string>
+    <string name="unresolved_messages_entry">Lire les messages directs conservés dont l’expéditeur n’est pas vérifié</string>
+    <string name="unresolved_messages_notice">L’identité de l’expéditeur n’est pas vérifiée. Il est impossible de répondre à ces messages ici.</string>
+    <string name="unresolved_messages_radio">Radio : %1$s</string>
+    <string name="unresolved_messages_no_radio">Sélectionnez une radio dans les réglages pour lire ses messages conservés.</string>
+    <string name="unresolved_messages_loading">Chargement des messages conservés…</string>
+    <string name="unresolved_messages_empty">Aucun message non résolu pour cette radio</string>
+    <string name="unresolved_messages_error">Impossible de charger les messages conservés. Réessayez.</string>
+    <string name="unresolved_messages_more">Charger les messages plus anciens</string>
+    <string name="unresolved_messages_refresh">Actualiser</string>
+    <string name="unresolved_messages_sender">Expéditeur non résolu</string>
+    <string name="unresolved_messages_candidate">Correspondance locale uniquement ; expéditeur non vérifié</string>
+    <string name="unresolved_messages_legacy">Message historique ; expéditeur inconnu</string>
+    <string name="unresolved_messages_wire_time">Heure de transmission d’origine : %1$s</string>
+    <string name="unresolved_messages_received_time">Reçu : %1$s</string>
+    <string name="unresolved_messages_wire_time_unknown">Heure de transmission d’origine indisponible</string>
+    <string name="unresolved_messages_received_time_unknown">Heure de réception indisponible</string>
+    <string name="unresolved_messages_back">Retour</string>
+</resources>

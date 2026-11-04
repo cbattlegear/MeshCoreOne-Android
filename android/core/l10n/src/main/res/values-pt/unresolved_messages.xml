@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-005 Native unresolved-message copy. -->
+<resources>
+    <string name="unresolved_messages_title">Mensagens não resolvidas</string>
+    <string name="unresolved_messages_entry">Ler mensagens diretas guardadas com remetente não verificado</string>
+    <string name="unresolved_messages_notice">A identidade do remetente não está verificada. Não é possível responder a estas mensagens aqui.</string>
+    <string name="unresolved_messages_radio">Rádio: %1$s</string>
+    <string name="unresolved_messages_no_radio">Selecione um rádio nas Definições para ler as suas mensagens guardadas.</string>
+    <string name="unresolved_messages_loading">A carregar mensagens guardadas…</string>
+    <string name="unresolved_messages_empty">Sem mensagens não resolvidas para este rádio</string>
+    <string name="unresolved_messages_error">Não foi possível carregar as mensagens guardadas. Tente novamente.</string>
+    <string name="unresolved_messages_more">Carregar mensagens anteriores</string>
+    <string name="unresolved_messages_refresh">Atualizar</string>
+    <string name="unresolved_messages_sender">Remetente não resolvido</string>
+    <string name="unresolved_messages_candidate">Apenas correspondência de contacto local; remetente não verificado</string>
+    <string name="unresolved_messages_legacy">Mensagem histórica; remetente desconhecido</string>
+    <string name="unresolved_messages_wire_time">Hora original da transmissão: %1$s</string>
+    <string name="unresolved_messages_received_time">Recebida: %1$s</string>
+    <string name="unresolved_messages_wire_time_unknown">Hora original da transmissão indisponível</string>
+    <string name="unresolved_messages_received_time_unknown">Hora de receção indisponível</string>
+    <string name="unresolved_messages_back">Voltar</string>
+</resources>

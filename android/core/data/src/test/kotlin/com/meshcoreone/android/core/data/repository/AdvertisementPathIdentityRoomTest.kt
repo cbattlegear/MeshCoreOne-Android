@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.ContactFrame
 import com.meshcoreone.android.core.model.DebugLogLevel
+import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ConnectionState
@@ -429,7 +430,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             advert(2)
             service.withPendingAdvertContactOperation(RADIO_A, prefix, observed) { admission ->
                 assertEquals(LocalDirectContactResolution.Ambiguous, admission.resolution)
-                val orphan = message(contactID = null).copy(senderKeyPrefix = prefix)
+                val orphan = message(contactID = null, direction = MessageDirection.INCOMING).copy(senderKeyPrefix = prefix)
                 val saved = admission.saveIncomingDirectMessage(orphan)
                 assertEquals(LocalDirectContactResolution.Ambiguous, saved.resolution)
                 assertNull(saved.message.contactID)
@@ -465,7 +466,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             )
             service.withPendingAdvertContactOperation(RADIO_A, prefix, observed) { admission ->
                 assertEquals(LocalDirectContactResolution.Stale, admission.resolution)
-                val orphan = message(contactID = null).copy(senderKeyPrefix = prefix)
+                val orphan = message(contactID = null, direction = MessageDirection.INCOMING).copy(senderKeyPrefix = prefix)
                 val saved = admission.saveIncomingDirectMessage(orphan)
                 assertEquals(LocalDirectContactResolution.Stale, saved.resolution)
                 assertNull(saved.message.contactID)

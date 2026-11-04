@@ -20,6 +20,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +63,7 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
     val state by holder.state.collectAsStateWithLifecycle()
     val terminal by controller.state.collectAsStateWithLifecycle()
     var pending by remember { mutableStateOf<String?>(null) }
+    var choosingCopy by remember { mutableStateOf(false) }
     val historyUp = stringResource(AppToolsStrings.toolsCliHistoryUp)
     val historyDown = stringResource(AppToolsStrings.toolsCliHistoryDown)
     val tabComplete = stringResource(AppToolsStrings.toolsCliTabComplete)
@@ -76,13 +79,16 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
     LaunchedEffect(enabled) { if (!enabled) holder.cancelCurrentCommand() }
     DisposableEffect(holder) { onDispose { holder.cancelCurrentCommand(); controller.onDisappear() } }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SelectionContainer(Modifier.weight(1f)) {
+        SelectionContainer(Modifier.weight(1f).testTag("remote-cli-output")) {
             LazyColumn(Modifier.fillMaxSize()) {
                 items(state.terminal.outputLines, key = { it.id }) { line ->
-                    Row(Modifier.fillMaxWidth()) {
                         Text(
                             line.text,
-                            modifier = Modifier.weight(1f).semantics {
+                            modifier = Modifier.semantics {
+                                customActions = listOf(CustomAccessibilityAction(copy) {
+                                    clipboard.setText(AnnotatedString(holder.getResponseBlock(line)))
+                                    true
+                                })
                                 when (line.type) {
                                     CliOutputType.SUCCESS -> stateDescription = success
                                     CliOutputType.ERROR -> error(line.text)
@@ -99,11 +105,6 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
                                 CliOutputType.RESPONSE -> MaterialTheme.colorScheme.onSurface
                             },
                         )
-                        TextButton(
-                            onClick = { clipboard.setText(AnnotatedString(holder.getResponseBlock(line))) },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        ) { Text(copy) }
-                    }
                 }
             }
         }
@@ -129,6 +130,11 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
             keyboardActions = KeyboardActions(onSend = { if (canSend) pending = state.terminal.currentInput }),
         )
         Row(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(
+                onClick = { choosingCopy = true },
+                modifier = Modifier.heightIn(min = 48.dp).testTag("remote-cli-copy"),
+                enabled = state.terminal.outputLines.isNotEmpty(),
+            ) { Text(copy) }
             TextButton(controller::onHistoryUp, Modifier.semantics { contentDescription = historyUp }) { Text("↑") }
             TextButton(controller::onHistoryDown, Modifier.semantics { contentDescription = historyDown }) { Text("↓") }
             TextButton({ controller.onTabComplete() }, Modifier.semantics { contentDescription = tabComplete }) { Text("Tab") }
@@ -138,6 +144,26 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
             if (terminal.showCancel) TextButton(controller::onCancel) { Text(stringResource(L.remoteNodesCancel)) }
         }
     }
+    if (choosingCopy) AlertDialog(
+        onDismissRequest = { choosingCopy = false },
+        title = { Text(copy) },
+        text = {
+            LazyColumn {
+                items(state.terminal.outputLines, key = { it.id }) { line ->
+                    TextButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(holder.getResponseBlock(line)))
+                            choosingCopy = false
+                        },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text(line.text, fontFamily = FontFamily.Monospace) }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton({ choosingCopy = false }) { Text(stringResource(L.remoteNodesCancel)) }
+        },
+    )
     pending?.let { command ->
         AlertDialog(
             onDismissRequest = { pending = null },

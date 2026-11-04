@@ -6,7 +6,16 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.app.navigation.AppRemoteNodeCli
@@ -36,7 +45,6 @@ class AppRemoteNodeCliCopyTest {
             val fixture = RemoteNodesFixture()
             val requests = mutableListOf<String>()
             val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val copy = host.get().getString(AppToolsStrings.toolsRxLogCopy)
             host.get().setContent {
                 MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
                     AppRemoteNodeCli(fixture.session, { _, command, _ ->
@@ -59,8 +67,8 @@ class AppRemoteNodeCliCopyTest {
                 compose.waitForIdle()
             }
             fun copyFrom(text: String) {
-                val line = hasText(text, substring = true)
-                compose.onNode(hasText(copy) and hasAnySibling(line))
+                compose.onNodeWithTag("remote-cli-copy").performClick()
+                compose.onNode(hasText(text, substring = true) and hasAnyAncestor(isDialog()))
                     .performScrollTo().assertHasClickAction().performClick()
             }
             fun copied() = clipboard.primaryClip!!.getItemAt(0).text.toString()
@@ -74,6 +82,66 @@ class AppRemoteNodeCliCopyTest {
             copyFrom("> first")
             compose.runOnIdle { assertEquals("first", copied()) }
             compose.runOnIdle { assertEquals(listOf("first", "second"), requests) }
+        } finally {
+            host.pause().stop().destroy()
+        }
+    }
+
+    @Test fun multiRowSelectionCopiesOnlyTerminalTextAtNarrowWidthAndLargeFont() {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        try {
+            host.get().actionBar?.hide()
+            val fixture = RemoteNodesFixture()
+            val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            host.get().setContent {
+                CompositionLocalProvider(
+                    LocalDensity provides Density(1f, 2f),
+                ) {
+                    MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
+                        Box(Modifier.width(320.dp)) {
+                            AppRemoteNodeCli(fixture.session, { _, _, _ -> "alpha\nbeta" }, true)
+                        }
+                    }
+                }
+            }
+            val input = compose.onNodeWithTag("remote-cli-input")
+            input.performClick().performTextReplacement("probe")
+            input.performKeyInput { pressKey(Key.Enter) }
+            compose.onNodeWithTag("remote-cli-confirm").performClick()
+            val alpha = compose.onNodeWithText("alpha").performScrollTo()
+            val beta = compose.onNodeWithText("beta")
+            compose.waitForIdle()
+            val first = alpha.fetchSemanticsNode().boundsInRoot
+            val last = beta.fetchSemanticsNode().boundsInRoot
+            val container = compose.onNodeWithTag("remote-cli-output")
+            val origin = container.fetchSemanticsNode().boundsInRoot.topLeft
+            container.performMouseInput {
+                moveTo(Offset(first.left + 1f, first.center.y) - origin)
+                press()
+                moveTo(Offset(last.right - 1f, last.center.y) - origin, durationMillis = 500)
+                release()
+            }
+            compose.waitForIdle()
+            container.performKeyInput {
+                keyDown(Key.CtrlLeft)
+                pressKey(Key.C)
+                keyUp(Key.CtrlLeft)
+            }
+            compose.runOnIdle {
+                assertEquals("alpha\nbeta", clipboard.primaryClip!!.getItemAt(0).text.toString())
+                assertTrue("Reading rows must remain compact", first.height < 48f)
+            }
+            beta.performSemanticsAction(SemanticsActions.CustomActions) { actions ->
+                assertEquals(host.get().getString(AppToolsStrings.toolsRxLogCopy), actions.single().label)
+                assertTrue(actions.single().action())
+            }
+            compose.runOnIdle {
+                assertEquals("alpha\nbeta", clipboard.primaryClip!!.getItemAt(0).text.toString())
+            }
+            compose.onNodeWithTag("remote-cli-copy").assertHeightIsAtLeast(48.dp)
+                .performSemanticsAction(SemanticsActions.RequestFocus) { it() }
+            compose.onNodeWithTag("remote-cli-copy").performKeyInput { pressKey(Key.Enter) }
+            compose.onNode(isDialog()).assertExists()
         } finally {
             host.pause().stop().destroy()
         }

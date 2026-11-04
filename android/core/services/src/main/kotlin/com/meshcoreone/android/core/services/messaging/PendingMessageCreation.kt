@@ -8,7 +8,8 @@ import kotlin.coroutines.CoroutineContext
 /**
  * Install with `withContext(receipt)` around one pending-create call and retain it across cancellation.
  * This observes row creation only: COMMITTED does not mean enqueued, transmitted or delivered.
- * UNKNOWN must be reconciled by identity, never by blindly creating another message from the text.
+ * NOT_COMMITTED requires a store result serialized against the original insert; an absent readback
+ * alone is UNKNOWN. Reconcile UNKNOWN by identity, never by blindly recreating from the text.
  * The receipt is process memory, not a durable operation journal.
  */
 class PendingMessageCreation : AbstractCoroutineContextElement(Key) {

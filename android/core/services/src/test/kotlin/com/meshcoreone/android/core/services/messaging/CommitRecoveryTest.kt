@@ -71,7 +71,7 @@ class CommitRecoveryTest {
                     assertEquals(1, h.store.messages.size)
                 }
             },
-            native("${destination}_cancelBeforeWriteProvesNoCommitWithAllocatedIdentity") {
+            native("${destination}_cancelBeforeWriteWithoutOwnerBarrierKeepsIdentityUnknown") {
                 val h = Harness(this); h.start()
                 val entered = CompletableDeferred<Unit>()
                 val store = object : PersistenceStoreProtocol by h.store {
@@ -83,7 +83,7 @@ class CommitRecoveryTest {
                     entered.await()
                     assertEquals(PendingMessageCreation.State.WRITING, receipt.snapshot.state)
                     call.cancelAndJoin()
-                    assertEquals(PendingMessageCreation.State.NOT_COMMITTED, receipt.snapshot.state)
+                    assertEquals(PendingMessageCreation.State.UNKNOWN, receipt.snapshot.state)
                     assertEquals(RADIO, assertNotNull(receipt.snapshot.message).radioId)
                     assertTrue(h.store.messages.isEmpty()); assertTrue(h.sends(destination.wire).isEmpty())
                 }
@@ -186,7 +186,7 @@ class CommitRecoveryTest {
                 assertEquals(first, receipt.snapshot.message); assertEquals(1, h.store.messages.size)
                 assertEquals(PendingMessageCreation.State.COMMITTED, receipt.snapshot.state)
             },
-            native("${destination}_failedWriteWithConfirmedAbsenceIsNotCommitted") {
+            native("${destination}_failedWriteWithAbsentReadbackIsUnknownWithoutOwnerBarrier") {
                 val h = Harness(this); h.start()
                 val failure = storageFailure()
                 h.store.faults["saveMessage"] = failure
@@ -194,7 +194,7 @@ class CommitRecoveryTest {
                 assertSame(failure, assertFailsWith<PersistenceStoreException> {
                     withContext(receipt) { destination.create(h.service) }
                 })
-                assertEquals(PendingMessageCreation.State.NOT_COMMITTED, receipt.snapshot.state)
+                assertEquals(PendingMessageCreation.State.UNKNOWN, receipt.snapshot.state)
                 assertNotNull(receipt.snapshot.message); assertTrue(h.store.messages.isEmpty())
                 assertTrue(h.sends(destination.wire).isEmpty())
             },

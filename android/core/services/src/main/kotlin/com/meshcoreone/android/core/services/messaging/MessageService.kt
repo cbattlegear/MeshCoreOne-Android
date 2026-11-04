@@ -416,7 +416,7 @@ class MessageService(
                 try {
                     val stored = dataStore.fetchMessage(key(message.id))
                     val state = when {
-                        stored == null -> PendingMessageCreation.State.NOT_COMMITTED
+                        stored == null -> PendingMessageCreation.State.UNKNOWN
                         stored == message -> PendingMessageCreation.State.COMMITTED
                         else -> {
                             remember("pendingCreation.${message.id}.identity",

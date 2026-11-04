@@ -260,7 +260,7 @@ class RemoteNodesComposeTest {
         }
         show(RemoteNodeLaunch(fixture.contact, RemoteNodeLaunchAction.SAVED_HISTORY))
         val labels = text(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapControlsShowLabels)
-        compose.onNodeWithText(labels).performScrollTo().performClick()
+        compose.onNodeWithText(labels, useUnmergedTree = true).performScrollTo().performClick()
         compose.waitUntil(5_000) {
             writeStarted.isCompleted &&
                 compose.onAllNodesWithTag("remote-map:retry").fetchSemanticsNodes().isNotEmpty()

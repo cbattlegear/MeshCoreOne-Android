@@ -446,9 +446,10 @@ class MapMountedConsumerTest {
 
     private fun advanceFrames() {
         repeat(6) {
+            compose.mainClock.advanceTimeByFrame()
             val clock = frameClock
             if (clock == null) {
-                compose.mainClock.advanceTimeByFrame()
+                Shadows.shadowOf(Looper.getMainLooper()).idle()
             } else {
                 host.get().runOnUiThread {
                     Snapshot.sendApplyNotifications()

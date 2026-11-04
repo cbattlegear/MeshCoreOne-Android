@@ -57,6 +57,72 @@ class ChannelAttemptRecoveryTest {
             assertEquals(setOf(first, second), h.store.pending.values.toSet())
             assertTrue(h.store.channelAttempts.isEmpty())
             assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            var usable = false
+            h.channelFence.withMutation(h.channelLease) { usable = true }
+            assertTrue(usable, "Known prewire rejection must not quarantine this radio")
+            val independent = h.pending(h.message(MessageStatus.PENDING, 0u, text = "independent"))
+            val accepted = h.service.sendQueuedChannel(independent.id, requireNotNull(independent.channelMessageEnvelope()), true)
+            assertEquals(QueuedChannelAttemptPhase.ACCEPTED, accepted.phase)
+            assertEquals(setOf(first, second), h.store.pending.values.filter { it.messageID == message.id }.toSet())
+        },
+        native("prewire-storage-read-rejection-keeps-fence-usable") {
+            val h = Harness(this); h.start()
+            val row = h.pending(h.message(MessageStatus.PENDING, 0u))
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            val holder = launch {
+                h.channelFence.withMutation(h.channelLease) { entered.complete(Unit); release.await() }
+            }
+            entered.await()
+            val send = async {
+                assertFailsWith<QueuedChannelRetainedException> {
+                    h.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
+                }
+            }
+            runCurrent()
+            val readFailure = storageFailure()
+            h.store.faults["fetchPendingSendsForMessage"] = readFailure
+            release.complete(Unit); holder.join()
+            assertSame(readFailure, send.await().cause)
+            h.store.faults.clear()
+            assertEquals(row, h.store.pending.getValue(EntityKey(RADIO, row.id)))
+            assertTrue(h.store.channelAttempts.isEmpty())
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            h.channelFence.withMutation(h.channelLease) { }
+        },
+        native("uncertain-wire-still-quarantines-the-same-radio-fence") {
+            val h = Harness(this); h.start()
+            val row = h.pending(h.message(MessageStatus.PENDING, 0u))
+            h.transport.channelError = 2u
+            assertFailsWith<QueuedChannelRetainedException> {
+                h.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
+            }
+            assertEquals(QueuedChannelAttemptPhase.UNCERTAIN, h.store.channelAttempts.values.single().phase)
+            assertFailsWith<com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure.UnsettledDispatch> {
+                h.channelFence.withMutation(h.channelLease) { fail("Uncertain radio must remain quarantined") }
+            }
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+        },
+        native("ready-sibling-preflight-return-rechecks-sealed-admission-before-count") {
+            val h = Harness(this); h.start()
+            val row = h.pending(h.message(MessageStatus.PENDING, 0u))
+            val queue = h.queue()
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            var reads = 0
+            h.store.before = {
+                if (it == "fetchPendingSendsForMessage" && ++reads == 2) {
+                    entered.complete(Unit)
+                    release.await()
+                }
+            }
+            queue.hydrate(); runCurrent()
+            assertTrue(entered.isCompleted)
+            queue.awaitChannelQueryAccounting()
+            release.complete(Unit); runCurrent(); queue.awaitDrainCompletion()
+            h.store.before = null
+            assertEquals(row, h.store.pending.getValue(EntityKey(RADIO, row.id)))
+            assertFalse(h.store.calls.any { it == "incrementReadyQueuedChannelAttemptCount" })
+            assertTrue(h.store.channelAttempts.isEmpty())
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
         },
         native("accepted-plus-ready-sibling-keeps-both-without-cleanup-or-wire") {
             val h = Harness(this); h.start()

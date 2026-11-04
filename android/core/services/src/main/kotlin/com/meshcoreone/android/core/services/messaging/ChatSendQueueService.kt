@@ -366,6 +366,7 @@ class ChatSendQueueService(
                 return null
             }
         } catch (failure: PersistenceStoreException) { retainChannel(entry, failure); return null }
+        checkSendAdmission()
         val readiness = dataStore as? QueuedChannelReadinessPersisting
         if (readiness == null) {
             retainChannel(entry, UnsupportedOperationException("Exact READY-only pending-row attempt counting is not wired"))

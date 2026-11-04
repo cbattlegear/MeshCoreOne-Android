@@ -40,6 +40,11 @@ import kotlinx.coroutines.sync.withLock
 internal class QueuedChannelRetainedException(val pendingID: UUID, cause: Throwable) :
     Exception("Queued channel submission retained without automatic dispatch", cause)
 
+private sealed interface ChannelPrewireResult {
+    data class Accepted(val attempt: QueuedChannelAttempt) : ChannelPrewireResult
+    data class Rejected(val failure: PersistenceStoreException) : ChannelPrewireResult
+}
+
 class MessageService(
     override val token: SessionToken,
     private val localPublicKey: Bytes,
@@ -824,12 +829,17 @@ class MessageService(
         try {
             withPoolBackoff(2u) {
                 val attemptKey = QueuedChannelAttemptKey(token.radioId, pendingID, envelope.messageID, newID())
-                lease.owner.dispatch(lease, envelope.channelIndex, occupantID,
+                val result = lease.owner.dispatch(lease, envelope.channelIndex, occupantID,
                     dataStore::fetchChannelOccupantID) {
                     checkIdentity("sendQueuedChannel.admitted")
                     // Observational guard only; storage must atomically exclude racing siblings at begin.
-                    if (dataStore.fetchPendingSendsForMessage(key(envelope.messageID)).any { it.id != pendingID }) {
-                        throw retainedChannel(pendingID, PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    val siblings = try {
+                        dataStore.fetchPendingSendsForMessage(key(envelope.messageID))
+                    } catch (failure: PersistenceStoreException) {
+                        return@dispatch ChannelPrewireResult.Rejected(failure)
+                    }
+                    if (siblings.any { it.id != pendingID }) {
+                        return@dispatch ChannelPrewireResult.Rejected(PersistenceStoreException(PersistenceStoreError.InvalidData,
                             QueuedChannelAttemptRejected(EntityKey(token.radioId, pendingID),
                                 QueuedChannelAttemptConflict.RETAINED_SUBMISSION)))
                     }
@@ -863,7 +873,11 @@ class MessageService(
                         throw retainedChannel(pendingID, failure)
                     }
                     // Inside the admitted operation: cancellation on dispatch return cannot erase acceptance.
-                    settleQueuedChannel(attemptKey, QueuedChannelAttemptOutcome.ACCEPTED)
+                    ChannelPrewireResult.Accepted(settleQueuedChannel(attemptKey, QueuedChannelAttemptOutcome.ACCEPTED))
+                }
+                when (result) {
+                    is ChannelPrewireResult.Accepted -> result.attempt
+                    is ChannelPrewireResult.Rejected -> throw retainedChannel(pendingID, result.failure)
                 }
             }
         } catch (failure: ChannelDispatchFailure) { throw retainedChannel(pendingID, failure) }

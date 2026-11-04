@@ -1,4 +1,4 @@
-// AndroidOnly: WP-312 Test-only observable map preferences for native accessibility consumers.
+// AndroidOnly: WP-503 Test-only observable map preferences for native accessibility consumers.
 package com.meshcoreone.android.accessibility
 
 import com.meshcoreone.android.core.maps.MapColorPreference

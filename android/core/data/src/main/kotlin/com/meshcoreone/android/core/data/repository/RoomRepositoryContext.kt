@@ -177,13 +177,15 @@ internal class RoomRepositoryContext(
         afterCommit: () -> Unit,
         block: suspend RepositoryTransaction.() -> T,
     ): T = channelIdentityMutation.withChannelIdentityRestore {
-        LocalDirectRoster.mutate { access("importBackupDatabase", writing = true) {
-            mutex.withLock {
-                ensureOpen()
-                flushRxLocked()
-                val transaction = RepositoryTransaction(database, clock, pendingRx)
-                committedTransaction({}, returnCommittedOnCancellation = true) { transaction.block() }
-            } }
+        LocalDirectRoster.mutate {
+            access("importBackupDatabase", writing = true) {
+                mutex.withLock {
+                    ensureOpen()
+                    flushRxLocked()
+                    val transaction = RepositoryTransaction(database, clock, pendingRx)
+                    committedTransaction({}, returnCommittedOnCancellation = true) { transaction.block() }
+                }
+            }
         }
     }.also { afterCommit() }
 

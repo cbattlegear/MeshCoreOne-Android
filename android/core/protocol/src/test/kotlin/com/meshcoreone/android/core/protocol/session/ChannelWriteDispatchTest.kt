@@ -23,6 +23,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import org.junit.jupiter.api.Test
@@ -55,13 +56,15 @@ class ChannelWriteDispatchTest {
             for (sent in listOf(false, true)) {
                 var completionOutcome: ContactWriteDispatchOutcome? = null
                 val dispatch = ContactWriteDispatch(onExchangeFinishedAction = { completionOutcome = it.outcome })
-                val serializer = RequestResponseSerializer(backgroundScope)
                 val failure = IllegalStateException("Command refused or failed")
-                assertFailsWith<IllegalStateException> {
-                    serializer.withOwnedSerialization(dispatch.exchangeDispatch) {
-                        if (sent) beforeSend()
-                        dispatch.markUncertain(failure)
-                        throw failure
+                supervisorScope {
+                    val serializer = RequestResponseSerializer(this)
+                    assertFailsWith<IllegalStateException> {
+                        serializer.withOwnedSerialization(dispatch.exchangeDispatch) {
+                            if (sent) beforeSend()
+                            dispatch.markUncertain(failure)
+                            throw failure
+                        }
                     }
                 }
                 assertEquals(
@@ -78,12 +81,14 @@ class ChannelWriteDispatchTest {
                 var completionDisposition: ChannelWriteCancellationDisposition? = null
                 lateinit var dispatch: ChannelWriteDispatch
                 dispatch = ChannelWriteDispatch { completionDisposition = dispatch.cancellationDisposition }
-                val serializer = RequestResponseSerializer(backgroundScope)
                 val failure = IllegalStateException("Injected exchange failure")
-                assertFailsWith<IllegalStateException> {
-                    serializer.withOwnedSerialization(dispatch) {
-                        if (sent) beforeSend()
-                        throw failure
+                supervisorScope {
+                    val serializer = RequestResponseSerializer(this)
+                    assertFailsWith<IllegalStateException> {
+                        serializer.withOwnedSerialization(dispatch) {
+                            if (sent) beforeSend()
+                            throw failure
+                        }
                     }
                 }
                 assertEquals(

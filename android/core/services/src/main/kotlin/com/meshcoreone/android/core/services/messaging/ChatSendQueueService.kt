@@ -61,6 +61,8 @@ class ChatSendQueueService(
     private var teardown: CompletableDeferred<TeardownReport>? = null
     private val dmQueue = SendQueue(ownership.scope, ::sendDM, ::terminalDM, ::drained)
     private val channelQueue = SendQueue(ownership.scope, ::sendChannel, ::terminalChannel, ::drained)
+    // Test-only preemption point after dequeue; production composition leaves this unset.
+    internal var beforeInitialReadinessCheck: (() -> Unit)? = null
     val queuedEnvelopeCount: Int get() = synchronized(lock) { queued.size }
     val isObservingConnection: Boolean get() = synchronized(lock) { connectionTask?.isActive == true }
     private fun key(id: UUID) = EntityKey(token.radioId, id)
@@ -97,6 +99,8 @@ class ChatSendQueueService(
                     previousReady = ready
                     if (snapshot.token != null && snapshot.token != token) {
                         ownership.reporter.report(MessagingDiagnostic.StaleResult(token, "queueConnection"))
+                        dmQueue.stopAfterCurrent()
+                        channelQueue.stopAfterCurrent()
                         ownership.invalidate()
                         channelProgress.retire()
                         cancelQueryAccounting()
@@ -205,10 +209,20 @@ class ChatSendQueueService(
     }
 
     private suspend fun awaitReady() {
-        ownership.checkLifetime("queueReadiness")
+        beforeInitialReadinessCheck?.invoke()
+        checkQueueReadinessLifetime("queueReadiness")
         while (!ownership.isReady) {
             clock.messagingDeadline(config.transportWaitTimeout) { triggers.wait() }
-            ownership.checkLifetime("queueReadiness.woke")
+            checkQueueReadinessLifetime("queueReadiness.woke")
+        }
+    }
+    private suspend fun checkQueueReadinessLifetime(operation: String) {
+        try { ownership.checkLifetime(operation) }
+        catch (failure: MessageServiceException) {
+            if (failure.error == MessageServiceError.NotConnected && ownership.closing) {
+                throw CancellationException("Send queue generation retired").also { it.initCause(failure) }
+            }
+            throw failure
         }
     }
     private suspend fun park(id: UUID, failure: Throwable): Nothing {
@@ -217,7 +231,7 @@ class ChatSendQueueService(
         reportQueryAccounting(id, ChannelQueryAccountingOutcome.PARKED)
         finishQueryAccounting(id)
         clock.messagingDeadline(config.transportWaitTimeout) { triggers.wait() }
-        ownership.checkLifetime("park.woke")
+        // Retirement racing a selected wake must not send this persisted envelope to terminal handling.
         throw CancellationException("Parked send envelope")
     }
     private suspend fun remapPending(id: UUID) = withContext(NonCancellable) {
@@ -458,6 +472,8 @@ class ChatSendQueueService(
     suspend fun awaitDrainCompletion() { dmQueue.awaitDrainCompletion(); channelQueue.awaitDrainCompletion() }
 
     suspend fun shutdown(): TeardownReport {
+        dmQueue.stopAfterCurrent()
+        channelQueue.stopAfterCurrent()
         val (receipt, claimed) = synchronized(lock) {
             teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
                 teardown = it

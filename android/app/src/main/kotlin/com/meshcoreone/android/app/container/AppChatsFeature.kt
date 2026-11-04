@@ -16,6 +16,7 @@ import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.ChannelQuery
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
@@ -520,7 +521,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                         messageID = message.id, emoji = pending.parsed.emoji, senderName = pending.senderName,
                         messageHash = pending.parsed.messageHash, rawText = pending.rawText,
                         contactID = target.contact.id, radioId = pending.radioId,
-                    )
+                    ) to { indexing.service.requeuePendingDMReaction(pending) }
                 }
                 is ReactionIndexScope.Channel -> {
                     val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
@@ -532,17 +533,31 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                             messageID = message.id, emoji = pending.parsed.emoji, senderName = pending.senderNodeName,
                             messageHash = pending.parsed.messageHash, rawText = pending.rawText,
                             channelIndex = pending.channelIndex, radioId = pending.radioId,
-                        )
+                        ) to { indexing.service.requeuePendingReaction(pending) }
                     }
                 }
             }
             var updated = message
-            for (reaction in reactions) {
-                if (!store.reactionExists(EntityKey(message.radioId, message.id), reaction.senderName, reaction.emoji)) {
-                    indexing.service.persistReactionAndUpdateSummary(reaction, store)?.let {
-                        updated = updated.copy(reactionSummary = it.summary)
+            var completed = 0
+            try {
+                for ((reaction, _) in reactions) {
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    val key = EntityKey(message.radioId, message.id)
+                    val result = if (store.reactionExists(key, reaction.senderName, reaction.emoji)) {
+                        // A prior save may have committed before summary reconciliation failed or was cancelled.
+                        indexing.service.reconcileSummary(key, store)
+                    } else {
+                        indexing.service.persistReactionAndUpdateSummary(reaction, store)
                     }
+                    val summary = result?.summary ?: throw PersistenceStoreException(
+                        PersistenceStoreError.SaveFailed("History reaction replay did not complete"),
+                    )
+                    updated = updated.copy(reactionSummary = summary)
+                    completed++
                 }
+            } finally {
+                // Indexing drains the whole batch; a failure must retain the current and all later matches.
+                reactions.drop(completed).forEach { (_, requeue) -> requeue() }
             }
             updated
         }

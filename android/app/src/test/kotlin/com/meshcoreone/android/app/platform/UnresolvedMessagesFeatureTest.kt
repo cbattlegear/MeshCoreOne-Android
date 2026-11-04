@@ -78,6 +78,12 @@ class UnresolvedMessagesFeatureTest : RoomProcessTest() {
             assertEquals(UnprovedDirectMessageProvenance.LOCAL_CANDIDATE, rows.single { it.occurrenceID == candidate.id }.provenance)
             assertNull(store.fetchMessage(EntityKey(radio, unresolved.id))?.contactID)
             assertEquals(peer.id, store.fetchMessage(EntityKey(radio, candidate.id))?.contactID)
+            val contactKey = EntityKey(radio, peer.id)
+            assertTrue(store.fetchMessages(contactKey).isEmpty(),
+                "Tentative association must not expose the occurrence as ordinary contact history")
+            assertNull(store.newestUnreadIncomingMessage(contactKey))
+            assertTrue(deps.data.fetchLastMessages(listOf(peer.id), 10)[peer.id].orEmpty().isEmpty(),
+                "The actual Chats preview adapter must not label tentative text as contact history")
             val unknown = rows.single { it.occurrenceID == legacy.id }
             assertEquals(UnprovedDirectMessageProvenance.LEGACY_UNKNOWN, unknown.provenance)
             assertNull(unknown.wireTimestamp)

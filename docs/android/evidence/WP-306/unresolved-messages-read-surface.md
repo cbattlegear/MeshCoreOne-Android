@@ -139,7 +139,17 @@ Producer session `174c2a9d-d3fa-489c-8caa-80b200272b20` confirmed single-owner
 custody for that repair: consistent ordinary-contact list/observe/count/window/
 unread/candidates/mentions exclusion, preserving the typed unproved reader,
 backup retention and atomic contact-removal inspection. Its immutable fix and
-execution controls are pending; this consumer has not edited those shared hunks.
+execution controls were handed off as `ea1cb2dc2754a6a62bcfc326476943a4c075be02`
+and `4fa2adf56d882bd6597f0edcf22ea2ace27f2caa`. Applying the former here exposed
+absent producer-assembly test prerequisites in `MessagingRoomIntegrationTest.kt`;
+the clean-start cherry-pick was aborted without changing producer hunks.
+A dependency-complete, clean integration base has been requested.
+
+The existing App historical-ambiguity control now additionally asserts that the
+tentative row is absent from ordinary contact reads, unread selection and the
+actual Chats last-message preview adapter while remaining in the typed unproved
+projection. These are authored regression assertions, not executed results, and
+require the producer exclusion fix before they can pass.
 
 A further supported check of documentation head
 `749d0e618bc75fcfd97fa097d5134ed7eb349002`, with the same affected base above,
@@ -148,6 +158,11 @@ again passed native Windows preflight and stopped before Gradle with
 There is still no executed product-test evidence. Runtime deployment was routed
 to the coordinator for its separately authorized, quiescent owner, not attempted
 as an incidental feature repair.
+The coordinator subsequently confirmed an explicit runtime-recovery hold pending
+invocation-bound cleanup proof. No further local launch or deployment is allowed;
+verification must use the existing supported exact-candidate hosted path after
+source assembly, including Chats, App and localization controls rather than a
+core-only green run.
 
 1. Recover/deploy the reviewed execution runtime through its separately authorized
    owner; run real affected Android checks and resolve their actual findings.

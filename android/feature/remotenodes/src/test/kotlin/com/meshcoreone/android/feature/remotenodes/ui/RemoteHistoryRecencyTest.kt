@@ -1,6 +1,7 @@
 // AndroidOnly: WP-313 Mounted history recency regression with a deterministic clock and local map surface; not device acceptance.
 package com.meshcoreone.android.feature.remotenodes.ui
 
+import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.Text
@@ -99,20 +100,22 @@ class RemoteHistoryRecencyTest {
         return LocationReportRowText.detailLine(report, locale, ZoneId.systemDefault(), MeasurementSystem.of(locale))
     }
 
+    private val headline: String get() = if (Build.VERSION.SDK_INT == 31) "2 hr. ago" else "2h ago"
+
     @Test fun listHeadlineAndDetailsOpenTheSameReportWithRecencyOnTheFullMap() {
         mount()
         compose.onNodeWithText(detail()).performScrollTo()
-            .assertTextContains("2h ago")
+            .assertTextContains(headline)
             .performClick()
         val fullMap = hasAnyAncestor(hasTestTag("remote-history-full-map"))
-        compose.onNode(hasText("2h ago") and fullMap).performScrollTo().assertIsDisplayed()
-        compose.onNode(hasText(detail()) and fullMap).assertIsDisplayed()
+        compose.onNode(hasText(headline) and fullMap).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(detail()) and fullMap).performScrollTo().assertIsDisplayed()
     }
 
     @Test fun selectingInlineMapReportShowsRecencyWithoutRemovingAbsoluteDetails() {
         mount()
         compose.onNodeWithText("Select fixture report").performScrollTo().performClick()
-        compose.onNode(hasText("2h ago") and !hasClickAction()).performScrollTo().assertIsDisplayed()
-        compose.onNode(hasText(detail()) and !hasClickAction()).assertIsDisplayed()
+        compose.onNode(hasText(headline) and !hasClickAction()).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(detail()) and !hasClickAction()).performScrollTo().assertIsDisplayed()
     }
 }

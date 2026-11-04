@@ -42,6 +42,11 @@ unresolved placement/accessory questions or establish device acceptance.
   Existing calendar-unit, absolute-time, coordinate and sea-level cases remain.
 - `RelativeTimeLocalizationTest`: actual Android ICU text for past, future and
   zero amounts in English, plus Japanese past/future text (API 31 and 37).
+  API31's ICU68 falls back from absent English narrow relative patterns to
+  short `hr.`/`sec.` patterns; API37 has `h`/`s` narrow text. This native
+  variation is retained, not replaced with fixed English. The historical
+  patterns are independently recorded in
+  [ICU release-68-2 English data](https://github.com/unicode-org/icu/blob/release-68-2/icu4c/source/data/locales/en.txt).
 - `RemoteHistoryRecencyTest`: mounted route with an injected fixed clock and
   local map surface. Requires the report button to expose both headline and
   unchanged detail, opens that report's full map and checks both lines, and

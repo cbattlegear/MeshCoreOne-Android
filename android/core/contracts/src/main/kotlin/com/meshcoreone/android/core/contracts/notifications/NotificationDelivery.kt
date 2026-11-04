@@ -25,6 +25,12 @@ enum class NotificationAction(val rawValue: String) {
     DISMISS("DISMISS_ACTION"),
 }
 
+/** Immutable channel displayed by a notification, NOT proof of a received message's RF origin. */
+sealed interface ChannelNotificationTarget {
+    data class Proven(val radioId: RadioId, val channelIndex: UByte, val occupantId: UUID) : ChannelNotificationTarget
+    data object Unproved : ChannelNotificationTarget
+}
+
 /**
  * Typed replacement for the Swift `userInfo` dictionary. The delivery adapter stores it with the
  * posted notification and hands it back in [DeliveredNotification] and [NotificationResponse].
@@ -36,7 +42,17 @@ sealed interface NotificationPayload {
     data class DirectMessage(val contact: EntityKey, val messageID: UUID) : NotificationPayload
 
     /** `type: channelMessage` with `channelIndex`, `radioID` and `messageID`. */
-    data class ChannelMessage(val radioId: RadioId, val channelIndex: UByte, val messageID: UUID) : NotificationPayload
+    data class ChannelMessage(
+        val radioId: RadioId,
+        val channelIndex: UByte,
+        val messageID: UUID,
+        val displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
+    ) : NotificationPayload {
+        init {
+            require(displayTarget !is ChannelNotificationTarget.Proven ||
+                displayTarget.radioId == radioId && displayTarget.channelIndex == channelIndex)
+        }
+    }
 
     /** `type: roomMessage` with `roomName`, `sessionID` and `messageID`. */
     data class RoomMessage(val roomName: String, val session: EntityKey, val messageID: UUID) : NotificationPayload
@@ -50,7 +66,13 @@ sealed interface NotificationPayload {
         val contact: EntityKey?,
         val channelIndex: UByte?,
         val radioId: RadioId?,
-    ) : NotificationPayload
+        val displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
+    ) : NotificationPayload {
+        init {
+            require(displayTarget !is ChannelNotificationTarget.Proven ||
+                displayTarget.radioId == radioId && displayTarget.channelIndex == channelIndex)
+        }
+    }
 
     /** `type: lowBattery` with `batteryPercentage`. */
     data class LowBattery(val batteryPercentage: Long) : NotificationPayload

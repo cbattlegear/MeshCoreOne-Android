@@ -3,6 +3,7 @@ package com.meshcoreone.android.platform.notifications.messaging
 
 import android.content.Intent
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
@@ -18,6 +19,11 @@ internal object NotificationPayloadCodec {
     private const val ROOM = "mc1.notification.room"
     private const val SESSION = "mc1.notification.session"
     private const val BATTERY = "mc1.notification.battery"
+    private const val TARGET_VERSION = "mc1.notification.display-target.version"
+    private const val TARGET_STATE = "mc1.notification.display-target.state"
+    private const val TARGET_RADIO = "mc1.notification.display-target.radio"
+    private const val TARGET_CHANNEL = "mc1.notification.display-target.channel"
+    private const val TARGET_OCCUPANT = "mc1.notification.display-target.occupant"
 
     fun write(intent: Intent, payload: NotificationPayload): Intent = intent.apply {
         when (payload) {
@@ -31,6 +37,7 @@ internal object NotificationPayloadCodec {
                 radio(payload.radioId)
                 putExtra(CHANNEL, payload.channelIndex.toInt())
                 putExtra(MESSAGE, payload.messageID.toString())
+                displayTarget(payload.displayTarget)
             }
             is NotificationPayload.RoomMessage -> {
                 putExtra(TYPE, "room")
@@ -48,6 +55,7 @@ internal object NotificationPayloadCodec {
                 payload.contact?.let { entity(it, CONTACT) }
                 payload.radioId?.let { value -> radio(value) }
                 payload.channelIndex?.let { putExtra(CHANNEL, it.toInt()) }
+                displayTarget(payload.displayTarget)
             }
             is NotificationPayload.LowBattery -> {
                 putExtra(TYPE, "low-battery")
@@ -132,6 +140,7 @@ internal object NotificationPayloadCodec {
                 radio(intent),
                 channel(intent),
                 uuid(intent, MESSAGE),
+                displayTarget(intent),
             )
             "room" -> NotificationPayload.RoomMessage(
                 intent.getStringExtra(ROOM) ?: return null,
@@ -144,6 +153,7 @@ internal object NotificationPayloadCodec {
                 contact = optionalEntity(intent, CONTACT),
                 channelIndex = optionalChannel(intent),
                 radioId = optionalRadio(intent),
+                displayTarget = displayTarget(intent),
             )
             "low-battery" -> NotificationPayload.LowBattery(intent.getLongExtra(BATTERY, Long.MIN_VALUE).also {
                 if (it == Long.MIN_VALUE) return null
@@ -202,8 +212,43 @@ internal object NotificationPayloadCodec {
     private fun optionalChannel(intent: Intent): UByte? =
         if (intent.hasExtra(CHANNEL)) channel(intent) else null
 
+    private fun Intent.displayTarget(target: ChannelNotificationTarget) {
+        putExtra(TARGET_VERSION, 1)
+        when (target) {
+            ChannelNotificationTarget.Unproved -> putExtra(TARGET_STATE, "unproved")
+            is ChannelNotificationTarget.Proven -> {
+                putExtra(TARGET_STATE, "displayed")
+                putExtra(TARGET_RADIO, target.radioId.value.toString())
+                putExtra(TARGET_CHANNEL, target.channelIndex.toInt())
+                putExtra(TARGET_OCCUPANT, target.occupantId.toString())
+            }
+        }
+    }
+
+    private fun displayTarget(intent: Intent): ChannelNotificationTarget {
+        if (TARGET_KEYS.none(intent::hasExtra)) return ChannelNotificationTarget.Unproved
+        require(intent.getIntExtra(TARGET_VERSION, -1) == 1)
+        return when (intent.getStringExtra(TARGET_STATE)) {
+            "unproved" -> {
+                require(listOf(TARGET_RADIO, TARGET_CHANNEL, TARGET_OCCUPANT).none(intent::hasExtra))
+                ChannelNotificationTarget.Unproved
+            }
+            "displayed" -> {
+                val index = intent.getIntExtra(TARGET_CHANNEL, -1)
+                require(index in 0..UByte.MAX_VALUE.toInt())
+                val radio = uuid(intent, TARGET_RADIO)
+                val occupant = uuid(intent, TARGET_OCCUPANT)
+                require(radio.toString() == intent.getStringExtra(TARGET_RADIO))
+                require(occupant.toString() == intent.getStringExtra(TARGET_OCCUPANT))
+                ChannelNotificationTarget.Proven(RadioId(radio), index.toUByte(), occupant)
+            }
+            else -> throw IllegalArgumentException("Invalid notification display target")
+        }
+    }
+
+    private val TARGET_KEYS = setOf(TARGET_VERSION, TARGET_STATE, TARGET_RADIO, TARGET_CHANNEL, TARGET_OCCUPANT)
     private val PERSISTED_KEYS = setOf(
         TYPE, RADIO, MESSAGE, CHANNEL, ROOM, BATTERY,
         "$CONTACT.radio", "$CONTACT.id", "$SESSION.radio", "$SESSION.id",
-    )
+    ) + TARGET_KEYS
 }

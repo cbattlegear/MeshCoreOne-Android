@@ -361,6 +361,7 @@ class ContactDetailStateHolder(
         mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_avatar_invalidimage)) }
     }
 
+    /** Captures the selected contact identity before an external picker can outlive the row. */
     fun captureAvatarIdentity(): Pair<EntityKey, Bytes>? {
         val contact = current
         val service = session.contactService()

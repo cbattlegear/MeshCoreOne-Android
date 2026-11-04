@@ -162,9 +162,9 @@ internal class FakeContactService(private val store: FakeDataStore? = null) : No
     }
     override suspend fun updateContactAvatar(contact: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?) {
         calls += "avatar:${imageData?.size}"
-        avatars += contact to imageData
         val stored = store?.contacts?.firstOrNull { it.id == contact.id && it.radioId == contact.radioId }
         if (stored == null || stored.publicKey != expectedPublicKey) throw NodesContactFailure.ContactNotFound()
+        avatars += contact to imageData
         avatarIdentities += contact to expectedPublicKey
         avatarBehavior(contact, imageData)
     }

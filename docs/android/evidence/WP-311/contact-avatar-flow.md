@@ -507,3 +507,41 @@ Allowed source checks passed: `python android/parity-tests/semantic.py --check`
 `python tools/android-port/portmap.py`,
 `python tools/android-port/controller/validate.py`, and `git diff --check`.
 These used pinned Python 3.12.4, not Kotlin compilation or test execution.
+
+## Atomic avatar integration and current candidate
+
+The consumer now captures `(EntityKey, publicKey)` from the selected contact in
+the configuration-retained editor lifetime before launching the picker, then
+passes both unchanged to the WP-209 three-argument service method. Producer
+commits `ea0dfe8b877f138635ad7df46e8f15c1163b7688`,
+`ac6496f5b27ba15a2b2172a41bbff1e9358680bc` and
+`ceeaa39c26f26e8082b8a37f8bc259b128a791bb` are included for the atomic
+existing-row-only avatar update. This checks current radio/entity key and
+public key; it does not distinguish delete/recreate with the same identity.
+No incarnation field or same-identity ABA guarantee is claimed.
+
+Consumer head `a63886d766a44d08fbc962226fb75a5de86ae0d4` / base
+`cb4a79ab906db851800bcf93f7c2ebfb5aa34571` triggered hosted run
+[41860811120](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41860811120).
+Classification, controller/workflow policy and PR checklist passed; its
+Android job failed. The available review/build diagnosis found two consumer
+compile errors: the Compose editor had not delegated the retained
+`avatarIdentity`, and an App test used a nodes-internal `ContactDTO.key`
+extension. No product test counts are available for this failed candidate.
+Both compile errors were corrected in `2efd6a64df211beb3c57220201afc83c3d68f737`.
+
+The exact `2efd6a64df211beb3c57220201afc83c3d68f737` hosted run
+[41862844614](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41862844614)
+is queued; at this record it has not discovered or executed product tests.
+The producer PR #552 run `41860260327` is still using its Linux Android build
+job. The supported local launcher previously refused before Gradle due to an
+old/mismatched installed `controller/authority.py`; no direct Gradle invocation,
+lock recovery or shared-runtime cleanup was performed.
+
+The current review also identified a possible lost update: favorite persistence
+currently saves a DTO fetched before radio acknowledgement, so an overlapping
+avatar set/clear could be overwritten by that stale full-row save. This is
+reported to the WP-209 producer for a store-level field-specific fix and held-
+acknowledgement Room/service regression. Until that is fixed and covered, this
+candidate does not claim favorite/avatar write consistency or merge readiness.
+Physical device, TalkBack and iOS acceptance remain separate and unclaimed.

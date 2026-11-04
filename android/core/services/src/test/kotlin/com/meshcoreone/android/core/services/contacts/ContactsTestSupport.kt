@@ -191,13 +191,14 @@ internal class ContactsFakeStore(
         var transition = ContactBlockTransition.NONE
         contactRows[key.id] = when (update) {
             is ContactLocalUpdate.Preferences -> {
+                val nickname = update.nickname
                 transition = when {
                     update.isBlocked == true && !row.isBlocked -> ContactBlockTransition.BLOCKED
                     update.isBlocked == false && row.isBlocked -> ContactBlockTransition.UNBLOCKED
                     else -> ContactBlockTransition.NONE
                 }
                 row.copy(
-                    nickname = if (update.nickname == null) row.nickname else update.nickname.ifEmpty { null },
+                    nickname = if (nickname == null) row.nickname else nickname.ifEmpty { null },
                     isBlocked = update.isBlocked ?: row.isBlocked,
                     isFavorite = update.isFavorite ?: row.isFavorite,
                     unreadCount = if (transition == ContactBlockTransition.BLOCKED) 0 else row.unreadCount,

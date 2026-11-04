@@ -189,6 +189,35 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
     }
 
     @Test
+    fun avatarWaitDoesNotStartAnotherMainTaskAfterTheSharedDeadline() {
+        var now = 1_000_000_000L
+        var firstRan = false
+        var secondRan = false
+        val handler = Handler(Looper.getMainLooper())
+        val first = Runnable {
+            firstRan = true
+            now = 2_000_000_000L
+        }
+        val second = Runnable { secondRan = true }
+        try {
+            compose.runOnUiThread {
+                handler.post(first)
+                handler.post(second)
+            }
+            val failure = assertFailsWith<AssertionError> {
+                pumpAvatarMainTasks(
+                    "bounded task pump", 2_000_000_000L, { "bounded pump control" }, { now },
+                )
+            }
+            assertEquals("bounded task pump: shared deadline expired during Main task pumping", failure.message)
+            assertTrue(firstRan)
+            assertFalse(secondRan, "A later ready Main task must remain unstarted after expiry")
+        } finally {
+            compose.runOnUiThread { handler.removeCallbacks(first); handler.removeCallbacks(second) }
+        }
+    }
+
+    @Test
     @Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h900dp-mdpi")
     fun realNavigationPredictiveBackCancellationPreservesAnInFlightAvatarWrite() = runTest {
         val harness = ContainerHarness(this, store)
@@ -551,9 +580,10 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         if (remainingMillis <= 0) failWithDiagnostics("$stage: shared deadline expired", null, diagnostic)
         try {
             compose.waitUntil(remainingMillis) {
-                // Compose polling and the harness scheduler do not drain a paused Android Main queue.
-                Shadows.shadowOf(Looper.getMainLooper()).idle()
+                pumpAvatarMainTasks(stage, deadline, diagnostic, nanoTime)
+                ensureAvatarBeforeDeadline(stage, "settling test scheduler", deadline, diagnostic, nanoTime)
                 settle()
+                ensureAvatarBeforeDeadline(stage, "evaluating completion", deadline, diagnostic, nanoTime)
                 condition()
             }
         } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
@@ -561,6 +591,36 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         }
         if (nanoTime() >= deadline) {
             failWithDiagnostics("$stage: condition completed after shared deadline", null, diagnostic)
+        }
+    }
+
+    private fun pumpAvatarMainTasks(
+        stage: String,
+        deadline: Long,
+        diagnostic: () -> String,
+        nanoTime: () -> Long = System::nanoTime,
+    ) {
+        val scheduler = Shadows.shadowOf(Looper.getMainLooper()).scheduler
+        while (scheduler.areAnyRunnable()) {
+            if (nanoTime() >= deadline) {
+                failWithDiagnostics("$stage: shared deadline expired during Main task pumping", null, diagnostic)
+            }
+            scheduler.runOneTask()
+            if (nanoTime() >= deadline && scheduler.areAnyRunnable()) {
+                failWithDiagnostics("$stage: shared deadline expired during Main task pumping", null, diagnostic)
+            }
+        }
+    }
+
+    private fun ensureAvatarBeforeDeadline(
+        stage: String,
+        checkpoint: String,
+        deadline: Long,
+        diagnostic: () -> String,
+        nanoTime: () -> Long,
+    ) {
+        if (nanoTime() >= deadline) {
+            failWithDiagnostics("$stage: shared deadline expired before $checkpoint", null, diagnostic)
         }
     }
 

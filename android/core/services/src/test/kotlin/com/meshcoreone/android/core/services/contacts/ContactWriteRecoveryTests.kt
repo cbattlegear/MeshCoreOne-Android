@@ -38,6 +38,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CopyableThrowable
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -1690,8 +1691,8 @@ class ContactWriteRecoveryTests {
 
     private fun queuedMarkerRetryFailure(distinctFailure: Boolean) = runTest {
         withFixture {
-            val markerFailure = IOException("Pending marker retry failed")
-            val recordingFailure = if (distinctFailure) IOException("Service marker retry failed") else markerFailure
+            val markerFailure = MarkerRecordingFailure("Pending marker retry failed")
+            val recordingFailure = if (distinctFailure) MarkerRecordingFailure("Service marker retry failed") else markerFailure
             val backing = PendingMarkerFlags()
             var failMarker = true
             val flags = object : ContactPreferenceFlags by backing {
@@ -2275,6 +2276,11 @@ class ContactWriteRecoveryTests {
         }
 
         private data class PendingWrite(val command: Bytes, val owner: MockTransport)
+    }
+
+    private class MarkerRecordingFailure(message: String) : IOException(message), CopyableThrowable<MarkerRecordingFailure> {
+        // Keep the injected identity across serializer await, even with stacktrace recovery enabled.
+        override fun createCopy(): MarkerRecordingFailure? = null
     }
 
     private class PendingMarkerFlags : ContactPreferenceFlags {

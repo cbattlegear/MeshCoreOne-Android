@@ -671,3 +671,12 @@ No Kotlin tests were discovered or executed for this repair. The two new
 regressions are authored, not passing evidence. The coordinator received the
 execution-lane blocker for trusted recovery/allocation; no interlock or retained
 execution owner was bypassed, and no new CI-result bundle was created.
+
+Independent source review identified that coroutine stacktrace recovery could
+copy an ordinary injected `IOException` across the serializer's `Deferred.await`,
+invalidating the stable-identity control. The forward-only test correction uses
+an `IOException` subclass implementing `CopyableThrowable` with `createCopy() =
+null`. Both controls retain strict `assertSame` and exact suppression assertions;
+the default test JVM assertions and stacktrace-recovery settings are unchanged.
+The production identity guard is unchanged. Exact-head hosted CI, rather than
+the superseded ordinary-exception controls, must establish execution results.

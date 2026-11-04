@@ -120,7 +120,7 @@ private suspend fun AdvertisementService.runFiredRound(roundJob: Job, generation
         return
     }
     when (outcome) {
-        AdvertContactSyncOutcome.BUSY -> locked {
+        AdvertContactSyncOutcome.BUSY -> pendingLocked {
             // The radio was never asked: keep the failure budget and do not stamp lastDeltaSyncEnd.
             logger(DebugLogLevel.INFO, "Advert delta sync deferred: another sync holds the claim")
             finishRoundLocked(this, generation)
@@ -143,13 +143,13 @@ private suspend fun AdvertisementService.runFiredRound(roundJob: Job, generation
 }
 
 /** Runs every pre-drain guard, then drains the pending work in the same actor segment. */
-private fun AdvertisementService.drainRound(roundJob: Job, generation: Long): DrainedRound? = locked {
+private suspend fun AdvertisementService.drainRound(roundJob: Job, generation: Long): DrainedRound? = pendingLocked {
     // Stop may have cleared the handler during the foreground hop; re-read it here.
     val handler = deltaSyncHandler
     // Empty-round guard before drain so a schedule with no work never clears the 0x8F set.
     if (roundJob.isCancelled || handler == null || !hasPendingDeltaSyncWork) {
         finishRoundLocked(this, generation)
-        return@locked null
+        return@pendingLocked null
     }
     // Capture before teardown clears `currentRadioId` so rollback can still run after stop.
     val drained = pendingAdvertKeys.toSet()
@@ -183,13 +183,13 @@ private suspend fun AdvertisementService.invokeHandler(roundJob: Job, round: Dra
     }
 
 /** Returns true when the failure cap dropped the drained advert keys (caller stamps their recency). */
-private fun AdvertisementService.recordFailedRound(round: DrainedRound, generation: Long): Boolean = locked {
+private suspend fun AdvertisementService.recordFailedRound(round: DrainedRound, generation: Long): Boolean = pendingLocked {
     consecutiveDeltaSyncFailures += 1
     lastDeltaSyncEnd = clock.now()
     finishRoundLocked(this, generation)
     if (consecutiveDeltaSyncFailures < AdvertisementService.MAX_CONSECUTIVE_DELTA_SYNC_FAILURES) {
         requeueDrainedWorkLocked(this, round, shouldSchedule = true)
-        return@locked false
+        return@pendingLocked false
     }
     // Drop drained advert keys (the cap's purpose) but restore path keys and an owed escalation.
     logger(
@@ -361,7 +361,7 @@ private suspend fun AdvertisementService.escalateMissingUnknownKeys(unknownAtSta
     if (missing.isEmpty()) return
     logger(DebugLogLevel.INFO, "Advert delta sync escalation: ${missing.size} unknown key(s) still missing")
     val now = clock.wallNow()
-    locked {
+    pendingLocked {
         escalateToFullRefetch = true
         missing.forEach { recordPendingAdvertKeyLocked(it, now) }
     }

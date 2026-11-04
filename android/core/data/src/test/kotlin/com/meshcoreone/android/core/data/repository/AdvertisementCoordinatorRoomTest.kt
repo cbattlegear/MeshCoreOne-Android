@@ -599,7 +599,9 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             foreground = true
             send(MeshEvent.Advertisement(seed.contact.publicKey))
             assertNull(saved(seed.contact))
-            val contact = assertNotNull(service.materializeContactForPendingAdvert(seed.contact.publicKey.prefix(6), RADIO_A))
+            val contact = assertIs<LocalDirectContactResolution.Unique>(
+                service.materializeContactForPendingAdvert(seed.contact.publicKey.prefix(6), RADIO_A),
+            ).contact
             assertEquals(seed.contact.copy(id = contact.id, lastHeardTimestamp = AT.epochSecond.toUInt()), contact)
             assertEquals(contact, store.fetchContactByPrefix(RADIO_A, seed.contact.publicKey.prefix(6)))
             assertEquals(listOf(seed.contact.publicKey), requestedContacts())
@@ -619,7 +621,8 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         withAdvert {
             val seed = unknown(0x8E, "NoPending")
             stubContact(seed.contact.publicKey, "NoPending")
-            assertNull(service.materializeContactForPendingAdvert(seed.contact.publicKey.prefix(6), RADIO_A))
+            assertEquals(LocalDirectContactResolution.NotFound,
+                service.materializeContactForPendingAdvert(seed.contact.publicKey.prefix(6), RADIO_A))
             assertTrue(requestedContacts().isEmpty())
             assertNull(saved(seed.contact))
             assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
@@ -630,12 +633,14 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
     @OriginalCase("AdvertisementServiceTests::materializeContactForPendingAdvert returns nil on multi-match prefix()")
     @Test fun ambiguousPendingPrefixesCannotMaterializeEitherActualRoomContact() = runTest(scheduler) {
         withAdvert {
-            val first = Bytes(ByteArray(32) { if (it == 0) 0xAB.toByte() else (0x8F + it).toByte() })
-            val second = Bytes(ByteArray(32) { if (it == 0) 0xAB.toByte() else (0x90 + it).toByte() })
+            val prefix = Bytes.fromHex("abababababab")
+            val first = prefix + Bytes(ByteArray(26) { 0x8F.toByte() })
+            val second = prefix + Bytes(ByteArray(26) { 0x90.toByte() })
             assertNotEquals(first, second)
             send(MeshEvent.Advertisement(first))
             send(MeshEvent.Advertisement(second))
-            assertNull(service.materializeContactForPendingAdvert(Bytes.of(0xAB), RADIO_A))
+            assertEquals(LocalDirectContactResolution.Ambiguous,
+                service.materializeContactForPendingAdvert(prefix, RADIO_A))
             assertTrue(requestedContacts().isEmpty())
             assertTrue(store.fetchContacts(RADIO_A).isEmpty())
             assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
@@ -651,7 +656,9 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
             var calls = 0
             service.setDeltaSyncHandler { calls++; AdvertContactSyncOutcome.SYNCED }
             send(MeshEvent.Advertisement(seed.contact.publicKey))
-            val contact = assertNotNull(service.materializeContactForPendingAdvert(seed.contact.publicKey.prefix(6), RADIO_A))
+            val contact = assertIs<LocalDirectContactResolution.Unique>(
+                service.materializeContactForPendingAdvert(seed.contact.publicKey.prefix(6), RADIO_A),
+            ).contact
             assertEquals(seed.contact.copy(id = contact.id, lastHeardTimestamp = AT.epochSecond.toUInt()), contact)
             assertEquals(contact, store.fetchContactByPrefix(RADIO_A, seed.contact.publicKey.prefix(6)))
             assertEquals(listOf(seed.contact.publicKey), requestedContacts())
@@ -1487,7 +1494,8 @@ class AdvertisementCoordinatorRoomTest : RepositoryTest() {
         fun release() { released.complete(Unit) }
     }
 
-    private class InterceptedStore(private val actual: PersistenceStoreProtocol) : PersistenceStoreProtocol by actual {
+    private class InterceptedStore(private val actual: PersistenceStoreProtocol) :
+        PersistenceStoreProtocol by actual, LocalDirectContactPersisting by (actual as LocalDirectContactPersisting) {
         var deletion: Hold? = null
         var deleteCalls = 0
         var snapshotFailure: PersistenceStoreException? = null

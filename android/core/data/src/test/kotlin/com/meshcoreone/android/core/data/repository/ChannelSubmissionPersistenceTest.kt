@@ -341,7 +341,6 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
         val firstQueryExecutor = Executors.newSingleThreadExecutor()
         val firstTransactionExecutor = Executors.newSingleThreadExecutor()
         val secondQueryExecutor = Executors.newSingleThreadExecutor()
-        val secondTransactionExecutor = Executors.newSingleThreadExecutor()
         val immediate = Executor { it.run() }
         val lifetime = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         lateinit var firstDatabase: MeshCoreDatabase
@@ -355,14 +354,26 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
                     check(releaseFirst.await(30, TimeUnit.SECONDS)) { "Controlled Room writer was not released" }
                 }
             }, immediate).build()
+        val secondCommandStarted = CountDownLatch(1)
+        val secondTransactionWorker = Executors.newSingleThreadExecutor()
+        val secondTransactionExecutor = Executor { command ->
+            secondTransactionWorker.execute {
+                if (armed.get()) secondCommandStarted.countDown()
+                command.run()
+            }
+        }
         val secondDatabase = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
             .setQueryExecutor(secondQueryExecutor)
             .setTransactionExecutor(secondTransactionExecutor)
             .openHelperFactory(observingBeginFactory {
                 if (armed.get()) secondBegin.countDown()
             }).build()
-        val firstStore = RoomPersistenceStore(firstDatabase, lifetime, clock)
-        val secondStore = RoomPersistenceStore(secondDatabase, lifetime, clock)
+        val firstStore = RoomPersistenceStore(
+            firstDatabase, lifetime, clock, channelIdentityMutation = ChannelIdentityMutex(),
+        )
+        val secondStore = RoomPersistenceStore(
+            secondDatabase, lifetime, clock, channelIdentityMutation = ChannelIdentityMutex(),
+        )
         try {
             val message = row()
             firstStore.saveMessage(message)
@@ -388,6 +399,10 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
                     null
                 }
             }
+            val reachedTransactionExecutor = withContext(Dispatchers.IO) {
+                secondCommandStarted.await(10, TimeUnit.SECONDS)
+            }
+            assertTrue(reachedTransactionExecutor, "Second Room transaction command must start while the first writer is held")
             val reachedBegin = withContext(Dispatchers.IO) { secondBegin.await(10, TimeUnit.SECONDS) }
             assertTrue(reachedBegin, "Second Room handle must reach beginTransaction while the first writer is held")
             assertFalse(first.isCompleted)
@@ -413,11 +428,11 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
             firstQueryExecutor.shutdown()
             firstTransactionExecutor.shutdown()
             secondQueryExecutor.shutdown()
-            secondTransactionExecutor.shutdown()
+            secondTransactionWorker.shutdown()
             assertTrue(withContext(Dispatchers.IO) { firstQueryExecutor.awaitTermination(10, TimeUnit.SECONDS) })
             assertTrue(withContext(Dispatchers.IO) { firstTransactionExecutor.awaitTermination(10, TimeUnit.SECONDS) })
             assertTrue(withContext(Dispatchers.IO) { secondQueryExecutor.awaitTermination(10, TimeUnit.SECONDS) })
-            assertTrue(withContext(Dispatchers.IO) { secondTransactionExecutor.awaitTermination(10, TimeUnit.SECONDS) })
+            assertTrue(withContext(Dispatchers.IO) { secondTransactionWorker.awaitTermination(10, TimeUnit.SECONDS) })
             context.deleteDatabase(name)
         }
     }

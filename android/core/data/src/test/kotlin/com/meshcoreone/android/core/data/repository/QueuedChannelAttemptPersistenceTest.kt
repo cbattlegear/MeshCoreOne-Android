@@ -1276,7 +1276,7 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         store.settleQueuedChannelAttempt(key, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
         val otherContext = RoomPersistenceStore(db, owner, clock)
         try {
-            val newer = queued(row).copy(sequence = 2)
+            val newer = queued(row).copy(sequence = 2, channelDispatchState = QueuedChannelDispatchState.READY)
             db.pendingSends().insert(newer.toEntity())
             rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
                 store.retireDefinitelyUnsentQueuedChannelAttempt(key)

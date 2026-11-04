@@ -12,6 +12,7 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
 import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublication
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import java.util.UUID
@@ -190,7 +191,7 @@ class AppDeepLinkRouterTest {
     }
 
     @Test
-    fun targetChangeOnFirstCompletionRetainsDeliveryAndOriginalContextForRetry() = runTest {
+    fun repeatedTargetChangeIsBoundedAndRetainsDeliveryAndOriginalContextForExplicitRetry() = runTest {
         val environment = FakeEnvironment().apply { targetChanged = true }
         val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
         pending.markReady()
@@ -200,6 +201,7 @@ class AppDeepLinkRouterTest {
         assertEquals(delivery, pending.snapshot())
         assertTrue(pending.consumedDeliveryIds().isEmpty())
         assertEquals(0, environment.mutations)
+        assertEquals(2, environment.resolutionCount)
         val observed = assertNotNull(pending.lookupFailure.value)
         environment.targetChanged = false
         environment.contacts = listOf(contact(Bytes.fromHex("AB".repeat(32))))
@@ -208,12 +210,35 @@ class AppDeepLinkRouterTest {
         )
         assertEquals(DeepLinkRouteOutcome.Navigated, recovered.outcome)
         assertEquals(1, environment.captureCount)
+        assertEquals(3, environment.resolutionCount)
         assertNull(pending.snapshot())
         assertNull(pending.lookupFailure.value)
         assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
         assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(
             pending.cancel(observed.deliveryId, observed.attempt),
         )
+    }
+
+    @Test
+    fun oneTargetChangeReresolvesAndRefetchesWithoutRecapturingOrExposingFalseAbsence() = runTest {
+        val saved = contact(Bytes.fromHex("AB".repeat(32)))
+        val environment = FakeEnvironment().apply {
+            contacts = listOf(saved)
+            targetChangesRemaining = 1
+        }
+        val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("target-changes-once", contactUri())
+        val result = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.submit(delivery))
+        assertEquals(DeepLinkRouteOutcome.Navigated, result.outcome)
+        assertEquals(1, environment.captureCount)
+        assertEquals(2, environment.resolutionCount)
+        assertEquals(listOf(saved.radioId, saved.radioId), environment.lookupRadios)
+        assertEquals(saved, environment.contactDetail)
+        assertNull(environment.pendingContact)
+        assertNull(pending.lookupFailure.value)
+        assertNull(pending.snapshot())
+        assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
     }
 
     @Test
@@ -399,6 +424,8 @@ class AppDeepLinkRouterTest {
         var captureCount = 0
         var forcedCompletion: ContactLinkCompletion? = null
         var targetChanged = false
+        var targetChangesRemaining = 0
+        var resolutionCount = 0
         var afterCapture: () -> Unit = {}
         var beforeCompletion: () -> Unit = {}
         var beforeLookup: () -> Unit = {}
@@ -430,23 +457,30 @@ class AppDeepLinkRouterTest {
 
         override fun resolveContactLinkContext(
             context: ContactLinkContext, publicKey: Bytes,
-        ): ContactLinkLookupResolution =
-            if (contextCurrent && context.radioId == currentRadioId && (context as CapturedContext).publicKey == publicKey)
+        ): ContactLinkLookupResolution {
+            resolutionCount++
+            return if (contextCurrent && context.radioId == currentRadioId && (context as CapturedContext).publicKey == publicKey)
                 ContactLinkLookupResolution.Current(context.radioId, context.selfPublicKey, origin = context)
             else ContactLinkLookupResolution.Stale
+        }
 
         override fun completeResolvedContactLookup(
             context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
             link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
-            selectChats: Boolean, publications: ContactLinkPublications,
+            selectChats: Boolean, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
         ): ContactLinkResolvedCompletion {
             assertSame(context, target.origin)
             assertEquals(context.radioId, target.radioId)
             assertEquals(context.selfPublicKey, target.selfPublicKey)
-            if (targetChanged) return ContactLinkResolvedCompletion.TargetChanged
-            return ContactLinkResolvedCompletion.Completed(
-                completeLookup(context, link, existing, selectChats, publications),
-            )
+            if (targetChanged || targetChangesRemaining > 0) {
+                if (targetChangesRemaining > 0) targetChangesRemaining--
+                return ContactLinkResolvedCompletion.TargetChanged
+            }
+            return cancellation.commitIfActive {
+                ContactLinkResolvedCompletion.Completed(
+                    completeLookup(context, link, existing, selectChats, publications),
+                )
+            }
         }
 
         private fun completeLookup(

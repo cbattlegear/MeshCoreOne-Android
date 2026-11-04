@@ -23,6 +23,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import java.util.UUID
 import kotlin.test.Test
@@ -805,13 +806,13 @@ class ExternalRouteReplacementTest {
         override fun completeResolvedContactLookup(
             context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
             link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
-            selectChats: Boolean, publications: ContactLinkPublications,
+            selectChats: Boolean, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
         ): ContactLinkResolvedCompletion {
             val lookup = (context as CapturedLookup).lookup
             beforeContactCommit()
             val result = navigation.completeResolvedCapturedContactLookup(
                 lookup, target, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
-                navigation.state.value.boundSessionToken, lookup.allowsInitialBinding, null, selectChats, publications,
+                navigation.state.value.boundSessionToken, lookup.allowsInitialBinding, null, selectChats, publications, cancellation,
             )
             afterContactCommit()
             return result

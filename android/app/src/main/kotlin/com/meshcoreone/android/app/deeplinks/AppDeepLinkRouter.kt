@@ -4,11 +4,14 @@ package com.meshcoreone.android.app.deeplinks
 import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
 import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
+import com.meshcoreone.android.feature.chats.list.ContactLinkContext
 import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import java.net.URI
 import java.net.URISyntaxException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
@@ -49,6 +52,18 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
     }
 
     private suspend fun routeContact(link: MeshCoreDeepLink.Contact, external: Boolean): DeepLinkRouteOutcome {
+        val job = checkNotNull(currentCoroutineContext()[Job])
+        val (cancellation, observation) = ContactLinkCancellation.observe(job)
+        return try {
+            routeContact(link, external, cancellation)
+        } finally {
+            observation.dispose()
+        }
+    }
+
+    private suspend fun routeContact(
+        link: MeshCoreDeepLink.Contact, external: Boolean, cancellation: ContactLinkCancellation,
+    ): DeepLinkRouteOutcome {
         val coroutineContext = currentCoroutineContext()
         val guard = coroutineContext[PendingExternalRoute.CommitGuard]
         val original = guard?.contactLinkContext()
@@ -64,13 +79,29 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         if (captured.disposition == ContactLinkCaptureDisposition.StaleContext) {
             return commitOutcomeIfActive { DeepLinkRouteOutcome.ContactLookupRejected }
         }
+        var targetChanges = 0
+        while (true) {
+            val outcome = routeContactAttempt(captured, link, external, original != null, cancellation)
+            if (outcome is DeepLinkRouteOutcome.ContactLookupFailed &&
+                outcome.cause is ContactLookupTargetChanged && targetChanges++ == 0
+            ) continue
+            return outcome
+        }
+    }
+
+    private suspend fun routeContactAttempt(
+        captured: ContactLinkContext, link: MeshCoreDeepLink.Contact, external: Boolean,
+        retryingDelivery: Boolean, cancellation: ContactLinkCancellation,
+    ): DeepLinkRouteOutcome {
+        val coroutineContext = currentCoroutineContext()
+        val guard = coroutineContext[PendingExternalRoute.CommitGuard]
         val resolve = {
             coroutineContext.ensureActive()
             environment.resolveContactLinkContext(captured, link.publicKey)
         }
         val target = when (val resolution = if (guard == null) resolve() else guard.commit(resolve)) {
             ContactLinkLookupResolution.Stale ->
-                return if (original != null) DeepLinkRouteOutcome.ContactLookupFailed(ContactLookupContextStale())
+                return if (retryingDelivery) DeepLinkRouteOutcome.ContactLookupFailed(ContactLookupContextStale())
                 else commitOutcomeIfActive { DeepLinkRouteOutcome.ContactLookupRejected }
             is ContactLinkLookupResolution.Current -> resolution
         }
@@ -96,7 +127,7 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
         return ContactLinkPublications().use { publications ->
             commitOutcomeIfActive {
                 val completion = environment.completeResolvedContactLookup(
-                    captured, target, link, existing, external, publications,
+                    captured, target, link, existing, external, publications, cancellation,
                 )
                 val outcome = when (completion) {
                     ContactLinkResolvedCompletion.TargetChanged ->
@@ -109,7 +140,7 @@ class AppDeepLinkRouter(private val environment: AppDeepLinkEnvironment) {
                     ContactLinkCompletion.IgnoredSelfContact -> DeepLinkRouteOutcome.IgnoredSelfContact
                     ContactLinkCompletion.WrongTarget -> DeepLinkRouteOutcome.ContactLookupRejected
                     ContactLinkCompletion.StaleContext ->
-                        if (original != null) DeepLinkRouteOutcome.ContactLookupFailed(ContactLookupContextStale())
+                        if (retryingDelivery) DeepLinkRouteOutcome.ContactLookupFailed(ContactLookupContextStale())
                         else DeepLinkRouteOutcome.ContactLookupRejected
                 }
             }

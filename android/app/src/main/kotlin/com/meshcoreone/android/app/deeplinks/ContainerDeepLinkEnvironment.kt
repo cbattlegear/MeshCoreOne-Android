@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 
 class ContainerDeepLinkEnvironment(
@@ -44,9 +45,10 @@ class ContainerDeepLinkEnvironment(
     override fun completeResolvedContactLookup(
         context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
         link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
-        selectChats: Boolean, publications: ContactLinkPublications,
+        selectChats: Boolean, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
     ): ContactLinkResolvedCompletion = container.completeResolvedContactLookup(
         context, target, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing, selectChats, publications,
+        cancellation,
     )
 
     override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel, selectChats: Boolean) =

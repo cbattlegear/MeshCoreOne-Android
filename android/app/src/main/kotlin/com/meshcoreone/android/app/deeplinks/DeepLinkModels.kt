@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 
 sealed interface MeshCoreDeepLink {
@@ -49,7 +50,7 @@ interface AppDeepLinkEnvironment {
     fun completeResolvedContactLookup(
         context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
         link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
-        selectChats: Boolean, publications: ContactLinkPublications,
+        selectChats: Boolean, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
     ): ContactLinkResolvedCompletion
     fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel, selectChats: Boolean = false)
     fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag, selectChats: Boolean = false)

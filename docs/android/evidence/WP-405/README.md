@@ -30,6 +30,40 @@ import in the router test; the import is corrected. No new behavior finding
 was reported by that bounded external-consumer review. Kotlin compilation and
 product acceptance remain pending actual producer integration/hosted results.
 
+### Current cancellation-fence and first-binding follow-up
+
+Review `4470140963` against #495 identified a real completion window: coroutine
+cancellation after the router's check but while waiting for a lifecycle monitor
+could still permit a navigation CAS. The external router now observes its actual
+route Job through the producer-owned `ContactLinkCancellation.observe(job)`
+factory. The token is mandatory through its environment and adapter into
+`AppContainer.completeResolvedContactLookup(..., cancellation)` and is disposed
+only after completion/publication cleanup. The producer checks it after entering
+the lifecycle boundary and arbitrates it with the non-publishing CAS.
+No new cancellation mutator, runtime owner, or local-lock bypass is introduced.
+WP-302 owns the public factory visibility and guarded producer implementation;
+its `3128b251caf51b0c1e0b56e787330856f8ce9866` signature was inspected, with
+public factory visibility confirmed for its upcoming successor.
+
+The reactivated owner also requested bounded preservation of legitimate
+first-binding target changes. A first `TargetChanged` now re-resolves the same
+opaque capture and repeats the read against the producer-resolved target once,
+without re-capture, revision allocation, URI/ID change, or premature consumption.
+A second target change stays visible/retryable as described below. This
+supersedes the earlier requirement for explicit retry after every first target
+change; it does not permit retry against a truly stale/replacement graph.
+`Completed(WrongTarget)` remains terminal rejected.
+
+Authored controls include actual graph/Room first null resolution, legitimate
+first binding before completion, bounded original-capture re-resolution and saved
+peer navigation/self rejection; and an actual router/container completion thread
+blocked on the real manager lifecycle monitor, caller cancellation while blocked,
+no state/effect/consumption after release, and same-origin retry for existing and
+absent contacts. Unit controls enforce one automatic re-read and a bounded
+two-resolution failure rather than an infinite retry loop. Existing cancellation,
+replacement and published-rejection controls are preserved. These new Kotlin
+controls are not yet compiled/run; source validators alone do not verify them.
+
 ## Issue #544: first-graph process-store contact lookup
 
 ### Origin-bound resolution and completion (source only)

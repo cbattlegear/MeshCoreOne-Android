@@ -25,8 +25,13 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
+import com.meshcoreone.android.feature.chats.list.ContactLinkContext
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -36,6 +41,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -146,6 +152,7 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
     @Test fun unboundResolvedCompletionCannotTreatFirstGraphSavedContactAsAbsent() = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved peer") }
+        val (cancellation, observation) = ContactLinkCancellation.observe(checkNotNull(currentCoroutineContext()[Job]))
         try {
             val started = h.container.start()
             h.eventually("null-resolution fixture starts") { started.isCompleted }
@@ -169,7 +176,7 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
             val saved = assertNotNull(store.fetchContact(radio, link.publicKey))
             val before = navigation.currentState
             val changed = ContactLinkPublications().use {
-                environment.completeResolvedContactLookup(context, unbound, link, null, true, it)
+                environment.completeResolvedContactLookup(context, unbound, link, null, true, it, cancellation)
             }
             assertIs<ContactLinkResolvedCompletion.TargetChanged>(changed)
             assertEquals(before, navigation.currentState)
@@ -181,7 +188,7 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
             val actual = environment.fetchContact(assertNotNull(bound.radioId), link.publicKey)
             assertEquals(saved, actual)
             val completed = ContactLinkPublications().use {
-                environment.completeResolvedContactLookup(context, bound, link, actual, true, it)
+                environment.completeResolvedContactLookup(context, bound, link, actual, true, it, cancellation)
             }
             assertEquals(
                 ContactLinkCompletion.Navigated,
@@ -189,7 +196,189 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
             )
             assertEquals(saved, navigation.currentState.selectedContact)
             assertNull(navigation.currentState.pendingContactLink)
-        } finally { h.container.close() }
+        } finally {
+            observation.dispose()
+            h.container.close()
+        }
+    }
+
+    @Test fun canceledExternalCompletionWaitingForActualLifecycleMonitorHasNoEffectAndRetainsOrigin() = runTest {
+        for (known in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved peer") }
+            val read = CompletableDeferred<Unit>()
+            val releaseRead = CompletableDeferred<Unit>()
+            val managerHeld = CountDownLatch(1)
+            val releaseManager = CountDownLatch(1)
+            val enteringCompletion = CountDownLatch(1)
+            val completionThread = AtomicReference<Thread>()
+            var heldAttempt = true
+            var captures = 0
+            val delegate = ContainerDeepLinkEnvironment(h.container, h.container.navigation)
+            val environment = object : AppDeepLinkEnvironment by delegate {
+                override fun captureContactLinkContext(
+                    publicKey: Bytes, publications: ContactLinkPublications,
+                ): ContactLinkContext = delegate.captureContactLinkContext(publicKey, publications).also { captures++ }
+
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    val found = delegate.fetchContact(radioId, publicKey)
+                    if (heldAttempt) {
+                        assertEquals(known, found != null)
+                        read.complete(Unit)
+                        releaseRead.await()
+                    }
+                    return found
+                }
+
+                override fun completeResolvedContactLookup(
+                    context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
+                    link: MeshCoreDeepLink.Contact, existing: ContactDTO?, selectChats: Boolean,
+                    publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                ): ContactLinkResolvedCompletion {
+                    if (heldAttempt) {
+                        completionThread.set(Thread.currentThread())
+                        enteringCompletion.countDown()
+                    }
+                    return delegate.completeResolvedContactLookup(
+                        context, target, link, existing, selectChats, publications, cancellation,
+                    )
+                }
+            }
+            try {
+                val started = h.container.start()
+                h.eventually("monitor cancellation fixture starts") { started.isCompleted }
+                val connecting = async { h.manager.connect(h.target()) }
+                val navigation = h.container.navigation
+                h.eventually("monitor cancellation origin binds") {
+                    connecting.isCompleted && navigation.state.value.navigationReady
+                }
+                connecting.await()
+                val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+                pending.markReady()
+                val delivery = PendingExternalRoute.Delivery(
+                    "monitor-cancel",
+                    h.container.nodesFeature.uriCodec.exportContactUri(
+                        "Alias", if (known) key(20) else key(30), ContactType.REPEATER,
+                    ),
+                )
+                val caller = async(Dispatchers.IO) { pending.submit(delivery) }
+                read.await()
+                val before = navigation.currentState
+                val holding = async(Dispatchers.IO) {
+                    h.manager.withNavigationCommitBoundary {
+                        managerHeld.countDown()
+                        check(releaseManager.await(10, TimeUnit.SECONDS)) { "Lifecycle monitor was not released" }
+                    }
+                }
+                assertTrue(managerHeld.await(10, TimeUnit.SECONDS))
+                releaseRead.complete(Unit)
+                assertTrue(enteringCompletion.await(10, TimeUnit.SECONDS))
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+                while (completionThread.get().state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.yield()
+                assertEquals(Thread.State.BLOCKED, completionThread.get().state, "Completion must wait on the real manager monitor")
+                caller.cancel()
+                releaseManager.countDown()
+                holding.await()
+                caller.join()
+                assertTrue(caller.isCancelled)
+                assertEquals(before, navigation.currentState)
+                assertEquals(before, navigation.state.value)
+                assertEquals(delivery, pending.snapshot())
+                assertTrue(pending.consumedDeliveryIds().isEmpty())
+                assertNull(pending.lookupFailure.value)
+                heldAttempt = false
+                val retried = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.retry())
+                assertEquals(
+                    if (known) DeepLinkRouteOutcome.Navigated else DeepLinkRouteOutcome.ConfirmationStaged,
+                    retried.outcome,
+                )
+                assertEquals(1, captures, "Precommit cancellation must not recapture the initiating graph")
+                assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
+                assertNull(pending.snapshot())
+            } finally {
+                releaseManager.countDown()
+                releaseRead.complete(Unit)
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun externalFirstBindingReresolvesOriginalCaptureAndReadsSavedPeerBeforeConsuming() = runTest {
+        for (selfLink in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved peer") }
+            val resolvedUnbound = CountDownLatch(1)
+            val releaseUnbound = CountDownLatch(1)
+            val delegate = ContainerDeepLinkEnvironment(h.container, h.container.navigation)
+            val reads = mutableListOf<RadioId>()
+            var captures = 0
+            var resolutions = 0
+            val environment = object : AppDeepLinkEnvironment by delegate {
+                override fun captureContactLinkContext(
+                    publicKey: Bytes, publications: ContactLinkPublications,
+                ): ContactLinkContext = delegate.captureContactLinkContext(publicKey, publications).also { captures++ }
+
+                override fun resolveContactLinkContext(
+                    context: ContactLinkContext, publicKey: Bytes,
+                ): ContactLinkLookupResolution {
+                    val target = delegate.resolveContactLinkContext(context, publicKey)
+                    if (++resolutions == 1) {
+                        assertNull(assertIs<ContactLinkLookupResolution.Current>(target).radioId)
+                        resolvedUnbound.countDown()
+                        check(releaseUnbound.await(10, TimeUnit.SECONDS)) { "Unbound resolution was not released" }
+                    }
+                    return target
+                }
+
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    reads += radioId
+                    return delegate.fetchContact(radioId, publicKey)
+                }
+            }
+            try {
+                val started = h.container.start()
+                h.eventually("first-bound automatic retry fixture starts") { started.isCompleted }
+                val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
+                pending.markReady()
+                val delivery = PendingExternalRoute.Delivery(
+                    "first-binding",
+                    h.container.nodesFeature.uriCodec.exportContactUri(
+                        "Alias", if (selfLink) key(7) else key(20), ContactType.REPEATER,
+                    ),
+                )
+                val caller = async(Dispatchers.IO) { pending.submit(delivery) }
+                assertTrue(resolvedUnbound.await(10, TimeUnit.SECONDS))
+                val connecting = async { h.manager.connect(h.target()) }
+                val navigation = h.container.navigation
+                h.eventually("first graph binds before the original resolution completes") {
+                    connecting.isCompleted && navigation.state.value.navigationReady
+                }
+                connecting.await()
+                val radio = assertNotNull(h.sessions.current).token.radioId
+                val saved = assertNotNull(store.fetchContact(radio, key(20)))
+                assertNull(navigation.currentState.pendingContactLink)
+                releaseUnbound.countDown()
+                val routed = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(caller.await())
+                assertEquals(1, captures)
+                assertEquals(2, resolutions, "TargetChanged gets only a re-resolution, not a new origin")
+                if (selfLink) {
+                    assertEquals(DeepLinkRouteOutcome.IgnoredSelfContact, routed.outcome)
+                    assertTrue(reads.isEmpty())
+                    assertNull(navigation.currentState.selectedContact)
+                } else {
+                    assertEquals(DeepLinkRouteOutcome.Navigated, routed.outcome)
+                    assertEquals(listOf(radio), reads)
+                    assertEquals(saved, navigation.currentState.selectedContact)
+                }
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(pending.snapshot())
+                assertNull(pending.lookupFailure.value)
+                assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
+            } finally {
+                releaseUnbound.countDown()
+                h.container.close()
+            }
+        }
     }
 
     @Test fun externalContactAdapterReadsCapturedRadioWithoutLastConnectionPreference() = runTest {

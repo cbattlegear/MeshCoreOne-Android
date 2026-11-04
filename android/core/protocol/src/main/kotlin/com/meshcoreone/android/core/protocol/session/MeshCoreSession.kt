@@ -19,8 +19,11 @@ import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 
 class MeshCoreSession private constructor(
     transport: MeshTransport,
@@ -206,12 +209,40 @@ class MeshCoreSession private constructor(
             }
         }
     }
-    override suspend fun addContact(contact: MeshContact) {
+    override suspend fun addContact(contact: MeshContact) = addContact(contact, ContactWriteDispatch()) {}
+
+    override suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+        dispatch.exchangeDispatch.claim()
         requireFullPublicKey(contact.publicKey, "addContact")
         validateContactPath(contact.outPathLength, contact.outPath)
-        simple(PacketBuilder.updateContact(contact))
+        core.exchange(dispatch.exchangeDispatch) {
+            dispatch.beforeDispatch()
+            try {
+                simple(PacketBuilder.updateContact(contact))
+                dispatch.markAccepted()
+            } catch (rejected: MeshCoreException.DeviceError) {
+                dispatch.markRejected(rejected)
+                throw rejected
+            } catch (invalid: MeshCoreException.InvalidInput) {
+                dispatch.markRejected(invalid)
+                throw invalid
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                dispatch.markUncertain(failure)
+                throw failure
+            }
+            // The radio has committed. Caller cancellation or teardown cannot undo this local tail.
+            withContext(NonCancellable) { onCommitted() }
+        }
     }
-    override suspend fun removeContact(publicKey: Bytes) { requireFullPublicKey(publicKey, "removeContact"); simple(PacketBuilder.removeContact(publicKey)) }
+    override suspend fun removeContact(publicKey: Bytes) = removeContact(publicKey, ChannelWriteDispatch())
+
+    override suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        requireFullPublicKey(publicKey, "removeContact")
+        core.exchange(dispatch) { simple(PacketBuilder.removeContact(publicKey)) }
+    }
     override suspend fun resetPath(publicKey: Bytes) { requireFullPublicKey(publicKey, "resetPath"); simple(PacketBuilder.resetPath(publicKey)) }
     override suspend fun shareContact(publicKey: Bytes) { requireFullPublicKey(publicKey, "shareContact"); simple(PacketBuilder.shareContact(publicKey)) }
     override suspend fun exportContact(publicKey: Bytes?): String {
@@ -244,16 +275,39 @@ class MeshCoreSession private constructor(
         if (secret.size < 16) throw MeshCoreException.InvalidInput("Channel secret requires at least 16 bytes")
         simple(PacketBuilder.setChannel(index, name, secret))
     }
+    override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        if (secret.size < 16) throw MeshCoreException.InvalidInput("Channel secret requires at least 16 bytes")
+        val packet = PacketBuilder.setChannel(index, name, secret)
+        core.exchange(dispatch) { simple(packet) }
+    }
     suspend fun setChannel(index: UByte, name: String, secret: ChannelSecret = ChannelSecret.DeriveFromName) =
         setChannel(index, name, secret.secretData(name))
     override suspend fun sendMessage(destination: Bytes, text: String, timestamp: Instant, attempt: UByte): MessageSentInfo {
         requirePrefix(destination, "sendMessage")
         return messageSent(PacketBuilder.sendMessage(destination, text, timestamp, attempt))
     }
+    override suspend fun sendMessage(
+        destination: Bytes, text: String, timestamp: Instant, attempt: UByte, dispatch: MessageWriteDispatch,
+    ): MessageSentInfo {
+        dispatch.claim()
+        requirePrefix(destination, "sendMessage")
+        val packet = PacketBuilder.sendMessage(destination, text, timestamp, attempt)
+        return core.exchange(dispatch.accounting) {
+            query(packet, "messageSent", errorMatcher = ::deviceError) { (it as? MeshEvent.MessageSent)?.info }
+        }
+    }
     suspend fun sendMessage(destination: Destination, text: String, timestamp: Instant = Instant.now(), attempt: UByte = 0u): MessageSentInfo =
         sendMessage(destination.publicKey(6), text, timestamp, attempt)
     override suspend fun sendChannelMessage(channel: UByte, text: String, timestamp: Instant) =
         simple(PacketBuilder.sendChannelMessage(channel, text, timestamp))
+    override suspend fun sendChannelMessage(
+        channel: UByte, text: String, timestamp: Instant, dispatch: MessageWriteDispatch,
+    ) {
+        dispatch.claim()
+        val packet = PacketBuilder.sendChannelMessage(channel, text, timestamp)
+        core.exchange(dispatch.accounting) { simple(packet) }
+    }
     override suspend fun sendCommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
         requirePrefix(destination, "sendCommand")
         return messageSent(PacketBuilder.sendCommand(destination, command, timestamp))

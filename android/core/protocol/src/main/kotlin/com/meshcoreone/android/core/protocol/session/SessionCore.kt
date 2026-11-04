@@ -405,16 +405,31 @@ internal class SessionCore(
         }
     }
 
-    suspend fun <T> exchange(operation: suspend ExchangeOwner.() -> T): T = exchange(generation(), operation)
+    suspend fun <T> exchange(operation: suspend ExchangeOwner.() -> T): T = exchange(generation(), operation = operation)
 
-    suspend fun <T> exchange(generation: SessionGeneration, operation: suspend ExchangeOwner.() -> T): T {
+    suspend fun <T> exchange(dispatch: ChannelWriteDispatch, operation: suspend ExchangeOwner.() -> T): T {
+        val generation = try {
+            generation()
+        } catch (failure: MeshCoreException.SessionNotStarted) {
+            // Generation lookup failed before any serializer task could own or send this attempt.
+            dispatch.cancelled(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT)
+            throw failure
+        }
+        return exchange(generation, dispatch, operation)
+    }
+
+    suspend fun <T> exchange(
+        generation: SessionGeneration,
+        dispatch: ChannelWriteDispatch? = null,
+        operation: suspend ExchangeOwner.() -> T,
+    ): T {
         val caller = currentCoroutineContext()
         if (offlinePlaceholder) {
             caller.ensureActive()
             throw MeshTransportError.NotConnected
         }
         try {
-            return generation.serializer.withOwnedSerialization {
+            return generation.serializer.withOwnedSerialization(dispatch) {
                 requireCurrent(generation)
                 if (synchronized(lock) { ARBITRARY_RESPONSE_FAMILY in generation.unresolvedReplies }) {
                     checkCorrelation(generation, ARBITRARY_RESPONSE_FAMILY, acceptsErrors = false)

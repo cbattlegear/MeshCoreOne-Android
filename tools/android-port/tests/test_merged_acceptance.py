@@ -21,11 +21,12 @@ from controller.gates import Binding, policy_revision
 from controller.ledger import Identity, validate_merged_implementation
 from controller.merged_acceptance import (
     BoundedRepair, HumanGateRequired, MergedAcceptance, NoImplementationFound,
-    declares_completion,
+    declares_completion, timestamp,
 )
 from controller.model import REFERENCE_SHA, git
-from controller.native_review import RESULT_MARKER, REVIEW_MARKER, WORKFLOW_PATH
+from controller.native_review import PUBLICATION_MARKER, PUBLICATION_STEP, RESULT_MARKER, REVIEW_MARKER, WORKFLOW_PATH
 from controller.render import marker
+from controller.schema import digest
 
 
 class MergedAcceptanceTests(unittest.TestCase):
@@ -157,11 +158,11 @@ class MergedAcceptanceTests(unittest.TestCase):
         backend = CloudBackend(api, manifest, rules, settings(None))
         return MergedAcceptance(backend, manifest, rules), api, prefix, manifest, rules
 
-    def evaluate(self, reader, manifest, rules, *, merged=True):
+    def evaluate(self, reader, manifest, rules, *, merged=True, completion=True):
         with patch("controller.native_review.trusted_inputs", return_value=(manifest, rules)), \
                 patch.object(reader, "verify_trusted_readers"), patch.object(reader, "verify_legacy_run"), \
                 patch.object(reader, "candidate_history", return_value=nullcontext(manifest.repo)):
-            return reader.evaluate("WP-101", 123, merged=merged)
+            return reader.evaluate("WP-101", 123, merged=merged, completion=completion)
 
     def test_missing_merged_head_uses_disposable_history_without_changing_checkout(self):
         reader, _, _, manifest, _ = self.fixture()
@@ -452,6 +453,121 @@ class MergedAcceptanceTests(unittest.TestCase):
         checks[-1]["output"]["summary"] = "different review"
         with self.assertRaisesRegex(PortError, "same published review"):
             self.evaluate(reader, manifest, rules)
+
+    def normalized_merged_fixture(self, *, legacy=False, bounded=False):
+        reader, api, prefix, manifest, rules = self.fixture(current=not legacy, legacy_native=legacy)
+        checks = api.routes[("GET", prefix + f"/commits/{HEAD}/check-runs?filter=all&per_page=100&page=1")]["check_runs"][1:]
+        if bounded:
+            review = api.routes[("GET", prefix + "/pulls/123/reviews?per_page=100&page=1")][0]
+            receipt = json.loads(review["body"][len(REVIEW_MARKER):])
+            if bounded == "infrastructure":
+                scope = {
+                    "schema_version": 1, "kind": "bounded-infrastructure-verification",
+                    "scope_id": "wp003-ci-reader-route-v1", "paths": ["tools/android-port/controller/native_review.py"],
+                }
+                receipt.update(
+                    schema_version=4,
+                    evidence={
+                        "schema_version": 5, "verification_scope": scope,
+                        "runs": [{"check": "android-ci", "run_id": 1, "run_attempt": 1}],
+                    },
+                )
+            else:
+                scope = None
+                receipt.update(schema_version=2, evidence={"schema_version": 3}, scope_comment_id=700)
+            review["body"] = REVIEW_MARKER + json.dumps(receipt)
+            result = json.loads(checks[0]["output"]["summary"][len(RESULT_MARKER):])
+            result.update(
+                acceptance_kind=(
+                    "bounded-infrastructure-verification" if bounded == "infrastructure" else "bounded-repair"
+                ),
+                wp_complete=False, dependency_unlock=False,
+                review_body_sha256=hashlib.sha256(review["body"].encode()).hexdigest(),
+            )
+            if bounded == "infrastructure":
+                result.update(
+                    verification_scope_id=scope["scope_id"], scope_sha256=digest(scope), ci_run_ids=[1],
+                )
+            for check in checks:
+                check["output"]["summary"] = RESULT_MARKER + json.dumps(result)
+        for check in checks:
+            check["details_url"] = f"https://github.com/{rules['repository']}/runs/{check['id']}"
+        receipt = {"check_ids": sorted(check["id"] for check in checks),
+                   "result_sha256": hashlib.sha256(checks[0]["output"]["summary"].encode()).hexdigest()}
+        log = f"Native review WP-101 PR 123 receipt 90\t{PUBLICATION_STEP}\t2026-10-10T11:45:00Z {PUBLICATION_MARKER}{json.dumps(receipt)}\n"
+        return reader, api, prefix, manifest, rules, checks, log
+
+    def test_receipt_backed_normalized_checks_remain_recognizable_after_merge(self):
+        for legacy in (False, True):
+            for bounded in (False, True):
+                with self.subTest(legacy=legacy, bounded=bounded):
+                    reader, _, _, manifest, rules, _, log = self.normalized_merged_fixture(
+                        legacy=legacy, bounded=bounded,
+                    )
+                    with patch("controller.repair_acceptance.read_job_log", return_value=log) as logs:
+                        if bounded:
+                            with self.assertRaises(BoundedRepair):
+                                self.evaluate(reader, manifest, rules)
+                            result = self.evaluate(reader, manifest, rules, completion=False)
+                            self.assertEqual(result["kind"], "merged-scope")
+                        else:
+                            result = self.evaluate(reader, manifest, rules)
+                            self.assertEqual(result["kind"], "merged-implementation")
+                        self.assertEqual(result["review_ids"], [90])
+                        self.assertTrue(all(call.args[1] == 102 for call in logs.call_args_list))
+
+    def test_infrastructure_publisher_scope_and_ci_receipt_must_match_historical_consumer(self):
+        reader, api, prefix, manifest, rules, checks, log = self.normalized_merged_fixture(
+            bounded="infrastructure",
+        )
+        pr = api.routes[("GET", prefix + "/pulls/123")]
+        merged_at = timestamp(pr["merged_at"], "merge")
+        with patch("controller.repair_acceptance.read_job_log", return_value=log):
+            scope = reader.published_scope("WP-101", 123, BASE, HEAD, merged_at, manifest, rules)
+        self.assertEqual(scope["review_id"], 90)
+        self.assertEqual(scope["approvals"], [])
+        result = json.loads(checks[0]["output"]["summary"][len(RESULT_MARKER):])
+        result["ci_run_ids"] = [999]
+        summary = RESULT_MARKER + json.dumps(result)
+        for check in checks:
+            check["output"]["summary"] = summary
+        receipt_log = {
+            "check_ids": sorted(check["id"] for check in checks),
+            "result_sha256": hashlib.sha256(summary.encode()).hexdigest(),
+        }
+        log = (
+            f"Native review WP-101 PR 123 receipt 90\t{PUBLICATION_STEP}\t"
+            f"2026-10-10T11:45:00Z {PUBLICATION_MARKER}{json.dumps(receipt_log)}\n"
+        )
+        with patch("controller.repair_acceptance.read_job_log", return_value=log), self.assertRaisesRegex(
+            PortError, "disagrees with its source receipt",
+        ):
+            reader.published_scope("WP-101", 123, BASE, HEAD, merged_at, manifest, rules)
+
+    def test_normalized_historical_checks_keep_receipt_timestamp_and_attempt_guards(self):
+        for kind in ("missing-receipt", "copied-id", "changed-summary", "late-check",
+                     "late-review", "wrong-attempt", "failed-job", "wrong-job", "wrong-url"):
+            with self.subTest(kind=kind):
+                reader, api, prefix, manifest, rules, checks, log = self.normalized_merged_fixture()
+                if kind == "missing-receipt":
+                    log = ""
+                elif kind == "copied-id":
+                    log = log.replace('"check_ids": [101]', '"check_ids": [999]')
+                elif kind == "changed-summary":
+                    checks[0]["output"]["summary"] += " "
+                elif kind == "late-check":
+                    checks[0]["completed_at"] = "2026-10-10T12:01:00Z"
+                elif kind == "late-review":
+                    api.routes[("GET", prefix + "/pulls/123/reviews?per_page=100&page=1")][0]["submitted_at"] = "2026-10-10T12:01:00Z"
+                elif kind == "wrong-attempt":
+                    api.routes[("GET", prefix + "/actions/runs/2/attempts/1")]["run_attempt"] = 2
+                elif kind in ("failed-job", "wrong-job"):
+                    job = api.routes[("GET", prefix + "/actions/runs/2/attempts/1/jobs?per_page=100&page=1")]["jobs"][0]
+                    job["conclusion" if kind == "failed-job" else "run_id"] = "failure" if kind == "failed-job" else 3
+                else:
+                    checks[0]["details_url"] = f"https://github.com/{rules['repository']}/runs/999"
+                with patch("controller.repair_acceptance.read_job_log", return_value=log), self.assertRaises(PortError):
+                    self.evaluate(reader, manifest, rules)
 
     def test_published_human_acceptance_is_reused_without_an_extra_completion_record(self):
         reader, _, _, manifest, rules = self.fixture(current=True, human_required=True)

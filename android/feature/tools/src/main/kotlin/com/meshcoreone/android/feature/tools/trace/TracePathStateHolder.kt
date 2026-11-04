@@ -47,6 +47,7 @@ class TracePathStateHolder(
 
     private val recents = RecentHopsStore(recentHopsStorage)
     private var currentRadioId: RadioId? = null
+    private val hashModeActionObservers = linkedSetOf<() -> Unit>()
     internal var deps: TracePathFeatureDependencies = TracePathFeatureDependencies.Disconnected
         private set
 
@@ -71,6 +72,15 @@ class TracePathStateHolder(
     /** Each provider is read live at its point of use. */
     fun configure(dependencies: TracePathFeatureDependencies) {
         deps = dependencies
+    }
+
+    internal fun observeHashModeActions(onAction: () -> Unit): () -> Unit {
+        hashModeActionObservers += onAction
+        return { hashModeActionObservers -= onAction }
+    }
+
+    private fun notifyHashModeAction() {
+        hashModeActionObservers.toList().forEach { it() }
     }
 
     internal fun update(transform: (TracePathState) -> TracePathState) = mutableState.update(transform)
@@ -150,17 +160,22 @@ class TracePathStateHolder(
         clearError()
         val hop = TracePathEditing.hopFor(node, hashSize)
         pendingPathHash = null
-        update { it.copy(outboundPath = it.outboundPath + hop, activeSavedPath = null, result = null) }
+        update { it.copy(outboundPath = it.outboundPath + hop, activeSavedPath = null, result = null, batchPresentationActive = false) }
     }
 
     /** Uniform-width rebuild for a per-trace override; the flags byte declares one size for the path. */
     fun setTraceHashMode(mode: UByte) {
+        notifyHashModeAction()
+        applyTraceHashMode(mode)
+    }
+
+    private fun applyTraceHashMode(mode: UByte) {
         clearError()
         update { it.copy(traceHashMode = mode) }
         val size = hashSize
         pendingPathHash = null
         update {
-            it.copy(outboundPath = TracePathEditing.rehash(it.outboundPath, size), activeSavedPath = null, result = null)
+            it.copy(outboundPath = TracePathEditing.rehash(it.outboundPath, size), activeSavedPath = null, result = null, batchPresentationActive = false)
         }
     }
 
@@ -185,7 +200,7 @@ class TracePathStateHolder(
         update { it.copy(outboundPath = it.outboundPath + appended) }
         if (result.added.isNotEmpty()) {
             pendingPathHash = null
-            update { it.copy(activeSavedPath = null, result = null) }
+            update { it.copy(activeSavedPath = null, result = null, batchPresentationActive = false) }
             clearError()
         }
         return result
@@ -196,7 +211,7 @@ class TracePathStateHolder(
         if (index !in current.outboundPath.indices) return
         pendingPathHash = null
         update {
-            it.copy(outboundPath = it.outboundPath.filterIndexed { i, _ -> i != index }, activeSavedPath = null, result = null)
+            it.copy(outboundPath = it.outboundPath.filterIndexed { i, _ -> i != index }, activeSavedPath = null, result = null, batchPresentationActive = false)
         }
     }
 
@@ -204,7 +219,7 @@ class TracePathStateHolder(
         clearError()
         pendingPathHash = null
         update {
-            it.copy(outboundPath = TracePathEditing.move(it.outboundPath, fromOffsets, toOffset), activeSavedPath = null, result = null)
+            it.copy(outboundPath = TracePathEditing.move(it.outboundPath, fromOffsets, toOffset), activeSavedPath = null, result = null, batchPresentationActive = false)
         }
     }
 
@@ -216,17 +231,19 @@ class TracePathStateHolder(
     fun setAutoReturnPath(enabled: Boolean) = update { it.copy(autoReturnPath = enabled) }
 
     fun clearPath() {
+        notifyHashModeAction()
         clearError()
         pendingPathHash = null
-        update { it.copy(activeSavedPath = null, outboundPath = emptyList(), result = null, traceHashMode = null) }
+        update { it.copy(activeSavedPath = null, outboundPath = emptyList(), result = null, traceHashMode = null, batchPresentationActive = false) }
     }
 
     // MARK: - Saved paths
 
     /** Restores a saved path at its saved width; a mirrored palindrome turns auto-return on. */
     fun loadSavedPath(savedPath: SavedTracePathDTO) {
+        notifyHashModeAction()
         pendingPathHash = null
-        update { it.copy(outboundPath = emptyList(), result = null) }
+        update { it.copy(outboundPath = emptyList(), result = null, batchPresentationActive = false) }
         if (savedPath.pathBytes.isEmpty) return
         val size = savedPath.hashSize.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
         val mode = if (deps.connectedDevice()?.supportsTraceHashSizeOverride == true) {
@@ -352,7 +369,7 @@ class TracePathStateHolder(
 
     fun cancelBatchTrace() = batch.cancelBatchTrace()
 
-    fun clearBatchState() = update { it.copy(currentTraceIndex = 0, completedResults = emptyList()) }
+    fun clearBatchState() = update { it.copy(currentTraceIndex = 0, completedResults = emptyList(), batchPresentationActive = false) }
 
     /** Turning batch mode off clears batch progress and results (the source's `didSet`). */
     fun setBatchEnabled(enabled: Boolean) {
@@ -385,12 +402,40 @@ class TracePathStateHolder(
         }
     }
 
-    /** Switches to a pasted uniform width the radio can honor, unless it already matches. */
+    /** Accepts a supported uniform-width paste; rebuilds the path only when its width changes. */
     fun adoptHashSize(forPastedCodes: String) {
-        if (deps.connectedDevice()?.supportsTraceHashSizeOverride != true) return
+        if (!supportsTraceHashOverride) return
         val mode = TraceHashModes.inferredTraceHashMode(forPastedCodes) ?: return
-        if (mode == effectiveTraceMode) return
-        setTraceHashMode(mode)
+        notifyHashModeAction()
+        applySupportedTraceHashMode(mode, preserveOverride = false)
+    }
+
+    internal fun restoreTraceHashMode(mode: UByte, expectedRadioId: RadioId? = null): Boolean {
+        val device = deps.connectedDevice() ?: return false
+        if (expectedRadioId != null && device.radioId != expectedRadioId) return false
+        if (device.supportsTraceHashSizeOverride) {
+            applySupportedTraceHashMode(
+                mode,
+                preserveOverride = true,
+                effectiveMode = current.traceHashMode ?: device.pathHashMode,
+            )
+        }
+        return true
+    }
+
+    private val supportsTraceHashOverride: Boolean
+        get() = deps.connectedDevice()?.supportsTraceHashSizeOverride == true
+
+    private fun applySupportedTraceHashMode(
+        mode: UByte,
+        preserveOverride: Boolean,
+        effectiveMode: UByte = effectiveTraceMode,
+    ) {
+        if (mode != effectiveMode) {
+            applyTraceHashMode(mode)
+        } else if (preserveOverride && current.traceHashMode != mode) {
+            update { it.copy(traceHashMode = mode) }
+        }
     }
 
     fun recordRecent(publicKey: Bytes) {

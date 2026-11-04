@@ -1,0 +1,221 @@
+name: One-off generated dependency support
+
+on:
+  push:
+    branches:
+      - "copilot/dependency-support-0ccefd-20261104"
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact frozen candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: 0ccefd18095902403f458afa02006896f1a44e0c
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.4"
+          architecture: x64
+
+      - name: Install checksum-pinned workflow parser
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          --no-deps --only-binary=:all:
+          -r tools/android-port/controller/requirements-ci.txt --quiet
+
+      - name: Bind exact source and isolated runner paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "0ccefd18095902403f458afa02006896f1a44e0c"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          expected = "de5fa465e908e7f098e718082f013135b9a36ee706d032cf510f4f1153424b2a"
+          pins = json.loads(Path("tools/android-port/controller/toolchain-pins.json").read_text())
+          if pins.get("sdk_license_sha256") != expected:
+              raise SystemExit("Pinned Android SDK license differs from the previously accepted terms")
+          PY
+          root="$RUNNER_TEMP/meshcoreone-generated-dependencies"
+          mkdir -p "$root/evidence"
+          {
+            echo "ANDROID_CI_STATE=$root/toolchain/environment.json"
+            echo "ANDROID_CI_OUTPUT=$root/evidence"
+            echo "ANDROID_CI_WORK=$root/evidence"
+          } >> "$GITHUB_ENV"
+
+      - name: Provision exact pinned first-party JDK and SDK
+        run: >-
+          python tools/android-port/controller/ci.py provision
+          --root "$(dirname "$ANDROID_CI_STATE")"
+          --accept-sdk-license
+
+      - name: Configure isolated toolchain environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json
+          import os
+          from pathlib import Path
+
+          state = json.loads(Path(os.environ["ANDROID_CI_STATE"]).read_text())
+          private = Path(state["private_root"])
+          print(f"JAVA_HOME={state['java_home']}")
+          print(f"ANDROID_HOME={state['android_home']}")
+          print(f"ANDROID_SDK_ROOT={state['android_home']}")
+          print(f"GRADLE_USER_HOME={private / 'gradle-root'}")
+          print(f"ANDROID_USER_HOME={private / 'android-user'}")
+          PY
+          state="$(python -c 'import json,os; print(json.load(open(os.environ["ANDROID_CI_STATE"]))["java_home"])')"
+          echo "$state/bin" >> "$GITHUB_PATH"
+
+      - name: Verify actual hosted worker readiness
+        run: python tools/android-port/controller/ci.py preflight
+
+      - id: generate
+        name: Generate complete lock and SHA-256 metadata graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./android/gradlew -p android \
+            verifyScaffoldTests verifyRoomSchema validateModuleGraph \
+            runtimeDependencyInventory resolveScaffoldDependencies \
+            :app:assembleDebug :app:compileDebugAndroidTestKotlin lintScaffold \
+            --write-locks --write-verification-metadata sha256 \
+            --no-daemon --console=plain --no-build-cache --no-parallel --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=512m
+
+      - id: strict
+        name: Strict non-generation verification of the generated graph
+        shell: bash
+        run: |
+          set +e
+          python tools/android-port/controller/ci.py run --stage scaffold
+          result=$?
+          set -e
+          echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+
+      - id: package
+        name: Package only generated dependency outputs and integrity evidence
+        if: ${{ always() && steps.generate.outcome == 'success' && steps.strict.outcome == 'success' }}
+        env:
+          STRICT_EXIT: ${{ steps.strict.outputs.exit_code }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import subprocess
+
+          repo = Path.cwd()
+          base = "0ccefd18095902403f458afa02006896f1a44e0c"
+          expected_tree = "84a115af5e58bf32108ce6e913fd9e86cfc51f3a"
+          if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != base:
+              raise SystemExit("Candidate HEAD changed during generated dependency run")
+          if subprocess.check_output(["git", "rev-parse", f"{base}^{{tree}}"], text=True).strip() != expected_tree:
+              raise SystemExit("Candidate tree differs from the frozen source binding")
+
+          def allowed(path):
+              if path.startswith("android/") and path.endswith("/verification-metadata.xml"):
+                  return True
+              if not path.startswith("android/") or not path.endswith(".lockfile"):
+                  return False
+              return (
+                  "/dependency-locks/" in path
+                  or path.endswith("/gradle.lockfile")
+                  or path.endswith("/settings.lockfile")
+              )
+
+          raw = subprocess.check_output(
+              ["git", "status", "--porcelain=v1", "--untracked-files=all", "-z"]
+          )
+          changed = []
+          for record in raw.decode("utf-8").split("\0"):
+              if not record:
+                  continue
+              status, path = record[:2], record[3:]
+              if not allowed(path) or "D" in status or "R" in status or "C" in status:
+                  raise SystemExit(f"Out-of-scope generated worktree change: {status!r} {path}")
+              if Path(path).is_symlink() or not Path(path).is_file():
+                  raise SystemExit(f"Unsafe generated dependency output: {path}")
+              changed.append(path)
+          changed = sorted(set(changed))
+          if not changed:
+              raise SystemExit("Generation produced no dependency lock or verification metadata changes")
+
+          subprocess.run(["git", "add", "--", *changed], check=True)
+          output_tree = subprocess.check_output(["git", "write-tree"], text=True).strip()
+          subprocess.run(["git", "diff", "--check", base, "--", *changed], check=True)
+          manifest_files = []
+          for path in changed:
+              data = (repo / path).read_bytes()
+              manifest_files.append({
+                  "path": path,
+                  "size": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              })
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "dependency-support-handoff"
+          if root.exists():
+              raise SystemExit("Handoff directory unexpectedly already exists")
+          root.mkdir(parents=True)
+          patch = subprocess.check_output(
+              ["git", "diff", "--binary", "--full-index", base, "--", *changed]
+          )
+          (root / "generated-support.patch").write_bytes(patch)
+          summary = {
+              "schema_version": 1,
+              "repository": "cbattlegear/MeshCoreOne-Android",
+              "input_commit": base,
+              "input_tree": expected_tree,
+              "generated_tree": output_tree,
+              "generation_command": [
+                  "./android/gradlew", "-p", "android",
+                  "verifyScaffoldTests", "verifyRoomSchema", "validateModuleGraph",
+                  "runtimeDependencyInventory", "resolveScaffoldDependencies",
+                  ":app:assembleDebug", ":app:compileDebugAndroidTestKotlin", "lintScaffold",
+                  "--write-locks", "--write-verification-metadata", "sha256",
+              ],
+              "strict_command": "python tools/android-port/controller/ci.py run --stage scaffold",
+              "strict_exit_code": int(os.environ["STRICT_EXIT"]),
+              "strict_generation_flags_used": False,
+              "outputs": manifest_files,
+          }
+          (root / "manifest.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload bounded generated-support handoff
+        if: ${{ always() && steps.package.outcome == 'success' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: generated-dependency-support-0ccefd18095902403f458afa02006896f1a44e0c
+          path: ${{ runner.temp }}/dependency-support-handoff/
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Require strict verification success
+        if: ${{ always() && steps.strict.outcome == 'success' }}
+        env:
+          STRICT_EXIT: ${{ steps.strict.outputs.exit_code }}
+        run: test "$STRICT_EXIT" = "0"

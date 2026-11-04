@@ -115,8 +115,10 @@ class ContactAvatarRoomTest : RepositoryTest() {
                 val writer = newStore()
                 try {
                     writer.incrementUnreadCount(entity())
-                    writer.updateContactFavorite(entity(), original.publicKey, true)
-                    writer.updateContactAvatar(entity(), original.publicKey, image)
+                    assertEquals(ContactFavoriteUpdateResult.UPDATED,
+                        writer.updateContactFavorite(entity(), original.publicKey, true))
+                    assertEquals(ContactAvatarUpdateResult.UPDATED,
+                        writer.updateContactAvatar(entity(), original.publicKey, image))
                     val before = assertNotNull(writer.fetchContact(entity()))
                     release.complete(Unit)
                     pending.await()
@@ -166,8 +168,10 @@ class ContactAvatarRoomTest : RepositoryTest() {
                 val session = HeldFavoriteSession()
                 val pending = async { localService(session = session).setTelemetryPermissions(entity(), granted) }
                 assertEquals(ContactFlags(if (granted) 0x8Eu else 0x80u), session.started.await())
-                store.updateContactFavorite(entity(), original.publicKey, true)
-                store.updateContactAvatar(entity(), original.publicKey, image)
+                assertEquals(ContactFavoriteUpdateResult.UPDATED,
+                    store.updateContactFavorite(entity(), original.publicKey, true))
+                assertEquals(ContactAvatarUpdateResult.UPDATED,
+                    store.updateContactAvatar(entity(), original.publicKey, image))
                 val before = assertNotNull(store.fetchContact(entity()))
                 session.acknowledged.complete(Unit)
                 pending.await()
@@ -180,6 +184,7 @@ class ContactAvatarRoomTest : RepositoryTest() {
     @Test fun missingOrReplacedLocalIdentityNeverMutatesOrRunsCleanup() = runTest {
         for (edit in LocalEdit.entries) {
             for (replacement in listOf<ContactDTO?>(null, contact(publicKey = key(0x55)).withAvatar(Bytes.of(9)))) {
+                store.deleteContact(entity())
                 store.saveContact(contact())
                 val fetched = CompletableDeferred<Unit>()
                 val release = CompletableDeferred<Unit>()
@@ -216,6 +221,7 @@ class ContactAvatarRoomTest : RepositoryTest() {
 
     @Test fun telemetryDeletionReplacementAndCancellationDuringAckNeverWrite() = runTest {
         for (replacement in listOf<ContactDTO?>(null, contact(publicKey = key(0x55)).withAvatar(Bytes.of(9)))) {
+            store.deleteContact(entity())
             store.saveContact(contact())
             val session = HeldFavoriteSession()
             val pending = async {
@@ -234,11 +240,13 @@ class ContactAvatarRoomTest : RepositoryTest() {
             assertNotNull(pending.await())
             assertEquals(before, db.contacts().backupAll())
         }
+        store.deleteContact(entity())
         store.saveContact(contact())
         val session = HeldFavoriteSession()
         val pending = async { localService(session = session).setTelemetryPermissions(entity(), true) }
         session.started.await()
-        store.updateContactAvatar(entity(), key(), Bytes.of(3))
+        assertEquals(ContactAvatarUpdateResult.UPDATED, store.updateContactAvatar(entity(), key(), Bytes.of(3)))
+        assertEquals(Bytes.of(3), assertNotNull(store.fetchContact(entity())).avatarImageData)
         val before = db.contacts().backupAll()
         pending.cancelAndJoin()
         assertEquals(before, db.contacts().backupAll())
@@ -303,7 +311,8 @@ class ContactAvatarRoomTest : RepositoryTest() {
                 store.updateContactLocalFields(entity(), wrongFullKey, update))
             assertEquals(before, db.contacts().backupAll())
         }
-        store.updateContactLocalFields(entity(), key(), ContactLocalUpdate.OCVSettings("custom", null))
+        assertEquals(ContactLocalUpdateResult.Updated(),
+            store.updateContactLocalFields(entity(), key(), ContactLocalUpdate.OCVSettings("custom", null)))
         assertEquals(foreign, store.fetchContact(entity(RADIO_B)))
     }
 

@@ -67,8 +67,8 @@ class ContactWriteRecoveryStateTests {
             mock.simulateOK()
             runCurrent()
             assertEquals(
-                ContactWriteRecoveryReason.RADIO_ACCEPTED_RECONCILIATION_REQUIRED,
-                assertIs<ContactWriteRecoveryState.Required>(producer.contactWriteRecoveryState(radioA)).reason,
+                ContactWriteRecoveryState.Clear(radioA),
+                producer.contactWriteRecoveryState(radioA),
             )
             assertEquals("Sent", producer.getContact(radioA, contactsKey(1))?.name)
             assertFalse(navigated)

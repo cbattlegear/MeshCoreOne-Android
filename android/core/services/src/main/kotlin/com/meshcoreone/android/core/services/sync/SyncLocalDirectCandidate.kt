@@ -23,10 +23,7 @@ suspend fun SyncCoordinator.wireLocalDirectCandidateForTest(
     polling.setLocalDirectMessageHandler { envelope ->
         require(envelope.session == session) { "Local direct delivery belongs to another session" }
         val prefix = envelope.message.senderPublicKeyPrefix
-        val observed = if (envelope.resolution == LocalDirectContactResolution.NotFound) {
-            adverts.materializeLocalDirectContactForPendingAdvert(prefix, session.radioId)
-        } else envelope.resolution
-        adverts.withPendingAdvertContactOperation(session.radioId, prefix, observed) { admission ->
+        adverts.withPendingAdvertContactOperation(session.radioId, prefix, envelope.resolution) { admission ->
             val contact = (admission.resolution as? LocalDirectContactResolution.Unique)?.contact
             handleIncomingMessage(
                 IncomingMessageKind.Direct(envelope.message, contact),

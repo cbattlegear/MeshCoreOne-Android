@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.contracts.domain.LocalDirectMessagePolling
 import com.meshcoreone.android.core.contracts.domain.LocalDirectMessageSaveResult
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
@@ -38,20 +39,20 @@ private class CandidatePolling : MockMessagePollingService(), LocalDirectMessage
 private class CandidateAdverts(
     legacy: SyncAdvertisementServicing = FakeAdvertisementService(),
 ) : SyncAdvertisementServicing by legacy, SyncLocalDirectAdvertisementServicing {
-    var materialized: LocalDirectContactResolution = LocalDirectContactResolution.NotFound
     var admitted: LocalDirectContactResolution? = null
+    var admissionFailure: Exception? = null
     var beforeSave: suspend (MessageDTO) -> Unit = {}
     val materializations = mutableListOf<Pair<RadioId, Bytes>>()
     val observations = mutableListOf<LocalDirectContactResolution>()
     val saved = mutableListOf<MessageDTO>()
     var scopesExited = 0
 
-    override suspend fun materializeLocalDirectContactForPendingAdvert(
+    override suspend fun materializeContactForPendingAdvert(
         prefix: Bytes,
         radioId: RadioId,
-    ): LocalDirectContactResolution {
+    ): ContactDTO? {
         materializations += radioId to prefix
-        return materialized
+        error("Candidate delivery must not materialize a contact")
     }
 
     override suspend fun <T> withPendingAdvertContactOperation(
@@ -61,6 +62,7 @@ private class CandidateAdverts(
         block: suspend (LocalDirectContactAdmission) -> T,
     ): T {
         observations += observed
+        admissionFailure?.let { throw it }
         val admission = object : LocalDirectContactAdmission {
             override val resolution = admitted ?: observed
 
@@ -106,14 +108,13 @@ class SyncLocalDirectCandidateTest {
             assertNotNull(polling.capturedSignedMessageHandler)
             assertNotNull(polling.capturedCLIMessageHandler)
         },
-        nativeCase("only NotFound materializes and all other observations remain typed") {
+        nativeCase("all observations enter admission unchanged without materializing a contact") {
             val radioId = newRadio()
             val polling = CandidatePolling()
             val services = SyncTestServices(SyncInMemoryStore.createTestDataStore(radioId), polling = polling)
             val adverts = CandidateAdverts()
             val contact = testContact(radioId, "Candidate", key(0x31))
             val unique = LocalDirectContactResolution.Unique(contact, UUID(0, 9))
-            adverts.materialized = unique
             val session = candidateSession(radioId)
             coordinator().wireLocalDirectCandidateForTest(
                 services.dependencies().copy(advertisementService = adverts), session,
@@ -130,11 +131,18 @@ class SyncLocalDirectCandidateTest {
                 handler(LocalDirectMessageEnvelope(UUID(0, index.toLong() + 1), session, message, DeliveryContext.Live, resolution))
             }
 
-            assertEquals(listOf(radioId to message.senderPublicKeyPrefix), adverts.materializations)
-            assertEquals(listOf(unique, LocalDirectContactResolution.Ambiguous, LocalDirectContactResolution.Stale, unique), adverts.observations)
+            assertTrue(adverts.materializations.isEmpty())
+            assertEquals(observations, adverts.observations)
             assertEquals(4, adverts.saved.size)
             assertEquals(4, adverts.saved.map { it.id }.toSet().size)
             assertTrue(adverts.saved.all { it.text == "same text" && it.deduplicationKey == null })
+            assertTrue(adverts.saved.take(3).all { it.contactID == null })
+            assertEquals(contact.id, adverts.saved.last().contactID)
+
+            adverts.admitted = LocalDirectContactResolution.Ambiguous
+            handler(LocalDirectMessageEnvelope(UUID(0, 5), session, message, DeliveryContext.Live, unique))
+            assertEquals(unique, adverts.observations.last())
+            assertNull(adverts.saved.last().contactID)
         },
         nativeCase("candidate saves original reaction-shaped text without contact side effects") {
             val radioId = newRadio()
@@ -205,7 +213,7 @@ class SyncLocalDirectCandidateTest {
             assertEquals(3, adverts.scopesExited)
             assertTrue(adverts.materializations.isEmpty())
         },
-        nativeCase("mismatched radio or generation is rejected before materialization") {
+        nativeCase("mismatched radio or generation is rejected before admission") {
             val radioId = newRadio()
             val polling = CandidatePolling()
             val services = SyncTestServices(SyncInMemoryStore.createTestDataStore(radioId), polling = polling)
@@ -237,6 +245,14 @@ class SyncLocalDirectCandidateTest {
             val handler = checkNotNull(polling.candidateHandler)
             val message = contactMessage(key(0x35).prefix(6), "preserve", clock.now())
             val envelope = LocalDirectMessageEnvelope(UUID(0, 60), session, message, DeliveryContext.Live, LocalDirectContactResolution.Ambiguous)
+            adverts.admissionFailure = IllegalStateException("advert admission unavailable")
+            val advertFailure = assertFailsWith<IllegalStateException> {
+                handler(envelope.copy(resolution = LocalDirectContactResolution.NotFound))
+            }
+            assertEquals("advert admission unavailable", advertFailure.message)
+            assertEquals(listOf(LocalDirectContactResolution.NotFound), adverts.observations)
+            assertTrue(adverts.materializations.isEmpty())
+            adverts.admissionFailure = null
             adverts.beforeSave = { throw IllegalStateException("store unavailable") }
             val failure = assertFailsWith<IllegalStateException> { handler(envelope) }
             assertEquals("store unavailable", failure.message)

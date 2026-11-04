@@ -290,6 +290,13 @@ class ContactService(
     fun needsContactWriteReconciliation(radioId: RadioId): Boolean =
         ContactWriteRecovery.snapshot(preferences, radioId) != null
 
+    /**
+     * Read-only presentation state. Does not retry marker writes, change recovery epochs, fetch,
+     * clear uncertainty, or authorize a new contact write. Preference read failures propagate.
+     */
+    fun contactWriteRecoveryState(radioId: RadioId): ContactWriteRecoveryState =
+        ContactWriteRecovery.observe(preferences, radioId)
+
     private fun requireContactReconciliation(
         radioId: RadioId,
         failure: Exception,

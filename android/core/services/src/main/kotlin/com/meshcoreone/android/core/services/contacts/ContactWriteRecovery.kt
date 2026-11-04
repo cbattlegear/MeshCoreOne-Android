@@ -41,6 +41,7 @@ internal object ContactWriteRecovery {
         var epoch: Any? = null
         var epochLoadedWithoutProvenance = false
         var markerRecordingPending = false
+        var uncertaintyWithoutDispatch = false
         var syncing = false
         val syncMutex = Mutex()
         val writes = linkedSetOf<ContactWriteDispatch>()
@@ -58,6 +59,39 @@ internal object ContactWriteRecovery {
     fun snapshot(preferences: ContactPreferenceFlags, radioId: RadioId): Any? {
         val state = state(preferences, radioId)
         return loadEpoch(preferences, radioId, state)
+    }
+
+    @Synchronized
+    fun observe(preferences: ContactPreferenceFlags, radioId: RadioId): ContactWriteRecoveryState {
+        val state = state(preferences, radioId)
+        if (state.epoch == null) {
+            return if (preferences.bool(key(radioId))) {
+                ContactWriteRecoveryState.Required(
+                    radioId,
+                    ContactWriteRecoveryReason.STORED_MARKER_WITHOUT_PROVENANCE,
+                    ContactWriteMarkerRecording.LOADED_FLAG_UNVERIFIED,
+                )
+            } else ContactWriteRecoveryState.Clear(radioId)
+        }
+        val uncertainties = state.reportedUncertainties + state.pendingUncertainties
+        val reason = when {
+            state.epochLoadedWithoutProvenance -> ContactWriteRecoveryReason.STORED_MARKER_WITHOUT_PROVENANCE
+            uncertainties.any {
+                it.outcome == ContactWriteDispatchOutcome.UNKNOWN ||
+                    it.outcome == ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN
+            } -> ContactWriteRecoveryReason.RADIO_OUTCOME_UNCERTAIN
+            state.uncertaintyWithoutDispatch || uncertainties.isEmpty() ->
+                ContactWriteRecoveryReason.OPERATION_OUTCOME_UNAVAILABLE
+            uncertainties.all { it.outcome == ContactWriteDispatchOutcome.ACCEPTED } ->
+                ContactWriteRecoveryReason.RADIO_ACCEPTED_RECONCILIATION_REQUIRED
+            else -> ContactWriteRecoveryReason.OPERATION_OUTCOME_UNAVAILABLE
+        }
+        val recording = when {
+            state.markerRecordingPending -> ContactWriteMarkerRecording.RETRY_PENDING
+            state.epochLoadedWithoutProvenance -> ContactWriteMarkerRecording.LOADED_FLAG_UNVERIFIED
+            else -> ContactWriteMarkerRecording.SET_SUCCEEDED
+        }
+        return ContactWriteRecoveryState.Required(radioId, reason, recording)
     }
 
     suspend fun <T> withSyncFence(
@@ -200,6 +234,7 @@ internal object ContactWriteRecovery {
         }
         state.epoch = Any()
         state.markerRecordingPending = true
+        if (dispatch == null) state.uncertaintyWithoutDispatch = true
         if (dispatch != null) state.pendingUncertainties.add(dispatch)
         recordPendingMarker(preferences, radioId, state)
     }
@@ -213,6 +248,7 @@ internal object ContactWriteRecovery {
         state.markerRecordingPending = false
         state.epoch = null
         state.epochLoadedWithoutProvenance = false
+        state.uncertaintyWithoutDispatch = false
         state.writes.clear()
         state.dispatchingWrites.clear()
         state.finishedWrites.clear()

@@ -173,7 +173,7 @@ class NotificationOpenHandoffStore internal constructor(private val databaseFile
                                 ($COLUMN_POST_ID, $COLUMN_DELIVERY_ID, $COLUMN_SEQUENCE, $COLUMN_CONSUMED,
                                  $COLUMN_PAYLOAD, $COLUMN_FINGERPRINT)
                                 VALUES (?, ?, ?, ?, ?, ?)""",
-                            arrayOf(
+                            arrayOf<Any>(
                                 postId,
                                 proposedDeliveryId.toString(),
                                 metadata.nextSequence,
@@ -317,7 +317,7 @@ class NotificationOpenHandoffStore internal constructor(private val databaseFile
                             """UPDATE $TABLE_OPENS
                                SET $COLUMN_CONSUMED = ?, $COLUMN_PAYLOAD = NULL
                                WHERE $COLUMN_POST_ID = ? AND $COLUMN_DELIVERY_ID = ? AND $COLUMN_SEQUENCE = ?""",
-                            arrayOf(
+                            arrayOf<Any>(
                                 CONSUMED,
                                 identity.postId,
                                 identity.deliveryId.toString(),
@@ -497,7 +497,7 @@ class NotificationOpenHandoffStore internal constructor(private val databaseFile
     private fun updateMetadata(database: SQLiteDatabase, metadata: Metadata) {
         database.execSQL(
             "UPDATE $TABLE_METADATA SET next_sequence = ?, revision = ? WHERE singleton = 1 AND store_id = ?",
-            arrayOf(metadata.nextSequence, metadata.revision, metadata.storeId.toString()),
+            arrayOf<Any>(metadata.nextSequence, metadata.revision, metadata.storeId.toString()),
         )
         if (database.compileStatement("SELECT changes()").use { it.simpleQueryForLong() } != 1L) {
             throw SQLiteDatabaseCorruptException("Notification open journal metadata identity changed")

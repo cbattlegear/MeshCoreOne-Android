@@ -102,6 +102,97 @@ jobs:
             --no-daemon --console=plain --no-build-cache --no-parallel --max-workers=2 \
             --stacktrace -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=512m
 
+      - id: diagnostics
+        name: Capture failed core data test reports
+        if: ${{ always() && steps.generate.outcome == 'failure' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+
+          base = "0ccefd18095902403f458afa02006896f1a44e0c"
+          expected_tree = "84a115af5e58bf32108ce6e913fd9e86cfc51f3a"
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip()
+          if head != base or tree != expected_tree:
+              raise SystemExit(f"Frozen checkout mismatch: {head} {tree}")
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "dependency-generation-diagnostics"
+          root.mkdir(parents=True, exist_ok=False)
+          source_dirs = [
+              Path("android/core/data/build/test-results/testDebugUnitTest"),
+              Path("android/core/data/build/reports/tests/testDebugUnitTest"),
+          ]
+          copied = []
+          for source in source_dirs:
+              if not source.exists():
+                  continue
+              for item in sorted(source.rglob("*")):
+                  if not item.is_file():
+                      continue
+                  if item.is_symlink():
+                      raise SystemExit(f"Refusing symlinked test report: {item}")
+                  relative = item.relative_to(Path("android/core/data/build"))
+                  target = root / relative
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(item, target)
+                  data = target.read_bytes()
+                  copied.append({
+                      "path": str(relative),
+                      "size": len(data),
+                      "sha256": hashlib.sha256(data).hexdigest(),
+                  })
+
+          junit = [
+              item for item in copied
+              if item["path"].startswith("test-results/") and item["path"].endswith(".xml")
+          ]
+          provenance = {
+              "repository": "cbattlegear/MeshCoreOne-Android",
+              "workflow": "One-off generated dependency support",
+              "workflow_commit": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "job": os.environ["GITHUB_JOB"],
+              "product_checkout_commit": head,
+              "product_checkout_tree": tree,
+              "generation_step_outcome": "failure",
+              "generation_command": [
+                  "./android/gradlew", "-p", "android",
+                  "verifyScaffoldTests", "verifyRoomSchema", "validateModuleGraph",
+                  "runtimeDependencyInventory", "resolveScaffoldDependencies",
+                  ":app:assembleDebug", ":app:compileDebugAndroidTestKotlin", "lintScaffold",
+                  "--write-locks", "--write-verification-metadata", "sha256",
+                  "--no-daemon", "--console=plain", "--no-build-cache", "--no-parallel",
+                  "--max-workers=2", "--stacktrace",
+                  "-Pkotlin.compiler.execution.strategy=in-process", "-PscaffoldTestHeap=512m",
+              ],
+              "junit_report_count": len(junit),
+              "reports": copied,
+          }
+          (root / "provenance.json").write_text(
+              json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(provenance, indent=2, sort_keys=True))
+          if not junit:
+              raise SystemExit("No JUnit XML reports were produced for the failed generation run")
+          PY
+
+      - name: Upload failed core data test reports
+        if: ${{ always() && steps.generate.outcome == 'failure' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: diagnostic-core-data-test-reports-0ccefd18095902403f458afa02006896f1a44e0c
+          path: ${{ runner.temp }}/dependency-generation-diagnostics/
+          if-no-files-found: warn
+          retention-days: 3
+
       - id: strict
         name: Strict non-generation verification of the generated graph
         shell: bash

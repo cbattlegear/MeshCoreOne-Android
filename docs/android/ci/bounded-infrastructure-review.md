@@ -144,20 +144,23 @@ action, acceptance override or autonomous dispatch.
 
 The supervisor must run from the exact deployed default-branch commit. It
 reconstructs that immutable tree, retaining its wrapper, settings, build logic,
-plugins, dependency checksums and task actions. Only candidate production
-Kotlin/Java source data in existing modules and the two consumer fixtures is
-overlaid. Candidate Android configuration, resources, processors and new modules
-are refused; candidate controller/workflow bytes are never executed. Candidate
+plugins, dependency checksums and task actions. Only candidate Kotlin source
+data in the app's `main`, `benchmark` and `profile` source sets and the two
+consumer fixture directories is overlaid. Java, other modules/source sets,
+Android configuration, resources and processors are refused; candidate
+controller/workflow bytes are never executed. Candidate
 test changes are not executed or claimed as verified. This intentionally cannot
 verify arbitrary build-graph changes or serve as full Android acceptance.
 
 A disposable credential-free Docker container first compiles the trusted base
 to populate a private dependency cache. A fresh projection then compiles the
 candidate sources offline with build/configuration caches disabled and tasks
-forced to run. The init script is meaningful only with those base-owned task
-actions: it refuses skipped/up-to-date/no-source/failed actions, requires both
-fixture inputs and nonempty class outputs for each consumer variant, and hashes
-the outputs. The supervisor binds base/head/source/projection/toolchain pins,
+forced to run. A separate read-only host-authored source plan assigns every
+selected input to its actual variant. The init script is meaningful only with
+those base-owned task actions: it refuses skipped/up-to-date/no-source/failed
+actions, requires every selected variant input (not only the fixtures) and
+nonempty class outputs, and binds source-path counts/digests and output hashes.
+The supervisor binds base/head/source/projection/toolchain pins,
 actual Java runtime/platform/tool binary digests, run and attempt. It checks
 source and runtime input stability. Read-only host tool mounts contain no home,
 checkout credentials, Docker socket or arbitrary host environment; only the
@@ -177,7 +180,8 @@ python tools/android-port/controller/compiler_verification.py inspect --pr <numb
 ```
 
 `ANDROID_PORT_GITHUB_TOKEN` supplies read-only server/log access, not acceptance
-authority. A stale base or closed/changed PR is refused rather than silently
+authority. Both commands require an exact committed current-base runtime
+checkout. A stale base or closed/changed PR is refused rather than silently
 rebinding an old run. This bounded reader is separate from WP acceptance:
 the existing live and historical consumer-acceptance readers still fail closed.
 Neither the optional workflow's ordinary Actions job result nor `inspect`

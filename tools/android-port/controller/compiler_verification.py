@@ -30,8 +30,7 @@ FIXTURES = (
     "android/benchmark/dataset/kotlin/com/meshcoreone/android/benchmark/Workload.kt",
 )
 SOURCE = re.compile(
-    r"android/(?:app|(?:core|feature|platform)/[a-z0-9-]+)/src/"
-    r"(?:main|release|benchmark|profile|commonMain|androidMain)/(?:kotlin|java)/.+\.(?:kt|java)$"
+    r"android/app/src/(?:main|benchmark|profile)/(?:kotlin|java)/.+\.kt$"
     r"|android/benchmark/(?:target|dataset)/kotlin/.+\.kt$"
 )
 TEST_DATA = re.compile(
@@ -55,11 +54,8 @@ def source_plan(repo, base, head):
             continue
         if not SOURCE.fullmatch(path) and not TEST_DATA.fullmatch(path):
             raise PortError("Independent compiler source-only boundary refuses: " + path)
-    for path in selected:
-        if path not in FIXTURES and not path.startswith("android/benchmark/"):
-            module = path.split("/src/", 1)[0]
-            if module + "/build.gradle.kts" not in before:
-                raise PortError("Independent compiler cannot introduce a module: " + module)
+    if "android/app/build.gradle.kts" not in before:
+        raise PortError("Independent compiler requires the trusted app module")
     if not set(FIXTURES) <= selected.keys():
         raise PortError("Independent compiler requires both actual consumer fixtures")
     return before, selected
@@ -107,6 +103,25 @@ def verify_projection(root, entries):
             raise PortError("Compiler input changed: " + path)
 
 
+def compiler_sources(entries):
+    result = {task: [] for task in TASKS}
+    for path in sorted(entries):
+        if not SOURCE.fullmatch(path):
+            continue
+        tasks = TASKS
+        if path.startswith("android/app/src/benchmark/"):
+            tasks = TASKS[:1]
+        elif path.startswith("android/app/src/profile/"):
+            tasks = TASKS[1:]
+        for task in tasks:
+            result[task].append(path)
+    return result
+
+
+def source_paths_digest(paths):
+    return hashlib.sha256("\n".join(paths).encode()).hexdigest()
+
+
 def private_directory(path):
     if not path.is_absolute() or path.resolve() != path or path.exists():
         raise PortError("Independent compiler requires a fresh absolute unlinked output directory")
@@ -129,7 +144,15 @@ def toolchain_identity(jdk, sdk):
     return result
 
 
-def docker_command(image, project, home, jdk, sdk, guard, *, offline):
+def trusted_checkout(repo, base):
+    from controller.runtime_inputs import verify_committed_inputs
+
+    if git(repo, "rev-parse", "HEAD").decode().strip() != base:
+        raise PortError("Independent compiler reader requires the exact deployed current-base checkout")
+    verify_committed_inputs(repo, base)
+
+
+def docker_command(image, project, home, jdk, sdk, guard, sources, *, offline):
     # No host home, repository/.git, token, daemon socket or arbitrary environment is mounted.
     command = [
         "docker", "create", "--network", "none" if offline else "bridge",
@@ -142,6 +165,7 @@ def docker_command(image, project, home, jdk, sdk, guard, *, offline):
     for source, target, writable in (
         (project, "/project", True), (home, "/home/gradle", True),
         (jdk, "/jdk", False), (sdk, "/sdk", False), (guard, "/guard.gradle", False),
+        (sources, "/compiler-sources.json", False),
         (Path("/usr"), "/usr", False), (Path("/bin"), "/bin", False),
         (Path("/lib"), "/lib", False), (Path("/lib64"), "/lib64", False),
         (Path("/etc/ssl/certs"), "/etc/ssl/certs", False),
@@ -192,7 +216,7 @@ def container_compile(command, log):
         checked(["docker", "rm", "--force", identifier], capture_output=True, timeout=60)
 
 
-def observations(project):
+def observations(project, expected_sources):
     path = project / "compiler-observations.jsonl"
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
         raise PortError("Missing or unsafe independent compiler observations")
@@ -203,8 +227,14 @@ def observations(project):
     ):
         raise PortError("Missing, duplicate or skipped independent compiler action")
     for value in values:
-        fields(value, {"task", "classes", "output_sha256"}, label="independent compiler action")
+        fields(value, {"task", "classes", "output_sha256", "sources", "source_paths_sha256"},
+               label="independent compiler action")
         positive_integer(value["classes"], "Independent class-file count")
+        paths = expected_sources[value["task"]]
+        if type(value["sources"]) is not int or value["sources"] != len(paths) or (
+            value["source_paths_sha256"] != source_paths_digest(paths)
+        ):
+            raise PortError("Independent compiler source coverage differs")
         if not isinstance(value["output_sha256"], str) or re.fullmatch(r"[a-f0-9]{64}", value["output_sha256"]) is None:
             raise PortError("Missing independent compiler output binding")
     return sorted(values, key=lambda value: value["task"])
@@ -217,10 +247,9 @@ def execute(repo, binding, state, output, run_id, attempt):
         or git(repo, "rev-parse", "HEAD").decode().strip() != binding.base_sha
     ):
         raise PortError("Independent compiler must execute deployed default-branch code, not its candidate")
-    from controller.runtime_inputs import verify_committed_inputs
     from controller.ci import preflight
 
-    verify_committed_inputs(repo, binding.base_sha)
+    trusted_checkout(repo, binding.base_sha)
     private_directory(output)
     preflight(state, output / "preflight")
     entries, inputs = projection(repo, binding.base_sha, binding.head_sha)
@@ -247,16 +276,22 @@ def execute(repo, binding, state, output, run_id, attempt):
     baseline = output / "baseline"
     baseline_entries = tree(repo, binding.base_sha)
     materialize(repo, baseline_entries, baseline, binding.base_sha)
-    container_compile(docker_command(image, baseline, home, jdk, sdk, guard, offline=False),
+    baseline_sources = compiler_sources(baseline_entries)
+    baseline_plan = output / "baseline-sources.json"
+    baseline_plan.write_text(json.dumps(baseline_sources), encoding="utf-8")
+    container_compile(docker_command(image, baseline, home, jdk, sdk, guard, baseline_plan, offline=False),
                       output / "baseline.log")
-    observations(baseline)
+    observations(baseline, baseline_sources)
     project = output / "candidate-source"
     materialize(repo, entries, project, binding.base_sha)
     verify_projection(project, entries)
-    container_compile(docker_command(image, project, home, jdk, sdk, guard, offline=True),
+    candidate_sources = compiler_sources(entries)
+    candidate_plan = output / "candidate-sources.json"
+    candidate_plan.write_text(json.dumps(candidate_sources), encoding="utf-8")
+    container_compile(docker_command(image, project, home, jdk, sdk, guard, candidate_plan, offline=True),
                       output / "candidate.log")
     verify_projection(project, entries)
-    actions = observations(project)
+    actions = observations(project, candidate_sources)
     if toolchain_identity(jdk, sdk) != runtime:
         raise PortError("Independent compiler runtime inputs changed")
     report = {
@@ -304,7 +339,8 @@ def authenticated_result(native, binding, pr_number, run_id, attempt):
         "actions", "runtime", "network", "candidate_configuration_executed", "required_check",
         "wp_complete", "dependency_unlock",
     }, label="independent compiler result")
-    _, inputs = projection(native.manifest.repo, binding.base_sha, binding.head_sha)
+    entries, inputs = projection(native.manifest.repo, binding.base_sha, binding.head_sha)
+    expected_sources = compiler_sources(entries)
     if (
         type(report["schema_version"]) is not int or report["schema_version"] != 1
         or report["scope"] != "independent-compiler-actions-only"
@@ -330,8 +366,14 @@ def authenticated_result(native, binding, pr_number, run_id, attempt):
     ):
         raise PortError("Missing or duplicate authenticated compiler action")
     for action in actions:
-        fields(action, {"task", "classes", "output_sha256"}, label="authenticated compiler action")
+        fields(action, {"task", "classes", "output_sha256", "sources", "source_paths_sha256"},
+               label="authenticated compiler action")
         positive_integer(action["classes"], "Authenticated compiler class count")
+        paths = expected_sources[action["task"]]
+        if type(action["sources"]) is not int or action["sources"] != len(paths) or (
+            action["source_paths_sha256"] != source_paths_digest(paths)
+        ):
+            raise PortError("Authenticated compiler source coverage differs")
         if not isinstance(action["output_sha256"], str) or re.fullmatch(r"[a-f0-9]{64}", action["output_sha256"]) is None:
             raise PortError("Missing authenticated compiler output hash")
     return report
@@ -421,6 +463,7 @@ def main(argv=None):
         backend = CloudBackend(GitHubApi(token), manifest, policy, settings)
         pr = backend.api.request("GET", backend.prefix + f"/pulls/{positive_integer(args.pr, 'Compiler PR')}")
         base = backend.current_base()
+        trusted_checkout(repo, base)
         if (
             pr.get("state") != "open" or pr.get("merged") is not False
             or pr.get("head", {}).get("sha") != args.head

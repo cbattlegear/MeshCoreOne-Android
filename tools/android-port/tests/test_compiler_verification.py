@@ -2,6 +2,7 @@
 
 import copy
 from dataclasses import asdict
+import io
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,17 @@ from controller.workflows import ACTION_PINS, parse_yaml
 
 REPO = Path(__file__).resolve().parents[3]
 SOURCE = "android/app/src/main/kotlin/Consumer.kt"
+SOURCE_ENTRIES = {path: "fixture-blob" for path in (*compiler.FIXTURES, SOURCE)}
+EXPECTED_SOURCES = compiler.compiler_sources(SOURCE_ENTRIES)
+
+
+def valid_actions():
+    return [
+        {"task": task, "classes": 3, "output_sha256": "e" * 64,
+         "sources": len(EXPECTED_SOURCES[task]),
+         "source_paths_sha256": compiler.source_paths_digest(EXPECTED_SOURCES[task])}
+        for task in compiler.TASKS
+    ]
 
 
 class CompilerProjectionTests(unittest.TestCase):
@@ -82,6 +94,9 @@ class CompilerProjectionTests(unittest.TestCase):
             "android/app/src/main/resources/META-INF/services/javax.annotation.processing.Processor",
             "android/app/src/main/AndroidManifest.xml",
             "android/app/src/main/kotlin/build.gradle.kts",
+            "android/app/src/main/java/Uncompiled.java",
+            "android/app/src/release/kotlin/Uncompiled.kt",
+            "android/core/data/src/main/kotlin/Uncompiled.kt",
         ):
             with self.subTest(path=path):
                 self.write(path, "disabled compiler and forged success\n")
@@ -95,7 +110,7 @@ class CompilerProjectionTests(unittest.TestCase):
 
     def test_new_module_is_not_admitted_as_plain_source(self):
         self.write("android/core/untrusted/src/main/kotlin/Plugin.kt", "class Plugin\n")
-        with self.assertRaisesRegex(PortError, "cannot introduce a module"):
+        with self.assertRaisesRegex(PortError, "source-only boundary refuses"):
             compiler.projection(self.repo, self.base, self.commit())
 
     def test_deleted_consumer_fixture_is_refused(self):
@@ -105,14 +120,21 @@ class CompilerProjectionTests(unittest.TestCase):
 
     def test_source_addition_deletion_and_test_changes_bind_only_production(self):
         (self.repo / SOURCE).unlink()
-        replacement = "android/app/src/main/java/New.java"
-        self.write(replacement, "class New {}")
+        replacement = "android/app/src/main/kotlin/New.kt"
+        self.write(replacement, "class New")
         test = "android/app/src/test/kotlin/UnexecutedTest.kt"
         self.write(test, 'error("this test is not a compiler action")')
         entries, _ = compiler.projection(self.repo, self.base, self.commit())
         self.assertNotIn(SOURCE, entries)
         self.assertIn(replacement, entries)
         self.assertNotIn(test, entries)
+
+    def test_variant_source_coverage_is_exact_and_includes_every_selected_input(self):
+        benchmark = "android/app/src/benchmark/kotlin/Benchmark.kt"
+        profile = "android/app/src/profile/kotlin/Profile.kt"
+        selected = compiler.compiler_sources({**SOURCE_ENTRIES, benchmark: "x", profile: "y"})
+        self.assertEqual(selected[compiler.TASKS[0]], sorted([*SOURCE_ENTRIES, benchmark]))
+        self.assertEqual(selected[compiler.TASKS[1]], sorted([*SOURCE_ENTRIES, profile]))
 
     def test_oversized_and_linked_sources_are_refused(self):
         self.write(SOURCE, "x" * (compiler.MAX_SOURCE + 1))
@@ -130,6 +152,7 @@ class CompilerIsolationTests(unittest.TestCase):
         return compiler.docker_command(
             "sha256:" + "a" * 64, Path("/private/project"), Path("/private/home"),
             Path("/private/jdk"), Path("/private/sdk"), Path("/private/guard.gradle"), offline=offline,
+            sources=Path("/private/compiler-sources.json"),
         )
 
     def test_container_is_credential_free_and_offline_without_candidate_configuration(self):
@@ -154,7 +177,7 @@ class CompilerIsolationTests(unittest.TestCase):
     def test_mount_delimiter_injection_is_refused(self):
         with self.assertRaisesRegex(PortError, "Unsafe independent compiler mount"):
             compiler.docker_command("image", Path("/project,src=/root"), Path("/home"),
-                                    Path("/jdk"), Path("/sdk"), Path("/guard"), offline=True)
+                                    Path("/jdk"), Path("/sdk"), Path("/guard"), Path("/sources"), offline=True)
 
     def test_timeout_removes_only_the_exact_container_created_by_this_invocation(self):
         identifier = "a" * 64
@@ -189,22 +212,48 @@ class CompilerIsolationTests(unittest.TestCase):
                 compiler.execute(REPO, binding, {}, Path("/unused"), 1, 1)
         checked.assert_not_called()
 
+    def test_authenticated_reader_refuses_candidate_or_modified_runtime_checkout(self):
+        with patch.object(compiler, "git", return_value=b"a" * 40), \
+                patch("controller.runtime_inputs.verify_committed_inputs") as verify:
+            with self.assertRaisesRegex(PortError, "exact deployed current-base"):
+                compiler.trusted_checkout(REPO, "b" * 40)
+            verify.assert_not_called()
+            compiler.trusted_checkout(REPO, "a" * 40)
+            verify.assert_called_once_with(REPO, "a" * 40)
+            verify.side_effect = PortError("fixture changed runtime")
+            with self.assertRaisesRegex(PortError, "changed runtime"):
+                compiler.trusted_checkout(REPO, "a" * 40)
+
+    def test_actual_runtime_file_digests_are_bound_and_missing_inputs_fail(self):
+        with patch.object(Path, "is_file", return_value=True), \
+                patch.object(Path, "open", side_effect=lambda *args: io.BytesIO(b"runtime-fixture")):
+            identity = compiler.toolchain_identity(Path("/jdk"), Path("/sdk"))
+        self.assertEqual(set(identity), set(compiler.RUNTIME_FILES))
+        self.assertEqual(set(identity.values()), {
+            compiler.hashlib.sha256(b"runtime-fixture").hexdigest(),
+        })
+        with patch.object(Path, "is_file", return_value=False):
+            with self.assertRaisesRegex(PortError, "runtime input missing"):
+                compiler.toolchain_identity(Path("/jdk"), Path("/sdk"))
+
     def test_missing_duplicate_skipped_and_zero_output_observations_are_refused(self):
-        valid = [{"task": task, "classes": 3, "output_sha256": "a" * 64} for task in compiler.TASKS]
+        valid = valid_actions()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             path = root / "compiler-observations.jsonl"
             for values, allowed in ((valid, True), ([], False), (valid[:1], False),
                                     ([valid[0], valid[0]], False), ([None, valid[1]], False),
                                     ([{**valid[0], "classes": 0}, valid[1]], False),
+                                    ([{**valid[0], "sources": 1}, valid[1]], False),
+                                    ([{**valid[0], "source_paths_sha256": "a" * 64}, valid[1]], False),
                                     ([{**valid[0], "skipped": True}, valid[1]], False)):
                 path.write_text("".join(json.dumps(value) + "\n" for value in values), encoding="utf-8")
                 with self.subTest(values=values):
                     if allowed:
-                        self.assertEqual(compiler.observations(root), valid)
+                        self.assertEqual(compiler.observations(root, EXPECTED_SOURCES), valid)
                     else:
                         with self.assertRaises(PortError):
-                            compiler.observations(root)
+                            compiler.observations(root, EXPECTED_SOURCES)
 
 
 class AuthenticatedCompilerTests(unittest.TestCase):
@@ -230,14 +279,14 @@ class AuthenticatedCompilerTests(unittest.TestCase):
             "inputs": self.inputs, "network": "none", "candidate_configuration_executed": False,
             "required_check": False, "wp_complete": False, "dependency_unlock": False,
             "runtime": {path: "a" * 64 for path in compiler.RUNTIME_FILES},
-            "actions": [{"task": task, "classes": 3, "output_sha256": "e" * 64} for task in compiler.TASKS],
+            "actions": valid_actions(),
         }
 
     def verify(self, report=None, logs=None):
         text = json.dumps(self.report if report is None else report)
         log = f"job\t{compiler.STEP}\t2026-11-04T22:00:00Z {text}\n"
         with patch("controller.repair_acceptance.read_job_log", return_value=log if logs is None else logs), \
-                patch.object(compiler, "projection", return_value=({}, self.inputs)):
+                patch.object(compiler, "projection", return_value=(SOURCE_ENTRIES, self.inputs)):
             return compiler.authenticated_result(self.native, self.binding, 518, 1, 2)
 
     def test_actual_authenticated_run_has_bounded_nonrequired_result(self):
@@ -258,6 +307,9 @@ class AuthenticatedCompilerTests(unittest.TestCase):
             ("runtime", {}), ("runtime", {path: "" for path in compiler.RUNTIME_FILES}),
             ("binding", {**asdict(self.binding), "head_sha": "e" * 40}),
             ("actions", [self.report["actions"][0]] * 2),
+            ("actions", [{**self.report["actions"][0], "sources": 1}, self.report["actions"][1]]),
+            ("actions", [{**self.report["actions"][0], "source_paths_sha256": "a" * 64},
+                         self.report["actions"][1]]),
         ):
             report = copy.deepcopy(self.report)
             report[key] = value

@@ -1,10 +1,12 @@
 // AndroidOnly: WP-003 Observations are meaningful only in the trusted-base source projection.
 import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 import java.security.MessageDigest
 import java.nio.file.Files
 
 def expected = [":app:compileBenchmarkKotlin", ":app:compileProfileKotlin"] as Set
 def completed = [] as Set
+def requiredSources = new JsonSlurper().parse(new File("/compiler-sources.json"))
 def destination = new File(gradle.startParameter.currentDir.parentFile, "compiler-observations.jsonl")
 if (destination.exists()) throw new GradleException("Independent compiler observations must be fresh")
 
@@ -17,12 +19,10 @@ gradle.taskGraph.afterTask { task, state ->
             throw new GradleException("Independent compiler action did not execute: ${task.path}")
         }
         def sources = task.sources.files.collect { it.canonicalFile } as Set
-        [
-            "benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt",
-            "benchmark/dataset/kotlin/com/meshcoreone/android/benchmark/Workload.kt",
-        ].each { relative ->
-            if (!sources.contains(task.project.rootProject.file(relative).canonicalFile)) {
-                throw new GradleException("Independent compiler omitted consumer source: ${relative}")
+        def selected = requiredSources[task.path]
+        selected.each { relative ->
+            if (!sources.contains(new File(task.project.rootProject.projectDir.parentFile, relative).canonicalFile)) {
+                throw new GradleException("Independent compiler omitted selected source: ${relative}")
             }
         }
         def classes = []
@@ -40,6 +40,9 @@ gradle.taskGraph.afterTask { task, state ->
         }
         destination.append(JsonOutput.toJson([
             task: task.path, classes: classes.size(), output_sha256: digest.digest().encodeHex().toString(),
+            sources: selected.size(),
+            source_paths_sha256: MessageDigest.getInstance("SHA-256")
+                .digest(selected.join("\n").getBytes("UTF-8")).encodeHex().toString(),
         ]) + "\n", "UTF-8")
     }
 }

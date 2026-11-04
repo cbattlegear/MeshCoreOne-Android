@@ -144,7 +144,13 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
                             state = state,
                             labels = recoveredDraftLabels(),
                             destinationLabel = destination.value?.let { UiText.Verbatim("Selected channel B") },
-                            statusLabel = { UiText.Verbatim("Original status: ${it.status}") },
+                            originLabel = { message ->
+                                UiText.Resource(if (message.channelOccupantID == null) {
+                                    com.meshcoreone.android.core.l10n.R.string.wp308_recovery_status_unknown_origin
+                                } else {
+                                    com.meshcoreone.android.core.l10n.R.string.wp308_recovery_status_replaced_occupant
+                                })
+                            },
                             failureText = { checkNotNull(it.message) },
                             onSelect = holder::select,
                             onRefresh = { scope.launch { holder.refresh() } },

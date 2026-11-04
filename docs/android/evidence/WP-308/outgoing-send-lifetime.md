@@ -11,6 +11,11 @@ uses those actual resources rather than fixture-only action labels.
 The owner's explicit English fallbacks are not full locale parity.
 Origin-attribution and delivery status remain different concepts; a generic
 uncertainty label must not replace known SENT or DELIVERED state.
+The list renders actual stored delivery status through the existing shared
+`DeliveryFeedbackText` consumer, independently of its caller-supplied origin
+label. The mounted replacement fixture uses resource-backed unknown/replaced
+origin labels; neither those labels nor an arbitrary callback can replace the
+actual delivery-status renderer. No second status mapping was introduced.
 The owner reports a runtime mismatch before Android execution; that is not
 a consumer test result. Local portmap/controller/whitespace checks returned
 0 after resource integration. No runtime, device or execution-owner state

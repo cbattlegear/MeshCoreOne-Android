@@ -31,6 +31,7 @@ import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.feature.chats.composer.RecoveredDraftState
+import com.meshcoreone.android.feature.chats.actions.DeliveryFeedbackText
 
 data class RecoveredDraftLabels(
     val title: UiText,
@@ -58,7 +59,7 @@ fun RecoveredDraftList(
     state: RecoveredDraftState,
     labels: RecoveredDraftLabels,
     destinationLabel: UiText?,
-    statusLabel: (MessageDTO) -> UiText,
+    originLabel: (MessageDTO) -> UiText,
     failureText: @Composable (Throwable) -> String,
     onSelect: (EntityKey) -> Unit,
     onRefresh: () -> Unit,
@@ -103,7 +104,8 @@ fun RecoveredDraftList(
                     RadioButton(selected = state.selected == key, onClick = null, enabled = !busy)
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(message.text, style = MaterialTheme.typography.bodyLarge)
-                        Text(uiString(statusLabel(message)), style = MaterialTheme.typography.bodySmall,
+                        DeliveryFeedbackText(message)
+                        Text(uiString(originLabel(message)), style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }

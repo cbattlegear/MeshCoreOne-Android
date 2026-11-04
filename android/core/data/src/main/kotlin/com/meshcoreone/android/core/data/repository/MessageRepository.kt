@@ -15,7 +15,29 @@ import java.util.UUID
 internal class MessageRepository(
     private val context: RoomRepositoryContext,
     pending: PendingSendRepository,
-) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting {
+) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting, UnprovedDirectMessageReading {
+    override suspend fun fetchUnprovedDirectMessages(
+        radioId: RadioId, limit: Long, offset: Long,
+    ): SnapshotList<UnprovedDirectMessage> = context.read("fetchUnprovedDirectMessages") {
+        queryBounds(limit, offset)
+        database.messages().unprovedDirectMessages(radioId.value, limit, offset).map { row ->
+            val dto = row.toDTO()
+            val marker = LocalDirectMessageProvenance.of(dto)
+            UnprovedDirectMessage(
+                occurrenceID = dto.id,
+                radioId = dto.radioId,
+                text = dto.text,
+                wireTimestamp = dto.senderTimestamp ?: dto.timestamp.takeUnless { dto.timestampCorrected },
+                receivedAt = dto.createdAt.takeIf { marker != null },
+                provenance = when (marker) {
+                    LocalDirectMessageProvenance.UNRESOLVED -> UnprovedDirectMessageProvenance.UNRESOLVED
+                    LocalDirectMessageProvenance.LOCAL_CANDIDATE -> UnprovedDirectMessageProvenance.LOCAL_CANDIDATE
+                    null -> UnprovedDirectMessageProvenance.LEGACY_UNKNOWN
+                },
+            )
+        }.snapshot()
+    }
+
     override suspend fun createOrReconcilePendingDirectMessage(
         intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
     ): MessageDTO = context.write("createOrReconcilePendingDirectMessage") {

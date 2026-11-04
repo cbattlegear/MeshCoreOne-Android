@@ -49,6 +49,8 @@ interface MessageDao : RowWriter<MessageEntity> {
     fun observeContact(radioId: UUID, contactID: UUID): Flow<List<MessageEntity>>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID IS NULL AND channelIndex IS NULL")
     suspend fun orphanedDirectMessages(radioId: UUID): List<MessageEntity>
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND directionRawValue = 0 AND channelIndex IS NULL AND channelOccupantID IS NULL AND (contactID IS NULL OR deduplicationKey = 'local-direct-unresolved:' || lower(id) OR deduplicationKey = 'local-direct-candidate:' || lower(id)) ORDER BY " + MESSAGE_ORDER + ", id DESC LIMIT :limit OFFSET :offset")
+    suspend fun unprovedDirectMessages(radioId: UUID, limit: Long, offset: Long): List<MessageEntity>
     @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND contactID = :contactID")
     suspend fun countForContact(radioId: UUID, contactID: UUID): Long
     @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index")

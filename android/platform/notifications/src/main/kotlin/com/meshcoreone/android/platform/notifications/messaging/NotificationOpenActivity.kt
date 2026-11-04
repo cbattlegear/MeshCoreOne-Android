@@ -2,6 +2,7 @@
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
@@ -40,14 +41,21 @@ class NotificationOpenActivity : Activity() {
             }
             // Only this non-exported Activity stages a content tap; the exported launcher gets no payload.
             val result = NotificationActionDispatcher.enqueue(NotificationResponse(payload, null, null))
-            startActivity(
-                launcher.addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP,
-                ),
-            )
-            if (result == EnqueueResult.DELIVERED_OR_QUEUED) {
-                AndroidMessagingNotificationDelivery.retireContentNotification(this, segments[0], postId)
-            } else {
+            try {
+                startActivity(
+                    launcher.addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                    ),
+                )
+            } catch (error: ActivityNotFoundException) {
+                logger.severe("Cannot open notification: application launcher is unavailable; notification retained")
+                return
+            } catch (error: SecurityException) {
+                logger.severe("Cannot open notification: application launcher was denied; notification retained")
+                return
+            }
+            // Memory acceptance is not a durable receipt. Keep the platform token available after process loss.
+            if (result == EnqueueResult.REJECTED_CAPACITY) {
                 logger.warning("Notification content queue is full; notification remains available for another tap")
             }
         } finally {

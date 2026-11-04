@@ -141,7 +141,7 @@ class ChannelAttemptRecoveryTest {
         native("uncertain-wire-still-quarantines-the-same-radio-fence") {
             val h = Harness(this); h.start()
             val row = h.pending(h.message(MessageStatus.PENDING, 0u))
-            h.transport.channelError = 2u
+            h.transport.holdChannelReplies = true
             assertFailsWith<QueuedChannelRetainedException> {
                 h.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
             }
@@ -150,6 +150,52 @@ class ChannelAttemptRecoveryTest {
                 h.channelFence.withMutation(h.channelLease) { fail("Uncertain radio must remain quarantined") }
             }
             assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+        },
+        native("correlated-channel-rejection-is-durably-unsent-and-leaves-fence-usable") {
+            val h = Harness(this, MessageServiceConfig(poolBackoff = PoolBackoffConfig(attemptCap = 0)))
+            h.start()
+            val row = h.pending(h.message(MessageStatus.PENDING, 0u))
+            h.transport.channelError = 2u
+            val failure = assertFailsWith<MeshCoreException.DeviceError> {
+                h.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
+            }
+            assertEquals(2u.toUByte(), failure.code)
+            assertEquals(row, h.store.pending.getValue(EntityKey(RADIO, row.id)))
+            val attempt = h.store.channelAttempts.values.single()
+            assertEquals(row.id, attempt.key.pendingID)
+            assertEquals(row.messageID, attempt.key.messageID)
+            assertEquals(QueuedChannelAttemptPhase.DEFINITELY_UNSENT, attempt.phase)
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            h.channelFence.withMutation(h.channelLease) { }
+            h.transport.channelError = null
+            val accepted = h.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
+            assertEquals(QueuedChannelAttemptPhase.ACCEPTED, accepted.phase)
+            assertNotEquals(attempt.key.attemptID, accepted.key.attemptID)
+            assertEquals(2, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+        },
+        native("channel-rejection-settlement-failure-does-not-certify-ready-or-replay") {
+            val h = Harness(this, MessageServiceConfig(poolBackoff = PoolBackoffConfig(attemptCap = 0)))
+            h.start()
+            val row = h.pending(h.message(MessageStatus.PENDING, 0u))
+            h.transport.channelError = 2u
+            val storage = storageFailure()
+            h.store.faults["settleQueuedChannelAttempt"] = storage
+            val retained = assertFailsWith<QueuedChannelRetainedException> {
+                h.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
+            }
+            assertSame(storage, retained.cause)
+            assertTrue(retained.suppressedExceptions.any { it is MeshCoreException.DeviceError && it.code == 2u.toUByte() })
+            assertEquals(QueuedChannelAttemptPhase.DISPATCHING, h.store.channelAttempts.values.single().phase)
+            assertEquals(QueuedChannelDispatchState.DISPATCHING,
+                h.store.pending.getValue(EntityKey(RADIO, row.id)).channelDispatchState)
+            h.store.faults.clear()
+            assertFailsWith<QueuedChannelRetainedException> {
+                h.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
+            }
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertFailsWith<com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure.UnsettledDispatch> {
+                h.channelFence.withMutation(h.channelLease) { fail("Uncommitted settlement cannot clear the fence") }
+            }
         },
         native("ready-sibling-preflight-return-rechecks-sealed-admission-before-count") {
             val h = Harness(this); h.start()

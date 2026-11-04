@@ -91,13 +91,16 @@ class ContactService(
      * Sync contacts from the device.
      * @param since Optional date for incremental sync (only contacts modified after this time);
      *   `null` is a full sync that may prune local contacts the device no longer has.
+     * Marked write recovery requires a guarded reconciliation contract; an ordinary fetch cannot
+     * authorize persistence, pruning or marker clearing for that state.
      */
     override suspend fun syncContacts(radioId: RadioId, since: Instant?): ContactSyncResult =
         ContactWriteRecovery.withSyncFence(preferences, radioId) {
             mapSession {
-                val recoveryEpoch = ContactWriteRecovery.snapshot(preferences, radioId)
-                val effectiveSince = if (recoveryEpoch != null) null else since
-                val fetchResult = session.getContactsReportingTotal(effectiveSince)
+                if (ContactWriteRecovery.snapshot(preferences, radioId) != null) {
+                    throw ContactServiceError.SyncInterrupted()
+                }
+                val fetchResult = session.getContactsReportingTotal(since)
                 val meshContacts = fetchResult.contacts
                 val total = meshContacts.size.toLong()
 
@@ -115,22 +118,13 @@ class ContactService(
                 eventBroadcaster.yield(ContactServiceEvent.SyncProgress(received = receivedCount, total = total))
 
                 // On full sync, remove local contacts that no longer exist on device.
-                val fullSnapshotApplied = if (effectiveSince == null) {
+                if (since == null) {
                     pruneOrphans(radioId, devicePublicKeys, fetchResult.reportedTotal)
-                } else false
-
-                if (recoveryEpoch != null) {
-                    if (!fullSnapshotApplied || devicePublicKeys.size.toLong() != fetchResult.reportedTotal) {
-                        throw ContactServiceError.SyncInterrupted()
-                    }
-                    if (!ContactWriteRecovery.reconciled(preferences, radioId, recoveryEpoch)) {
-                        throw ContactServiceError.SyncInterrupted()
-                    }
                 }
                 ContactSyncResult(
                     contactsReceived = receivedCount,
                     lastSyncTimestamp = lastTimestamp,
-                    isIncremental = effectiveSince != null,
+                    isIncremental = since != null,
                 )
             }
         }

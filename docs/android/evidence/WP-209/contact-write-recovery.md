@@ -31,8 +31,9 @@ Owner: `services-porter`, directly assigned Project child
   dispatch boundary. `RequestContext` now finalizes cancellation disposition and
   the contact exchange callback before releasing the serializer, so a queued
   same-radio write cannot pass between caller cancellation and recovery marking.
-  Recovery sync also excludes writes through snapshot application, pruning and
-  marker clearing. The messaging additions do not change contact request bytes,
+  Ordinary sync excludes writes through snapshot application and pruning.
+  Marked recovery now fails before fetch; the earlier count-based marker-clearing
+  path is disabled by the safety successor below. The messaging additions do not change contact request bytes,
   ACK correlation or caller cancellation behavior. The merge had no conflict
   markers or discarded edits.
 - Main subsequently advanced from `796a872a3565a66c74f782b738a9ecb3c273fb25`
@@ -91,7 +92,7 @@ ContactService/service-test overlap; its UI stays with its existing owner.
 
 ## Behavioral evidence to execute
 
-`ContactWriteRecoveryTests` contains 32 deterministic methods using an actual
+`ContactWriteRecoveryTests` currently contains 38 authored deterministic methods using an actual
 `MeshCoreSession` and controlled raw frames, not a fake contact session:
 queued-before-send cancellation; retired caller plus late successful ACK;
 identical/different replacement delivery correlation; active and late rejection;
@@ -102,12 +103,12 @@ equal-timestamp newer metadata, including a live superseded completion that must
 not return import success; failed durable recovery recording with explicit
 failure and process-retained uncertainty; teardown/different-radio replacement;
 queued-write exclusion after cancellation, ordinary subsequent-write admission,
-partial-snapshot rejection, pre-snapshot refusal while a prior exchange can still
+marked-recovery refusal, pre-snapshot refusal while a prior exchange can still
 write, invalidation of a queued cross-session write released after an omitted
 snapshot is captured but before local application, fail-closed persisted markers
 without dispatch provenance, and blocked write admission while a full-snapshot
 batch save is held. The fence atomically checks for potentially writable exchanges
-before snapshot capture, remains active through pruning and marker clearing, and
+before snapshot capture, remains active through ordinary pruning, and
 refuses stale snapshot application when the old exchange could have completed
 during that interval. No full sync, teardown, reconnect or READY state is treated
 as physical drain proof. Service persistence here is an explicit in-memory role,
@@ -362,5 +363,43 @@ recovery-marker linearization. A source-bound terminal full-baseline proof and
 a current-generation marker reread must be validated inside that guard; count
 equality or an instantaneous `inspect()` is not permission. Room I/O must not
 run under protocol/core/lifecycle locks. No such integration is added or enabled
-here. Existing count-based recovery branches in this held candidate remain
-unaccepted and are not evidence of safe full reconciliation.
+here. At this preceding candidate, the count-based recovery branches remained
+unaccepted; the safety successor below disables them.
+
+### Fail-closed marked recovery
+
+The bounded safety successor to
+`254282a923ed0d5fc1c18b5b489a20f447f0c3c4` rejects a non-null recovery epoch
+with the existing `ContactServiceError.SyncInterrupted` before fetching contacts,
+publishing sync progress or persisting any frames. It removes the recovery-driven
+full-fetch conversion and count-based `reconciled` call from `syncContacts`.
+Ordinary no-recovery full/incremental sync retains its fetch, batch persistence,
+progress, timestamp and existing prune policies. No new proof or success API is
+introduced; recovery remains unavailable until the real cross-owner guard lands.
+
+Two additional authored methods bring the file to 38 methods (not discovery or
+execution). The equal-count control performs an independent real-session fetch
+with one returned contact and total one, then exercises marked service sync with
+retained terminal dispatch provenance. Full and incremental attempts throw;
+batch-save/delete/marker-clear counters stay zero, newer and orphan local rows
+remain unchanged, no event or notification is emitted, and subsequent writes
+remain blocked. A replacement session with freshly loaded marked preferences
+also cannot fetch, mutate or clear recovery. This is a simulated restart and
+in-memory persistence role, not process-death or Room evidence.
+
+The ordinary-sync control checks both full prune and incremental no-prune
+behavior with no recovery marker. Existing cancellation, rejection, local-save
+failure, persistence-tail, durable-marker-failure and replacement controls now
+retain recovery and reject retry rather than expecting unproved count-based
+repair. Greater/equal timestamp cases use independent fixtures so the first
+case's deliberately retained marker cannot prevent the second case's setup.
+The held batch-persistence fence control now tests ordinary successful sync,
+not unavailable recovery.
+
+WP-209 source/test/evidence modify admissions passed; `git diff --check` and the
+trusted `python .\tools\android-port\controller\validate.py` passed (result
+`valid`, Python 3.12.4); these are source checks, not Kotlin execution.
+No local Gradle, CI dispatch, native/device verification,
+publication, claim mutation or hold change is authorized or claimed. WP-107
+protocol authority and WP-202 transaction/marker ordering remain prerequisites;
+this gate prevents unproved recovery, not completes #517.

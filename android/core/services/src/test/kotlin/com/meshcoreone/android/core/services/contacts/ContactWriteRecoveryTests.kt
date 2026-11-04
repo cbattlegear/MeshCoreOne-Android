@@ -125,15 +125,9 @@ class ContactWriteRecoveryTests {
             assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
             assertNull(store.fetchContact(radioA, contactsKey(2)))
 
-            producer.syncContacts(radioA, null)
-            assertFalse(producer.needsContactWriteReconciliation(radioA))
-            val retry = async { producer.addOrUpdateContact(radioA, frame(2, "Queued")) }
-            runCurrent()
-            assertEquals(2, radio.writes.size)
-            radio.accept()
-            runCurrent()
-            retry.await()
-            assertEquals("Queued", store.fetchContact(radioA, contactsKey(2))?.name)
+            assertRecoveryRemainsBlocked(producer)
+            assertEquals(1, radio.writes.size)
+            assertNull(store.fetchContact(radioA, contactsKey(2)))
         }
     }
 
@@ -188,14 +182,9 @@ class ContactWriteRecoveryTests {
             assertEquals(1, radio.writes.size)
             assertFalse(oldAcknowledged)
 
-            producer.syncContacts(radioA, null)
-            val retry = async { producer.addOrUpdateContact(radioA, replacement) }
-            runCurrent()
-            assertEquals(2, radio.writes.size)
-            radio.accept()
-            runCurrent()
-            retry.await()
-            assertEquals("Replacement", store.fetchContact(radioA, replacement.publicKey)?.name)
+            assertRecoveryRemainsBlocked(producer)
+            assertEquals(1, radio.writes.size)
+            assertEquals("Old", store.fetchContact(radioA, contactsKey(1))?.name)
         }
     }
 
@@ -233,10 +222,8 @@ class ContactWriteRecoveryTests {
             assertTrue(producer.needsContactWriteReconciliation(radioA))
             assertTrue(store.fetchContacts(radioA).isEmpty())
             val replacement = service()
-            val sync = replacement.syncContacts(radioA, Instant.ofEpochSecond(50))
-            assertFalse(sync.isIncremental)
-            assertFalse(replacement.needsContactWriteReconciliation(radioA))
-            assertEquals(1, radio.contactRequests.single().size)
+            assertRecoveryRemainsBlocked(replacement)
+            assertTrue(radio.contactRequests.isEmpty())
         }
     }
 
@@ -286,7 +273,7 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
-    fun localSaveFailureReportsRadioAcceptanceAndFullSyncCanRepairIt() = runTest {
+    fun localSaveFailureReportsRadioAcceptanceButUnprovedSyncCannotRepairIt() = runTest {
         withFixture {
             val diskFailure = IOException("test disk failure")
             val failing = object : ContactPersisting by store {
@@ -320,9 +307,9 @@ class ContactWriteRecoveryTests {
             assertNotNull(radio.contact(contactsKey(1)))
             assertNull(store.fetchContact(radioA, contactsKey(1)))
             assertTrue(producer.needsContactWriteReconciliation(radioA))
-            replacement.syncContacts(radioA, Instant.ofEpochSecond(50))
-            assertEquals("Accepted", store.fetchContact(radioA, contactsKey(1))?.name)
-            assertFalse(replacement.needsContactWriteReconciliation(radioA))
+            assertRecoveryRemainsBlocked(replacement)
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
+            assertTrue(replacementRadio.contactRequests.isEmpty())
         }
     }
 
@@ -344,9 +331,8 @@ class ContactWriteRecoveryTests {
             assertNull(store.fetchContact(radioA, contactsKey(1)))
             assertTrue(service().needsContactWriteReconciliation(radioA))
             assertTrue(diagnostics.any { it is com.meshcoreone.android.core.protocol.session.SessionDiagnostic.BackgroundFailure })
-            service().syncContacts(radioA, null)
-            assertEquals("Late", store.fetchContact(radioA, contactsKey(1))?.name)
-            assertFalse(service().needsContactWriteReconciliation(radioA))
+            assertRecoveryRemainsBlocked(service())
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
         }
     }
 
@@ -391,22 +377,17 @@ class ContactWriteRecoveryTests {
             saveGate.complete(Unit)
             runCurrent()
             assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
-            service().syncContacts(radioA, null)
-            val retry = async { service().addOrUpdateContact(radioA, frame(1, "Second", 200u)) }
-            runCurrent()
-            assertEquals(2, radio.writes.size)
-            radio.accept()
-            runCurrent()
-            retry.await()
-            assertEquals("Second", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertRecoveryRemainsBlocked(service())
+            assertEquals(1, radio.writes.size)
+            assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
         }
     }
 
     @Test
     fun greaterAndEqualTimestampReplacementMetadataSurvivesOlderCompletion() = runTest {
-        withFixture {
-            val producer = service()
-            for (modified in listOf(1u, 2u)) {
+        for (modified in listOf(1u, 2u)) {
+            withFixture {
+                val producer = service()
                 val oldFrame = frame(modified.toInt(), "Old", 1u)
                 val original = ContactDTO.fromFrame(radioA, oldFrame)
                 store.seed(original)
@@ -421,7 +402,7 @@ class ContactWriteRecoveryTests {
                 radio.accept()
                 runCurrent()
                 assertEquals(newer, store.fetchContact(radioA, original.publicKey))
-                producer.syncContacts(radioA, null)
+                assertRecoveryRemainsBlocked(producer)
             }
         }
     }
@@ -476,11 +457,10 @@ class ContactWriteRecoveryTests {
             radio.accept()
             runCurrent()
             val replacement = service(flags = flags)
-            assertSame(diskFailure, assertFailsWith<IOException> { replacement.syncContacts(radioA, null) })
-            assertTrue(replacement.needsContactWriteReconciliation(radioA))
+            assertRecoveryRemainsBlocked(replacement)
             failCommits = false
-            replacement.syncContacts(radioA, null)
-            assertFalse(replacement.needsContactWriteReconciliation(radioA))
+            assertRecoveryRemainsBlocked(replacement)
+            assertEquals(1, recoveryWrites, "Unproved sync never attempts to clear even a failed durable marker")
         }
     }
 
@@ -525,21 +505,13 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
-    fun fullSyncFenceBlocksWritesUntilSnapshotApplicationAndMarkerClearFinish() = runTest {
+    fun ordinaryFullSyncFenceBlocksWritesUntilSnapshotApplicationFinishes() = runTest {
         withFixture {
             val old = async { service().addOrUpdateContact(radioA, frame(1, "First")) }
             runCurrent()
-            old.cancelAndJoin()
             radio.accept()
             runCurrent()
-            radio.reportedTotal = 2
-            try {
-                service().syncContacts(radioA, null)
-                throw AssertionError("Incomplete reconciliation was accepted")
-            } catch (_: ContactServiceError.SyncInterrupted) {
-                assertTrue(service().needsContactWriteReconciliation(radioA))
-            }
-            radio.reportedTotal = null
+            old.await()
             val gate = CompletableDeferred<Unit>()
             val entered = CompletableDeferred<Unit>()
             val held = object : ContactPersisting by store {
@@ -1223,16 +1195,9 @@ class ContactWriteRecoveryTests {
             assertEquals(1, radio.writes.size)
             assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
 
-            val snapshot = producer.syncContacts(radioA, null)
-            assertFalse(snapshot.isIncremental)
-            assertFalse(producer.needsContactWriteReconciliation(radioA))
-            val retry = async { producer.addOrUpdateContact(radioA, frame(2, "Queued")) }
-            runCurrent()
-            assertEquals(2, radio.writes.size)
-            radio.accept()
-            runCurrent()
-            retry.await()
-            assertEquals("Queued", store.fetchContact(radioA, contactsKey(2))?.name)
+            assertRecoveryRemainsBlocked(producer)
+            assertEquals(1, radio.writes.size)
+            assertNull(store.fetchContact(radioA, contactsKey(2)))
         }
     }
 
@@ -1320,6 +1285,107 @@ class ContactWriteRecoveryTests {
         }
     }
 
+    @Test
+    fun equalCountUnprovedFetchCannotMutatePruneClearRecoveryOrEnableWritesAcrossRestart() = runTest {
+        withFixture {
+            var markerClears = 0
+            val observedFlags = object : ContactPreferenceFlags by preferences {
+                override fun set(key: String, value: Boolean) {
+                    if (key == "contactWriteReconciliation.${radioA.value}" && !value) markerClears++
+                    preferences.set(key, value)
+                }
+            }
+            val producer = service(flags = observedFlags)
+            val caller = async { producer.addOrUpdateContact(radioA, frame(1, "Radio older", 1u)) }
+            runCurrent()
+            caller.cancelAndJoin()
+            radio.accept()
+            runCurrent()
+            val newer = assertNotNull(store.fetchContact(radioA, contactsKey(1)))
+                .updating(frame(1, "Local newer", 200u))
+            val orphan = ContactDTO.fromFrame(radioA, frame(2, "Must not prune", 200u))
+            store.seed(newer)
+            store.seed(orphan)
+
+            val unproved = session.getContactsReportingTotal(null)
+            assertEquals(1L, unproved.reportedTotal)
+            assertEquals(1, unproved.contacts.size)
+            val fetchesBeforeGuard = radio.contactRequests.size
+            var batchSaves = 0
+            var deletes = 0
+            val observedPersistence = object : ContactPersisting by store {
+                override suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long {
+                    batchSaves++
+                    return store.batchSaveContacts(radioId, frames)
+                }
+
+                override suspend fun deleteContact(contact: EntityKey) {
+                    deletes++
+                    store.deleteContact(contact)
+                }
+            }
+            val coordinator = ContactsFakeSyncCoordinator()
+            val guarded = service(persistence = observedPersistence, coordinator = coordinator, flags = observedFlags)
+            val events = guarded.events()
+            val collectedEvents = async { events.events.toList() }
+            assertRecoveryRemainsBlocked(guarded)
+            assertEquals(fetchesBeforeGuard, radio.contactRequests.size, "Recovery must fail before another fetch")
+            assertEquals(0, batchSaves)
+            assertEquals(0, deletes)
+            assertEquals(0, markerClears)
+            assertEquals(newer, store.fetchContact(radioA, newer.publicKey))
+            assertEquals(orphan, store.fetchContact(radioA, orphan.publicKey))
+            assertTrue(preferences.bool("contactWriteReconciliation.${radioA.value}"))
+            assertTrue(coordinator.notifications.isEmpty())
+            guarded.finishEvents()
+            assertEquals(emptyList(), collectedEvents.await())
+
+            session.stop()
+            val restartedFlags = ContactsFakePreferences().apply {
+                set("contactWriteReconciliation.${radioA.value}", true)
+            }
+            val replacementRadio = radio.replacementView()
+            val restarted = service(
+                connection = newSession(replacementRadio),
+                persistence = observedPersistence,
+                flags = restartedFlags,
+            )
+            assertRecoveryRemainsBlocked(restarted)
+            assertTrue(replacementRadio.contactRequests.isEmpty())
+            assertEquals(0, batchSaves)
+            assertEquals(0, deletes)
+            assertEquals(newer, store.fetchContact(radioA, newer.publicKey))
+            assertEquals(orphan, store.fetchContact(radioA, orphan.publicKey))
+            assertTrue(restartedFlags.bool("contactWriteReconciliation.${radioA.value}"))
+            assertEquals(1, radio.writes.size)
+        }
+    }
+
+    @Test
+    fun ordinaryFullAndIncrementalSyncRemainAvailableWithoutRecovery() = runTest {
+        for (since in listOf(null, Instant.ofEpochSecond(50))) {
+            withFixture {
+                val producer = service()
+                val add = async { producer.addOrUpdateContact(radioA, frame(1, "Radio contact")) }
+                runCurrent()
+                radio.accept()
+                runCurrent()
+                add.await()
+                val orphan = ContactDTO.fromFrame(radioA, frame(2, "Local only"))
+                store.seed(orphan)
+
+                val result = producer.syncContacts(radioA, since)
+                assertEquals(1L, result.contactsReceived)
+                assertEquals(since != null, result.isIncremental)
+                assertEquals("Radio contact", store.fetchContact(radioA, contactsKey(1))?.name)
+                if (since == null) assertNull(store.fetchContact(radioA, orphan.publicKey))
+                else assertEquals(orphan, store.fetchContact(radioA, orphan.publicKey))
+                assertFalse(producer.needsContactWriteReconciliation(radioA))
+                assertEquals(1, radio.contactRequests.size)
+            }
+        }
+    }
+
     private fun frame(byte: Int, name: String, modified: UInt = 1u) = ContactFrame(
         contactsKey(byte), ContactType.CHAT, 0u, 255u, Bytes.EMPTY, name, 0u, 0.0, 0.0, modified,
     )
@@ -1361,6 +1427,19 @@ class ContactWriteRecoveryTests {
             cleanup: ContactCleanupHandling? = null,
             flags: ContactPreferenceFlags = preferences,
         ) = ContactService(connection, store, persistence, coordinator, cleanup, flags)
+
+        suspend fun assertRecoveryRemainsBlocked(producer: ContactService) {
+            for (since in listOf(null, Instant.ofEpochSecond(50))) {
+                assertFailsWith<ContactServiceError.SyncInterrupted> { producer.syncContacts(radioA, since) }
+                assertTrue(producer.needsContactWriteReconciliation(radioA))
+            }
+            assertEquals(
+                ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED,
+                assertFailsWith<ContactWriteAdmissionBlocked> {
+                    producer.addOrUpdateContact(radioA, frame(0x70, "Blocked retry"))
+                }.reason,
+            )
+        }
 
         suspend fun close() { sessions.asReversed().forEach { it.stop() } }
     }

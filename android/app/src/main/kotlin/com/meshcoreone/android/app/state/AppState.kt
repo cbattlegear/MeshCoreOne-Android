@@ -52,6 +52,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.yield
 
 /** View-environment values a background coordinator refresh reuses when no view is in hand. */
@@ -119,6 +121,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     private val lock = Any()
     private val sessionLock = Any()
+    private val settingsWiring = Mutex()
 
     // region Observable counters and references
 
@@ -641,10 +644,16 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         }
     }
 
-    private fun wireSettingsEventStream(attempt: SessionWiringAttempt): Boolean {
+    private suspend fun wireSettingsEventStream(attempt: SessionWiringAttempt): Boolean = settingsWiring.withLock {
+        var reused = false
+        if (!commitSessionWiring(attempt) {
+                reused = settingsEventsJob?.let { it.token == attempt.session.token && it.job.isActive } == true
+            }
+        ) return@withLock false
+        if (reused) return@withLock true
         val session = attempt.session
         val subscription = session.settingsService.events()
-        return replaceSessionCollector(
+        replaceSessionCollector(
             attempt, subscription.events, { settingsEventsJob }, { settingsEventsJob = it }, subscription::close,
         ) { wrapped ->
             when (val event = wrapped.event) {

@@ -1768,6 +1768,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 val terminal = backgroundScope.async { receipt.awaitOutcome() }
                 if (acceptFirst) {
                     mount(h)
+                    compose.waitForIdle()
                     h.eventually("mounted consumer accepts the raw exact proposal") {
                         navigation.currentState.pendingContactDetail?.publicKey == key(20)
                     }
@@ -2715,6 +2716,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertTrue(f.graphs.all { it.retirement == RuntimePublicationRetirement.NEVER_PUBLISHED })
             assertEquals(RuntimePublicationCounts(0, 0), f.slot.counts)
             assertFalse(f.manager.isNavigationLifecycleCurrent(failedStamp))
+            assertFalse(f.manager.shouldAllowConnection(force = false))
+            testScheduler.advanceTimeBy(30_000)
+            testScheduler.runCurrent()
+            assertTrue(f.manager.shouldAllowConnection(force = false))
 
             f.onFactory = { inputs, graph ->
                 assertEquals(RuntimePublicationOutcome.PUBLISHED, inputs.publication.publish(f.slot.target(graph)))
@@ -3381,8 +3386,17 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val urls = listOf(20, 30).map {
                 h.container.nodesFeature.uriCodec.exportContactUri("Retired contact lookup", key(it), ContactType.REPEATER)
             }
-            val externalRoutes = urls.map { url -> async { external.routeExternal(url) } }
-            urls.forEach { assertTrue(chat.route(it)) }
+            val externalRoutes = urls.mapIndexed { index, url ->
+                val route = async { external.routeExternal(url) }
+                h.eventually("external lookup $index enters the held store", virtualBudgetMillis = 0) {
+                    contactReads.get() == index * 2 + 1
+                }
+                assertTrue(chat.route(url))
+                h.eventually("chat lookup $index enters the held store", virtualBudgetMillis = 0) {
+                    contactReads.get() == index * 2 + 2
+                }
+                route
+            }
             h.eventually("both producers hold found and absent contact lookups") { contactReads.get() == 4 }
             hold = false
             holdReplacement = true

@@ -250,6 +250,7 @@ class NavigationComposeTest {
                         }
                     }
                 }
+                compose.waitForIdle()
                 compose.waitUntil(5_000) { requestOwners.contains(incoming.entryId) }
                 compose.waitForIdle()
                 assertFalse("The previous entry must not be mounted before the preview", renderedEntries.contains(previousEntry))
@@ -328,6 +329,7 @@ class NavigationComposeTest {
                     }
                 }
             }
+            compose.waitForIdle()
             compose.waitUntil(5_000) { consumed.contains(1L) }
             val originalList = list
             compose.runOnIdle {

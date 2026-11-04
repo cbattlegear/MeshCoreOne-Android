@@ -1,7 +1,6 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/AdvertisementServiceTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.services.contacts
 
-import com.meshcoreone.android.core.contracts.domain.LocalDirectContactResolution
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.protocol.event.MeshEvent
 import kotlin.test.assertEquals
@@ -123,9 +122,7 @@ class AdvertisementServiceBackgroundTest {
             startMonitoring(service)
             session.yieldEvent(MeshEvent.Advertisement(key))
             eventually("pending") { key in service.pendingAdvertKeys }
-            val contact = kotlin.test.assertIs<LocalDirectContactResolution.Unique>(
-                service.materializeContactForPendingAdvert(key.prefix(6), radioId),
-            ).contact
+            val contact = assertNotNull(service.materializeContactForPendingAdvert(key.prefix(6), radioId))
             assertEquals(key, contact.publicKey)
             assertTrue(key in service.pendingAdvertKeys)
             assertEquals(0, recorder.callCount, "materialize must not issue GET_CONTACTS")

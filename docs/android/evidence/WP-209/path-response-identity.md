@@ -13,7 +13,7 @@ The dependency is producer-owned `LocalDirectContactPersisting` contract
 that separate role; a missing capability throws explicitly instead of falling back
 to first-prefix-match or nullable lookup.
 
-`AdvertisementService.materializeContactForPendingAdvert(prefix, radioId)` now
+`AdvertisementService.materializeLocalDirectContactForPendingAdvert(prefix, radioId)`
 returns `LocalDirectContactResolution`: `NotFound`, `Ambiguous`, `Stale`, or
 `Unique(contact, rosterRevision)`. Only genuine local absence and exactly one
 pending full key admit a radio fetch. After `getContact` suspends, the method checks
@@ -22,6 +22,14 @@ It then keeps the pending gate across the conditional Room insertion, recency an
 Discover transaction. Storage failures and cancellation propagate. A competing
 local key returned by conditional insertion is combined with the pending key and
 remains `Ambiguous`, never a newly attributed sender.
+
+The typed materializer is additive and inactive. The existing nullable
+`materializeContactForPendingAdvert` implementation, signature and original tests
+are preserved unchanged; it does not call the typed method. Its known ambiguity,
+post-fetch race and error-collapse limitations are **not fixed** by this
+source-only contribution. Neither method is used by the inactive WP-214 candidate
+ingestion seam: typed materialization itself stamps recency and emits ContactUpdated,
+which that source-only ingestion experiment must not trigger.
 
 The callback seam is:
 
@@ -88,10 +96,10 @@ in-memory Room controls. Its controlled session role is not a physical radio:
   remain `Stale`, including when the old radio has a unique persisted row.
 
 Existing advertisement service/background tests and
-`AdvertisementCoordinatorRoomTest` retain their original case identities and
-assertions while adopting the typed result. The original arbitrary one-byte
-multi-match fixture is expressed as two full keys sharing the actual six-byte
-receive prefix; it still asserts no fetch/materialization for ambiguity.
+`AdvertisementCoordinatorRoomTest` retain their original legacy materialization
+case identities, fixtures and assertions. Only the new typed controls invoke the
+inactive six-byte materialization API. The actual path-response controls use the
+producer capability and do not claim the legacy materialization bug is repaired.
 
 ## Verification and integration status
 
@@ -113,8 +121,10 @@ not this clean-main authoring base. A conflicting attempted cherry-pick was
 aborted without producer-source resolutions; #550's branch/head is untouched.
 The consumer commit must be composed by that producer on its actual prerequisite
 graph for exact-head hosted service/data/parity execution and independent source
-review. WP-214 owns the typed sync port/caller; WP-302 retains the app adapter.
-This branch alone is not an assembled, merge-ready application.
+review. WP-214 owns the inactive typed sync port/caller; WP-302 retains the app
+adapter. The additive method split preserves legacy app source compatibility
+without changing or registering that adapter. This branch alone is not an
+assembled, merge-ready application.
 
 No Android device, physical-radio, cross-platform backup, or receive-activation
 acceptance is claimed. Hosted results/logs for the eventual exact candidate are

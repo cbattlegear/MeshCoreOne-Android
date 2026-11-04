@@ -263,7 +263,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             advert(1)
             source.contact = meshContact(1)
             val hold = source.holdContact()
-            val materializing = async { service.materializeContactForPendingAdvert(prefix, RADIO_A) }
+            val materializing = async { service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A) }
             runCurrent()
             assertTrue(hold.entered.isCompleted)
             advert(2)
@@ -281,7 +281,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             advert(1)
             source.contact = meshContact(1)
             val hold = source.holdContact()
-            val materializing = async { service.materializeContactForPendingAdvert(prefix, RADIO_A) }
+            val materializing = async { service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A) }
             runCurrent()
             assertTrue(hold.entered.isCompleted)
             val competing = row(2)
@@ -299,7 +299,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             advert(1)
             source.contact = meshContact(1)
             val hold = source.holdContact()
-            val materializing = async { service.materializeContactForPendingAdvert(prefix, RADIO_A) }
+            val materializing = async { service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A) }
             runCurrent()
             assertTrue(hold.entered.isCompleted)
             val newer = row().copy(name = "Newer", lastModified = 500u, isFavorite = true)
@@ -317,7 +317,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             advert(1)
             source.contact = meshContact(1)
             val hold = intercepted.holdMaterialize()
-            val materializing = async { service.materializeContactForPendingAdvert(prefix, RADIO_A) }
+            val materializing = async { service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A) }
             runCurrent()
             assertTrue(hold.entered.isCompleted)
             val competing = row(2)
@@ -337,7 +337,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             source.contact = meshContact(2)
             assertEquals(
                 LocalDirectContactResolution.Stale,
-                service.materializeContactForPendingAdvert(prefix, RADIO_A),
+                service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A),
             )
             assertTrue(store.fetchContacts(RADIO_A).isEmpty())
             assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
@@ -351,7 +351,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             advert(1)
             source.contact = meshContact(1)
             val hold = source.holdContact()
-            val materializing = async { service.materializeContactForPendingAdvert(prefix, RADIO_A) }
+            val materializing = async { service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A) }
             runCurrent()
             assertTrue(hold.entered.isCompleted)
             source.emit(MeshEvent.ContactDeleted(publicKey(1)))
@@ -369,7 +369,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             advert(1)
             source.contact = meshContact(1)
             val hold = source.holdContact()
-            val materializing = async { service.materializeContactForPendingAdvert(prefix, RADIO_A) }
+            val materializing = async { service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A) }
             runCurrent()
             assertTrue(hold.entered.isCompleted)
             service.stopEventMonitoring()
@@ -388,7 +388,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             advert(1)
             source.contact = meshContact(1)
             val hold = source.holdContact()
-            val materializing = async { service.materializeContactForPendingAdvert(prefix, RADIO_A) }
+            val materializing = async { service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A) }
             runCurrent()
             assertTrue(hold.entered.isCompleted)
             materializing.cancelAndJoin()
@@ -397,7 +397,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             assertEquals(0, intercepted.materializeCalls)
             hold.release.complete(Unit)
             assertIs<LocalDirectContactResolution.Unique>(
-                service.materializeContactForPendingAdvert(prefix, RADIO_A),
+                service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A),
             )
         }
     }
@@ -408,7 +408,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             source.contact = meshContact(1)
             intercepted.materializeFailure = IOException("controlled materialization failure")
             val failure = assertFailsWith<IOException> {
-                service.materializeContactForPendingAdvert(prefix, RADIO_A)
+                service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A)
             }
             assertEquals("controlled materialization failure", failure.message)
             assertTrue(store.fetchContacts(RADIO_A).isEmpty())
@@ -462,7 +462,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             advert(2)
             assertEquals(
                 LocalDirectContactResolution.Stale,
-                service.materializeContactForPendingAdvert(prefix, RADIO_A),
+                service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A),
             )
             service.withPendingAdvertContactOperation(RADIO_A, prefix, observed) { admission ->
                 assertEquals(LocalDirectContactResolution.Stale, admission.resolution)
@@ -483,7 +483,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             service.stopEventMonitoring()
             assertEquals(
                 LocalDirectContactResolution.Stale,
-                service.materializeContactForPendingAdvert(prefix, RADIO_A),
+                service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A),
             )
             service.withPendingAdvertContactOperation(RADIO_A, prefix, observed) { admission ->
                 assertEquals(LocalDirectContactResolution.Stale, admission.resolution)

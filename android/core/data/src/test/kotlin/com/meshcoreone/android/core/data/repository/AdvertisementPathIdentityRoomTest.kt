@@ -449,6 +449,48 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
         }
     }
 
+    @Test fun aReplacedRadioCannotUseTheNewRadiosPendingKeysToAdmitAnOldRadioCandidate() = runTest(scheduler) {
+        val original = row()
+        store.saveContact(original)
+        withFixture {
+            advert(1)
+            val observed = (store as LocalDirectContactPersisting).classifyLocalDirectContact(RADIO_A, prefix)
+            service.stopEventMonitoring()
+            service.startEventMonitoring(RADIO_B)
+            runCurrent()
+            advert(2)
+            assertEquals(
+                LocalDirectContactResolution.Stale,
+                service.materializeContactForPendingAdvert(prefix, RADIO_A),
+            )
+            service.withPendingAdvertContactOperation(RADIO_A, prefix, observed) { admission ->
+                assertEquals(LocalDirectContactResolution.Stale, admission.resolution)
+                val orphan = message(contactID = null).copy(senderKeyPrefix = prefix)
+                val saved = admission.saveIncomingDirectMessage(orphan)
+                assertEquals(LocalDirectContactResolution.Stale, saved.resolution)
+                assertNull(saved.message.contactID)
+            }
+            assertEquals(0, intercepted.materializeCalls)
+            assertTrue(source.requestedContacts.isEmpty())
+        }
+    }
+
+    @Test fun aStoppedMonitorCannotAdmitOrMaterializeAnExistingLocalCandidate() = runTest(scheduler) {
+        store.saveContact(row())
+        withFixture {
+            val observed = (store as LocalDirectContactPersisting).classifyLocalDirectContact(RADIO_A, prefix)
+            service.stopEventMonitoring()
+            assertEquals(
+                LocalDirectContactResolution.Stale,
+                service.materializeContactForPendingAdvert(prefix, RADIO_A),
+            )
+            service.withPendingAdvertContactOperation(RADIO_A, prefix, observed) { admission ->
+                assertEquals(LocalDirectContactResolution.Stale, admission.resolution)
+            }
+            assertTrue(source.requestedContacts.isEmpty())
+        }
+    }
+
     @Test fun pendingGateKeepsNewAdvertRecordingOutsideTheWholeConsumerAdmission() = runTest(scheduler) {
         val original = row()
         store.saveContact(original)
@@ -591,6 +633,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
         private val broadcaster = EventBroadcaster<MeshEvent>()
         var handled = 0
         var contact: MeshContact? = null
+        val requestedContacts = mutableListOf<Bytes>()
         private var contactHold: Hold? = null
         fun holdContact() = Hold().also { contactHold = it }
         fun releaseHolds() { contactHold?.release?.complete(Unit) }
@@ -611,6 +654,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
         override suspend fun setName(name: String): Nothing = unexpected()
         override suspend fun setCoordinates(latitude: Double, longitude: Double): Nothing = unexpected()
         override suspend fun getContact(publicKey: Bytes): MeshContact? {
+            requestedContacts += publicKey
             contactHold?.await()
             return contact
         }

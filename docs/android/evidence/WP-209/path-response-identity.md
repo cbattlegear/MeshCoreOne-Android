@@ -38,7 +38,9 @@ Lock order is **pending gate, local roster fence, Room**. The gate covers advert
 recording, draining, failure/busy requeue, missing-key escalation, deletion and
 teardown reset. The callback receives the producer's actual conservative
 admission, not a wrapper masking a unique admission after its save can bind.
-Distinct pending full keys are combined with current local candidates before
+An absent monitor or different current radio produces `Stale` before a local
+candidate can be returned. Pending keys from a replacement radio cannot admit an
+old radio's candidate. Distinct pending full keys are combined with current local candidates before
 producer admission. Originally `Ambiguous` or `Stale` observations stay unresolved.
 The callback must not reenter advert admission, mutate pending/roster/channel
 state, or perform long hardware or platform-notification work. Release the scope
@@ -66,7 +68,7 @@ trusted exact-candidate review and positive hosted discovery required.
 
 ## Authored controls, not execution evidence
 
-`AdvertisementPathIdentityRoomTest` contains 24 actual service/event-monitor and
+`AdvertisementPathIdentityRoomTest` contains 26 actual service/event-monitor and
 in-memory Room controls. Its controlled session role is not a physical radio:
 
 - Reversed collision insertion orders, foreign-radio isolation, encoded hash-size
@@ -82,6 +84,8 @@ in-memory Room controls. Its controlled session role is not a physical radio:
 - Fetch cancellation, materialization storage failure, same-key versus two-key
   pending/local union, sticky unresolved observations, unresolved message save,
   and cancellation releasing a pending-fenced consumer operation.
+- Old-radio admission after replacement and admission after monitor stop both
+  remain `Stale`, including when the old radio has a unique persisted row.
 
 Existing advertisement service/background tests and
 `AdvertisementCoordinatorRoomTest` retain their original case identities and

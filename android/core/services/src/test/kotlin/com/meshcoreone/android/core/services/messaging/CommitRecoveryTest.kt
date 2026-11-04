@@ -370,6 +370,152 @@ class CommitRecoveryTest {
         )
     }
 
+    @TestFactory fun pendingDirectActionReceiptBoundaries() = listOf(
+        native("pendingDirect_acceptanceSurvivesCancellationAndCannotReplay") {
+            val h = Harness(this); h.start()
+            val message = h.message(status = MessageStatus.PENDING)
+            val receipt = NotificationActionReceipt()
+            val call = backgroundScope.async(receipt) {
+                h.service.sendPendingDirectMessage(message.id, h.contact)
+            }
+
+            runCurrent()
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
+            call.cancelAndJoin()
+            assertFailsWith<CancellationException> { call.await() }
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+            assertTrue(receipt.isAccepted)
+
+            assertFailsWith<MessageServiceException> {
+                withContext(receipt) { h.service.sendPendingDirectMessage(message.id, h.contact) }
+            }
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+        },
+        native("pendingDirect_definiteDeviceRejectionReturnsReadyWithoutFailingRow") {
+            val h = Harness(this); h.start()
+            val message = h.message(status = MessageStatus.PENDING)
+            h.transport.directError = 1u
+            val receipt = NotificationActionReceipt()
+
+            assertFailsWith<MessageServiceException> {
+                withContext(receipt) { h.service.sendPendingDirectMessage(message.id, h.contact) }
+            }
+
+            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+            assertEquals(0, h.service.pendingAckCount)
+            h.transport.directError = null
+            h.transport.acknowledge = true
+            withContext(receipt) { h.service.sendPendingDirectMessage(message.id, h.contact) }
+            assertTrue(receipt.isAccepted)
+            assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
+        },
+        native("pendingDirect_definitelyUnsentCancellationReturnsReadyForSameRow") {
+            val h = Harness(this); h.start()
+            val message = h.message(status = MessageStatus.PENDING)
+            val holding = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            h.transport.beforeReply = {
+                if (it[0] == CommandCode.RESET_PATH.rawValue) {
+                    holding.complete(Unit)
+                    release.await()
+                }
+            }
+            val priorCommand = backgroundScope.async { h.session.resetPath(TARGET) }
+            holding.await()
+            val receipt = NotificationActionReceipt()
+            val call = backgroundScope.async(receipt) {
+                h.service.sendPendingDirectMessage(message.id, h.contact)
+            }
+
+            runCurrent()
+            assertEquals(NotificationActionReceipt.State.IN_FLIGHT, receipt.state)
+            call.cancelAndJoin()
+            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+            assertEquals(0, h.service.pendingAckCount)
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+
+            release.complete(Unit)
+            priorCommand.await()
+            h.transport.beforeReply = null
+            h.transport.acknowledge = true
+            withContext(receipt) { h.service.sendPendingDirectMessage(message.id, h.contact) }
+            assertTrue(receipt.isAccepted)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+        },
+        native("pendingDirect_possibleWireCancellationIsUncertainAndCannotFailOrReplay") {
+            val h = Harness(this); h.start()
+            val message = h.message(status = MessageStatus.PENDING)
+            val entered = CompletableDeferred<Unit>()
+            val waitForReply = CompletableDeferred<Unit>()
+            h.transport.beforeReply = {
+                if (it[0] == CommandCode.SEND_MESSAGE.rawValue) {
+                    entered.complete(Unit)
+                    waitForReply.await()
+                }
+            }
+            val receipt = NotificationActionReceipt()
+            val call = backgroundScope.async(receipt) {
+                h.service.sendPendingDirectMessage(message.id, h.contact)
+            }
+
+            entered.await()
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            call.cancelAndJoin()
+            assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+            assertFailsWith<MessageServiceException> {
+                withContext(receipt) { h.service.sendPendingDirectMessage(message.id, h.contact) }
+            }
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+        },
+        native("pendingDirect_acceptedStateStaysMonotonicAcrossLaterRetryFailure") {
+            val h = Harness(this); h.start()
+            val message = h.message(status = MessageStatus.PENDING)
+            var wireCount = 0
+            h.transport.beforeReply = {
+                if (it[0] == CommandCode.SEND_MESSAGE.rawValue && ++wireCount == 2) {
+                    h.transport.directError = 1u
+                }
+            }
+            val dispatches = mutableListOf<MessageWriteDispatch>()
+            val session = object : MeshCoreSessionProtocol by h.session {
+                override suspend fun sendMessage(
+                    destination: Bytes, text: String, timestamp: Instant, attempt: UByte,
+                    dispatch: MessageWriteDispatch,
+                ): MessageSentInfo {
+                    dispatches += dispatch
+                    return h.session.sendMessage(destination, text, timestamp, attempt, dispatch)
+                }
+            }
+
+            withService(h, h.store, session) { service ->
+                val receipt = NotificationActionReceipt()
+                val call = backgroundScope.async(receipt) {
+                    service.sendPendingDirectMessage(message.id, h.contact)
+                }
+                runCurrent()
+                assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
+                assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+
+                advanceTimeBy(20)
+                runCurrent()
+                assertFailsWith<MessageServiceException> { call.await() }
+                assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
+                assertEquals(2, dispatches.size)
+                assertNotSame(dispatches[0], dispatches[1])
+                assertTrue(receipt.isAccepted)
+                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                assertFailsWith<MessageServiceException> {
+                    withContext(receipt) { service.sendPendingDirectMessage(message.id, h.contact) }
+                }
+                assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
+            }
+        },
+    )
+
     private suspend fun withService(
         h: Harness, store: PersistenceStoreProtocol, session: MeshCoreSessionProtocol = h.session,
         block: suspend (MessageService) -> Unit,

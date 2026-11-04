@@ -358,17 +358,22 @@ class MessageService(
 
     internal suspend fun failMessageAndRethrow(failure: Exception, messageID: UUID, notify: Boolean = false): Nothing {
         // Complete only the already-persisted send's failure before teardown returns, never a successor's work.
+        val notificationReceipt = currentCoroutineContext()[NotificationActionReceipt]
         withContext(NonCancellable) {
             try {
-                mutation(messageID).withLock {
-                    if (pendingAck(messageID)?.acknowledgement == null) {
-                        ownership.checkPersistenceCompletion("failMessage")
-                        synchronized(lock) { pendingAcks.remove(messageID) }
-                        val changed = dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
-                        ownership.checkPersistenceCompletion("failMessage.saved")
-                        if (notify && changed) broadcastFailed(messageID)
-                        recovered("failPending.$messageID")
+                if (notificationReceipt == null) {
+                    mutation(messageID).withLock {
+                        if (pendingAck(messageID)?.acknowledgement == null) {
+                            ownership.checkPersistenceCompletion("failMessage")
+                            synchronized(lock) { pendingAcks.remove(messageID) }
+                            val changed = dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
+                            ownership.checkPersistenceCompletion("failMessage.saved")
+                            if (notify && changed) broadcastFailed(messageID)
+                            recovered("failPending.$messageID")
+                        }
                     }
+                } else if (notificationReceipt.state == NotificationActionReceipt.State.READY) {
+                    synchronized(lock) { pendingAcks.remove(messageID) }
                 }
             } catch (storage: PersistenceStoreException) {
                 remember("failMessage.$messageID", storage)
@@ -439,6 +444,15 @@ class MessageService(
         }
     }
 
+    private suspend fun requireFreshNotificationAction(operation: String) {
+        val receipt = currentCoroutineContext()[NotificationActionReceipt] ?: return
+        if (receipt.state != NotificationActionReceipt.State.READY) {
+            throw MessageServiceException(
+                MessageServiceError.SendFailed("$operation cannot replay a consumed notification action"),
+            )
+        }
+    }
+
     override suspend fun createPendingMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO =
         owned("createPendingMessage", pendingOperations) {
             validate(text, contact)
@@ -450,33 +464,40 @@ class MessageService(
             message
         }
 
-    private suspend fun <T> inlineWire(block: suspend (MessageWriteDispatch?) -> T): T {
+    private suspend fun <T> notificationWire(block: suspend (MessageWriteDispatch?) -> T): T {
         val receipt = currentCoroutineContext()[NotificationActionReceipt]
         if (receipt == null) return block(null)
         val dispatch = MessageWriteDispatch()
-        receipt.wireStarted()
+        val ownsOutcome = receipt.state == NotificationActionReceipt.State.READY
+        if (ownsOutcome) receipt.wireStarted()
         try {
             val result = block(dispatch)
-            receipt.accepted()
+            if (ownsOutcome) receipt.accepted()
             return result
         } catch (cancelled: CancellationException) {
-            if (dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
-                receipt.wireNotDispatched()
-            } else {
-                receipt.uncertain()
+            if (ownsOutcome) {
+                if (dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                    receipt.wireNotDispatched()
+                } else {
+                    receipt.uncertain()
+                }
             }
             throw cancelled
         } catch (rejected: MeshCoreException.DeviceError) {
-            receipt.wireRejected()
+            if (ownsOutcome) receipt.wireRejected()
             throw rejected
         } catch (failure: Exception) {
-            receipt.uncertain()
+            if (ownsOutcome) receipt.uncertain()
             throw failure
         }
     }
 
+    private suspend fun <T> inlineWire(block: suspend (MessageWriteDispatch?) -> T): T =
+        notificationWire(block)
+
     override suspend fun sendDirectMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO =
         owned("sendDirectMessage") {
+            requireFreshNotificationAction("sendDirectMessage")
             validate(text, contact)
             val message = outgoing(text, contact, textType, replyToID)
             val (info, tracking, predicted) = sendBoundary(message.id, true) {
@@ -571,6 +592,7 @@ class MessageService(
         }
         try {
             return owned("queuedDirectMessage") {
+                requireFreshNotificationAction("queuedDirectMessage")
                 val row = fetchSaved(id)
                 if (row.contactID != contact.id || contact.radioId != token.radioId) throw MessageServiceException(MessageServiceError.ContactNotFound)
                 validate(row.text, contact)
@@ -669,7 +691,14 @@ class MessageService(
                     dmOperations.withLock {
                         checkIdentity("retryDirectMessage.wire")
                         if (unacknowledgedRetirement(claim)) null
-                        else completedDirect(claim) ?: session.sendMessage(contact.publicKey.prefix(6), text, Instant.ofEpochSecond(stamp.toLong()), attempt)
+                        else completedDirect(claim) ?: notificationWire { dispatch ->
+                            val timestamp = Instant.ofEpochSecond(stamp.toLong())
+                            if (dispatch == null) {
+                                session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt)
+                            } else {
+                                session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt, dispatch)
+                            }
+                        }
                     }
                 } ?: return null
                 synchronized(lock) { claim.lastSentInfo = info }

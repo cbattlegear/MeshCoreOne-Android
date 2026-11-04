@@ -207,7 +207,7 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
             notifications.postChannelMessageNotification(
                 channel.name, channelIndex, radioId, senderNodeName, messageText,
                 messageDTO.id, channel.notificationLevel, hasSelfMention,
-                ChannelNotificationTarget.Proven(channel.radioId, channel.index, channel.id),
+                ChannelNotificationTarget.Unproved,
             )
         }
     } else {

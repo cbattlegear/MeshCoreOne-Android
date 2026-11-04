@@ -54,7 +54,7 @@ class SyncDisplayTargetAdapterTest {
             "Displayed", 2u, radio, "Peer", "hello", messageId, level, mention, target,
         )
 
-    @Test fun forwardsDisplayedIdentityIntoTheRealNotificationPayload() = runTest {
+    @Test fun forwardsCallerSuppliedDisplayTargetIntoTheRealNotificationPayload() = runTest {
         val (adapter, delivery) = fixture()
         val target = ChannelNotificationTarget.Proven(radio, 2u, occupantId)
 

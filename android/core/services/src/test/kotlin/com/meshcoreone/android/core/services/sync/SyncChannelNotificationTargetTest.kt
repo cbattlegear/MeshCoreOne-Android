@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
 class SyncChannelNotificationTargetTest {
     @TestFactory
     fun displayedTargets(): List<DynamicTest> = listOf(
-        nativeCase("channel notification captures identity from the same displayed name and level snapshot") {
+        nativeCase("channel notification uses the displayed name and level without inventing occupant proof") {
             val radioId = newRadio()
             val store = SyncInMemoryStore.createTestDataStore(radioId)
             val channel = ChannelDTO(
@@ -37,7 +37,7 @@ class SyncChannelNotificationTargetTest {
             assertEquals(channel.name, post.title)
             assertEquals(channel.notificationLevel, post.notificationLevel)
             assertEquals(true, post.hasSelfMention)
-            assertEquals(ChannelNotificationTarget.Proven(radioId, channel.index, channel.id), post.displayTarget)
+            assertEquals(ChannelNotificationTarget.Unproved, post.displayTarget)
             assertEquals(listOf("hello @[TestDevice]"), store.allMessages().map { it.text })
         },
         nativeCase("unresolved receive remains saved without inventing a display target or notification") {
@@ -84,22 +84,19 @@ class SyncChannelNotificationTargetTest {
             assertTrue(services.notifications.posts.isEmpty())
         },
     ) + listOf(false, true).map { sameKey ->
-        nativeCase("held and reordered notifications retain each displayed occupant across ${if (sameKey) "same-key ABA" else "replacement"}") {
+        nativeCase("held and reordered notifications remain unproved across ${if (sameKey) "same-key ABA" else "replacement"}") {
             val radioId = newRadio()
             val old = ChannelDTO(radioId = radioId, index = 2u, name = "Old", secret = Bytes(ByteArray(16) { 1 }))
-            val middle = ChannelDTO(
-                radioId = radioId, index = old.index, name = if (sameKey) "Middle" else "Replacement",
+            val middle = old.copy(
+                name = if (sameKey) "Middle" else "Replacement",
                 secret = Bytes(ByteArray(16) { 2 }),
                 notificationLevel = NotificationLevel.MENTIONS_ONLY,
             )
             val replacement = if (sameKey) {
-                ChannelDTO(
-                    radioId = radioId, index = old.index, name = "Replacement", secret = old.secret,
-                    notificationLevel = NotificationLevel.MENTIONS_ONLY,
-                )
+                middle.copy(name = "Replacement", secret = old.secret)
             } else middle
-            assertNotEquals(old.id, middle.id)
-            assertNotEquals(old.id, replacement.id)
+            assertEquals(old.id, middle.id)
+            assertEquals(old.id, replacement.id)
             assertNotEquals(old.secret, middle.secret)
             if (sameKey) assertEquals(old.secret, replacement.secret)
             val services = SyncTestServices(SyncInMemoryStore.createTestDataStore(radioId))
@@ -140,8 +137,8 @@ class SyncChannelNotificationTargetTest {
             assertEquals(listOf(replacement.name, old.name), posts.map { it.title })
             assertEquals(
                 listOf(
-                    ChannelNotificationTarget.Proven(radioId, replacement.index, replacement.id),
-                    ChannelNotificationTarget.Proven(radioId, old.index, old.id),
+                    ChannelNotificationTarget.Unproved,
+                    ChannelNotificationTarget.Unproved,
                 ),
                 posts.map { it.displayTarget },
             )

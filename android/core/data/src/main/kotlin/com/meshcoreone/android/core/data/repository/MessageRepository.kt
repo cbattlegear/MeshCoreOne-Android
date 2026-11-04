@@ -34,8 +34,7 @@ internal class MessageRepository(
             id = intent.messageID, radioId = intent.radioId, contactID = intent.contactID,
             text = intent.text, textType = intent.textType, replyToID = intent.replyToID,
             timestamp = timestamp, createdAt = createdAt,
-        ).toEntity().copy(timestamp = timestamp.toLong())
-        // The general DTO mapper repairs zero timestamps; this producer preserves the supplied wire value.
+        ).toEntityPreservingTimestamp()
         database.messages().insert(row)
         save()
         database.messages().byId(intent.radioId.value, intent.messageID)?.toDTO()

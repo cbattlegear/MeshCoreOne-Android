@@ -14,14 +14,15 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executor
 import kotlin.test.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -77,6 +78,28 @@ class PendingDirectMessageCreationTest : RepositoryTest() {
             }
         }
         assertTrue(issues.isEmpty())
+    }
+
+    @Test fun zeroTimestampIsIndependentOfCreationTimeAndLegacyMappingStillRejectsInvalidDerivedTime() = runTest {
+        for (createdAt in listOf(
+            Instant.ofEpochSecond(-1),
+            Instant.ofEpochSecond(-2, 500_000_000),
+            Instant.ofEpochSecond(UInt.MAX_VALUE.toLong() + 1),
+            Instant.ofEpochSecond(UInt.MAX_VALUE.toLong() + 1, 999_999_999),
+        )) {
+            val intent = intent()
+            val actual = store.createOrReconcilePendingDirectMessage(intent, 0u, createdAt)
+            assertEquals(0u, actual.timestamp)
+            assertEquals(createdAt, actual.createdAt)
+            assertEquals(createdAt, actual.sortDate)
+            val row = assertNotNull(db.messages().byId(RADIO_A.value, intent.messageID))
+            assertEquals(0L, row.timestamp)
+            assertEquals(actual, row.toDTO())
+            assertEquals(actual, store.createOrReconcilePendingDirectMessage(intent, 99u, AT))
+            val failure = assertFailsWith<PersistenceStoreException> { store.saveMessage(actual.copy(id = UUID.randomUUID())) }
+            assertIs<PersistenceStoreError.SaveFailed>(failure.error)
+            assertEquals(listOf(row), db.messages().forIdentity(intent.messageID))
+        }
     }
 
     @Test fun conflictingImmutableIntentFailsTypedWithoutReplacingAnyRow() = runTest {
@@ -258,18 +281,22 @@ class PendingDirectMessageCreationTest : RepositoryTest() {
             }
         }
         entered.await()
+        val requested = CompletableDeferred<Unit>()
+        val creation = async(Dispatchers.IO) {
+            requested.complete(Unit)
+            store.createOrReconcilePendingDirectMessage(intent, 42u, AT)
+        }
         try {
-            val requested = CompletableDeferred<Unit>()
-            val creation = async(Dispatchers.IO) {
-                requested.complete(Unit)
-                store.createOrReconcilePendingDirectMessage(intent, 42u, AT)
-            }
             requested.await()
-            creation.cancelAndJoin()
+            creation.cancel()
         } finally {
+            // Room must service the occupied transaction executor before the queued cancellation can join.
             release.complete(Unit)
             blocker.await()
         }
+        creation.join()
+        assertTrue(creation.isCancelled)
+        assertFailsWith<CancellationException> { creation.await() }
         assertTrue(db.messages().forIdentity(intent.messageID).isEmpty())
         assertTrue(issues.isEmpty())
         assertEquals(intent.messageID, store.createOrReconcilePendingDirectMessage(intent, 42u, AT).id)

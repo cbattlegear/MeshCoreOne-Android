@@ -16,7 +16,6 @@ data class MessageWindow(val messages: SnapshotList<MessageDTO>, val hasMore: Bo
 data class ChannelQuery(val radioId: RadioId, val channelIndex: UByte, val id: UUID)
 data class ContactIdentity(val id: UUID, val publicKey: Bytes)
 data class ContactSaveResult(val id: UUID, val isNew: Boolean)
-// AndroidOnly: WP-209 Identity-checked, existing-row-only avatar mutation outcome.
 enum class ContactAvatarUpdateResult { UPDATED, CONTACT_NOT_FOUND, IDENTITY_MISMATCH }
 data class DiscoveredNodeSaveResult(val node: DiscoveredNodeDTO, val isNew: Boolean)
 data class ParsedReaction(val emoji: String, val targetSender: String, val messageHash: String)

@@ -43,7 +43,6 @@ interface ContactDao : RowWriter<ContactEntity> {
     fun observe(radioId: UUID): Flow<List<ContactEntity>>
     @Query("SELECT * FROM contacts WHERE radioId = :radioId AND id = :id")
     suspend fun byId(radioId: UUID, id: UUID): ContactEntity?
-    // AndroidOnly: WP-209 Existing-row avatar write cannot overwrite metadata or insert a deleted contact.
     @Query("UPDATE contacts SET avatarImageData = :imageData WHERE radioId = :radioId AND id = :id AND publicKey = :expectedPublicKey")
     suspend fun updateAvatar(radioId: UUID, id: UUID, expectedPublicKey: Bytes, imageData: Bytes?): Int
     @Query("SELECT * FROM contacts WHERE radioId = :radioId AND publicKey = :key")

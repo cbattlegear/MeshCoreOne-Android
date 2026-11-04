@@ -210,7 +210,7 @@ class LocalDirectAttributionRepositoryTest : RepositoryTest() {
         )
         val actual = inserted.contact
         val second = store.materializeLocalDirectContactIfAbsent(RADIO_A, prefix, peer(11).toContactFrame(), AT)
-        assertEquals(actual.id, assertIs<LocalDirectContactResolution.Unique>(second).contact.id)
+        assertEquals(LocalDirectContactResolution.Ambiguous, second)
         assertEquals(1, store.fetchContacts(RADIO_A).size)
         val updated = assertIs<LocalDirectContactResolution.Unique>(store.applyLocalDirectPathIfCurrent(
             RADIO_A, prefix, inserted, 1u, Bytes.of(0xAA), AT.plusSeconds(1),

@@ -127,12 +127,18 @@ The complementary actual-coordinator schedule supersedes the lookup revision
 during retry and asserts that stale completion adds no state publication,
 navigation, consent, failure or consumption, retaining the retryable delivery.
 An additional authored actual-coordinator schedule cancels the retry caller
-immediately after the real `WrongTarget` publication, before the parent can
-consume the route result, on standard and unconfined test dispatchers. It
+after the real `WrongTarget` CAS, before deferred publication release and before
+the parent can consume the route result, on standard and unconfined test dispatchers. It
 asserts visible failure/revision-only publication, cancellation propagation,
 exact terminal delivery accounting and no replay via retry, duplicate submit,
 or old-attempt actions. This source is uncompiled/unexecuted; it does not
-establish cancellation-at-WrongTarget execution evidence.
+establish cancellation-at-WrongTarget execution evidence. Review corrected the
+earlier inaccurate "immediately after publication" wording: producer `69e7a82`
+defers observable publication until `ContactLinkPublications.use` closes.
+A separate authored schedule now collects the actual navigation StateFlow,
+asserts the exact published WrongTarget/revision state, and cancels the retry
+caller from that observation. Both controls are preserved and remain unrun
+until the combined candidate's hosted job executes them.
 
 The adapter-only successor `1fec5c1c7751fd80989cb5d09a12b5dd7debee09`
 did not close the consumer failure path: the router still used `lookupOrNull`.

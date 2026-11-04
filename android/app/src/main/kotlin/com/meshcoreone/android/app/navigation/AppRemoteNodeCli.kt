@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -25,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
@@ -41,6 +43,8 @@ import com.meshcoreone.android.app.container.appCliErrors
 internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend, enabled: Boolean) {
     val scope = rememberCoroutineScope()
     val resources = LocalResources.current
+    val clipboard = LocalClipboardManager.current
+    val copy = stringResource(AppToolsStrings.toolsRxLogCopy)
     val diagnostics by rememberUpdatedState(remember(resources) { ResourcesDiagnosticsText(resources) })
     val noService by rememberUpdatedState(stringResource(L.remoteNodesSettingsNoService))
     val currentSend by rememberUpdatedState(send)
@@ -75,25 +79,31 @@ internal fun AppRemoteNodeCli(session: RemoteNodeSessionDTO, send: RemoteCliSend
         SelectionContainer(Modifier.weight(1f)) {
             LazyColumn(Modifier.fillMaxSize()) {
                 items(state.terminal.outputLines, key = { it.id }) { line ->
-                    Text(
-                        line.text,
-                        modifier = Modifier.semantics {
-                            when (line.type) {
-                                CliOutputType.SUCCESS -> stateDescription = success
-                                CliOutputType.ERROR -> error(line.text)
-                                CliOutputType.COMMAND, CliOutputType.RESPONSE -> Unit
-                            }
-                        },
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = if (line.type == CliOutputType.SUCCESS) FontWeight.Bold else FontWeight.Normal,
-                        fontStyle = if (line.type == CliOutputType.ERROR) FontStyle.Italic else FontStyle.Normal,
-                        color = when (line.type) {
-                            CliOutputType.COMMAND -> MaterialTheme.colorScheme.onSurfaceVariant
-                            CliOutputType.SUCCESS -> MaterialTheme.colorScheme.primary
-                            CliOutputType.ERROR -> MaterialTheme.colorScheme.error
-                            CliOutputType.RESPONSE -> MaterialTheme.colorScheme.onSurface
-                        },
-                    )
+                    Row(Modifier.fillMaxWidth()) {
+                        Text(
+                            line.text,
+                            modifier = Modifier.weight(1f).semantics {
+                                when (line.type) {
+                                    CliOutputType.SUCCESS -> stateDescription = success
+                                    CliOutputType.ERROR -> error(line.text)
+                                    CliOutputType.COMMAND, CliOutputType.RESPONSE -> Unit
+                                }
+                            },
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = if (line.type == CliOutputType.SUCCESS) FontWeight.Bold else FontWeight.Normal,
+                            fontStyle = if (line.type == CliOutputType.ERROR) FontStyle.Italic else FontStyle.Normal,
+                            color = when (line.type) {
+                                CliOutputType.COMMAND -> MaterialTheme.colorScheme.onSurfaceVariant
+                                CliOutputType.SUCCESS -> MaterialTheme.colorScheme.primary
+                                CliOutputType.ERROR -> MaterialTheme.colorScheme.error
+                                CliOutputType.RESPONSE -> MaterialTheme.colorScheme.onSurface
+                            },
+                        )
+                        TextButton(
+                            onClick = { clipboard.setText(AnnotatedString(holder.getResponseBlock(line))) },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text(copy) }
+                    }
                 }
             }
         }

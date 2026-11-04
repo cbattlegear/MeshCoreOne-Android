@@ -320,6 +320,67 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
+    fun unresolvedRawReplyRefusesContactOperationsWithoutCreatingRecovery() = runTest {
+        for (remove in listOf(false, true)) {
+            withFixture {
+                val row = ContactDTO.fromFrame(radioA, frame(2, "Retained"))
+                store.seed(row)
+                val flags = PendingMarkerFlags()
+                val logs = mutableListOf<Pair<ContactLogLevel, String>>()
+                val producer = service(
+                    flags = flags,
+                    logger = ContactServiceLogger { level, message -> logs += level to message },
+                )
+                val raw = async {
+                    assertFailsWith<MeshCoreException.Timeout> {
+                        session.sendAndWait<Unit>(Bytes.of(0x14), timeout = 0.1) { null }
+                    }
+                }
+                runCurrent()
+                advanceTimeBy(101)
+                runCurrent()
+                raw.await()
+                repeat(2) {
+                    val failure = assertFailsWith<ContactServiceError.SessionError> {
+                        if (remove) producer.removeContact(radioA, row.publicKey)
+                        else producer.addOrUpdateContact(radioA, frame(3, "Must not send"))
+                    }
+                    assertIs<MeshCoreException.ConnectionLost>(failure.error)
+                    assertSame(failure.error, failure.cause)
+                }
+                assertTrue(radio.writes.isEmpty())
+                assertTrue(radio.removeRequests.isEmpty())
+                assertEquals(row, store.fetchContact(EntityKey(radioA, row.id)))
+                assertNull(store.fetchContact(radioA, contactsKey(3)))
+                assertTrue(store.deletedContactIDs.isEmpty())
+                assertTrue(flags.attempts.isEmpty())
+                assertFalse(producer.needsContactWriteReconciliation(radioA))
+                assertTrue(logs.isEmpty())
+
+                session.stop()
+                val replacementRadio = radio.replacementView()
+                val replacement = service(newSession(replacementRadio), flags = flags)
+                assertEquals(0L, replacement.syncContacts(radioA, Instant.ofEpochSecond(50)).contactsReceived)
+                if (remove) {
+                    replacement.removeContact(radioA, row.publicKey)
+                    assertEquals(1, replacementRadio.removeRequests.size)
+                    assertNull(store.fetchContact(radioA, row.publicKey))
+                } else {
+                    val accepted = async { replacement.addOrUpdateContact(radioA, frame(3, "Replacement")) }
+                    runCurrent()
+                    assertEquals(1, replacementRadio.writes.size)
+                    replacementRadio.accept()
+                    runCurrent()
+                    accepted.await()
+                    assertEquals("Replacement", store.fetchContact(radioA, contactsKey(3))?.name)
+                }
+                assertFalse(replacement.needsContactWriteReconciliation(radioA))
+                assertTrue(flags.attempts.isEmpty())
+            }
+        }
+    }
+
+    @Test
     fun cancellationQueuedBehindAnActualExchangeIsDefinitelyUnsent() = runTest {
         withFixture {
             val blocking = async { session.addContact(frame(1, "Blocking").toMeshContact()) }

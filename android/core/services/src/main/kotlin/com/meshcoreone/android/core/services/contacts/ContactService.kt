@@ -300,7 +300,12 @@ class ContactService(
         dispatch: ContactWriteDispatch? = null,
     ) {
         try {
-            ContactWriteRecovery.require(preferences, radioId, dispatch)
+            if (dispatch?.definitelyUnsent == true) {
+                ContactWriteRecovery.abandonDefinitelyUnsent(preferences, radioId, dispatch)
+                if (!ContactWriteRecovery.retryExistingRecovery(preferences, radioId)) return
+            } else {
+                ContactWriteRecovery.require(preferences, radioId, dispatch)
+            }
         } catch (recordingFailure: Exception) {
             if (recordingFailure !== failure) failure.addSuppressed(recordingFailure)
             logger.log(ContactLogLevel.WARNING, "Contact recovery marker could not be persisted")

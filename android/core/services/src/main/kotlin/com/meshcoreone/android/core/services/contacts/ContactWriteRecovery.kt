@@ -141,6 +141,14 @@ internal object ContactWriteRecovery {
         }
     }
 
+    @Synchronized
+    fun retryExistingRecovery(preferences: ContactPreferenceFlags, radioId: RadioId): Boolean {
+        val state = state(preferences, radioId)
+        if (state.epoch == null) return false
+        recordPendingMarker(preferences, radioId, state)
+        return true
+    }
+
     fun finishWrite(
         preferences: ContactPreferenceFlags,
         radioId: RadioId,

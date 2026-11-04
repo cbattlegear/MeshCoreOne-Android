@@ -77,6 +77,9 @@ class RequestResponseSerializer(
                 try {
                     caller.ensureActive()
                     context.operation()
+                } catch (failure: Exception) {
+                    dispatch?.cancelled(context.cancelDispatch())
+                    throw failure
                 } finally {
                     if (!caller.isActive) dispatch?.cancelled(context.cancelDispatch())
                     dispatch?.exchangeFinished()

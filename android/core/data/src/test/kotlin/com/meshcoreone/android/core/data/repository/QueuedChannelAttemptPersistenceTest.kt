@@ -309,6 +309,60 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         assertEquals(listOf(key), store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id)).map { it.key })
     }
 
+    @Test fun rejectedDirectRetryWithRetainedChannelIDPreservesFailedMessageAndExistingPendingRow() = runTest {
+        val channelMessage = channelMessage()
+        val channelPending = queued(channelMessage)
+        seed(channelMessage, channelPending)
+        val key = attempt(channelPending)
+        store.beginQueuedChannelAttempt(key, assertNotNull(channelMessage.channelOccupantID), 19u)
+        store.settleQueuedChannelAttempt(key, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
+        store.retireDefinitelyUnsentQueuedChannelAttempt(key)
+        val retained = store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id))
+        assertEquals(listOf(key), retained.map { it.key })
+
+        val directMessage = message(text = "failed direct message", status = MessageStatus.FAILED)
+        store.saveMessage(directMessage)
+        val previous = pending(messageID = directMessage.id).copy(
+            id = UUID.fromString("00000000-0000-0000-0000-000000000101"),
+        )
+        store.insertPendingSendAssigningSequence(previous)
+        val before = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, directMessage.id))
+        val collidingRetry = pending(messageID = directMessage.id).copy(id = channelPending.id)
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.replacePendingSendForRetry(directMessage.id, collidingRetry)
+        }
+
+        assertEquals(before, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, directMessage.id)))
+        assertEquals(MessageStatus.FAILED, assertNotNull(
+            store.fetchMessage(EntityKey(RADIO_A, directMessage.id)),
+        ).status)
+        assertEquals(retained, store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id)))
+    }
+
+    @Test fun directRetryReplacesExistingPendingRowAndUpdatesFailedMessageStatus() = runTest {
+        val directMessage = message(text = "retry this direct message", status = MessageStatus.FAILED)
+        store.saveMessage(directMessage)
+        val previous = pending(messageID = directMessage.id).copy(
+            id = UUID.fromString("00000000-0000-0000-0000-000000000201"),
+        )
+        store.insertPendingSendAssigningSequence(previous)
+        val previousStored = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, directMessage.id)).single()
+        val replacement = pending(messageID = directMessage.id).copy(
+            id = UUID.fromString("00000000-0000-0000-0000-000000000202"),
+        )
+
+        val sequence = store.replacePendingSendForRetry(directMessage.id, replacement)
+
+        assertEquals(1L, sequence)
+        assertEquals(listOf(replacement.copy(sequence = sequence)),
+            store.fetchPendingSendsForMessage(EntityKey(RADIO_A, directMessage.id)))
+        assertNotEquals(previousStored.id, replacement.id)
+        assertEquals(MessageStatus.PENDING, assertNotNull(
+            store.fetchMessage(EntityKey(RADIO_A, directMessage.id)),
+        ).status)
+    }
+
     @Test fun directRetryCannotDeleteOrReclassifyUnknownSiblingRows() = runTest {
         val row = channelMessage()
         val unknownDTO = pending(messageID = row.id, sequence = 1)

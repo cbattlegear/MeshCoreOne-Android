@@ -2,7 +2,11 @@
 // AndroidOnly: WP-215 Accepted/uncertain action cancellation, replacement and capacity regressions.
 package com.meshcoreone.android.platform.notifications.messaging
 
+import android.app.RemoteInput
+import android.content.Context
 import android.content.Intent
+import android.os.Bundle
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
@@ -37,6 +41,34 @@ class NotificationActionDispatcherTest {
     @After
     fun reset() {
         NotificationActionDispatcher.resetForTesting()
+    }
+
+    @Test
+    fun receiverPreservesExactReplyTextWithoutAdmittingWhitespaceOnlyInput() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val expected = "  Original reply\nwith trailing space  "
+        val payload = response("10000000-0000-0000-0000-000000000001").payload
+        val delivered = mutableListOf<NotificationResponse>()
+        NotificationActionDispatcher.install(this) { delivered += it; true }
+        fun replyIntent(text: String): Intent {
+            val intent = NotificationPayloadCodec.write(
+                Intent(context, NotificationActionReceiver::class.java)
+                    .putExtra(NotificationActionReceiver.EXTRA_ACTION, NotificationAction.REPLY.rawValue),
+                payload,
+            )
+            val input = RemoteInput.Builder(NotificationActionReceiver.REMOTE_INPUT_KEY).build()
+            RemoteInput.addResultsToIntent(
+                arrayOf(input), intent,
+                Bundle().apply { putCharSequence(input.resultKey, text) },
+            )
+            return intent
+        }
+        val receiver = NotificationActionReceiver()
+        receiver.onReceive(context, replyIntent(" \t\n "))
+        receiver.onReceive(context, replyIntent(expected))
+        assertTrue(NotificationActionDispatcher.drainOnce())
+        assertEquals(1, delivered.size)
+        assertEquals(expected, delivered.single().userText)
     }
 
     @Test

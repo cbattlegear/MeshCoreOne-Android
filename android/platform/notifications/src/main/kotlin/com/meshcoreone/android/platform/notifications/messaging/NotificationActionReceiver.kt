@@ -35,7 +35,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
         }
         val text = if (action == NotificationAction.REPLY) {
             RemoteInput.getResultsFromIntent(intent)?.getCharSequence(REMOTE_INPUT_KEY)?.toString()
-                ?.trim()?.takeIf(String::isNotEmpty) ?: return
+                ?.takeIf(String::isNotBlank) ?: return
         } else {
             null
         }

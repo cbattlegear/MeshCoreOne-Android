@@ -139,6 +139,11 @@ or open-app path; an intentional identical second reply requires a fresh action.
 This decision is not yet activated by the current consumer. It must not be
 implemented by inventing a per-receiver UUID or using a text hash as submission
 identity.
+The receiver now validates nonblank RemoteInput without trimming the original
+text, so later staging/conflict comparison can preserve what the user typed.
+A direct receiver/dispatcher regression covers leading/trailing whitespace and
+embedded newline preservation while retaining whitespace-only rejection. This
+is authored, not executed product evidence.
 
 ### Remaining producer and consumer boundaries
 

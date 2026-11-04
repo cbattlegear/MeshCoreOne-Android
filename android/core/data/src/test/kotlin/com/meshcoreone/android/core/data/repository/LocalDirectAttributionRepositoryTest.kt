@@ -94,16 +94,20 @@ class LocalDirectAttributionRepositoryTest : RepositoryTest() {
         }
     }
 
-    @Test fun finalResolvedDedupUsesOriginalWireTimestampNotCorrectedTimestamp() = runTest(scheduler) {
+    @Test fun localUniquenessCannotDeduplicateDistinctEqualRadioOccurrences() = runTest(scheduler) {
         val peer = peer(10)
         store.saveContact(peer)
         val observed = store.classifyLocalDirectContact(RADIO_A, prefix)
         val one = store.saveIncomingDirectMessage(incoming(), observed)
-        val duplicate = store.saveIncomingDirectMessage(incoming(), observed)
+        val equalOccurrence = store.saveIncomingDirectMessage(incoming(), observed)
+        val duplicate = store.saveIncomingDirectMessage(one.message, observed)
         assertTrue(one.inserted)
+        assertTrue(equalOccurrence.inserted)
+        assertNotEquals(one.message.deduplicationKey, equalOccurrence.message.deduplicationKey)
         assertFalse(duplicate.inserted)
         assertEquals(one.message.id, duplicate.message.id)
-        assertEquals(RepositoryDeduplicationKey.contentBased(peer.id, null, null, 0u, one.message.text), one.message.deduplicationKey)
+        assertEquals(LocalDirectMessageProvenance.LOCAL_CANDIDATE, LocalDirectMessageProvenance.of(one.message))
+        assertEquals(0u, one.message.senderTimestamp)
         assertEquals(peer.id, one.message.contactID)
     }
 
@@ -127,6 +131,7 @@ class LocalDirectAttributionRepositoryTest : RepositoryTest() {
         val scoped = async {
             store.withLocalDirectContactOperation(RADIO_A, prefix, observed) { admission ->
                 assertIs<LocalDirectContactResolution.Unique>(admission.resolution)
+                assertFailsWith<IllegalStateException> { store.saveContact(peer(11)) }
                 assertTrue(store.touchContactHeard(RADIO_A, peer.publicKey, AT))
                 assertNotNull(store.fetchContact(EntityKey(RADIO_A, peer.id)))
                 entered.complete(Unit)

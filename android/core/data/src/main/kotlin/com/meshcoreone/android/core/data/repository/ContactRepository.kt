@@ -169,7 +169,7 @@ internal class ContactRepository(
             val unread = LinkedHashMap<UUID, Long>()
             val mentions = LinkedHashMap<UUID, Long>()
             for (message in database.messages().orphanedDirectMessages(radioId.value)) {
-                if (message.deduplicationKey?.startsWith(LOCAL_DIRECT_UNRESOLVED) == true) continue
+                if (LocalDirectMessageProvenance.of(message.toDTO()) != null) continue
                 if (message.directionRawValue != MessageDirection.INCOMING.rawValue) continue
                 val prefix = message.senderKeyPrefix ?: continue
                 if (prefix.isEmpty || RepositoryReactionPolicy.isDirectReaction(message.text)) continue

@@ -22,17 +22,16 @@ internal object LocalDirectRoster {
     var revision: UUID = UUID.randomUUID()
         private set
 
-    suspend fun <T> read(block: suspend () -> T): T = mutex.withLock { block() }
+    suspend fun <T> read(block: suspend () -> T): T =
+        mutex.withLock(checkNotNull(currentCoroutineContext()[Job])) { block() }
 
-    suspend fun <T> mutate(block: suspend () -> T): T = mutex.withLock {
+    suspend fun <T> mutate(block: suspend () -> T): T = mutex.withLock(checkNotNull(currentCoroutineContext()[Job])) {
         invalidate()
         block()
     }
 
     fun invalidate() { revision = UUID.randomUUID() }
 }
-
-internal const val LOCAL_DIRECT_UNRESOLVED = "local-direct-unresolved:"
 
 internal class LocalDirectContactRepository(
     private val context: RoomRepositoryContext,
@@ -85,11 +84,9 @@ internal class LocalDirectContactRepository(
                 ) invalidData("Incoming direct message does not match its local admission")
                 val final = revalidate(radioId, prefix, resolution)
                 val contact = (final as? LocalDirectContactResolution.Unique)?.contact
-                val dedup = if (contact == null) "$LOCAL_DIRECT_UNRESOLVED${dto.id}" else {
-                    RepositoryDeduplicationKey.contentBased(
-                        contact.id, null, dto.senderNodeName, dto.senderTimestamp ?: dto.timestamp, dto.text,
-                    )
-                }
+                val provenance = if (contact == null) LocalDirectMessageProvenance.UNRESOLVED
+                    else LocalDirectMessageProvenance.LOCAL_CANDIDATE
+                val dedup = provenance.occurrenceKey(dto.id)
                 val saved = dto.copy(contactID = contact?.id, deduplicationKey = dedup)
                 val existing = database.messages().byId(radioId.value, dto.id)
                 if (existing != null) {
@@ -101,10 +98,6 @@ internal class LocalDirectContactRepository(
                     // Retry by occurrence never overwrites an earlier committed attribution decision.
                     val oldResolution = if (old.contactID == contact?.id) final else LocalDirectContactResolution.Stale
                     return@write LocalDirectMessageSaveResult(old, oldResolution, false)
-                }
-                if (contact != null) {
-                    val duplicate = database.messages().forDeduplicationKey(radioId.value, dedup).firstOrNull()
-                    if (duplicate != null) return@write LocalDirectMessageSaveResult(duplicate.toDTO(), final, false)
                 }
                 database.messages().insert(saved.toEntity())
                 save()

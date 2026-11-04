@@ -38,6 +38,25 @@ data class LocalDirectMessageSaveResult(
     val inserted: Boolean,
 )
 
+/** Durable local bookkeeping in the existing backup-compatible deduplication field, never RF proof. */
+enum class LocalDirectMessageProvenance {
+    UNRESOLVED,
+    LOCAL_CANDIDATE;
+
+    fun occurrenceKey(id: UUID): String = when (this) {
+        UNRESOLVED -> "local-direct-unresolved:$id"
+        LOCAL_CANDIDATE -> "local-direct-candidate:$id"
+    }
+
+    companion object {
+        fun of(message: MessageDTO): LocalDirectMessageProvenance? = when (message.deduplicationKey) {
+            UNRESOLVED.occurrenceKey(message.id) -> UNRESOLVED
+            LOCAL_CANDIDATE.occurrenceKey(message.id) -> LOCAL_CANDIDATE
+            else -> null
+        }
+    }
+}
+
 /** Valid only in its owning callback/Job; it must not escape or be used by a child coroutine. */
 interface LocalDirectContactAdmission {
     val resolution: LocalDirectContactResolution

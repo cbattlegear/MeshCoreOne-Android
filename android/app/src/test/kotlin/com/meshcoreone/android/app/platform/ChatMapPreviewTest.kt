@@ -16,6 +16,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.*
+import com.meshcoreone.android.app.container.RoomProcessTest
 import com.meshcoreone.android.app.content.DataStoreLinkPreviewPreferencesSource
 import com.meshcoreone.android.app.navigation.AppMapSettings
 import com.meshcoreone.android.app.navigation.AppMessageContent
@@ -285,10 +286,17 @@ class ChatMapPreviewTest : RoomProcessTest() {
 
     @Test fun memoryTrimDuringRenderingNotifiesTheLoadingCardAndDeduplicatesItsReplacement() = runTest {
         val first = CompletableDeferred<Bitmap?>()
+        val firstStarted = CompletableDeferred<Unit>()
         var calls = 0
-        withFixture(render = { if (++calls == 1) first.await() else bitmap() }) {
+        withFixture(render = {
+            if (++calls == 1) {
+                firstStarted.complete(Unit)
+                first.await()
+            } else bitmap()
+        }) {
             mount(message)
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
+            compose.waitUntil(10_000) { firstStarted.isCompleted }
             assertEquals(1, requests.size)
             compose.runOnIdle { content.trimMemory() }
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()

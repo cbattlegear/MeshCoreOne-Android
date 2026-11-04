@@ -41,6 +41,10 @@ interface ContactPersisting {
     suspend fun findContactByPublicKey(publicKey: Bytes): ContactDTO?
     suspend fun saveContact(radioId: RadioId, frame: ContactFrame): ContactSaveResult
     suspend fun saveContact(dto: ContactDTO)
+    /** Atomically changes only the avatar of an existing matching identity; null clears it. Never inserts. */
+    suspend fun updateContactAvatar(
+        key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
+    ): ContactAvatarUpdateResult
     suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long
     suspend fun deleteContact(key: EntityKey)
     suspend fun deleteContacts(

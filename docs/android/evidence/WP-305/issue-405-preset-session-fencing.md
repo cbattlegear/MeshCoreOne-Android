@@ -156,6 +156,13 @@ attempt. The owner's fresh flow constructs a fresh state. An old suspended radio
 flow admission again before starting completion, and cannot mint an attempt after owner settlement.
 This closes the source-only pre-attempt retirement hole; it is not navigation composition evidence.
 
+The app's first-run producer owner, like its rerun owner, now checks exact coordinator identity
+when settling/retiring. It can reacquire a fresh coordinator after a rejected pre-seal attempt
+without reviving that terminal old state. A held real writer control retires A, creates B while
+the durable flag is still false, rejects A without a canonical true, and completes B. Delayed A
+settlement cannot retire B. This is producer custody/recovery only; the held AppRoot gate is not
+replaced, no witness is minted here, and a durable true is never reset implicitly.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

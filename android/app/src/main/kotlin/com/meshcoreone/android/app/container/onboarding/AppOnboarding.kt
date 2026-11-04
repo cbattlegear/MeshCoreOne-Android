@@ -196,16 +196,29 @@ class AppOnboarding(
     val hasCompleted: StateFlow<Boolean>,
     val pairingState: com.meshcoreone.android.app.state.AppState? = null,
 ) : OnboardingFeatureDependencies {
-    private val firstRunFlowCoordinator: OnboardingFlowCoordinator by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        OnboardingFlowCoordinator(flowScope, this).also {
-            it.restoreStartingPath()
-        }
-    }
+    private var firstRunFlowCoordinator: OnboardingFlowCoordinator? = null
     private val rerunDependencies by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { Rerun(this) }
 
     override fun openAppSettings() = settingsOpener()
 
-    override fun retainedFlowCoordinator() = firstRunFlowCoordinator
+    @Synchronized
+    override fun retainedFlowCoordinator(): OnboardingFlowCoordinator =
+        firstRunFlowCoordinator ?: OnboardingFlowCoordinator(flowScope, this).also {
+            it.restoreStartingPath()
+            firstRunFlowCoordinator = it
+        }
+
+    @Synchronized
+    override fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator): Boolean =
+        firstRunFlowCoordinator === coordinator
+
+    @Synchronized
+    override fun onFlowCompletionHandled(coordinator: OnboardingFlowCoordinator) {
+        if (firstRunFlowCoordinator === coordinator) {
+            coordinator.onboarding.retireCompletion()
+            firstRunFlowCoordinator = null
+        }
+    }
 
     /** Records a finished runtime request: the location grant first (the producer reads it), then the snapshot. */
     fun onPermissionResult(kind: OnboardingPermissionKind, grants: Map<String, Boolean>) {

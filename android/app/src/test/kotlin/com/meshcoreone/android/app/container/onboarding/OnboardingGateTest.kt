@@ -48,6 +48,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -127,6 +128,39 @@ class OnboardingGateTest {
         onReceipt: ((com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt) -> Boolean)? = null,
     ) = host.get().setContent {
         MeshCoreTheme { OnboardingFlow(dependencies, onCompleted = {}, onCompletionReceipt = onReceipt) }
+    }
+
+    @Test fun `first-run explicit retirement rejects held write and reacquires a fresh exact-owned flow`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val release = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            val staged = CompletableDeferred<Unit>()
+            var stages = 0
+            var durable = false
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, value -> durable = value },
+                stageCompletion = { if (++stages == 1) { staged.complete(Unit); release.await() } },
+            )
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope)
+            val old = dependencies.retainedFlowCoordinator()
+            val completing = async { runCatching { old.onboarding.completeOnboarding() } }
+            staged.await()
+            dependencies.onFlowCompletionHandled(old)
+            val fresh = dependencies.retainedFlowCoordinator()
+            assertNotSame(old, fresh)
+            assertTrue(dependencies.ownsFlowCoordinator(fresh))
+            assertFalse(dependencies.ownsFlowCoordinator(old))
+            dependencies.onFlowCompletionHandled(old)
+            assertTrue(dependencies.ownsFlowCoordinator(fresh))
+            release.complete(Unit)
+            assertTrue(completing.await().isFailure)
+            assertFalse(durable)
+            fresh.onboarding.completeOnboarding()
+            assertTrue(durable)
+            assertTrue(fresh.onboarding.hasCompletedOnboarding)
+            assertFalse(old.onboarding.hasCompletedOnboarding)
+        } finally { release.complete(Unit); processScope.cancel() }
     }
 
     @Test fun `delivery retry cannot observe a second unsealed preset receipt from a completed flow`() = runBlocking {

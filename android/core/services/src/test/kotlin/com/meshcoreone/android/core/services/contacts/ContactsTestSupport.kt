@@ -3,6 +3,11 @@
 package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
+import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactFavoriteUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactBlockTransition
+import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdate
+import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdateResult
 import com.meshcoreone.android.core.contracts.domain.ContactSaveResult
 import com.meshcoreone.android.core.contracts.domain.ContactServiceProtocol
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
@@ -149,9 +154,63 @@ internal class ContactsFakeStore(
 
     override suspend fun saveContact(dto: ContactDTO) = synchronized(lock) { contactRows[dto.id] = dto }
 
+    override suspend fun updateContactAvatar(
+        key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
+    ): ContactAvatarUpdateResult = synchronized(lock) {
+        val row = contactRows[key.id]?.takeIf { it.radioId == key.radioId }
+            ?: return@synchronized ContactAvatarUpdateResult.CONTACT_NOT_FOUND
+        if (row.publicKey != expectedPublicKey) return@synchronized ContactAvatarUpdateResult.IDENTITY_MISMATCH
+        contactRows[key.id] = row.withAvatar(imageData)
+        ContactAvatarUpdateResult.UPDATED
+    }
+
     override suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long = synchronized(lock) {
         frames.forEach { upsert(radioId, it) }
         frames.size.toLong()
+    }
+
+    override suspend fun updateContactFavorite(
+        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+    ): ContactFavoriteUpdateResult = synchronized(lock) {
+        val row = contactRows[key.id]?.takeIf { it.radioId == key.radioId }
+            ?: return@synchronized ContactFavoriteUpdateResult.CONTACT_NOT_FOUND
+        if (row.publicKey != expectedPublicKey) return@synchronized ContactFavoriteUpdateResult.IDENTITY_MISMATCH
+        contactRows[key.id] = row.copy(
+            flags = ((row.flags.toInt() and 0xFE) or if (isFavorite) 1 else 0).toUByte(),
+            isFavorite = isFavorite,
+        )
+        ContactFavoriteUpdateResult.UPDATED
+    }
+
+    override suspend fun updateContactLocalFields(
+        key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+    ): ContactLocalUpdateResult = synchronized(lock) {
+        val row = contactRows[key.id]?.takeIf { it.radioId == key.radioId }
+            ?: return@synchronized ContactLocalUpdateResult.ContactNotFound
+        if (row.publicKey != expectedPublicKey) return@synchronized ContactLocalUpdateResult.IdentityMismatch
+        var transition = ContactBlockTransition.NONE
+        contactRows[key.id] = when (update) {
+            is ContactLocalUpdate.Preferences -> {
+                val nickname = update.nickname
+                transition = when {
+                    update.isBlocked == true && !row.isBlocked -> ContactBlockTransition.BLOCKED
+                    update.isBlocked == false && row.isBlocked -> ContactBlockTransition.UNBLOCKED
+                    else -> ContactBlockTransition.NONE
+                }
+                row.copy(
+                    nickname = if (nickname == null) row.nickname else nickname.ifEmpty { null },
+                    isBlocked = update.isBlocked ?: row.isBlocked,
+                    isFavorite = update.isFavorite ?: row.isFavorite,
+                    unreadCount = if (transition == ContactBlockTransition.BLOCKED) 0 else row.unreadCount,
+                )
+            }
+            is ContactLocalUpdate.OCVSettings -> row.copy(
+                ocvPreset = update.preset, customOCVArrayString = update.customArray,
+            )
+            is ContactLocalUpdate.TelemetryPermissions ->
+                row.copy(flags = ((row.flags.toInt() and 0xF1) or if (update.granted) 0x0E else 0).toUByte())
+        }
+        ContactLocalUpdateResult.Updated(transition)
     }
 
     private fun upsert(radioId: RadioId, frame: ContactFrame): ContactSaveResult {

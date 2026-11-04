@@ -25,6 +25,7 @@ data class RecoveredDraftState(
     val copying: Boolean = false,
     val hasMore: Boolean = true,
     val failure: Throwable? = null,
+    val copied: Boolean = false,
 )
 
 class RecoveredDraftStateHolder(
@@ -75,15 +76,15 @@ class RecoveredDraftStateHolder(
         require(source == null || current.messages.any { it.radioId == source.radioId && it.id == source.id }) {
             "Recovered draft must be selected from the displayed radio-scoped list"
         }
-        mutableState.value = current.copy(selected = source, failure = null)
+        mutableState.value = current.copy(selected = source, failure = null, copied = false)
     }
 
     suspend fun copySelectedTo(destination: ComposerTarget): Boolean = operations.withLock {
         val source = mutableState.value.selected ?: return@withLock false
-        mutableState.value = mutableState.value.copy(copying = true, failure = null)
+        mutableState.value = mutableState.value.copy(copying = true, failure = null, copied = false)
         try {
             port.copyToDraft(source, destination)
-            mutableState.value = mutableState.value.copy(selected = null)
+            mutableState.value = mutableState.value.copy(selected = null, copied = true)
             true
         } catch (cancelled: CancellationException) {
             throw cancelled

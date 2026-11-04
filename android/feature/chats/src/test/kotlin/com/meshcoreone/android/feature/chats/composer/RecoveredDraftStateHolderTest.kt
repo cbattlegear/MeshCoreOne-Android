@@ -96,6 +96,7 @@ class RecoveredDraftStateHolderTest {
         assertEquals(listOf(source), holder.state.value.messages)
         assertEquals(listOf(source), port.rows)
         assertNull(holder.state.value.selected)
+        assertTrue(holder.state.value.copied)
         assertFalse(holder.copySelectedTo(destination))
         assertEquals(1, port.copies.size)
     }
@@ -115,6 +116,7 @@ class RecoveredDraftStateHolderTest {
         assertEquals(key, holder.state.value.selected)
         assertEquals(port.rows, holder.state.value.messages)
         assertFalse(holder.state.value.copying)
+        assertFalse(holder.state.value.copied)
         assertTrue(port.copies.isEmpty())
     }
 
@@ -136,6 +138,7 @@ class RecoveredDraftStateHolderTest {
         assertEquals(key, holder.state.value.selected)
         assertFalse(holder.state.value.copying)
         assertNull(holder.state.value.failure)
+        assertFalse(holder.state.value.copied)
         assertTrue(port.copies.isEmpty())
     }
 

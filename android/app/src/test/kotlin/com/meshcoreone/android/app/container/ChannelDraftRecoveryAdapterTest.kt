@@ -27,6 +27,8 @@ import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
@@ -113,7 +115,21 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         assertEquals(PersistenceStoreError.MessageNotFound, missing.error)
     }
 
-    @Test fun mountedFont200RecoveryRequiresSelectionAndCopiesIntoAppDraftWithoutSending() = runTest {
+    private enum class CopyOutcome { COMPLETED, CONFLICT, CANCELLED }
+
+    @Test fun mountedFont200RecoveryRequiresSelectionAndCopiesIntoAppDraftWithoutSending() =
+        mountedRecovery(knownOrigin = false, outcome = CopyOutcome.COMPLETED)
+
+    @Test fun mountedReplacedOriginCopyPreservesProofAndShowsCompletedFeedback() =
+        mountedRecovery(knownOrigin = true, outcome = CopyOutcome.COMPLETED)
+
+    @Test fun mountedDestinationConflictPreservesNewerDraftAndRecoverySelection() =
+        mountedRecovery(knownOrigin = false, outcome = CopyOutcome.CONFLICT)
+
+    @Test fun mountedCancelledCopyKeepsOriginalAndNeverShowsCompletedFeedback() =
+        mountedRecovery(knownOrigin = true, outcome = CopyOutcome.CANCELLED)
+
+    private fun mountedRecovery(knownOrigin: Boolean, outcome: CopyOutcome) = runTest {
         store.saveChannel(radio, channel(1))
         val originA = assertNotNull(store.fetchChannelOccupantID(radio, 2u))
         val originals = (1L..45L).map { row(it, if (it % 2L == 0L) originA else null) }
@@ -126,13 +142,19 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         host.windowFocusChanged(true)
         try {
             val drafts = rig.container.chatsFeature.drafts
+            val enteredCopy = CompletableDeferred<Unit>()
+            val copyGate = CompletableDeferred<Unit>()
+            var copyJob: Job? = null
+            val newerDraft = "destination text typed after selection"
+            val conflict = IllegalStateException("Destination already has newer draft text")
+            val failures = mutableListOf<Throwable>()
             val adapter = ChannelDraftRecoveryAdapter(radio, store, store) { current, destination ->
+                enteredCopy.complete(Unit)
+                if (outcome == CopyOutcome.CANCELLED) copyGate.await()
                 val revision = drafts.revision(destination.conversationId)
-                check(drafts.restoreIfUnchanged(destination.conversationId, revision, current.text)) {
-                    "Destination already has newer draft text"
-                }
+                if (!drafts.restoreIfUnchanged(destination.conversationId, revision, current.text)) throw conflict
             }
-            val holder = RecoveredDraftStateHolder(radio, adapter, { _, failure -> throw failure })
+            val holder = RecoveredDraftStateHolder(radio, adapter, { _, failure -> failures += failure })
             holder.refresh()
             val destination = mutableStateOf<ComposerTarget?>(null)
             host.get().setContent {
@@ -151,12 +173,20 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
                                     com.meshcoreone.android.core.l10n.R.string.wp308_recovery_status_replaced_occupant
                                 })
                             },
-                            failureText = { checkNotNull(it.message) },
+                            failureText = { failure ->
+                                com.meshcoreone.android.core.ui.uiString(UiText.Resource(
+                                    if (failure === conflict) {
+                                        com.meshcoreone.android.core.l10n.R.string.wp308_recovery_destination_conflict
+                                    } else {
+                                        com.meshcoreone.android.core.l10n.R.string.wp308_recovery_copy_failed
+                                    },
+                                ))
+                            },
                             onSelect = holder::select,
                             onRefresh = { scope.launch { holder.refresh() } },
                             onLoadMore = { scope.launch { holder.loadMore() } },
                             onChooseChat = { destination.value = selected },
-                            onCopy = { scope.launch { holder.copySelectedTo(checkNotNull(destination.value)) } },
+                            onCopy = { copyJob = scope.launch { holder.copySelectedTo(checkNotNull(destination.value)) } },
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -169,16 +199,48 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
             node("Copy to selected chat").assertIsNotEnabled()
             node("Load more recovered drafts").performClick()
             compose.waitUntil(5_000) { holder.state.value.messages.size == 45 }
-            val oldest = originals.first()
-            node(oldest.text).performClick()
+            val source = originals[if (knownOrigin) 1 else 0]
+            node(source.text).performClick()
             node("Copy to selected chat").assertIsNotEnabled()
             assertNull(drafts.get(selected.conversationId))
             node("Choose chat").performClick()
             node("Selected channel B").assertIsDisplayed()
             assertNull(drafts.get(selected.conversationId))
+            if (outcome == CopyOutcome.CONFLICT) drafts.set(selected.conversationId, newerDraft)
             node("Copy to selected chat").performClick()
-            compose.waitUntil(5_000) { drafts.get(selected.conversationId) == oldest.text }
-            assertNull(holder.state.value.selected)
+            compose.waitUntil(5_000) { enteredCopy.isCompleted }
+            val copiedFeedback = "Text copied to the selected chat draft. This action did not send a message or remove the recovered text."
+            when (outcome) {
+                CopyOutcome.COMPLETED -> {
+                    compose.waitUntil(5_000) { holder.state.value.copied }
+                    assertEquals(source.text, drafts.get(selected.conversationId))
+                    assertNull(holder.state.value.selected)
+                    node(copiedFeedback).assertIsDisplayed()
+                    assertTrue(failures.isEmpty())
+                }
+                CopyOutcome.CONFLICT -> {
+                    compose.waitUntil(5_000) { holder.state.value.failure != null }
+                    assertEquals(newerDraft, drafts.get(selected.conversationId))
+                    assertEquals(EntityKey(radio, source.id), holder.state.value.selected)
+                    assertFalse(holder.state.value.copied)
+                    node("The selected chat already has draft text. Nothing was replaced. Keep or clear that draft before copying.")
+                        .assertIsDisplayed()
+                    compose.onNodeWithText(copiedFeedback).assertDoesNotExist()
+                    assertEquals(listOf(conflict), failures)
+                }
+                CopyOutcome.CANCELLED -> {
+                    assertTrue(holder.state.value.copying)
+                    compose.runOnIdle { checkNotNull(copyJob).cancel() }
+                    checkNotNull(copyJob).join()
+                    compose.waitUntil(5_000) { !holder.state.value.copying }
+                    assertNull(drafts.get(selected.conversationId))
+                    assertEquals(EntityKey(radio, source.id), holder.state.value.selected)
+                    assertFalse(holder.state.value.copied)
+                    assertNull(holder.state.value.failure)
+                    compose.onNodeWithText(copiedFeedback).assertDoesNotExist()
+                    assertTrue(failures.isEmpty())
+                }
+            }
             assertEquals(45, holder.state.value.messages.size)
             originals.forEach { assertEquals(it, store.fetchMessage(EntityKey(radio, it.id))) }
             assertTrue(store.fetchPendingSends(radio).isEmpty())

@@ -77,6 +77,18 @@ explicit-copy into the actual App draft store with no radio or pending send.
 The mounted control injects its destination owner; it does not demonstrate
 production navigation custody or original-display capture.
 
+The mounted recovery family now has four explicit methods: unknown-origin
+successful copy, known replaced-occupant successful copy, confirmed destination
+draft conflict, and cancellation held before the destination write. Each uses
+actual Room rows, A-to-B replacement, the App draft store, resource-backed UI,
+200% font, 45-row paging and explicit source/destination/copy controls. Completed
+copy shows the localized polite live-region feedback only after the port returns.
+Conflict preserves newer destination text and source selection; cancellation
+preserves the source and does not display completion. All four assert no pending
+send, no radio connection and unchanged original DTOs. This is authored mounted
+coverage, not a discovery/execution claim; it does not resolve production
+navigation custody or the separate restart Send Again defect.
+
 There is no production route registration or scoped-read activation in this
 preparation. Exact Android execution, App disk-reopen acceptance and the existing
 enabled restart Send Again defect remain open, as does the original

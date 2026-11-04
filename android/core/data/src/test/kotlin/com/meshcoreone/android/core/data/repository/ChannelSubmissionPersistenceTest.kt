@@ -296,13 +296,15 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
         val armed = AtomicBoolean(false)
         val held = AtomicBoolean(false)
         val heldInTransaction = AtomicBoolean(false)
-        val firstExecutor = Executors.newSingleThreadExecutor()
-        val secondExecutor = Executors.newSingleThreadExecutor()
+        val firstQueryExecutor = Executors.newSingleThreadExecutor()
+        val firstTransactionExecutor = Executors.newSingleThreadExecutor()
+        val secondQueryExecutor = Executors.newSingleThreadExecutor()
+        val secondTransactionExecutor = Executors.newSingleThreadExecutor()
         val immediate = Executor { it.run() }
         val lifetime = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         lateinit var firstDatabase: MeshCoreDatabase
         firstDatabase = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
-            .setQueryExecutor(firstExecutor).setTransactionExecutor(firstExecutor)
+            .setQueryExecutor(firstQueryExecutor).setTransactionExecutor(firstTransactionExecutor)
             .setQueryCallback({ sql, _ ->
                 if (armed.get() && sql.startsWith("SELECT", ignoreCase = true) &&
                     sql.contains("channel_submissions") && held.compareAndSet(false, true)) {
@@ -312,10 +314,13 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
                 }
             }, immediate).build()
         val secondDatabase = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
-            .setQueryExecutor(secondExecutor).setTransactionExecutor(secondExecutor)
-            .setQueryCallback({ sql, _ ->
-                if (armed.get() && sql.startsWith("BEGIN", ignoreCase = true)) secondBegin.countDown()
-            }, immediate).build()
+            .setQueryExecutor(secondQueryExecutor)
+            .setTransactionExecutor(Executor { command ->
+                secondTransactionExecutor.execute {
+                    if (armed.get()) secondBegin.countDown()
+                    command.run()
+                }
+            }).build()
         val firstStore = RoomPersistenceStore(firstDatabase, lifetime, clock)
         val secondStore = RoomPersistenceStore(secondDatabase, lifetime, clock)
         try {
@@ -365,10 +370,14 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
             secondStore.close()
             firstDatabase.close()
             secondDatabase.close()
-            firstExecutor.shutdown()
-            secondExecutor.shutdown()
-            assertTrue(withContext(Dispatchers.IO) { firstExecutor.awaitTermination(10, TimeUnit.SECONDS) })
-            assertTrue(withContext(Dispatchers.IO) { secondExecutor.awaitTermination(10, TimeUnit.SECONDS) })
+            firstQueryExecutor.shutdown()
+            firstTransactionExecutor.shutdown()
+            secondQueryExecutor.shutdown()
+            secondTransactionExecutor.shutdown()
+            assertTrue(withContext(Dispatchers.IO) { firstQueryExecutor.awaitTermination(10, TimeUnit.SECONDS) })
+            assertTrue(withContext(Dispatchers.IO) { firstTransactionExecutor.awaitTermination(10, TimeUnit.SECONDS) })
+            assertTrue(withContext(Dispatchers.IO) { secondQueryExecutor.awaitTermination(10, TimeUnit.SECONDS) })
+            assertTrue(withContext(Dispatchers.IO) { secondTransactionExecutor.awaitTermination(10, TimeUnit.SECONDS) })
             context.deleteDatabase(name)
         }
     }

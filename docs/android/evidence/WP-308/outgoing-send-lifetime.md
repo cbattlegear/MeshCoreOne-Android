@@ -2,6 +2,21 @@
 
 ## Recovery-list consumer preparation (not activated)
 
+The bounded WP-005 resource handoff `ced55e0ef6f7a8b3cbcfd002936e2af82d1ad16a`
+and evidence successor `36fe163514b41e2318f8fdeeaa6fc1248681ea73`
+are integrated by cherry-pick as `d5434d3bc` and `4dc17e7e6`, without
+their unrelated base ancestry. `recoveredDraftLabels()` binds the seven
+content labels directly to the shared resources, and the mounted control now
+uses those actual resources rather than fixture-only action labels.
+The owner's explicit English fallbacks are not full locale parity.
+Origin-attribution and delivery status remain different concepts; a generic
+uncertainty label must not replace known SENT or DELIVERED state.
+The owner reports a runtime mismatch before Android execution; that is not
+a consumer test result. Local portmap/controller/whitespace checks returned
+0 after resource integration. No runtime, device or execution-owner state
+was modified. Production destination/status/failure binding remains pending
+alongside the original display-custody prerequisite.
+
 The immutable storage handoff
 `2e62c5e28f46184c71915f93ba15829fa93f528e` is now composed locally
 as `88baffb4732c4dd07774d151dd5b66c9abdf3b59`. Its independent

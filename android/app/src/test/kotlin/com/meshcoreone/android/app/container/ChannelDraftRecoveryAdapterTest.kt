@@ -18,7 +18,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.feature.chats.composer.ComposerTarget
 import com.meshcoreone.android.feature.chats.composer.RecoveredDraftStateHolder
-import com.meshcoreone.android.feature.chats.composer.ui.RecoveredDraftLabels
+import com.meshcoreone.android.feature.chats.composer.ui.recoveredDraftLabels
 import com.meshcoreone.android.feature.chats.composer.ui.RecoveredDraftList
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.ui.UiText
@@ -142,15 +142,7 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
                         val scope = rememberCoroutineScope()
                         RecoveredDraftList(
                             state = state,
-                            labels = RecoveredDraftLabels(
-                                UiText.Verbatim("Recovered outgoing drafts"),
-                                UiText.Verbatim("Delivery may be uncertain. Copy does not resend or change the original."),
-                                UiText.Verbatim("No recovered drafts"),
-                                UiText.Verbatim("Refresh"),
-                                UiText.Verbatim("Load more"),
-                                UiText.Verbatim("Choose chat"),
-                                UiText.Verbatim("Copy into selected chat"),
-                            ),
+                            labels = recoveredDraftLabels(),
                             destinationLabel = destination.value?.let { UiText.Verbatim("Selected channel B") },
                             statusLabel = { UiText.Verbatim("Original status: ${it.status}") },
                             failureText = { checkNotNull(it.message) },
@@ -168,17 +160,17 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
                 compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text))
                 return compose.onNodeWithText(text)
             }
-            node("Copy into selected chat").assertIsNotEnabled()
-            node("Load more").performClick()
+            node("Copy to selected chat").assertIsNotEnabled()
+            node("Load more recovered drafts").performClick()
             compose.waitUntil(5_000) { holder.state.value.messages.size == 45 }
             val oldest = originals.first()
             node(oldest.text).performClick()
-            node("Copy into selected chat").assertIsNotEnabled()
+            node("Copy to selected chat").assertIsNotEnabled()
             assertNull(drafts.get(selected.conversationId))
             node("Choose chat").performClick()
             node("Selected channel B").assertIsDisplayed()
             assertNull(drafts.get(selected.conversationId))
-            node("Copy into selected chat").performClick()
+            node("Copy to selected chat").performClick()
             compose.waitUntil(5_000) { drafts.get(selected.conversationId) == oldest.text }
             assertNull(holder.state.value.selected)
             assertEquals(45, holder.state.value.messages.size)

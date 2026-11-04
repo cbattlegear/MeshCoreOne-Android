@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.core.ui.uiString
@@ -39,6 +40,16 @@ data class RecoveredDraftLabels(
     val loadMore: UiText,
     val chooseChat: UiText,
     val copyToSelectedChat: UiText,
+)
+
+fun recoveredDraftLabels() = RecoveredDraftLabels(
+    title = UiText.Resource(R.string.wp308_recovery_title),
+    explanation = UiText.Resource(R.string.wp308_recovery_explanation),
+    empty = UiText.Resource(R.string.wp308_recovery_empty),
+    refresh = UiText.Resource(R.string.wp308_recovery_refresh),
+    loadMore = UiText.Resource(R.string.wp308_recovery_load_more),
+    chooseChat = UiText.Resource(R.string.wp308_recovery_choose_chat),
+    copyToSelectedChat = UiText.Resource(R.string.wp308_recovery_copy_to_selected_chat),
 )
 
 /** Insets and destination selection belong to the enclosing native route. Every control scrolls. */

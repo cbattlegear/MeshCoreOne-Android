@@ -468,6 +468,234 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         assertEquals(AppTab.CHATS, n.state.value.selectedTab)
     }
 
+    @Test fun onboardingFromAnOfflineRetainedRadioAcceptsItsFirstExplicitGraph() = runTest {
+        val deviceA = UUID(0, 1001)
+        val deviceB = UUID(0, 1002)
+        for (differentRadio in listOf(false, true)) {
+            for (afterBinding in listOf(false, true)) {
+                val uiScheduler = TestCoroutineScheduler()
+                val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
+                val h = ContainerHarness(
+                    this, store, mainScope = mainScope,
+                    identity = { target ->
+                        if ((target as? ConnectionTarget.Bluetooth)?.deviceId == deviceA) key(7) else key(8)
+                    },
+                )
+                try {
+                    val started = h.container.start()
+                    h.eventually("production activation completes") { uiScheduler.runCurrent(); started.isCompleted }
+                    started.await()
+                    val firstConnect = async { h.manager.connect(h.target(deviceA)) }
+                    h.eventually("first graph binds") {
+                        uiScheduler.runCurrent()
+                        firstConnect.isCompleted && h.container.navigation.currentState.navigationReady
+                    }
+                    firstConnect.await()
+                    val n = h.container.navigation
+                    val first = assertNotNull(h.sessions.current)
+                    val disconnect = async { h.manager.disconnect() }
+                    h.eventually("the previous graph is withdrawn") {
+                        uiScheduler.runCurrent()
+                        disconnect.isCompleted && h.sessions.current == null
+                    }
+                    disconnect.await()
+                    val cleanup = async { h.appState.wireServicesIfConnected() }
+                    h.eventually("the previous radio is retained without a session") {
+                        uiScheduler.runCurrent()
+                        cleanup.isCompleted && n.currentState.radioId == first.token.radioId &&
+                            n.currentState.boundSessionToken == null
+                    }
+                    cleanup.await()
+                    n.selectTab(AppTab.SETTINGS)
+                    n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                    val presented = n.publishedNavigation.value
+                    val entryId = presented.value.activeStack.last().id
+                    val offlineCompletion = n.captureMountedOnboarding(presented, entryId)
+                    val reconnect = async { h.manager.connect(h.target(if (differentRadio) deviceB else deviceA)) }
+                    h.eventually("the successor graph is exposed before navigation binds") {
+                        val graph = h.sessions.current
+                        graph != null && graph !== first && h.manager.snapshot.value.token == graph.token
+                    }
+                    val successor = assertNotNull(h.sessions.current)
+                    assertEquals(differentRadio, successor.token.radioId != first.token.radioId)
+                    assertNull(n.currentState.boundSessionToken)
+                    val before = n.currentState
+                    assertFalse(n.completeMountedOnboarding(offlineCompletion, MountedOnboardingProducer.Preset(first.token)))
+                    assertEquals(before, n.currentState)
+                    val completion = if (afterBinding) offlineCompletion else n.captureMountedOnboarding(presented, entryId)
+                    assertNotNull(completion)
+                    if (afterBinding) {
+                        h.eventually("the successor navigation binds") {
+                            uiScheduler.runCurrent()
+                            reconnect.isCompleted && n.currentState.boundSessionToken == successor.token
+                        }
+                        reconnect.await()
+                    }
+                    assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)))
+                    assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+                    h.eventually("the successor finishes binding") {
+                        uiScheduler.runCurrent()
+                        reconnect.isCompleted && n.currentState.boundSessionToken == successor.token
+                    }
+                    reconnect.await()
+                } finally {
+                    val closing = async { h.container.close() }
+                    h.eventually("process cleanup drains the controlled UI queue") {
+                        uiScheduler.runCurrent()
+                        closing.isCompleted
+                    }
+                    closing.await()
+                }
+            }
+        }
+    }
+
+    @Test fun offlineNavigationWitnessRejectsASecondExposedGraph() = runTest {
+        val f = PublicationTestFixture(this, store)
+        try {
+            val first = async { f.manager.connect(f.target) }
+            f.eventually("the first graph is ready") { first.isCompleted && f.slot.current != null }
+            first.await()
+            val retired = assertNotNull(f.slot.current)
+            val disconnect = async { f.manager.disconnect() }
+            f.eventually("the first graph is withdrawn") { disconnect.isCompleted && f.slot.current == null }
+            disconnect.await()
+            val stamp = f.manager.captureNavigationLifecycle()
+            val offline = assertNotNull(f.manager.captureOfflineNavigationLifecycle(stamp))
+            val connect = async { f.manager.connect(f.target) }
+            f.eventually("the first successor is exposed") { connect.isCompleted && f.slot.current != null }
+            connect.await()
+            val successor = assertNotNull(f.slot.current)
+            assertNotSame(retired, successor)
+            assertTrue(f.manager.isFirstNavigationSessionAfterOffline(
+                offline, successor.token, f.slot.identity, successor,
+            ))
+            assertFalse(f.manager.isFirstNavigationSessionAfterOffline(
+                offline, retired.token, f.slot.identity, successor,
+            ))
+            val rebuilding = async { f.manager.rebuildSession(assertNotNull(f.manager.connectedDevice).id) }
+            f.eventually("a second successor is exposed") {
+                rebuilding.isCompleted && f.slot.current != null && f.slot.current !== successor
+            }
+            rebuilding.await()
+            val replacement = assertNotNull(f.slot.current)
+            assertFalse(f.manager.isFirstNavigationSessionAfterOffline(
+                offline, replacement.token, f.slot.identity, replacement,
+            ))
+        } finally {
+            f.manager.close()
+        }
+    }
+
+    @Test fun offlineNavigationWitnessRejectsAReplacementAfterCancelledSubmission() = runTest {
+        val f = PublicationTestFixture(this, store)
+        val hold = CompletableDeferred<Unit>()
+        var holdFirst = true
+        f.links.configureRadio = { if (holdFirst) it.connectGate = hold }
+        try {
+            val stamp = f.manager.captureNavigationLifecycle()
+            val offline = assertNotNull(f.manager.captureOfflineNavigationLifecycle(stamp))
+            val cancelled = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+            f.eventually("the first submission is held before graph publication") {
+                f.links.radios.isNotEmpty() && f.slot.current == null
+            }
+            cancelled.cancelAndJoin()
+            holdFirst = false
+            hold.complete(Unit)
+            val replacement = async { f.manager.connect(f.target) }
+            f.eventually("the replacement submission publishes") {
+                replacement.isCompleted && f.slot.current != null
+            }
+            replacement.await()
+            val graph = assertNotNull(f.slot.current)
+            assertFalse(f.manager.isFirstNavigationSessionAfterOffline(
+                offline, graph.token, f.slot.identity, graph,
+            ))
+            assertTrue(f.manager.isInitialNavigationSession(
+                f.manager.captureNavigationLifecycle(), graph.token, f.slot.identity, graph,
+            ))
+        } finally {
+            hold.complete(Unit)
+            f.manager.close()
+        }
+    }
+
+    @Test fun onboardingAfterActualLossAcceptsItsFirstRebuildOrExplicitReplacement() = runTest {
+        val deviceA = UUID(0, 1003)
+        val deviceB = UUID(0, 1004)
+        for (rebuild in listOf(true, false)) {
+            val uiScheduler = TestCoroutineScheduler()
+            val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
+            val h = ContainerHarness(
+                this, store, mainScope = mainScope,
+                identity = { target ->
+                    if ((target as? ConnectionTarget.Bluetooth)?.deviceId == deviceA) key(7) else key(8)
+                },
+            )
+            try {
+                val started = h.container.start()
+                h.eventually("production activation completes") { uiScheduler.runCurrent(); started.isCompleted }
+                started.await()
+                val connecting = async { h.manager.connect(h.target(deviceA)) }
+                h.eventually("the first graph binds") {
+                    uiScheduler.runCurrent()
+                    connecting.isCompleted && h.container.navigation.currentState.navigationReady
+                }
+                connecting.await()
+                val n = h.container.navigation
+                val retired = assertNotNull(h.sessions.current)
+                val connectedDeviceId = assertNotNull(h.manager.connectedDevice).id
+                assertNotNull(h.links.links.last().callbacks).onDisconnected(IllegalStateException("actual link loss"))
+                h.eventually("actual loss retires the graph and its navigation binding", virtualBudgetMillis = 0) {
+                    uiScheduler.runCurrent()
+                    h.manager.connectionState == DeviceConnectionState.DISCONNECTED &&
+                        h.sessions.current == null && n.currentState.boundSessionToken == null
+                }
+                assertEquals(retired.token.radioId, n.currentState.radioId)
+                val stamp = h.manager.captureNavigationLifecycle()
+                assertFalse(h.manager.isNavigationLifecycleCurrent(stamp))
+                assertNotNull(h.manager.captureOfflineNavigationLifecycle(stamp))
+                n.selectTab(AppTab.SETTINGS)
+                n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                val presented = n.publishedNavigation.value
+                val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+                val reconnect = async {
+                    if (rebuild) h.manager.rebuildSession(connectedDeviceId)
+                    else h.manager.connect(h.target(deviceB))
+                }
+                h.eventually("the first post-loss graph is exposed before binding", virtualBudgetMillis = 0) {
+                    val graph = h.sessions.current
+                    graph != null && graph !== retired && h.manager.snapshot.value.token == graph.token
+                }
+                val successor = assertNotNull(h.sessions.current)
+                assertEquals(!rebuild, successor.token.radioId != retired.token.radioId)
+                assertNull(n.currentState.boundSessionToken)
+                assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(retired.token)))
+                if (!rebuild) {
+                    h.eventually("the explicit successor navigation binds") {
+                        uiScheduler.runCurrent()
+                        reconnect.isCompleted && n.currentState.boundSessionToken == successor.token
+                    }
+                    reconnect.await()
+                }
+                assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)))
+                assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+                h.eventually("the post-loss graph finishes binding") {
+                    uiScheduler.runCurrent()
+                    reconnect.isCompleted && n.currentState.boundSessionToken == successor.token
+                }
+                reconnect.await()
+            } finally {
+                val closing = async { h.container.close() }
+                h.eventually("process cleanup drains the controlled UI queue") {
+                    uiScheduler.runCurrent()
+                    closing.isCompleted
+                }
+                closing.await()
+            }
+        }
+    }
+
     @Test fun newlyMountedOnboardingCanCaptureTheLiveGraphBeforeItsFirstNavigationBinding() = runTest {
         val uiScheduler = TestCoroutineScheduler()
         val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))

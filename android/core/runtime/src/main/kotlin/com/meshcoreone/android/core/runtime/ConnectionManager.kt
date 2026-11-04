@@ -147,6 +147,12 @@ class ConnectionManager(
         internal val exposureAtCapture: Boolean,
     )
 
+    class OfflineNavigationLifecycle internal constructor(
+        internal val lifecycle: NavigationLifecycleStamp,
+        internal val exposureCount: Long,
+        internal val retainedTarget: ConnectionTarget?,
+    )
+
     /**
      * The action must only inspect lifecycle state or perform a non-blocking atomic commit. It must not
      * suspend, publish observable state, or acquire a delivery/staging lock.
@@ -211,6 +217,38 @@ class ConnectionManager(
             pending == null && pendingNavigationSubmission == null &&
             values.value.state == DeviceConnectionState.DISCONNECTED && values.value.token == null &&
             deviceValue == null
+    }
+
+    /** A quiescent offline witness may follow its first exposed successor, not a later replacement. */
+    fun captureOfflineNavigationLifecycle(stamp: NavigationLifecycleStamp): OfflineNavigationLifecycle? =
+        synchronized(lock) {
+            if (!isOfflineNavigationLifecycleCurrent(stamp)) null
+            else OfflineNavigationLifecycle(stamp, navigationExposureCount, retained?.target)
+        }
+
+    fun isFirstNavigationSessionAfterOffline(
+        offline: OfflineNavigationLifecycle,
+        token: SessionToken,
+        registry: RuntimePublicationRegistryIdentity,
+        graph: RuntimePublishableServices,
+    ): Boolean = synchronized(lock) {
+        val stamp = offline.lifecycle
+        val owner = active ?: return@synchronized false
+        val exposure = owner.navigationExposure ?: return@synchronized false
+        if (stamp.managerIdentity !== navigationIdentity || offline.exposureCount == Long.MAX_VALUE ||
+            navigationExposureCount != offline.exposureCount + 1 ||
+            owner.number <= stamp.lastGeneration || nextGeneration != owner.number ||
+            !isInitialNavigationSession(captureNavigationLifecycle(), token, registry, graph)
+        ) return@synchronized false
+        val submission = owner.navigationSubmission
+        if (submission != null) {
+            stamp.revision != Long.MAX_VALUE && submission.revision == stamp.revision + 1 &&
+                submission.startGeneration == stamp.lastGeneration && !submission.isRevoked() &&
+                !submission.interposedOwner && submission.firstExposure === exposure
+        } else {
+            stamp.retainedGeneration != null && offline.retainedTarget != null &&
+                owner.target == offline.retainedTarget && revision == stamp.revision
+        }
     }
 
     fun isNavigationSessionCurrent(token: SessionToken, allowUnpublished: Boolean = false): Boolean =
@@ -321,6 +359,7 @@ class ConnectionManager(
                         (submission.revision != owner.revision || submission.work !== owner.operation)
                     ) return invalid
                     val nextCreated = Math.incrementExact(slot.created)
+                    val nextExposureCount = Math.incrementExact(navigationExposureCount)
                     val exposure = NavigationExposure(
                         navigationIdentity, processEpoch, owner.number, owner.revision, submission,
                         WeakReference(authority.session), authority.token, slot,
@@ -331,6 +370,7 @@ class ConnectionManager(
                     fence.published = true
                     owner.navigationExposure = exposure
                     if (firstExposureOwner != null) firstExposureOwner.firstExposure = exposure
+                    navigationExposureCount = nextExposureCount
                     slot.created = nextCreated
                     slot.live = target.graph
                     return published
@@ -341,6 +381,7 @@ class ConnectionManager(
 
     private var nextGeneration = 0L
     private var revision = 0L
+    private var navigationExposureCount = 0L
     private var active: RadioGeneration? = null
     private var retained: RadioGeneration? = null
     private var pending: Deferred<Unit>? = null

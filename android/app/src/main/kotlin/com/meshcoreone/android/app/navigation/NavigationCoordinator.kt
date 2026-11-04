@@ -944,7 +944,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         fun sameSession(state: NavigationState): Boolean {
             val unchanged = state.generation == source.generation && state.radioId == source.radioId &&
                 state.boundSessionToken == source.boundSessionToken
-            val firstBinding = source.radioId == null && source.boundSessionToken == null &&
+            val firstBinding = source.boundSessionToken == null &&
                 source.generation < Long.MAX_VALUE && state.generation == source.generation + 1 &&
                 state.radioId != null && state.boundSessionToken?.radioId == state.radioId
             return unchanged || firstBinding

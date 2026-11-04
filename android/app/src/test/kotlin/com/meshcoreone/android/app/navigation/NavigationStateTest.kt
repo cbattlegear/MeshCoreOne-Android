@@ -352,6 +352,28 @@ class NavigationStateTest {
         }
     }
 
+    @Test fun onboardingCompletionAcceptsTheFirstBindingAfterAnOfflineRetainedRadio() {
+        val epoch = ProcessEpoch(UUID(0, 85))
+        val first = SessionToken(epoch, Generation(1), radio)
+        for (nextRadio in listOf(radio, otherRadio)) {
+            val n = NavigationCoordinator()
+            assertTrue(n.bindNotificationSession(radio, null, first))
+            n.clearPendingLinks()
+            assertEquals(radio, n.currentState.radioId)
+            assertNull(n.currentState.boundSessionToken)
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            n.installOnboardingSessionCapture { { true } }
+            val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+            val successor = SessionToken(epoch, Generation(2), nextRadio)
+            assertTrue(n.bindNotificationSession(nextRadio, null, successor))
+            assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor)))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(successor, n.currentState.boundSessionToken)
+        }
+    }
+
     @Test fun onboardingCompletionRequiresItsSessionWitnessAtTheCommitBoundary() {
         val n = NavigationCoordinator()
         n.selectTab(AppTab.SETTINGS)

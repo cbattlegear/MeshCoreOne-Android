@@ -338,24 +338,32 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                 connectionManager.isNavigationSessionCurrent(session.token)
         }
 
+    private data class OnboardingNavigationCapture(
+        val graph: RadioSessionContainer?,
+        val lifecycle: ConnectionManager.NavigationLifecycleStamp,
+        val aligned: Boolean,
+        val offline: ConnectionManager.OfflineNavigationLifecycle?,
+    )
+
     private fun captureOnboardingNavigationSession(
         source: NavigationState,
     ): (MountedOnboardingProducer) -> Boolean {
-        val (initiating, lifecycle, aligned) = withNavigationCommitBoundary {
+        val (initiating, lifecycle, aligned, offline) = withNavigationCommitBoundary {
             val graph = sessions.current
             val stamp = connectionManager.captureNavigationLifecycle()
+            val offline = connectionManager.captureOfflineNavigationLifecycle(stamp)
             val current = if (graph != null) {
                 !graph.isTornDown &&
                     (graph.token == source.boundSessionToken ||
-                        source.radioId == null && source.boundSessionToken == null) &&
+                        source.boundSessionToken == null) &&
                     connectionManager.isInitialNavigationSession(stamp, graph.token, sessions.publicationIdentity, graph)
             } else {
                 source.boundSessionToken == null && (
                     connectionManager.isNavigationLifecycleCurrent(stamp) ||
-                        connectionManager.isOfflineNavigationLifecycleCurrent(stamp)
+                        offline != null
                     )
             }
-            Triple(graph, stamp, current)
+            OnboardingNavigationCapture(graph, stamp, current, offline)
         }
         return { producer ->
             withNavigationCommitBoundary {
@@ -372,9 +380,12 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                         connectionManager.isInitialNavigationSession(
                             lifecycle, graph.token, sessions.publicationIdentity, graph,
                         )
-                    else -> source.radioId == null && source.boundSessionToken == null &&
+                    else -> source.boundSessionToken == null && (
                         connectionManager.isInitialNavigationSession(
                             lifecycle, graph.token, sessions.publicationIdentity, graph,
+                        ) || offline != null && connectionManager.isFirstNavigationSessionAfterOffline(
+                            offline, graph.token, sessions.publicationIdentity, graph,
+                        )
                         )
                 }
             }

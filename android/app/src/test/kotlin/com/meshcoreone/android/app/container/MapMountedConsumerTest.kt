@@ -273,6 +273,32 @@ class MapMountedConsumerTest {
             runBlocking { storage.backupPreferences.snapshotForBackup() }.presentValues["mapClusteringEnabled"])
     }
 
+    @Test fun preferenceObservationRebindsWhenDependenciesChangeWithTheSameStore() {
+        val store = AppMapPreferences(
+            MeshCoreStorage.get(host.get()).preferences,
+            host.get().getSharedPreferences("shared-map", 0),
+        )
+        var loads = 0
+        val initial = MapFeatureDependencies(source { loads++; content() }, offline(), preferences = store)
+        val dependencies = mutableStateOf(initial)
+        mount(initial, dependenciesProvider = { dependencies.value })
+        compose.onNodeWithTag("pick:${contact.id}").assertExists()
+
+        compose.runOnIdle {
+            dependencies.value = initial.copy(dataSource = source { loads++; content() })
+        }
+        compose.waitUntil(5_000) {
+            loads == 2 && compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        runBlocking {
+            store.setFilter(MapFilterHost.MAIN_MAP, MapFilterState(favoritesOnly = true))
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
+        }
+    }
+
     @Test fun systemMapAppearanceFollowsEffectiveAppThemeAndKeepsExplicitMapOverrides() {
         var latest: MapPresentationState? = null
         mount(
@@ -295,6 +321,7 @@ class MapMountedConsumerTest {
         onFocusConsumed: () -> Unit = {},
         onPresentation: (MapPresentationState) -> Unit = {},
         appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM,
+        dependenciesProvider: (() -> MapFeatureDependencies)? = null,
     ) {
         val bound = dependencies.copy(preferences = dependencies.preferences ?: AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,
@@ -304,7 +331,7 @@ class MapMountedConsumerTest {
             MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false, motionScale = 0f) {
                 MapEntry(
                     FeatureRoute(FeatureId.MAP), { error("No generic navigation") },
-                    bound,
+                    dependenciesProvider?.invoke() ?: bound,
                     focus = focus(),
                     onFocusConsumed = onFocusConsumed,
                     mapSurface = { state, _, _, _, select, overlay ->

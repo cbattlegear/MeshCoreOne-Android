@@ -178,7 +178,7 @@ private fun MapContent(
     }
     var cameraCommandRevision by remember { mutableLongStateOf(0L) }
 
-    LaunchedEffect(preferenceStore, preferenceRetry) {
+    LaunchedEffect(preferenceStore, holder, preferenceRetry) {
         try {
             preferenceStore.observe(MapFilterHost.MAIN_MAP).collect { next ->
                 if (holder.state.value.filter != next.filter) {

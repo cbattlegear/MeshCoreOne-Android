@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.QueuedChannelAttemptRejected
 import com.meshcoreone.android.core.database.MessageEntity
 import com.meshcoreone.android.core.database.PendingSendEntity
+import com.meshcoreone.android.core.database.toDTO
 import com.meshcoreone.android.core.model.PendingSendKind
 import com.meshcoreone.android.core.model.QueuedChannelAttemptConflict
 import com.meshcoreone.android.core.model.RadioId

@@ -14,6 +14,81 @@ import org.junit.jupiter.api.TestFactory
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelAttemptRecoveryTest {
     @TestFactory fun recovery() = listOf(
+        native("two-ready-siblings-are-retained-before-count-or-wire") {
+            val h = Harness(this); h.start()
+            val message = h.message(MessageStatus.PENDING, 0u)
+            val first = h.pending(message)
+            val second = h.pending(message, isResend = true)
+            val queue = h.queue()
+            queue.hydrate(); runCurrent(); queue.awaitDrainCompletion()
+            assertEquals(setOf(first, second), h.store.pending.values.toSet())
+            assertEquals(message, h.stored(message.id))
+            assertTrue(h.store.channelAttempts.isEmpty())
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            assertFalse(h.store.calls.any { it == "incrementReadyQueuedChannelAttemptCount" })
+            val conflicts = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                .filter { it.operation.startsWith("channelRetained.") }
+            assertTrue(conflicts.any {
+                (it.cause.cause as? QueuedChannelAttemptRejected)?.reason == QueuedChannelAttemptConflict.RETAINED_SUBMISSION
+            })
+            queue.shutdown()
+            assertEquals(setOf(first, second), h.store.pending.values.toSet())
+        },
+        native("ready-sibling-arriving-while-fence-waits-is-retained-before-begin") {
+            val h = Harness(this); h.start()
+            val message = h.message(MessageStatus.PENDING, 0u)
+            val first = h.pending(message)
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            val holder = launch {
+                h.channelFence.withMutation(h.channelLease) { entered.complete(Unit); release.await() }
+            }
+            entered.await()
+            val send = async {
+                assertFailsWith<QueuedChannelRetainedException> {
+                    h.service.sendQueuedChannel(first.id, requireNotNull(first.channelMessageEnvelope()), true)
+                }
+            }
+            runCurrent()
+            val second = h.pending(message, isResend = true)
+            release.complete(Unit); holder.join()
+            val retained = send.await()
+            assertEquals(QueuedChannelAttemptConflict.RETAINED_SUBMISSION,
+                (retained.cause?.cause as? QueuedChannelAttemptRejected)?.reason)
+            assertEquals(setOf(first, second), h.store.pending.values.toSet())
+            assertTrue(h.store.channelAttempts.isEmpty())
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+        },
+        native("accepted-plus-ready-sibling-keeps-both-without-cleanup-or-wire") {
+            val h = Harness(this); h.start()
+            val message = h.message(MessageStatus.PENDING, 0u)
+            val first = h.pending(message)
+            val second = h.pending(message, isResend = true)
+            // Models the retained state reached when acceptance precedes sibling-rejecting completion.
+            val accepted = seedAccepted(h, first, message.timestamp)
+            val rows = h.store.pending.values.toSet()
+            val queue = h.queue()
+            queue.hydrate(); runCurrent(); queue.awaitDrainCompletion()
+            assertEquals(rows, h.store.pending.values.toSet())
+            assertTrue(h.store.pending.values.any { it.id == second.id })
+            assertEquals(accepted, h.store.channelAttempts.getValue(accepted.key))
+            assertEquals(message, h.stored(message.id))
+            assertFalse(h.store.calls.any { it == "completeAcceptedQueuedChannelAttempt" ||
+                it == "incrementReadyQueuedChannelAttemptCount" })
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+        },
+        native("single-ready-submission-still-sends-and-completes-once") {
+            val h = Harness(this); h.start()
+            val message = h.message(MessageStatus.PENDING, 0u)
+            val row = h.pending(message)
+            val queue = h.queue()
+            queue.hydrate(); runCurrent(); queue.awaitDrainCompletion()
+            assertTrue(h.store.pending.isEmpty())
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            val accepted = h.store.channelAttempts.values.single()
+            assertEquals(row.id, accepted.key.pendingID)
+            assertTrue(accepted.isCompleted)
+            assertEquals(QueuedChannelAttemptPhase.ACCEPTED, accepted.phase)
+        },
         *listOf(null, QueuedChannelDispatchState.DISPATCHING, QueuedChannelDispatchState.UNCERTAIN).map { state ->
             native("retained-$state-never-bumps-queries-sends-remaps-or-fails") {
                 val h = Harness(this); h.start()

@@ -793,8 +793,13 @@ class MessageService(
         pendingID: UUID, envelope: ChannelMessageEnvelope, preserveTimestamp: Boolean,
     ): QueuedChannelAttempt = owned("sendQueuedChannel") {
         val occupantID = envelope.channelOccupantID
-        val pending = dataStore.fetchPendingSendsForMessage(key(envelope.messageID))
-            .singleOrNull { it.id == pendingID }
+        val submissions = dataStore.fetchPendingSendsForMessage(key(envelope.messageID))
+        if (submissions.any { it.id != pendingID }) {
+            throw retainedChannel(pendingID, PersistenceStoreException(PersistenceStoreError.InvalidData,
+                QueuedChannelAttemptRejected(EntityKey(token.radioId, pendingID),
+                    QueuedChannelAttemptConflict.RETAINED_SUBMISSION)))
+        }
+        val pending = submissions.singleOrNull { it.id == pendingID }
         if (pending == null || pending.channelMessageEnvelope() != envelope ||
             pending.channelDispatchState != QueuedChannelDispatchState.READY ||
             pending.channelAttemptID != null || occupantID == null
@@ -822,6 +827,12 @@ class MessageService(
                 lease.owner.dispatch(lease, envelope.channelIndex, occupantID,
                     dataStore::fetchChannelOccupantID) {
                     checkIdentity("sendQueuedChannel.admitted")
+                    // Observational guard only; storage must atomically exclude racing siblings at begin.
+                    if (dataStore.fetchPendingSendsForMessage(key(envelope.messageID)).any { it.id != pendingID }) {
+                        throw retainedChannel(pendingID, PersistenceStoreException(PersistenceStoreError.InvalidData,
+                            QueuedChannelAttemptRejected(EntityKey(token.radioId, pendingID),
+                                QueuedChannelAttemptConflict.RETAINED_SUBMISSION)))
+                    }
                     try {
                         dataStore.beginQueuedChannelAttempt(attemptKey, occupantID, stamp)
                     } catch (failure: PersistenceStoreException) {

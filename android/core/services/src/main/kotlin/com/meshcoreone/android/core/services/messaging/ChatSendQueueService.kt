@@ -304,8 +304,13 @@ class ChatSendQueueService(
         val envelope = entry.envelope
         val id = envelope.messageID
         val pending = try {
-            dataStore.fetchPendingSendsForMessage(key(id)).singleOrNull { it.id == entry.pendingID }
-                .also { checkQueueLifetime("channel.submission") }
+            val submissions = dataStore.fetchPendingSendsForMessage(key(id))
+            checkQueueLifetime("channel.submission")
+            if (submissions.any { it.id != entry.pendingID }) {
+                retainChannel(entry, rejectedChannel(entry, QueuedChannelAttemptConflict.RETAINED_SUBMISSION))
+                return
+            }
+            submissions.singleOrNull { it.id == entry.pendingID }
         } catch (failure: PersistenceStoreException) { retainChannel(entry, failure); return }
         if (pending == null) { completeChannel(entry); return }
         if (pending.kind != PendingSendKind.CHANNEL || pending.channelMessageEnvelope() != envelope) {
@@ -355,6 +360,12 @@ class ChatSendQueueService(
 
     private suspend fun readyChannelAttempt(entry: ChannelEntry): Attempt? {
         if (synchronized(lock) { entry.pendingID in uncertainChannelCounts }) return null
+        try {
+            if (dataStore.fetchPendingSendsForMessage(key(entry.envelope.messageID)).any { it.id != entry.pendingID }) {
+                retainChannel(entry, rejectedChannel(entry, QueuedChannelAttemptConflict.RETAINED_SUBMISSION))
+                return null
+            }
+        } catch (failure: PersistenceStoreException) { retainChannel(entry, failure); return null }
         val readiness = dataStore as? QueuedChannelReadinessPersisting
         if (readiness == null) {
             retainChannel(entry, UnsupportedOperationException("Exact READY-only pending-row attempt counting is not wired"))

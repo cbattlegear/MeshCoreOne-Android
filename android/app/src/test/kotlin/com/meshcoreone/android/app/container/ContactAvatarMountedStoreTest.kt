@@ -17,10 +17,15 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultRegistry
 import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.activity.result.contract.ActivityResultContract
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -134,6 +139,48 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         val wrapper = failure.suppressed.single()
         assertTrue(wrapper is InvocationTargetException)
         assertSame(ordinary, wrapper.targetException)
+    }
+
+    @Test
+    fun avatarChooserReadinessRejectsAbsentAmbiguousAndDisabledActions() {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        val phase = mutableStateOf(0)
+        val label = host.get().getString(C.contactsDetailAvatarChooseSource)
+        host.windowFocusChanged(true)
+        try {
+            host.get().setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    Column {
+                        if (phase.value >= 1) Text(label)
+                        if (phase.value >= 2) {
+                            Button(onClick = {}, enabled = phase.value != 2) { Text(label) }
+                        }
+                        if (phase.value == 3 || phase.value == 4) {
+                            Button(onClick = {}, enabled = phase.value == 3) { Text(label) }
+                        }
+                    }
+                }
+            }
+            for (notReady in 0..4) {
+                compose.runOnIdle { phase.value = notReady }
+                assertFalse(
+                    avatarChooserReady(label),
+                    "Phase $notReady must not accept absent, title-only, disabled or ambiguous chooser actions",
+                )
+            }
+            compose.runOnIdle { phase.value = 5 }
+            awaitAvatarWrite(
+                "Enabled actionable chooser control", System.nanoTime() + 5_000_000_000L,
+                { "chooser phase=${phase.value}" },
+            ) {
+                avatarChooserReady(label)
+            }
+            assertEquals(2, compose.onAllNodes(hasText(label)).fetchSemanticsNodes().size)
+            assertTrue(avatarChooserReady(label), "The matching title is not a second actionable chooser")
+        } finally {
+            host.windowFocusChanged(false)
+            host.pause().stop().destroy()
+        }
     }
 
     @Test
@@ -412,8 +459,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                 "Held write chooser recovery", completionDeadline,
                 ::diagnostic, { harness.scheduler.runCurrent() },
             ) {
-                !compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseSource))
-                    .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled) &&
+                avatarChooserReady(host.get().getString(C.contactsDetailAvatarChooseSource)) &&
                     observations.any { it.stage == AvatarSaveStage.JOB_COMPLETED }
             }
             val saved = assertNotNull(assertNotNull(store.fetchContact(targetKey)).avatarImageData)
@@ -579,8 +625,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             awaitWrite("Actual avatar service completion", saveDeadline) { returned.get() == 1 }
             assertNull(serviceFailure.get())
             awaitWrite("Actual holder completion and chooser recovery", saveDeadline) {
-                !compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseSource))
-                    .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled) &&
+                avatarChooserReady(host.get().getString(C.contactsDetailAvatarChooseSource)) &&
                     observations.any { it.stage == AvatarSaveStage.JOB_COMPLETED }
             }
             val saved = assertNotNull(assertNotNull(store.fetchContact(targetKey)).avatarImageData).toByteArray()
@@ -608,6 +653,12 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             host.pause().stop().destroy()
             harness.container.close()
         }
+    }
+
+    private fun avatarChooserReady(label: String): Boolean {
+        val chooser = compose.onAllNodes(hasText(label) and hasClickAction())
+            .fetchSemanticsNodes().singleOrNull() ?: return false
+        return !chooser.config.contains(SemanticsProperties.Disabled)
     }
 
     private fun awaitAvatarWrite(

@@ -190,6 +190,8 @@ class CliToolSessionsTest {
         scheduler.advanceBy(1.seconds)
         assertEquals("Logging in... (4s)", holder.promptText)
         holder.cancelCurrentCommand()
+        assertNull(holder.state.value.remainingSeconds)
+        assertEquals(0, scheduler.clock.pendingSleepers)
         scheduler.runCurrent()
         assertNull(holder.state.value.remainingSeconds)
         assertEquals(0, scheduler.clock.pendingSleepers)
@@ -258,14 +260,21 @@ class CliToolSessionsTest {
         assertEquals("Logging in... (7s)", holder.promptText)
         assertEquals(1, scheduler.clock.pendingSleepers)
 
+        serviceScheduler.scope.launch { callback(8) }
+        serviceScheduler.runCurrent()
+        scheduler.runCurrent()
+        serviceScheduler.runCurrent()
+        assertEquals(8, holder.state.value.remainingSeconds)
+        assertEquals(1, scheduler.clock.pendingSleepers)
+
         serviceScheduler.scope.launch { oldCallback(50) }
         serviceScheduler.runCurrent()
         scheduler.runCurrent()
         serviceScheduler.runCurrent()
-        assertEquals(7, holder.state.value.remainingSeconds)
+        assertEquals(8, holder.state.value.remainingSeconds)
         assertEquals(1, scheduler.clock.pendingSleepers)
         scheduler.advanceBy(1.seconds)
-        assertEquals("Logging in... (6s)", holder.promptText)
+        assertEquals("Logging in... (7s)", holder.promptText)
         gate.complete(Unit)
         scheduler.runCurrent()
         assertEquals("@Basement> ", holder.promptText)

@@ -49,6 +49,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -128,6 +129,109 @@ class OnboardingGateTest {
         onReceipt: ((com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt) -> Boolean)? = null,
     ) = host.get().setContent {
         MeshCoreTheme { OnboardingFlow(dependencies, onCompleted = {}, onCompletionReceipt = onReceipt) }
+    }
+
+    @Test fun `raw flag before producer acknowledgement survives recreation without becoming startup completion`() =
+        runBlocking {
+            val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val release = CompletableDeferred<Unit>()
+            try {
+                host.setup().visible()
+                val published = CompletableDeferred<Unit>()
+                val flags = WriteBehindOnboardingFlags(emptyMap(), processScope, persist = { _, _ -> })
+                val delayed = object : OnboardingFlagStore by flags {
+                    override suspend fun persistBoolean(
+                        key: String, value: Boolean, requireCurrent: () -> Unit,
+                        seal: (com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt) -> Boolean,
+                        attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+                    ) {
+                        flags.persistBoolean(key, value, requireCurrent, seal, attempt)
+                        published.complete(Unit)
+                        release.await()
+                    }
+                }
+                val dependencies = onboarding(delayed, flags.hasCompleted, processScope)
+                val original = dependencies.retainedFlowCoordinator()
+                val completing = async(start = CoroutineStart.UNDISPATCHED) { original.onboarding.completeOnboarding() }
+                published.await()
+                assertTrue(flags.hasCompleted.value)
+                assertFalse(dependencies.wasCompletedAtLoad)
+                assertEquals(null, original.onboarding.completionReceipt)
+                val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+                showFlow(dependencies) { delivered += it; true }
+                compose.waitForIdle()
+                assertTrue(delivered.isEmpty())
+                host.recreate()
+                showFlow(dependencies) { delivered += it; true }
+                compose.waitForIdle()
+                assertSame(original, dependencies.retainedFlowCoordinator())
+                assertFalse(dependencies.wasCompletedAtLoad)
+                assertTrue(delivered.isEmpty())
+                release.complete(Unit)
+                completing.await()
+                compose.waitForIdle()
+                assertEquals(
+                    listOf(com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice),
+                    delivered,
+                )
+            } finally { release.complete(Unit); processScope.cancel() }
+        }
+
+    @Test fun `held and failed reset revoke delivery until explicit reset recovery`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val release = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            val resetting = CompletableDeferred<Unit>()
+            var failReset = true
+            var durable = false
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, value ->
+                    if (!value && failReset) {
+                        resetting.complete(Unit)
+                        release.await()
+                        throw java.io.IOException("reset failed")
+                    }
+                    durable = value
+                },
+            )
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope)
+            val flow = dependencies.retainedFlowCoordinator()
+            flow.onboarding.completeOnboarding()
+            var deliveryKey by mutableStateOf(0)
+            var accept = false
+            val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+            host.get().setContent {
+                MeshCoreTheme {
+                    OnboardingFlow(
+                        dependencies, onCompleted = {},
+                        onCompletionReceipt = { delivered += it; accept },
+                        completionDeliveryKey = deliveryKey,
+                    )
+                }
+            }
+            compose.waitForIdle()
+            assertEquals(1, delivered.size)
+            val reset = async { runCatching { flow.onboarding.resetOnboarding() } }
+            resetting.await()
+            compose.runOnIdle { accept = true; deliveryKey++ }
+            compose.waitForIdle()
+            assertEquals(1, delivered.size)
+            release.complete(Unit)
+            assertEquals("reset failed", reset.await().exceptionOrNull()?.message)
+            compose.runOnIdle { deliveryKey++ }
+            compose.waitForIdle()
+            assertEquals(1, delivered.size)
+            assertTrue(durable)
+            failReset = false
+            flow.onboarding.resetOnboarding()
+            compose.waitForIdle()
+            assertFalse(durable)
+            flow.onboarding.completeOnboarding()
+            compose.waitForIdle()
+            assertEquals(2, delivered.size)
+            assertTrue(durable)
+        } finally { release.complete(Unit); processScope.cancel() }
     }
 
     @Test fun `first-run explicit retirement rejects held write and reacquires a fresh exact-owned flow`() = runBlocking {
@@ -415,7 +519,9 @@ class OnboardingGateTest {
 
     @Test fun `already completed install shows the shell at once and leaves navigation alone`() {
         val coordinator = NavigationCoordinator().also { it.selectTab(AppTab.MAP) }
-        showGate(coordinator, onboarding(flags(completed = true)))
+        val bound = onboarding(flags(completed = true))
+        assertTrue(bound.wasCompletedAtLoad)
+        showGate(coordinator, bound)
         compose.onNodeWithTag("shell").assertIsDisplayed()
         assertEquals(AppTab.MAP, coordinator.state.value.selectedTab)
     }

@@ -19,7 +19,7 @@ sealed interface OnboardingCompletionReceipt {
     data object Restored : OnboardingCompletionReceipt
 }
 
-internal class OnboardingCompletionPublication(val receipt: OnboardingCompletionReceipt)
+internal class OnboardingCompletionPublication(val receipt: OnboardingCompletionReceipt, val revision: Long)
 
 /** Boolean persistence seam mirroring the `UserDefaults` calls the original state makes. */
 interface OnboardingFlagStore {
@@ -71,7 +71,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private val completed = MutableStateFlow(store.getBoolean(KEY_HAS_COMPLETED))
     private val path = MutableStateFlow<List<OnboardingStep>>(emptyList())
     private val publication = MutableStateFlow(
-        if (completed.value) OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored) else null,
+        if (completed.value) OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored, completionRevision) else null,
     )
     val completionReceipt: OnboardingCompletionReceipt? get() = publication.value?.receipt
     internal val completionPublication = publication.asStateFlow()
@@ -86,7 +86,9 @@ class OnboardingState(private val store: OnboardingFlagStore) {
                 check(!retired) { "Onboarding flow was retired" }
                 invalidateCompletion()
                 store.setBoolean(KEY_HAS_COMPLETED, value)
-                publication.value = if (value) OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored) else null
+                publication.value = if (value) {
+                    OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored, completionRevision)
+                } else null
                 completed.value = value
             }
         }
@@ -136,7 +138,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             synchronized(completionLock) {
                 check(pendingAttempt === attempt) { "Onboarding attempt was retired" }
                 pendingAttempt = null
-                publication.value = OnboardingCompletionPublication(receipt)
+                publication.value = OnboardingCompletionPublication(receipt, completionRevision)
                 completed.value = true
             }
         } finally {
@@ -157,7 +159,9 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     fun canStartCompletion(): Boolean = synchronized(completionLock) { !retired && !completed.value }
 
     internal fun ownsCompletion(value: OnboardingCompletionPublication): Boolean =
-        synchronized(completionLock) { !retired && publication.value === value }
+        synchronized(completionLock) {
+            !retired && value.revision == completionRevision && publication.value === value
+        }
 
     private fun invalidateCompletion(): Long = synchronized(completionLock) {
         pendingAttempt?.reject(IllegalStateException("Onboarding attempt was retired"))

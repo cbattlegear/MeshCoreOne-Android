@@ -163,6 +163,21 @@ the durable flag is still false, rejects A without a canonical true, and complet
 settlement cannot retire B. This is producer custody/recovery only; the held AppRoot gate is not
 replaced, no witness is minted here, and a durable true is never reset implicitly.
 
+Acknowledged publications carry the state revision as well as object identity. Reset invalidates
+delivery authority synchronously before its false-write suspends. A failed reset does not silently
+reauthorize the old receipt or claim rollback; an explicit successful reset retry permits recovery.
+A mounted real false-write control holds then fails reset, retries delivery in both intervals
+without accepting the old receipt, and explicitly retries reset and completion.
+
+`AppOnboarding.wasCompletedAtLoad` retains its construction-time process-owner flag decision, rather
+than sampling a current flag after Activity recreation. A producer-only control holds acknowledgement
+after the actual writer has published raw true, recreates the Activity with the same retained flow,
+and observes no receipt until acknowledgement, followed by one original delivery. A separate
+true-at-load shell/no-navigation control remains. This supplies a producer seam, not a replacement
+for the held first-run gate: original witness custody and the sealed/stale-witness navigation
+controls still require the admitted WP-302 composition. Distinct setup entries in separate tab
+stacks must not adopt a shared old flow's receipt with a newly captured witness.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

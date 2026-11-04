@@ -196,6 +196,7 @@ class AppOnboarding(
     val hasCompleted: StateFlow<Boolean>,
     val pairingState: com.meshcoreone.android.app.state.AppState? = null,
 ) : OnboardingFeatureDependencies {
+    val wasCompletedAtLoad: Boolean = hasCompleted.value
     private var firstRunFlowCoordinator: OnboardingFlowCoordinator? = null
     private val rerunDependencies by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { Rerun(this) }
 

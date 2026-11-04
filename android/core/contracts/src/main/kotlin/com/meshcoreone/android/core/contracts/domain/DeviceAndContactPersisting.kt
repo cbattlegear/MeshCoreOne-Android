@@ -57,6 +57,10 @@ interface ContactPersisting {
     suspend fun updateContactFavorite(
         key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
     ): ContactFavoriteUpdateResult
+    /** Applies only the selected local fields to an existing identity; reports the committed block transition. */
+    suspend fun updateContactLocalFields(
+        key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+    ): ContactLocalUpdateResult
     suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long
     suspend fun deleteContact(key: EntityKey)
     suspend fun deleteContacts(

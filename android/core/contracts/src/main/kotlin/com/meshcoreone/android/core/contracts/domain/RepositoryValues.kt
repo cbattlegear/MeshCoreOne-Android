@@ -18,6 +18,20 @@ data class ContactIdentity(val id: UUID, val publicKey: Bytes)
 data class ContactSaveResult(val id: UUID, val isNew: Boolean)
 enum class ContactAvatarUpdateResult { UPDATED, CONTACT_NOT_FOUND, IDENTITY_MISMATCH }
 enum class ContactFavoriteUpdateResult { UPDATED, CONTACT_NOT_FOUND, IDENTITY_MISMATCH }
+sealed interface ContactLocalUpdate {
+    /** A null nickname leaves it unchanged; an empty normalized nickname clears it. */
+    data class Preferences(
+        val nickname: String?, val isBlocked: Boolean?, val isFavorite: Boolean?,
+    ) : ContactLocalUpdate
+    data class OCVSettings(val preset: String, val customArray: String?) : ContactLocalUpdate
+    data class TelemetryPermissions(val granted: Boolean) : ContactLocalUpdate
+}
+enum class ContactBlockTransition { NONE, BLOCKED, UNBLOCKED }
+sealed interface ContactLocalUpdateResult {
+    data class Updated(val blockTransition: ContactBlockTransition = ContactBlockTransition.NONE) : ContactLocalUpdateResult
+    data object ContactNotFound : ContactLocalUpdateResult
+    data object IdentityMismatch : ContactLocalUpdateResult
+}
 data class DiscoveredNodeSaveResult(val node: DiscoveredNodeDTO, val isNew: Boolean)
 data class ParsedReaction(val emoji: String, val targetSender: String, val messageHash: String)
 data class NeighborBaseline(val previous: NodeStatusSnapshotDTO?, val seenPrefixes: SnapshotSet<Bytes>)

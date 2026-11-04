@@ -136,6 +136,36 @@ internal class ContactRepository(
         ContactFavoriteUpdateResult.UPDATED
     }
 
+    override suspend fun updateContactLocalFields(
+        key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+    ): ContactLocalUpdateResult = context.write("updateContactLocalFields") {
+        val row = database.contacts().byId(key.radioId.value, key.id)
+            ?: return@write ContactLocalUpdateResult.ContactNotFound
+        if (row.publicKey != expectedPublicKey) return@write ContactLocalUpdateResult.IdentityMismatch
+        var transition = ContactBlockTransition.NONE
+        val count = when (update) {
+            is ContactLocalUpdate.Preferences -> {
+                transition = when {
+                    update.isBlocked == true && !row.isBlocked -> ContactBlockTransition.BLOCKED
+                    update.isBlocked == false && row.isBlocked -> ContactBlockTransition.UNBLOCKED
+                    else -> ContactBlockTransition.NONE
+                }
+                database.contacts().updatePreferences(
+                    key.radioId.value, key.id, expectedPublicKey, update.nickname, update.isBlocked, update.isFavorite,
+                )
+            }
+            is ContactLocalUpdate.OCVSettings -> database.contacts().updateOCVSettings(
+                key.radioId.value, key.id, expectedPublicKey, update.preset, update.customArray,
+            )
+            is ContactLocalUpdate.TelemetryPermissions -> database.contacts().updateTelemetryPermissions(
+                key.radioId.value, key.id, expectedPublicKey, if (update.granted) 0x0EL else 0L,
+            )
+        }
+        if (count != 1) invalidData("Local contact identity changed inside the write transaction")
+        save()
+        ContactLocalUpdateResult.Updated(transition)
+    }
+
     override suspend fun deleteContact(key: EntityKey) =
         context.write("deleteContact", flushBeforeRollback = true) {
             deleteContactMessages(key)

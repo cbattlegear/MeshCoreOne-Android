@@ -40,6 +40,15 @@ contact and the exact channel index in the same radio. Malformed direct
 pending rows cannot qualify a channel message for recovery. The independent
 API and consumer policy are unchanged. Source validators and whitespace
 checks returned 0 after this composition; Android execution remains unclaimed.
+The integration owner's subsequent immutable handoff
+`180bf1da878028fcac024deae5d7383ffc47e019` is composed unchanged as
+`1a685b73542417e70326695a3ff6932ccd2ac522`. This successor changes
+producer Room fixtures/evidence, not recovery signatures or consumer paths.
+At inspection, hosted run `41922386382` was `in_progress` and bound to that
+exact producer SHA; it is not a consumer run or green acceptance. No generic
+DeviceError(2) was reclassified as no-send proof, and no existing queue
+expectation was altered here. Local source validators and whitespace checks
+returned 0 after composition.
 
 The separately assigned R1 consumer fix includes known-old-occupant and
 unbound outgoing recovery text in a separate list with explicit copy into a

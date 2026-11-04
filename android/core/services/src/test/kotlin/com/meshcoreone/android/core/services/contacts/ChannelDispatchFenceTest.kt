@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.ChannelDispatchAdmission
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
@@ -30,12 +31,18 @@ class ChannelDispatchFenceTest {
         val radio = RadioId(UUID(0, 1))
         val epoch = ProcessEpoch(UUID(0, 2))
         val connection = Any()
-        val lease = fence.openSession(token(1), connection)
+        val admission = ChannelDispatchAdmission(token(1), connection)
+        val lease = fence.openSession(token(1), connection, admission)
         var occupant: UUID? = UUID(0, 3)
         val intended = occupant
         val effects = mutableListOf<String>()
 
         fun token(generation: Long, radioId: RadioId = radio) = SessionToken(epoch, Generation(generation), radioId)
+
+        fun open(token: SessionToken, connection: Any): ChannelDispatchFence.Lease =
+            fence.openSession(token, connection,
+                if (token == admission.token && connection === admission.connectionIdentity) admission
+                else ChannelDispatchAdmission(token, connection))
 
         suspend fun send(lease: ChannelDispatchFence.Lease = this.lease) =
             fence.dispatch(lease, 7u, intended, { radioId, index ->
@@ -52,12 +59,163 @@ class ChannelDispatchFenceTest {
         }
     }
 
+    private suspend fun preparedFixture(): Fixture = Fixture().also { f ->
+        f.gate.withChannelOperationScope { scope ->
+            scope.withChannelIdentityMutation { assertEquals(f.intended, f.occupant) }
+            f.fence.recordReconciled(f.lease, scope, listOf(7u))
+        }
+    }
+
     @Test
-    fun heldDispatchPrecedesReplacementAcrossServiceInstances() = runTest {
-        val f = Fixture()
+    fun leaseRequiresExactManagerAdmissionAndCannotReplaceItsHandle() = runTest {
+        val f = preparedFixture()
+        val substituted = ChannelDispatchAdmission(f.token(1), f.connection)
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+            f.fence.openSession(f.token(1), f.connection, substituted)
+        }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+            f.fence.openSession(f.token(2), f.connection, f.admission)
+        }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+            f.fence.openSession(f.token(1), Any(), f.admission)
+        }
+        assertEquals(0L, substituted.inFlightCount)
+        assertEquals(0L, f.admission.inFlightCount)
+        f.admission.revoke()
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.open(f.token(1), f.connection) }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.send() }
+    }
+
+    @Test
+    fun managerRevocationDuringAuthorityReadPreventsAtomicWireAdmission() = runTest {
+        val f = preparedFixture()
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+            f.fence.dispatch(f.lease, 7u, f.intended, { _, _ ->
+                f.admission.revoke()
+                f.occupant
+            }) { error("Revoked during authority read") }
+        }
+        assertEquals(0L, f.admission.inFlightCount)
+        assertTrue(f.effects.isEmpty())
+    }
+
+    @Test
+    fun admittedDispatchRetainsPermitAfterRevocationAndCancellationUntilActualReturn() = runTest {
+        val f = preparedFixture()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val sameLease = f.fence.openSession(f.token(1), f.connection)
+        val sending = launch {
+            f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> f.occupant }) {
+                assertEquals(1L, f.admission.inFlightCount)
+                entered.complete(Unit)
+                release.await()
+                f.effects += "accepted"
+            }
+        }
+        entered.await()
+        f.admission.revoke()
+        sending.cancel()
+        assertEquals(1L, f.admission.inFlightCount)
+        assertTrue(f.admission.isRevoked)
+        val successor = f.open(f.token(2), Any())
+        val mutation = launch { f.fence.withMutation(successor) { f.effects += "successor" } }
+        runCurrent()
+        assertFalse(mutation.isCompleted)
+        release.complete(Unit)
+        sending.join()
+        mutation.join()
+        assertTrue(sending.isCancelled)
+        assertEquals(0L, f.admission.inFlightCount)
+        assertEquals(listOf("accepted", "successor"), f.effects)
+    }
+
+    @Test
+    fun scopedMutationPermitAccountsCompletionButCannotReadmitRevokedLease() = runTest {
+        val f = preparedFixture()
+        f.gate.withChannelOperationScope { scope ->
+            f.fence.withScopedMutation(f.lease, scope) {
+                assertEquals(1L, f.admission.inFlightCount)
+                f.admission.revoke()
+                scope.withChannelIdentityMutation { f.effects += "persist admitted" }
+                assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+                    f.fence.recordReconciled(f.lease, scope, listOf(7u))
+                }
+            }
+        }
+        assertEquals(0L, f.admission.inFlightCount)
+        assertEquals(listOf("persist admitted"), f.effects)
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.send() }
+    }
+
+    @Test
+    fun managerRevokedStaleFactoryDoesNotStrandSuccessorOrResetQuarantine() = runTest {
+        val f = preparedFixture()
+        f.admission.revoke()
+        val successor = f.open(f.token(2), Any())
+        assertFalse(successor === f.lease)
+        assertFailsWith<ChannelDispatchFailure.UnreconciledSession> { f.send(successor) }
+        val failure = MeshCoreException.Timeout()
+        f.fence.quarantine(f.lease, failure)
+        assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+            f.fence.withMutation(successor) { error("Old uncertainty still blocks successor") }
+        }.cause)
+    }
+
+    @Test
+    fun withdrawingObservedSlotsRequiresActiveScopeAndDoesNotAffectOtherSlots() = runTest {
+        val f = preparedFixture()
+        f.gate.withChannelOperationScope { scope ->
+            f.fence.recordReconciled(f.lease, scope, listOf(8u))
+            f.fence.forgetReconciled(f.lease, scope, listOf(7u))
+        }
+        assertFailsWith<ChannelDispatchFailure.UnreconciledSession> { f.send() }
+        f.fence.dispatch(f.lease, 8u, f.intended, { _, _ -> f.occupant }) { f.effects += "other slot" }
+        assertEquals(listOf("other slot"), f.effects)
+    }
+
+    @Test
+    fun cachedEpochCannotAdmitFreshConnectionOrAnUnreadSlot() = runTest {
+        val f = Fixture()
+        var reads = 0
+        assertFailsWith<ChannelDispatchFailure.UnreconciledSession> {
+            f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> reads++; f.occupant }) { error("must not send") }
+        }
+        assertEquals(0, reads)
+        f.gate.withChannelOperationScope { scope ->
+            f.fence.recordReconciled(f.lease, scope, listOf(7u))
+        }
+        f.send()
+        assertFailsWith<ChannelDispatchFailure.UnreconciledSession> {
+            f.fence.dispatch(f.lease, 8u, f.intended, { _, _ -> f.occupant }) { error("unread slot must not send") }
+        }
+        f.fence.retire(f.lease)
+        val successor = f.open(f.token(2), Any())
+        assertFailsWith<ChannelDispatchFailure.UnreconciledSession> { f.send(successor) }
+        f.gate.withChannelOperationScope { scope -> f.fence.recordReconciled(successor, scope, listOf(7u)) }
+        f.send(successor)
+        assertEquals(listOf("send", "send"), f.effects)
+    }
+
+    @Test
+    fun reconciliationCannotUseForgedOrExpiredCapability() = runTest {
+        val f = Fixture()
+        val forged = object : ChannelIdentityWriteScope {
+            override suspend fun <T> withChannelIdentityMutation(block: suspend () -> T): T = block()
+        }
+        assertFailsWith<IllegalStateException> { f.fence.recordReconciled(f.lease, forged, listOf(7u)) }
+        lateinit var expired: ChannelIdentityWriteScope
+        f.gate.withChannelOperationScope { expired = it }
+        assertFailsWith<IllegalStateException> { f.fence.recordReconciled(f.lease, expired, listOf(7u)) }
+        assertFailsWith<ChannelDispatchFailure.UnreconciledSession> { f.send() }
+        assertTrue(f.effects.isEmpty())
+    }
+
+    @Test
+    fun heldDispatchPrecedesReplacementAcrossServiceInstances() = runTest {
+        val f = preparedFixture()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val sameLease = f.open(f.token(1), f.connection)
         assertSame(f.lease, sameLease)
         val send = async {
             f.fence.dispatch(sameLease, 7u, f.intended, { _, _ -> f.occupant }) {
@@ -79,7 +237,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun heldReplacementRejectsOldPendingIntentBeforeWire() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val replace = launch {
@@ -101,7 +259,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun cancellationAfterAdmissionDoesNotReleaseForLateDispatch() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         val entered = CompletableDeferred<Unit>()
         val lateTransport = CompletableDeferred<Unit>()
         var accepted = false
@@ -129,7 +287,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun cancellationWhileWaitingForAdmissionNeverDispatches() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val mutation = launch {
@@ -149,7 +307,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun retiringDuringIdentityReadPreventsWire() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         f.fence.dispatchFailureAfterRetiredRead(f)
         assertTrue(f.effects.isEmpty())
     }
@@ -165,7 +323,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun retirementRejectsQueuedOldConnectionButAdmittedCallDrainsBeforeSuccessor() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val send = launch {
@@ -177,7 +335,7 @@ class ChannelDispatchFenceTest {
         }
         entered.await()
         f.fence.retire(f.lease)
-        val next = f.fence.openSession(f.token(2), Any())
+        val next = f.open(f.token(2), Any())
         val successor = launch {
             f.fence.withMutation(next) { f.effects += "successor mutation" }
         }
@@ -192,23 +350,23 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun ambiguousFailurePoisonsRadioAcrossRetirementAndReconnect() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         val failure = MeshCoreException.ConnectionLost()
         assertFailsWith<MeshCoreException.ConnectionLost> {
             f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> f.occupant }) { throw failure }
         }
         assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
-            f.fence.openSession(f.token(1), f.connection)
+            f.open(f.token(1), f.connection)
         }.cause)
         assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.replace() }
         assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.send() }
         f.fence.retire(f.lease)
-        assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.fence.openSession(f.token(2), Any()) }
+        assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.open(f.token(2), Any()) }
     }
 
     @Test
     fun sessionCancellationInsideOperationQuarantinesBeforeUnlock() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         assertFailsWith<CancellationException> {
             f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> f.occupant }) {
                 throw CancellationException("session ended without transport drain proof")
@@ -219,7 +377,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun definiteDeviceRejectionDoesNotQuarantine() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         assertFailsWith<MeshCoreException.DeviceError> {
             f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> f.occupant }) {
                 throw MeshCoreException.DeviceError(1u)
@@ -231,18 +389,18 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun producerUncertainMutationQuarantinesOtherInstances() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         val failure = MeshCoreException.Timeout()
         f.fence.withMutation(f.lease) { f.fence.quarantine(f.lease, failure) }
         assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
-            f.fence.openSession(f.token(1), f.connection)
+            f.open(f.token(1), f.connection)
         }.cause)
         assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { f.send() }
     }
 
     @Test
     fun sameKeyRenamePreservesEpochButClearDifferentKeyAndAbaDoNot() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         f.fence.withMutation(f.lease) {
             f.gate.withChannelIdentityMutation { f.effects += "rename" }
         }
@@ -260,7 +418,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun restoreWaitsForWholeRadioWriteAndPersistInterval() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         val radioAccepted = CompletableDeferred<Unit>()
         val persist = CompletableDeferred<Unit>()
         val mutation = launch {
@@ -289,7 +447,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun restoreBeforeDispatchRejectsImportedUnknownIntent() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         f.gate.withChannelIdentityRestore { f.occupant = UUID(0, 10) }
         assertFailsWith<ChannelDispatchFailure.ReplacedOccupant> { f.send() }
         assertFailsWith<ChannelDispatchFailure.UnknownOccupant> {
@@ -300,8 +458,8 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun freshRegistryStillRequiresSuppliedPersistedEpoch() = runTest {
-        val before = Fixture()
-        val after = Fixture()
+        val before = preparedFixture()
+        val after = preparedFixture()
         assertEquals(before.intended, after.intended)
         after.send()
         after.occupant = UUID(0, 30)
@@ -311,7 +469,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun unknownLegacyIntentNeverSamplesNewOccupantAsItsOwnIdentity() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         var reads = 0
         assertFailsWith<ChannelDispatchFailure.UnknownOccupant> {
             f.fence.dispatch(f.lease, 7u, null, { _, _ -> reads++; f.occupant }) { f.effects += "send" }
@@ -322,25 +480,26 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun wrongFenceConnectionTokenOrProcessCannotBorrowLease() = runTest {
-        val f = Fixture()
-        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.fence.openSession(f.token(1), Any()) }
-        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.fence.openSession(f.token(2), Any()) }
+        val f = preparedFixture()
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.open(f.token(1), Any()) }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.open(f.token(2), Any()) }
         assertFailsWith<ChannelDispatchFailure.RetiredSession> {
             ChannelDispatchFence(ChannelIdentityMutex()).withMutation(f.lease) { error("must not enter") }
         }
         f.fence.retire(f.lease)
-        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.fence.openSession(f.token(1), f.connection) }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.open(f.token(1), f.connection) }
         assertFailsWith<ChannelDispatchFailure.RetiredSession> {
-            f.fence.openSession(f.token(2).copy(epoch = ProcessEpoch(UUID(0, 99))), Any())
+            f.open(f.token(2).copy(epoch = ProcessEpoch(UUID(0, 99))), Any())
         }
     }
 
     @Test
     fun radioQuarantineDoesNotBecomeAnotherRadiosIdentity() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         f.fence.quarantine(f.lease, MeshCoreException.Timeout())
         val otherRadio = RadioId(UUID(0, 99))
-        val other = f.fence.openSession(f.token(1, otherRadio), Any())
+        val other = f.open(f.token(1, otherRadio), Any())
+        f.gate.withChannelOperationScope { scope -> f.fence.recordReconciled(other, scope, listOf(7u)) }
         f.fence.dispatch(other, 7u, UUID(0, 50), { radio, slot ->
             assertEquals(otherRadio, radio)
             assertEquals(7.toUByte(), slot)
@@ -351,7 +510,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun storeOwnedScopeValidatesWithoutRecursivelyAcquiringOperationLane() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         f.gate.withChannelOperationScope { scope ->
             f.fence.withScopedMutation(f.lease, scope) {
                 scope.withChannelIdentityMutation { f.effects += "persist" }
@@ -363,7 +522,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun mutationScopeRejectsForgeryWrongGateChildAndExpiredUse() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         val forged = object : ChannelIdentityWriteScope {
             override suspend fun <T> withChannelIdentityMutation(block: suspend () -> T): T = block()
         }
@@ -392,7 +551,7 @@ class ChannelDispatchFenceTest {
 
     @Test
     fun failedScopedMutationPreservesFailureAndScopeExpiresBeforePublication() = runTest {
-        val f = Fixture()
+        val f = preparedFixture()
         val failure = IllegalArgumentException("write failed")
         lateinit var leaked: ChannelIdentityWriteScope
         assertSame(failure, assertFailsWith<IllegalArgumentException> {

@@ -320,6 +320,24 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
                 }
             }
         }
+        val knownKeys = state.availableNodes.map { it.publicKey }.toSet()
+        val discoveredCandidates = state.discoveredRepeaters.filterNot { it.publicKey in knownKeys }
+        if (discoveredCandidates.isNotEmpty()) {
+            item {
+                Text(
+                    stringResource(com.meshcoreone.android.core.l10n.R.string.l10n_app_map_map_callout_discovered),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+            items(discoveredCandidates, key = { it.id }) { repeater ->
+                OutlinedButton(
+                    onClick = { holder.addNode(repeater) },
+                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
+                ) {
+                    Text(repeater.name)
+                }
+            }
+        }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(0u.toUByte(), 1u.toUByte(), 2u.toUByte()).forEach { mode ->

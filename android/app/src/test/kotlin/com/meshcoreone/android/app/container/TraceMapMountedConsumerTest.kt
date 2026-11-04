@@ -127,6 +127,18 @@ class TraceMapMountedConsumerTest {
         assertTrue(failures.isEmpty())
     }
 
+    @Test fun discoveredRepeaterCanBeAddedFromTheAccessibleTraceEditorList() {
+        mount()
+        compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_list))
+            .performClick()
+        compose.onNodeWithText("Hill").assertIsDisplayed().performClick()
+
+        compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_map))
+            .performClick()
+        compose.waitUntil(5_000) { latest?.points?.singleOrNull { it.id == hill.id }?.hopIndex == 1 }
+        assertTrue(failures.isEmpty())
+    }
+
     @Test fun systemMapAppearanceFollowsEffectiveAppThemeAndKeepsExplicitMapOverrides() {
         mount(AppColorSchemePreference.DARK)
         compose.waitUntil(5_000) { latest?.isDark == true }

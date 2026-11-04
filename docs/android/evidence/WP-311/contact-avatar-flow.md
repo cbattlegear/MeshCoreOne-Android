@@ -572,11 +572,13 @@ The current consumer candidate is
 `aadee631b6ecbdf6eab5620307ae82d26256aafa`. Hosted run
 [41868433539](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41868433539)
 has passed classification and controller policy. Its Linux Gradle validation
-step failed at 17:36Z: `verify_candidate_task_graph.gradle` timed out after
-3,600 seconds before the selected Gradle tasks executed. The timeout diagnostics
+step failed at 17:36Z: the Gradle validation command timed out after
+3,600 seconds; its last streamed tasks were build-logic setup tasks. The timeout diagnostics
 reported that mandatory JUnit reports were missing for the failed command.
 Cached report summaries are not counted as current-candidate test evidence.
-This is a candidate task-graph timeout, not a product test failure.
+This is a command timeout, not an observed product assertion failure. The
+presence of the task-graph verification init script in the command does not
+establish that script as the cause.
 Producer candidate `76920597c259903b2cffcbfbe2f733d0a52b4e7a` was superseded
 when its owner merged current main; exact run
 [41867785182](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41867785182)

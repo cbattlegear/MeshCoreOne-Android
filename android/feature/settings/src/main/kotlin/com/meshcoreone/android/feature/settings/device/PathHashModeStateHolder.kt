@@ -57,7 +57,7 @@ class PathHashModeStateHolder(
     fun dismissError() = mutable.update { it.copy(errorMessage = null) }
 
     fun onModeSelected(mode: UByte) {
-        if (mutable.value.isApplying || (mode == mutable.value.selectedMode && failedMode != mode)) return
+        if (mutable.value.isApplying || (mode == mutable.value.selectedMode && failedMode == null)) return
         apply(mode)
     }
 

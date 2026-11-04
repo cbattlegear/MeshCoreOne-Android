@@ -30,7 +30,7 @@ import kotlin.test.assertTrue
 
 class SettingsPathHashPersistenceTest : RoomProcessTest() {
     @Test fun roomFailureReachesTheActualSettingsActionAndReselectionRetries() = runTest {
-        withSettings { h, holder, failures ->
+        withSettings { h, holder, failures, _ ->
             val before = assertNotNull(h.manager.connectedDevice)
             db.openHelper.writableDatabase.execSQL(
                 "CREATE TRIGGER reject_path_hash_save BEFORE UPDATE ON devices " +
@@ -59,7 +59,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
     @Test fun contactWatermarkBetweenTicketAndSaveIsMergedWithoutLosingUnrelatedFields() = runTest {
         var armed = false
         var conflicts = 0
-        val interleaving = object : PersistenceStoreProtocol by store, DeviceEditPersisting {
+        val interleaving = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
             override suspend fun fetchDeviceWriteSnapshot(id: java.util.UUID) = store.fetchDeviceWriteSnapshot(id)
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                 if (armed && dto.pathHashMode == 2u.toUByte()) {
@@ -73,7 +73,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                 return store.saveDeviceIfUnchanged(dto, expected)
             }
         }
-        withSettings(interleaving) { h, holder, failures ->
+        withSettings(interleaving) { h, holder, failures, _ ->
             val before = assertNotNull(store.fetchDevice(assertNotNull(h.manager.connectedDevice).id))
             armed = true
             holder.onModeSelected(2u)
@@ -91,7 +91,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var armed = false
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting {
+        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
             override suspend fun fetchDeviceWriteSnapshot(id: java.util.UUID) = store.fetchDeviceWriteSnapshot(id)
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                 if (armed && dto.pathHashMode == 2u.toUByte()) {
@@ -102,7 +102,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
             }
         }
         try {
-            withSettings(held) { h, holder, failures ->
+            withSettings(held) { h, holder, failures, _ ->
                 val before = assertNotNull(h.manager.connectedDevice)
                 armed = true
                 holder.onModeSelected(2u)
@@ -117,15 +117,67 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         } finally { release.complete(Unit) }
     }
 
+    @Test fun failedPersistenceCanRestoreThePreviousModeThroughRealRadioReadbackAndRoom() = runTest {
+        withSettings { h, holder, failures, radioMode ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            assertEquals(0u.toUByte(), before.pathHashMode)
+            val radio = h.links.radios.single()
+            val start = radio.sent.size
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_path_hash_restore BEFORE UPDATE ON devices " +
+                    "BEGIN SELECT RAISE(FAIL, 'path hash storage failure'); END",
+            )
+            try {
+                holder.onModeSelected(2u)
+                h.eventually("radio changed but persistence failed") {
+                    !holder.state.value.isApplying && failures.isNotEmpty()
+                }
+                assertEquals(2u.toUByte(), radioMode())
+                assertEquals(0u.toUByte(), holder.state.value.displayedMode)
+                assertEquals(before, store.fetchDevice(before.id))
+                assertEquals(before, h.manager.connectedDevice)
+                assertNotNull(holder.state.value.errorMessage)
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_path_hash_restore")
+            }
+            holder.onModeSelected(0u)
+            h.eventually("previous mode restored on radio and acknowledged in Settings") {
+                !holder.state.value.isApplying && holder.state.value.errorMessage == null && radioMode() == 0u.toUByte()
+            }
+            assertEquals(0u.toUByte(), radioMode())
+            assertEquals(before, store.fetchDevice(before.id))
+            assertEquals(before, h.manager.connectedDevice)
+            assertEquals(
+                listOf(0x3d, 0x16, 0x3d, 0x16),
+                radio.sent.drop(start).map { it[0].toInt() }.filter { it == 0x3d || it == 0x16 },
+            )
+        }
+    }
+
+    @Test fun cleanSameModeSelectionDoesNotWriteTheRadioOrDatabase() = runTest {
+        withSettings { h, holder, failures, radioMode ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val row = assertNotNull(db.devices().byId(before.id))
+            val start = h.links.radios.single().sent.size
+            holder.onModeSelected(before.pathHashMode)
+            h.settle()
+            assertFalse(holder.state.value.isApplying)
+            assertTrue(failures.isEmpty())
+            assertEquals(before.pathHashMode, radioMode())
+            assertEquals(row, db.devices().byId(before.id))
+            assertTrue(h.links.radios.single().sent.drop(start).none { it[0] == 0x3d.toUByte() })
+        }
+    }
+
     private suspend fun TestScope.withSettings(
         persistence: PersistenceStoreProtocol = store,
-        action: suspend (ContainerHarness, PathHashModeStateHolder, MutableList<Throwable>) -> Unit,
+        action: suspend (ContainerHarness, PathHashModeStateHolder, MutableList<Throwable>, () -> UByte) -> Unit,
     ) {
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
         var holder: PathHashModeStateHolder? = null
         try {
+            var mode = 0
             h.links.configureRadio = { radio ->
-                var mode = 0
                 radio.firmwareVersion = 10u
                 radio.respond = { command ->
                     when (command[0].toInt()) {
@@ -178,7 +230,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
             h.eventually("Settings observes the ready device") {
                 settings.state.value.device != null && settings.state.value.enabled
             }
-            action(h, settings, failures)
+            action(h, settings, failures) { mode.toUByte() }
         } finally {
             holder?.stop()
             h.container.close()

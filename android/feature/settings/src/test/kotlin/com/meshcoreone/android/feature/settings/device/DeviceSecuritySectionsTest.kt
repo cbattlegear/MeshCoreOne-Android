@@ -95,6 +95,22 @@ class PathHashModeStateHolderTest {
     }
 
     @Test
+    fun `after persistence failure explicitly selecting the previous mode restores the radio`() {
+        holder.start(); scheduler.runCurrent()
+        service.failNext("setPathHashModeVerified", IllegalStateException("Storage write failed"))
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertEquals(1u.toUByte(), state.displayedMode)
+        holder.onModeSelected(1u)
+        scheduler.runCurrent()
+        assertEquals(listOf("setPathHashModeVerified(2)", "setPathHashModeVerified(1)"), service.calls)
+        assertNull(state.errorMessage)
+        holder.onModeSelected(1u)
+        scheduler.runCurrent()
+        assertEquals(2, service.calls.size)
+    }
+
+    @Test
     fun `the action stays busy until persistence acknowledges and ignores another selection`() {
         val persistence = CompletableDeferred<Unit>()
         service.onCall = { persistence.await() }

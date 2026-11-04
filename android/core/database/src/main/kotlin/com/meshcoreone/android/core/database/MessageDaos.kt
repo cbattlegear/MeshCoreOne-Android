@@ -37,6 +37,25 @@ interface MessageDao : RowWriter<MessageEntity> {
     suspend fun newestForChannelOccupant(radioId: UUID, index: Long, occupantID: UUID, limit: Long, offset: Long = 0): List<MessageEntity>
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID IS NULL)")
     suspend fun hasUnboundChannelHistory(radioId: UUID, index: Long): Boolean
+    @Query("""
+        SELECT m.* FROM messages m
+        WHERE m.radioId = :radioId AND m.contactID IS NULL AND m.channelIndex IS NOT NULL
+          AND m.directionRawValue = 1
+          AND (m.statusRawValue IN (0, 1, 4, 5) OR EXISTS(
+              SELECT 1 FROM pending_sends p WHERE p.radioId = m.radioId AND p.messageID = m.id
+          ))
+          AND (m.channelOccupantID IS NULL OR NOT EXISTS(
+              SELECT 1 FROM channel_occupants o JOIN channels c
+                ON c.radioId = o.radioId AND c.`index` = o.`index`
+              WHERE o.radioId = m.radioId AND o.`index` = m.channelIndex
+                AND o.occupantID = m.channelOccupantID AND o.unresolved = 0 AND c.isEnabled = 1
+                AND (SELECT COUNT(*) FROM channels slot
+                     WHERE slot.radioId = m.radioId AND slot.`index` = m.channelIndex) = 1
+          ))
+        ORDER BY m.createdAt_seconds DESC, m.createdAt_nanos DESC, m.id ASC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun recoverableChannelDrafts(radioId: UUID, limit: Long, offset: Long): List<MessageEntity>
     @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID")
     suspend fun countForChannelOccupant(radioId: UUID, index: Long, occupantID: UUID): Long
     @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID AND (sortDate_seconds > :seconds OR (sortDate_seconds = :seconds AND sortDate_nanos >= :nanos))")

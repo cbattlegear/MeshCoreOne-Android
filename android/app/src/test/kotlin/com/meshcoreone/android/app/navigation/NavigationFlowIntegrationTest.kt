@@ -72,6 +72,8 @@ import com.meshcoreone.android.feature.chats.list.ContactLinkTargetCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkTargetResolution
 import com.meshcoreone.android.feature.chats.list.ContactLinkHandoffReceipt
 import com.meshcoreone.android.feature.chats.list.ContactLinkHandoffOutcome
+import com.meshcoreone.android.feature.chats.list.ContactLinkLookupFailure
+import com.meshcoreone.android.feature.chats.list.ContactLinkLookupIssue
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
@@ -387,6 +389,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             h.appState.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced &&
                 h.container.navigation.state.value.navigationReady
         }
+    }
+
+    private fun contactMount(h: ContainerHarness, source: ContactDTO? = null): ChatContactMount {
+        val radio = assertNotNull(h.appState.currentRadioId)
+        val contact = source ?: ContactDTO(
+            radioId = radio, publicKey = key(60), name = "Source conversation", lastHeardTimestamp = null,
+        )
+        h.container.navigation.navigateToChat(contact)
+        return ChatContactMount(h.container.navigation.currentState.activeStack.last().id)
     }
 
     private fun await(h: ContainerHarness, condition: () -> Boolean) = compose.waitUntil(10_000) {
@@ -1449,21 +1460,21 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         for (window in listOf(390.dp, 1080.dp)) {
             val h = ContainerHarness(this, store)
             val feature = h.container.chatsFeature
-            val origin = ChatContactMount()
             val parent = SupervisorJob(backgroundScope.coroutineContext[Job])
             val routingScope = CoroutineScope(backgroundScope.coroutineContext + parent)
             val offered = CompletableDeferred<ContactLinkHandoffReceipt>()
-            val underlying = feature.linksForMount(origin)
-            val environment = object : ChatLinkEnvironment by underlying {
-                override fun completeResolvedContactLookup(
-                    context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
-                    existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
-                ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
-                    context, target, link, existing, publications, cancellation,
-                ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
-            }
             try {
                 connect(h)
+                val origin = contactMount(h)
+                val underlying = feature.linksForMount(origin)
+                val environment = object : ChatLinkEnvironment by underlying {
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                        context, target, link, existing, publications, cancellation,
+                    ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
+                }
                 feature.registerContactMount(origin)
                 val uri = h.container.nodesFeature.uriCodec.exportContactUri("Sealed delivery", key(30), ContactType.REPEATER)
                 assertTrue(ChatLinkRouter(environment, routingScope).route(uri))
@@ -1501,25 +1512,24 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         for (window in listOf(390.dp, 1080.dp)) {
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Accepted destination") }
-            val origin = ChatContactMount()
             val disposed = AtomicBoolean()
             val offered = CompletableDeferred<ContactLinkHandoffReceipt>()
             val feature = h.container.chatsFeature
-            val underlying = feature.linksForMount(origin)
-            val environment = object : ChatLinkEnvironment by underlying {
-                override fun completeResolvedContactLookup(
-                    context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
-                    existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
-                ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
-                    context, target, link, existing, publications, cancellation,
-                ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
-            }
             try {
                 connect(h)
                 val navigation = h.container.navigation
                 val radio = assertNotNull(h.appState.currentRadioId)
                 val saved = assertNotNull(store.fetchContact(radio, key(20)))
-                navigation.navigateToChat(saved)
+                val origin = contactMount(h, saved)
+                val underlying = feature.linksForMount(origin)
+                val environment = object : ChatLinkEnvironment by underlying {
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                        context, target, link, existing, publications, cancellation,
+                    ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
+                }
                 compose.runOnUiThread {
                     width.value = window
                     host.get().setContent {
@@ -1570,19 +1580,20 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     @Test fun mountedConsumerAcceptsOnlyTheNewestIdenticalContactOfferAndRetainsItsMetadata() = runTest {
         val h = ContainerHarness(this, store)
         val feature = h.container.chatsFeature
-        val origin = ChatContactMount()
         val receipts = CopyOnWriteArrayList<ContactLinkHandoffReceipt>()
-        val underlying = feature.linksForMount(origin)
-        val environment = object : ChatLinkEnvironment by underlying {
-            override fun completeResolvedContactLookup(
-                context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
-                existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
-            ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
-                context, target, link, existing, publications, cancellation,
-            ).also { if (it is ContactLinkTargetCompletion.Offered) receipts += it.receipt }
-        }
+        var mountedOrigin: ChatContactMount? = null
         try {
             connect(h)
+            val origin = contactMount(h).also { mountedOrigin = it }
+            val underlying = feature.linksForMount(origin)
+            val environment = object : ChatLinkEnvironment by underlying {
+                override fun completeResolvedContactLookup(
+                    context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                    existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                    context, target, link, existing, publications, cancellation,
+                ).also { if (it is ContactLinkTargetCompletion.Offered) receipts += it.receipt }
+            }
             feature.registerContactMount(origin)
             val uri = h.container.nodesFeature.uriCodec.exportContactUri("Identical replacement", key(30), ContactType.REPEATER)
             val router = ChatLinkRouter(environment, backgroundScope)
@@ -1610,7 +1621,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(accepted, h.container.navigation.currentState)
             assertTrue(h.links.radios.all { firmware -> firmware.sent.none { it[0].toInt() == 0x09 } })
         } finally {
-            feature.sealContactMount(origin)
+            mountedOrigin?.let(feature::sealContactMount)
             unmount()
             h.container.close()
         }
@@ -1738,26 +1749,347 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun outgoingMountedChatCannotAcceptAnOfferAfterTheNextEntryCommits() = runTest {
+        for (known in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = {
+                it.knownContacts += contactFrame(key(20), "Outgoing source")
+                it.knownContacts += contactFrame(key(21), "Linked destination")
+                it.knownContacts += contactFrame(key(22), "Next source")
+            }
+            try {
+                connect(h)
+                val navigation = h.container.navigation
+                val feature = h.container.chatsFeature
+                val radio = assertNotNull(h.appState.currentRadioId)
+                val first = assertNotNull(store.fetchContact(radio, key(20)))
+                val second = assertNotNull(store.fetchContact(radio, key(22)))
+                val target = if (known) key(21) else key(30)
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri("Mounted claim", target, ContactType.REPEATER)
+                fun message(contact: ContactDTO) = MessageDTO(
+                    radioId = radio, contactID = contact.id, text = uri,
+                    timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.INCOMING,
+                )
+                val firstMessage = message(first)
+                val secondMessage = message(second)
+                store.saveMessage(firstMessage)
+                store.saveMessage(secondMessage)
+                navigation.navigateToChat(first)
+                compose.runOnUiThread {
+                    host.get().setContent {
+                        Box(Modifier.width(width.value).height(1000.dp)) {
+                            MeshCoreTheme(motionScale = 1f) {
+                                NativeNavigationShell(navigation, chats = null, content = { destination, _ ->
+                                    if (destination is NavigationDestination.Chat ||
+                                        destination == NavigationDestination.Root(AppTab.CHATS)
+                                    ) AppChatsContent(feature, destination, navigation)
+                                })
+                            }
+                        }
+                    }
+                }
+                await(h) {
+                    compose.onAllNodesWithTag("timeline-bubble:${firstMessage.id}", useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                val firstBody = compose.onNode(
+                    hasAnyAncestor(hasTestTag("timeline-bubble:${firstMessage.id}")) and
+                        SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions),
+                    useUnmergedTree = true,
+                )
+                val firstAction = firstBody.fetchSemanticsNode().config[SemanticsActions.CustomActions].single()
+                compose.runOnIdle { assertTrue(firstAction.action()) }
+                h.eventually("outgoing source offers its exact link") {
+                    navigation.pendingChatContactOffers().size == 1
+                }
+                val oldOffer = navigation.pendingChatContactOffers().single()
+                val oldTerminal = backgroundScope.async { oldOffer.receipt.awaitOutcome() }
+                compose.runOnIdle {
+                    navigation.navigateToChat(second)
+                    assertFalse(oldOffer.mount.registrationSealed.get(), "Outgoing source is still mounted")
+                    val successor = navigation.currentState
+                    feature.acceptContactOffers()
+                    assertEquals(successor, navigation.currentState)
+                }
+                h.eventually("the outgoing offer is rejected") { oldTerminal.isCompleted }
+                assertEquals(ContactLinkHandoffOutcome.Superseded, oldTerminal.await())
+                assertEquals(ChatSelection.Direct(second), navigation.currentState.chatsSelectedRoute)
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(navigation.currentState.pendingContactDetail)
+
+                await(h) {
+                    compose.onAllNodesWithTag("timeline-bubble:${secondMessage.id}", useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                val secondBody = compose.onNode(
+                    hasAnyAncestor(hasTestTag("timeline-bubble:${secondMessage.id}")) and
+                        SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions),
+                    useUnmergedTree = true,
+                )
+                val secondAction = secondBody.fetchSemanticsNode().config[SemanticsActions.CustomActions].single()
+                compose.runOnIdle { assertTrue(secondAction.action()) }
+                h.eventually("the active source offers its own link") {
+                    navigation.pendingChatContactOffers().size == 1
+                }
+                val activeOffer = navigation.pendingChatContactOffers().single()
+                feature.acceptContactOffers()
+                val outcome = activeOffer.receipt.awaitOutcome()
+                assertEquals(
+                    ContactLinkHandoffOutcome.Accepted(
+                        if (known) ContactLinkCompletion.Navigated else ContactLinkCompletion.ConfirmationStaged,
+                    ),
+                    outcome,
+                )
+                if (known) {
+                    assertEquals(key(21), navigation.currentState.pendingContactDetail?.publicKey)
+                } else {
+                    val pending = assertNotNull(navigation.currentState.pendingContactLink)
+                    assertEquals(target, pending.publicKey)
+                    assertEquals("Mounted claim", pending.name)
+                    assertEquals(ContactType.REPEATER, pending.type)
+                    assertEquals(radio, pending.targetRadioId)
+                }
+            } finally {
+                unmount()
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun suspendedOutgoingChatLookupCannotOfferAfterItsEntryIsSuperseded() = runTest {
+        for (known in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(21), "Linked destination") }
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val completed = CompletableDeferred<ContactLinkTargetCompletion>()
+            var mountedOrigin: ChatContactMount? = null
+            try {
+                connect(h)
+                val feature = h.container.chatsFeature
+                val navigation = h.container.navigation
+                val radio = assertNotNull(h.appState.currentRadioId)
+                val origin = contactMount(h).also { mountedOrigin = it }
+                feature.registerContactMount(origin)
+                val underlying = feature.linksForMount(origin)
+                val environment = object : ChatLinkEnvironment by underlying {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        entered.complete(Unit)
+                        release.await()
+                        return store.fetchContact(radioId, publicKey)
+                    }
+
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                        context, target, link, existing, publications, cancellation,
+                    ).also { completed.complete(it) }
+                }
+                val target = if (known) key(21) else key(30)
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri("Held lookup", target, ContactType.REPEATER)
+                assertTrue(ChatLinkRouter(environment, backgroundScope).route(uri))
+                entered.await()
+                val next = ContactDTO(
+                    radioId = radio, publicKey = key(61), name = "Successor", lastHeardTimestamp = null,
+                )
+                navigation.navigateToChat(next)
+                val successor = navigation.currentState
+                assertFalse(origin.registrationSealed.get())
+                release.complete(Unit)
+                h.eventually("outgoing lookup reaches its guarded completion") { completed.isCompleted }
+                assertEquals(
+                    ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext),
+                    completed.await(),
+                )
+                feature.acceptContactOffers()
+                h.settle()
+                assertEquals(successor, navigation.currentState)
+                assertTrue(navigation.pendingChatContactOffers().isEmpty())
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(navigation.currentState.pendingContactDetail)
+            } finally {
+                release.complete(Unit)
+                mountedOrigin?.let(h.container.chatsFeature::sealContactMount)
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun mountedContactLookupFailureOffersLocalizedRetryOrCancellation() = runTest {
+        for (retry in listOf(false, true)) {
+            val failing = AtomicBoolean(false)
+            val reads = CopyOnWriteArrayList<RadioId>()
+            val target = key(21)
+            val wrapped = object : PersistenceStoreProtocol by store {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    if (publicKey == target) {
+                        reads += radioId
+                        if (failing.get()) throw IllegalStateException("contact lookup unavailable")
+                    }
+                    return store.fetchContact(radioId, publicKey)
+                }
+            }
+            val h = ContainerHarness(this, store, persistenceOverride = wrapped)
+            h.links.configureRadio = {
+                it.knownContacts += contactFrame(key(20), "Mounted source")
+                it.knownContacts += contactFrame(target, "Existing target")
+            }
+            try {
+                connect(h)
+                val radio = assertNotNull(h.appState.currentRadioId)
+                val source = assertNotNull(store.fetchContact(radio, key(20)))
+                val saved = assertNotNull(store.fetchContact(radio, target))
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri("Untrusted alias", target, ContactType.REPEATER)
+                val message = MessageDTO(
+                    radioId = radio, contactID = source.id, text = uri,
+                    timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.INCOMING,
+                )
+                store.saveMessage(message)
+                h.container.navigation.navigateToChat(source)
+                mount(h)
+                await(h) {
+                    compose.onAllNodesWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                reads.clear()
+                failing.set(true)
+                val body = compose.onNode(
+                    hasAnyAncestor(hasTestTag("timeline-bubble:${message.id}")) and
+                        SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions),
+                    useUnmergedTree = true,
+                )
+                val action = body.fetchSemanticsNode().config[SemanticsActions.CustomActions].single()
+                compose.runOnIdle { assertTrue(action.action()) }
+                await(h) {
+                    compose.onAllNodesWithTag("chat-contact-link-failure").fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithTag("chat-contact-link-failure").assertIsDisplayed()
+                val localized = host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)
+                compose.onNode(
+                    hasAnyAncestor(hasTestTag("chat-contact-link-failure")) and hasText(localized),
+                ).assertIsDisplayed()
+                compose.onNodeWithTag("chat-contact-link-retry").assertIsEnabled()
+                assertNull(h.container.navigation.currentState.pendingContactLink)
+                assertNull(h.container.navigation.currentState.pendingContactDetail)
+                assertEquals(listOf(radio), reads.toList())
+
+                if (retry) {
+                    failing.set(false)
+                    compose.onNodeWithTag("chat-contact-link-retry").performClick()
+                    await(h) { h.container.navigation.currentState.pendingContactDetail?.id == saved.id }
+                    assertEquals(saved, h.container.navigation.currentState.selectedContact)
+                    assertEquals(listOf(radio, radio), reads.toList())
+                } else {
+                    compose.onNodeWithTag("chat-contact-link-cancel").performClick()
+                    compose.waitForIdle()
+                    compose.onNodeWithTag("chat-contact-link-failure").assertDoesNotExist()
+                    assertEquals(ChatSelection.Direct(source), h.container.navigation.currentState.chatsSelectedRoute)
+                    assertNull(h.container.navigation.currentState.pendingContactLink)
+                    assertNull(h.container.navigation.currentState.pendingContactDetail)
+                    assertEquals(listOf(radio), reads.toList())
+                }
+            } finally {
+                unmount()
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun retryFromMountedSourceCannotReadOrNavigateAfterRealGraphReplacement() = runTest {
+        val target = key(30)
+        val failing = AtomicBoolean(false)
+        val reads = CopyOnWriteArrayList<RadioId>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                if (publicKey == target) {
+                    reads += radioId
+                    if (failing.get()) throw IllegalStateException("contact lookup unavailable")
+                }
+                return store.fetchContact(radioId, publicKey)
+            }
+        }
+        val replacementHandshake = CompletableDeferred<Unit>()
+        var replacing = false
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        h.links.configureRadio = { firmware ->
+            firmware.knownContacts += contactFrame(key(20), "Mounted source")
+            if (replacing) firmware.connectGate = replacementHandshake
+        }
+        var mountedOrigin: ChatContactMount? = null
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val source = assertNotNull(store.fetchContact(radio, key(20)))
+            val mount = contactMount(h, source).also { mountedOrigin = it }
+            val feature = h.container.chatsFeature
+            feature.registerContactMount(mount)
+            val router = ChatLinkRouter(feature.linksForMount(mount), backgroundScope)
+            val visible = AtomicReference<ContactLinkLookupFailure?>()
+            backgroundScope.launch { router.contactLookupFailure.collect { visible.set(it) } }
+            failing.set(true)
+            val uri = h.container.nodesFeature.uriCodec.exportContactUri("Captured peer", target, ContactType.REPEATER)
+            assertTrue(router.route(uri))
+            h.eventually("mounted lookup failure is observable") {
+                visible.get()?.issue is ContactLinkLookupIssue.Failed
+            }
+            val failure = assertNotNull(visible.get())
+            assertEquals(listOf(radio), reads.toList())
+
+            replacing = true
+            val deviceId = assertNotNull(h.appState.connectedDevice).id
+            val rebuilding = async { h.manager.rebuildSession(deviceId) }
+            h.eventually("old graph is withdrawn before replacement handshake", virtualBudgetMillis = 100) {
+                h.links.radios.size == 2 && h.sessions.current == null
+            }
+            val priorReads = reads.toList()
+            router.retryContactLookup(failure)
+            h.eventually("retry reports its retired initiating context", virtualBudgetMillis = 100) {
+                visible.get()?.issue == ContactLinkLookupIssue.ContextRetired
+            }
+            assertEquals(failure.deliveryId, visible.get()?.deliveryId)
+            assertEquals(priorReads, reads.toList())
+            assertNotEquals(target, h.container.navigation.currentState.selectedContact?.publicKey)
+            assertNull(h.container.navigation.currentState.pendingContactLink)
+            assertNull(h.container.navigation.currentState.pendingContactDetail)
+
+            failing.set(false)
+            replacementHandshake.complete(Unit)
+            rebuilding.await()
+            h.settle()
+            h.assertReady()
+            assertEquals(priorReads, reads.toList())
+            assertNotEquals(target, h.container.navigation.currentState.selectedContact?.publicKey)
+            assertNull(h.container.navigation.currentState.pendingContactLink)
+            assertNull(h.container.navigation.currentState.pendingContactDetail)
+        } finally {
+            replacementHandshake.complete(Unit)
+            mountedOrigin?.let(h.container.chatsFeature::sealContactMount)
+            h.container.close()
+        }
+    }
+
     @Test fun exactChatTerminalReceiptWaitsForEveryPublicationGateAndSurvivesConflatedNavigation() = runTest {
         for (acceptFirst in listOf(false, true)) {
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Published proof") }
             val feature = h.container.chatsFeature
-            val origin = ChatContactMount()
             val offered = CompletableDeferred<ContactLinkHandoffReceipt>()
             val held = ContactLinkPublications()
-            val underlying = feature.linksForMount(origin)
-            val environment = object : ChatLinkEnvironment by underlying {
-                override fun completeResolvedContactLookup(
-                    context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
-                    existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
-                ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
-                    context, target, link, existing, publications, cancellation,
-                ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
-            }
+            var mountedOrigin: ChatContactMount? = null
             try {
                 connect(h)
                 val navigation = h.container.navigation
+                val origin = contactMount(h).also { mountedOrigin = it }
+                val underlying = feature.linksForMount(origin)
+                val environment = object : ChatLinkEnvironment by underlying {
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                        context, target, link, existing, publications, cancellation,
+                    ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
+                }
                 feature.registerContactMount(origin)
                 h.container.captureContactLinkContext(key(31), held)
                 val before = navigation.state.value
@@ -1776,7 +2108,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     feature.sealContactMount(origin)
                 }
                 // Even another handoff release cannot make an unpublished terminal a receipt.
-                feature.registerContactMount(ChatContactMount())
+                feature.registerContactMount(ChatContactMount(origin.entryId))
                 navigation.navigateToMap(51.5, -0.1)
                 val latest = navigation.currentState
                 h.settle()
@@ -1797,7 +2129,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 assertEquals(terminal.await(), receipt.awaitOutcome())
             } finally {
                 held.release()
-                feature.sealContactMount(origin)
+                mountedOrigin?.let(feature::sealContactMount)
                 unmount()
                 h.container.close()
             }
@@ -3693,7 +4025,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Mounted cancellation peer") }
             val feature = h.container.chatsFeature
-            val origin = ChatContactMount()
+            var mountedOrigin: ChatContactMount? = null
             val fetchEntered = CompletableDeferred<Unit>()
             val releaseFetch = CompletableDeferred<Unit>()
             val boundaryHeld = CountDownLatch(1)
@@ -3712,6 +4044,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             var failure: Throwable? = null
             try {
                 connect(h)
+                val origin = contactMount(h).also { mountedOrigin = it }
                 feature.registerContactMount(origin)
                 mount(h)
                 val navigation = h.container.navigation
@@ -3826,7 +4159,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 releaseFetch.complete(Unit)
                 releaseBoundary.countDown()
                 unmount()
-                feature.sealContactMount(origin)
+                mountedOrigin?.let(feature::sealContactMount)
                 finishContactCancellationTest(failure, routingJob, failures, h.container, extraCleanup = {
                     controlJob.cancelAndJoin()
                     holder?.let { work -> withContext(Dispatchers.IO) { withTimeout(10_000) { work.await() } } }

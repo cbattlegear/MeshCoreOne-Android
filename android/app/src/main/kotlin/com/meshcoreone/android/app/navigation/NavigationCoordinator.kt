@@ -318,7 +318,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             val offline = graphToken == null && graphCurrent && runtimeToken == null && current.boundSessionToken == null &&
                 (current.radioId == null || current.radioId == radioId)
             val disposition = when {
-                mount != null && snapshot.handoffs.mounts[mount.id] != true -> ContactLinkCaptureDisposition.StaleContext
+                mount != null && !snapshot.ownsChatContactMount(mount) -> ContactLinkCaptureDisposition.StaleContext
                 !boundGraph && !initialGraph && !offline -> ContactLinkCaptureDisposition.StaleContext
                 publicKey == selfPublicKey -> ContactLinkCaptureDisposition.IgnoredSelfContact
                 else -> ContactLinkCaptureDisposition.Lookup
@@ -326,7 +326,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             val revision = if (disposition != ContactLinkCaptureDisposition.StaleContext)
                 Math.incrementExact(current.contactLookupRevision) else null
             val lookup = ContactLinkLookup(
-                this, current.generation, current.boundSessionToken, current.radioId,
+                this, mount, current.generation, current.boundSessionToken, current.radioId,
                 radioId, publicKey, selfPublicKey, revision, disposition,
             )
             if (revision == null) return lookup
@@ -384,6 +384,12 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     internal fun pendingChatContactOffers(): List<ChatContactOffer> =
         mutableState.snapshot().handoffs.offers.values.filter { it.terminal == null }
 
+    private fun NavigationStateStore.Snapshot.ownsChatContactMount(mount: ChatContactMount): Boolean =
+        handoffs.mounts[mount.id] == true && mount.entryId != null &&
+            value.selectedTab == AppTab.CHATS && value.activeStack.last().let {
+                it.id == mount.entryId && it.destination is NavigationDestination.Chat
+            }
+
     internal fun offerChatContact(
         mount: ChatContactMount, context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
         link: ContactLinkRequest, contact: ContactDTO?, publications: ContactLinkPublications,
@@ -395,7 +401,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         publications.defer(handoffPublication(publication))
         while (true) {
             val snapshot = mutableState.snapshot()
-            if (snapshot.handoffs.mounts[mount.id] != true || !isCurrent()) {
+            if (!snapshot.ownsChatContactMount(mount) ||
+                (context as? CapturedContactLinkContext)?.lookup?.mount !== mount || !isCurrent()
+            ) {
                 return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
             }
             val committed = cancellation.commitIfActive {
@@ -421,9 +429,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             if (offer !== offered || offer.terminal != null) return
             val lookup = (offer.context as? CapturedContactLinkContext)?.lookup
             val matched = lookup?.let {
-                currentContactLookup(it, snapshot.value, currentToken, allowInitialBinding, selfPublicKey)
+                currentContactLookup(it, snapshot, currentToken, allowInitialBinding, selfPublicKey)
             }
-            val eligible = snapshot.handoffs.mounts[offer.mount.id] == true && isCurrent() &&
+            val eligible = snapshot.ownsChatContactMount(offer.mount) && lookup?.mount === offer.mount && isCurrent() &&
                 matched != null && matched.radioId == offer.target.radioId &&
                 matched.selfPublicKey == offer.target.selfPublicKey && offer.target.origin === lookup
             val outcome = if (!eligible) null else when {
@@ -479,10 +487,13 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     private fun currentContactLookup(
-        lookup: ContactLinkLookup, current: NavigationState, currentToken: SessionToken?, allowInitialBinding: Boolean,
+        lookup: ContactLinkLookup, snapshot: NavigationStateStore.Snapshot, currentToken: SessionToken?,
+        allowInitialBinding: Boolean,
         identifiedSelfPublicKey: Bytes?,
     ): ContactLinkLookupResolution.Current? {
         if (lookup.owner !== this || lookup.disposition == ContactLinkCaptureDisposition.StaleContext) return null
+        if (lookup.mount != null && !snapshot.ownsChatContactMount(lookup.mount)) return null
+        val current = snapshot.value
         val initial = allowInitialBinding && lookup.allowsInitialBinding && currentToken != null &&
             current.initialContactLinkGeneration == lookup.generation &&
             current.generation == Math.incrementExact(lookup.generation) &&
@@ -504,7 +515,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         lookup: ContactLinkLookup, currentToken: SessionToken?, allowInitialBinding: Boolean,
         identifiedSelfPublicKey: Bytes?,
     ): ContactLinkLookupResolution = currentContactLookup(
-        lookup, mutableState.value, currentToken, allowInitialBinding, identifiedSelfPublicKey,
+        lookup, mutableState.snapshot(), currentToken, allowInitialBinding, identifiedSelfPublicKey,
     ) ?: ContactLinkLookupResolution.Stale
 
     internal fun isCapturedContactLookupCurrent(
@@ -540,7 +551,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         while (true) {
             val snapshot = mutableState.snapshot()
             val current = snapshot.value
-            val matched = currentContactLookup(lookup, current, currentToken, allowInitialBinding, identifiedSelfPublicKey)
+            val matched = currentContactLookup(lookup, snapshot, currentToken, allowInitialBinding, identifiedSelfPublicKey)
                 ?: return ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.StaleContext)
             if (target.radioId != matched.radioId || target.selfPublicKey != matched.selfPublicKey) {
                 return ContactLinkResolvedCompletion.TargetChanged

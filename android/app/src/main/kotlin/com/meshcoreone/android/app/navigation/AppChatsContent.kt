@@ -8,10 +8,12 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -27,6 +29,7 @@ import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.composer.ui.ChatConversationScreen
 import com.meshcoreone.android.feature.chats.composer.ui.ConversationLinkActions
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
+import com.meshcoreone.android.feature.chats.list.ContactLinkLookupIssue
 import com.meshcoreone.android.feature.chats.list.ChatRoute
 import com.meshcoreone.android.feature.chats.rooms.RoomConversationRoute
 import com.meshcoreone.android.feature.chats.rooms.RoomConversationStateHolder
@@ -110,12 +113,20 @@ private fun AppChatConversation(
     entryId: Long?,
 ) {
         val scope = rememberCoroutineScope()
-        val contactMount = remember(feature, selected, entryId) { ChatContactMount() }
+        val contactMount = remember(feature, selected, entryId) { ChatContactMount(entryId) }
         DisposableEffect(feature, contactMount) {
             feature.registerContactMount(contactMount)
             onDispose { feature.sealContactMount(contactMount) }
         }
         val linkEnvironment = remember(feature, contactMount) { feature.linksForMount(contactMount) }
+        val router = remember(feature, linkEnvironment, scope) {
+            ChatLinkRouter(linkEnvironment, scope, feature.list.diagnostics)
+        }
+        ContactLookupFailureDialog(
+            router,
+            entryId != null && state.selectedTab == com.meshcoreone.android.core.contracts.AppTab.CHATS &&
+                state.activeStack.last().id == entryId,
+        )
         val connection by feature.connectionState.collectAsState()
         LifecycleResumeEffect(feature, selected, connection) {
             val deactivate = feature.activate(selected)
@@ -141,9 +152,6 @@ private fun AppChatConversation(
             }
             val device = remember(feature, radio, scope) { feature.pathDevice(radio, scope) }
             val uriHandler = LocalUriHandler.current
-            val router = remember(feature, linkEnvironment, scope) {
-                ChatLinkRouter(linkEnvironment, scope, feature.list.diagnostics)
-            }
             val links = remember(contacts, device, radio, router, coordinator, uriHandler) {
                 ConversationLinkActions(
                     contacts = { contacts.value },
@@ -268,9 +276,6 @@ private fun AppChatConversation(
                 onDismiss = { actionMessage = null })
         }
         val uriHandler = LocalUriHandler.current
-        val router = remember(feature, linkEnvironment, scope) {
-            ChatLinkRouter(linkEnvironment, scope, feature.list.diagnostics)
-        }
         val links = remember(feature, router, coordinator, uriHandler) {
             ConversationLinkActions(
                 contacts = { environment.mentionContacts.value },
@@ -281,6 +286,7 @@ private fun AppChatConversation(
                 navigateToContact = coordinator::navigateToContactDetail,
             )
         }
+
         val placeholder = stringResource(when (conversation) {
             is TimelineConversation.Direct -> AppChatsStrings.chatsInputPlaceholderDirectMessage
             is TimelineConversation.Channel -> if (conversation.channel.isEncryptedChannel) {
@@ -325,4 +331,48 @@ private fun AppChatConversation(
                 }
             },
         )
+}
+
+@Composable
+private fun ContactLookupFailureDialog(router: ChatLinkRouter, active: Boolean) {
+    val failure by router.contactLookupFailure.collectAsState(initial = null)
+    val current = failure ?: return
+    if (!active) return
+    val dismiss = { router.dismissContactLookupFailure(current) }
+    androidx.compose.material3.AlertDialog(
+        modifier = Modifier.testTag("chat-contact-link-failure"),
+        onDismissRequest = dismiss,
+        title = {
+            androidx.compose.material3.Text(
+                stringResource(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_nodekind_contact),
+            )
+        },
+        text = {
+            androidx.compose.material3.Text(stringResource(
+                com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonErrorFailedToLoad,
+            ))
+        },
+        confirmButton = {
+            if (current.issue is ContactLinkLookupIssue.Failed) {
+                androidx.compose.material3.TextButton(
+                    onClick = { router.retryContactLookup(current) },
+                    modifier = Modifier.testTag("chat-contact-link-retry"),
+                ) {
+                    androidx.compose.material3.Text(stringResource(
+                        com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain,
+                    ))
+                }
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(
+                onClick = dismiss,
+                modifier = Modifier.testTag("chat-contact-link-cancel"),
+            ) {
+                androidx.compose.material3.Text(stringResource(
+                    com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonCancel,
+                ))
+            }
+        },
+    )
 }

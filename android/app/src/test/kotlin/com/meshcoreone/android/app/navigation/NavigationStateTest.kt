@@ -72,7 +72,7 @@ class NavigationStateTest {
         val store = NavigationStateStore(initial)
         val first = NavigationStateStore.Publication()
         val second = NavigationStateStore.Publication()
-        val mount = ChatContactMount()
+        val mount = ChatContactMount(null)
         assertTrue(store.compareAndSet(store.snapshot(), initial.copy(selectedTab = AppTab.MAP), first))
         val captured = store.snapshot()
         assertTrue(store.compareAndSet(
@@ -109,7 +109,8 @@ class NavigationStateTest {
 
     @Test fun finiteSnapshotWriterContentionCannotReopenASealedChatMountOrReleaseItsPredecessor() = runTest {
         val coordinator = NavigationCoordinator()
-        val mount = ChatContactMount()
+        coordinator.navigateToChat(contact)
+        val mount = ChatContactMount(coordinator.currentState.activeStack.last().id)
         coordinator.registerChatContactMount(mount).release()
         val held = ContactLinkPublications()
         coordinator.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, held, mount)
@@ -149,6 +150,44 @@ class NavigationStateTest {
             writers.forEach { it.cancelAndJoin() }
             sealing.cancelAndJoin()
             held.release()
+        }
+    }
+
+    @Test fun inactiveDirectChannelAndRoomMountsCannotCaptureOrResolveContactLookups() {
+        for (source in listOf(ChatSelection.Direct(contact), ChatSelection.Channel(channel), ChatSelection.Room(room))) {
+            for (switchTab in listOf(false, true)) {
+                val coordinator = NavigationCoordinator()
+                when (source) {
+                    is ChatSelection.Direct -> coordinator.navigateToChat(source.contact)
+                    is ChatSelection.Channel -> coordinator.navigateToChannel(source.channel)
+                    is ChatSelection.Room -> coordinator.navigateToRoom(source.session)
+                }
+                val mount = ChatContactMount(coordinator.currentState.activeStack.last().id)
+                coordinator.registerChatContactMount(mount).release()
+                val captured = ContactLinkPublications().use { publications ->
+                    coordinator.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, publications, mount)
+                }
+                assertEquals(ContactLinkCaptureDisposition.Lookup, captured.disposition)
+                val next = contact.copy(id = UUID.randomUUID(), publicKey = Bytes(ByteArray(32) { 0xCC.toByte() }))
+                if (switchTab) coordinator.selectTab(AppTab.MAP) else coordinator.navigateToChat(next)
+                assertFalse(mount.registrationSealed.get())
+                assertEquals(
+                    ContactLinkLookupResolution.Stale,
+                    coordinator.resolveCapturedContactLookup(captured, null, true, null),
+                )
+                val revision = coordinator.currentState.contactLookupRevision
+                val rejected = ContactLinkPublications().use { publications ->
+                    coordinator.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, publications, mount)
+                }
+                assertEquals(ContactLinkCaptureDisposition.StaleContext, rejected.disposition)
+                assertEquals(revision, coordinator.currentState.contactLookupRevision)
+                if (switchTab) {
+                    assertEquals(AppTab.MAP, coordinator.currentState.selectedTab)
+                    assertEquals(source, coordinator.currentState.chatsSelectedRoute)
+                } else {
+                    assertEquals(ChatSelection.Direct(next), coordinator.currentState.chatsSelectedRoute)
+                }
+            }
         }
     }
 

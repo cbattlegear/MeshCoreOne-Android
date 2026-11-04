@@ -38,6 +38,7 @@ import com.meshcoreone.android.core.services.messaging.MessageService
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.messaging.MessagePollingService
 import com.meshcoreone.android.core.services.messaging.PoolBackoffConfig
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import java.security.MessageDigest
 import java.time.Clock
@@ -138,6 +139,27 @@ class MessagingRoomIntegrationTest {
             timestamp = 1u,
             createdAt = base,
         )
+    private suspend fun RadioGeneration.reconcileSeededChannel(
+        channels: ChannelService, snapshot: ChannelOccupantSnapshot,
+    ) = store.withChannelOperation { scoped, identity ->
+        val index = snapshot.channel.index
+        val observed = channels.fetchChannel(index)
+            ?: error("Seeded channel slot ${index.toInt()} was not present on the test radio")
+        check(observed.index == index && observed.name == snapshot.channel.name &&
+            observed.secret == snapshot.channel.secret
+        ) { "Test radio channel did not match the seeded persistence slot" }
+        val persisted = scoped.batchSaveChannels(
+            radio, listOf(observed).snapshot(), SnapshotList.empty(), null,
+        )
+        check(persisted.any { it.index == index })
+        val current = scoped.fetchChannelOccupantSnapshot(radio, index)
+            ?: error("Reconciled test channel lost its persisted occupant")
+        check(current.occupantID == snapshot.occupantID) {
+            "Reconciliation changed the fixture's seeded channel occupant"
+        }
+        channelDispatchFence.recordReconciled(channelDispatchLease, identity, listOf(index))
+        firmware.markChannelQueries()
+    }
     private inner class RadioGeneration(
         number: Long,
         persistence: PersistenceStoreProtocol = store,
@@ -153,14 +175,25 @@ class MessagingRoomIntegrationTest {
         val firmware = RoomFirmware()
         val diagnostics = mutableListOf<MessagingDiagnostic>()
         val session = MeshCoreSession(firmware, SessionConfiguration(defaultTimeout = sessionTimeout), clock, scope.coroutineContext)
+        val channelDispatchFence = ChannelDispatchFence(ChannelIdentityMutex.PROCESS)
+        val channelDispatchLease = channelDispatchFence.openSession(
+            token, session, ChannelDispatchAdmission(token, session),
+        )
         val service = MessageService(token, self, session, persistence, signals, scope, config, clock,
-            reporter = MessagingIssueReporter { diagnostics += it })
+            reporter = MessagingIssueReporter { diagnostics += it }, channelDispatchLease = channelDispatchLease)
         val queue = ChatSendQueueService(token, persistence, service, channelQuery,
             OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, scope, queueConfig, clock,
             reporter = MessagingIssueReporter { diagnostics += it })
         init { generations += this }
         suspend fun start() { session.start() }
-        suspend fun stop() { queue.shutdown(); service.close(); session.stop(); scope.cancel() }
+        suspend fun stop() {
+            try {
+                queue.shutdown(); service.close(); session.stop()
+            } finally {
+                channelDispatchFence.retire(channelDispatchLease)
+                scope.cancel()
+            }
+        }
         fun poller() = MessagePollingService(token, session, store, signals, scope, clock).also { pollers += it }
     }
 
@@ -484,6 +517,8 @@ class MessagingRoomIntegrationTest {
             channelQuery = MessagingChannelQuery { channels.fetchChannel(it) })
         channels = ChannelService(g.session, store, null)
         g.start()
+        g.firmware.configureChannel(channel)
+        g.reconcileSeededChannel(channels, snapshot)
         g.firmware.error = 2u
         g.firmware.emptyChannelSlot = true
         val message = channelMessage("Hello channel", origin)
@@ -543,7 +578,10 @@ class MessagingRoomIntegrationTest {
             },
             queueConfig = ChatSendQueueConfig(maxConsecutiveFetchChannelFailures = 2),
         )
+        val channels = ChannelService(g.session, store, null)
         g.start()
+        g.firmware.configureChannel(channel)
+        g.reconcileSeededChannel(channels, snapshot)
         g.firmware.error = 2u
         val first = channelMessage("Hello channel", origin)
         val second = channelMessage("Second message", origin)
@@ -865,8 +903,11 @@ class MessagingRoomIntegrationTest {
     @OriginalCase("MessageServiceSendTests::sendChannelMessage saves message to dataStore before send attempt()")
     @Test fun rawChannelSendObservesTheAlreadyCommittedPendingRoomMessage() = runTest(scheduler) {
         seed()
+        val snapshot = seedChannel(0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
         val g = RadioGeneration(53)
         g.start()
+        g.firmware.configureChannel(snapshot.channel)
+        g.reconcileSeededChannel(ChannelService(g.session, store, null), snapshot)
         var before: MessageDTO? = null
         g.firmware.beforeSend = { data ->
             if (data[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue) {
@@ -903,12 +944,15 @@ class MessagingRoomIntegrationTest {
     @OriginalCase("MessageServiceSendTests::resendChannelMessage writes .sent before broadcasting .resent and refreshes counts()")
     @Test fun channelResendCommitsItsSentStatusAndCountsBeforeTheConsumerEvent() = runTest(scheduler) {
         seed()
+        val snapshot = seedChannel(0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
         val message = MessageDTO(radioId = radio, channelIndex = 0u, text = "Hello channel",
             timestamp = 42u, createdAt = base.minusSeconds(1), status = MessageStatus.FAILED,
             heardRepeats = 3, sendCount = 1)
         store.saveMessage(message)
         val g = RadioGeneration(55)
         g.start()
+        g.firmware.configureChannel(snapshot.channel)
+        g.reconcileSeededChannel(ChannelService(g.session, store, null), snapshot)
         val events = g.service.statusEvents()
         val seen = mutableListOf<MessageDTO?>()
         val collecting = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -2161,6 +2205,8 @@ class MessagingRoomIntegrationTest {
 
     private inner class RoomFirmware : MeshTransport {
         private val mock = MockTransport()
+        private val channels = mutableMapOf<UByte, ChannelInfo>()
+        private var channelQueryBaseline = 0
         var error: UByte? = null
         var emptyChannelSlot = false
         var acknowledge = true
@@ -2175,7 +2221,14 @@ class MessagingRoomIntegrationTest {
         var afterNoMore: (suspend () -> Unit)? = null
         fun sent(): List<Bytes> = mock.sentData.filter { it[0] == CommandCode.SEND_MESSAGE.rawValue }
         fun channelSent(): List<Bytes> = mock.sentData.filter { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue }
-        fun channelQueries(): List<Bytes> = mock.sentData.filter { it[0] == CommandCode.GET_CHANNEL.rawValue }
+        fun channelQueries(): List<Bytes> =
+            mock.sentData.filter { it[0] == CommandCode.GET_CHANNEL.rawValue }.drop(channelQueryBaseline)
+        fun markChannelQueries() {
+            channelQueryBaseline = mock.sentData.count { it[0] == CommandCode.GET_CHANNEL.rawValue }
+        }
+        fun configureChannel(channel: ChannelDTO) {
+            channels[channel.index] = ChannelInfo(channel.index, channel.name, channel.secret)
+        }
         override suspend fun isConnected() = mock.isConnected()
         override suspend fun connect() = mock.connect()
         override suspend fun disconnect() = mock.disconnect()
@@ -2207,10 +2260,20 @@ class MessagingRoomIntegrationTest {
                     mock.simulateOK()
                 }
                 CommandCode.GET_CONTACT_BY_KEY -> mock.simulateError(2u)
-                CommandCode.GET_CHANNEL -> if (emptyChannelSlot) {
-                    mock.simulateReceive(ByteWriter().appendUInt8(ResponseCode.CHANNEL_INFO.rawValue)
-                        .appendUInt8(data[1]).append(Bytes(ByteArray(32))).append(Bytes(ByteArray(16))).toBytes())
-                } else mock.simulateError(2u)
+                CommandCode.GET_CHANNEL -> {
+                    val index = data[1]
+                    val channel = channels[index]
+                    when {
+                        emptyChannelSlot -> mock.simulateReceive(ByteWriter().appendUInt8(ResponseCode.CHANNEL_INFO.rawValue)
+                            .appendUInt8(index).append(Bytes(ByteArray(32))).append(Bytes(ByteArray(16))).toBytes())
+                        channel != null -> {
+                            val name = channel.name.toByteArray(Charsets.UTF_8).copyOf(32)
+                            mock.simulateReceive(ByteWriter().appendUInt8(ResponseCode.CHANNEL_INFO.rawValue)
+                                .appendUInt8(index).append(Bytes(name)).append(channel.secret).toBytes())
+                        }
+                        else -> mock.simulateError(2u)
+                    }
+                }
                 CommandCode.RESET_PATH -> mock.simulateOK()
                 CommandCode.GET_MESSAGE -> {
                     val empty = incomingMessages.isEmpty()

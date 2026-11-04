@@ -25,6 +25,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Logger
 import kotlin.math.abs
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -47,6 +48,7 @@ class SettingsService(
     private inner class Subscription : SessionEventSubscription<SettingsEvent> {
         val id: UUID = UUID.randomUUID()
         val channel = Channel<SessionEvent<SettingsEvent>>(Channel.UNLIMITED)
+        val pendingPersistence = mutableSetOf<CompletableDeferred<Unit>>()
         private val collected = AtomicBoolean(false)
         override val events: Flow<SessionEvent<SettingsEvent>> = flow {
             check(collected.compareAndSet(false, true)) { "A settings subscription permits one consumer" }
@@ -62,6 +64,11 @@ class SettingsService(
         override fun close() {
             synchronized(eventLock) {
                 if (subscription?.id == id) subscription = null
+                val pending = pendingPersistence.toList()
+                pendingPersistence.clear()
+                pending.forEach {
+                    it.completeExceptionally(SettingsServiceException(SettingsServiceError.NotConnected))
+                }
                 channel.close()
             }
         }
@@ -72,8 +79,8 @@ class SettingsService(
         if (eventsFinished || !context.isCurrent) {
             next.channel.close()
         } else {
-            subscription?.channel?.close()
             if (subscription != null) Logger.getLogger("MeshCore.SettingsService").fine("Replacing settings subscriber")
+            subscription?.close()
             subscription = next
         }
         next
@@ -82,7 +89,7 @@ class SettingsService(
     fun finishEvents() {
         synchronized(eventLock) {
             eventsFinished = true
-            subscription?.channel?.close()
+            subscription?.close()
             subscription = null
         }
     }
@@ -195,11 +202,44 @@ class SettingsService(
     suspend fun setPathHashMode(mode: UByte) = operation { configuration { setPathHashMode(mode) } }
     suspend fun setPathHashModeVerified(mode: UByte): UByte = operation { writePathHashAndVerify(mode) }
 
-    private suspend fun writePathHashAndVerify(mode: UByte): UByte {
+    /** Normal Settings awaits the event consumer's durable write, outside the radio-operation lock. */
+    suspend fun setPathHashModePersisted(mode: UByte): UByte = context.operation {
+        val completion = CompletableDeferred<Unit>()
+        val owner = synchronized(eventLock) {
+            subscription?.takeUnless { eventsFinished }
+                ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
+        try {
+            operation { writePathHashAndVerify(mode, completion, owner) }
+            completion.await()
+            context.requireCurrent()
+            mode
+        } finally {
+            synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
+        }
+    }
+
+    private suspend fun writePathHashAndVerify(
+        mode: UByte,
+        completion: CompletableDeferred<Unit>? = null,
+        owner: Subscription? = null,
+    ): UByte {
         configuration { setPathHashMode(mode) }
         val actual = configuration { queryDevice() }.pathHashMode
         if (actual != mode) verification("pathHashMode=$mode", "pathHashMode=$actual")
-        publish(SettingsEvent.PathHashModeUpdated(mode))
+        if (completion == null) {
+            publish(SettingsEvent.PathHashModeUpdated(mode))
+        } else {
+            context.requireCurrent()
+            synchronized(eventLock) {
+                if (eventsFinished || subscription !== owner) {
+                    throw SettingsServiceException(SettingsServiceError.NotConnected)
+                }
+                val target = checkNotNull(owner)
+                target.pendingPersistence.add(completion)
+                target.channel.trySend(SessionEvent(context.token, SettingsEvent.PathHashModeUpdated(mode, completion))).getOrThrow()
+            }
+        }
         return mode
     }
 

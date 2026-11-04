@@ -14,6 +14,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -105,7 +106,7 @@ class ContactAvatarMediaTest {
                 closes.incrementAndGet()
             }
         }
-        val pending = launch {
+        val pending = launch(start = CoroutineStart.UNDISPATCHED) {
             ContactAvatarMedia.readSelection(cancelOpen = { signal.cancel() }) {
                 signal.setOnCancelListener {
                     cancelled.countDown()
@@ -151,7 +152,7 @@ class ContactAvatarMediaTest {
                 closes.incrementAndGet()
             }
         }
-        val pending = launch {
+        val pending = launch(start = CoroutineStart.UNDISPATCHED) {
             ContactAvatarMedia.readSelection(cancelOpen = { signal.cancel() }) {
                 signal.setOnCancelListener {
                     released.countDown()

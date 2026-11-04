@@ -223,7 +223,7 @@ class ContactServiceTests {
         case("removeContact deletes messages and triggers cleanup") {
             val radioId = RadioId(UUID.randomUUID())
             val contactId = UUID.randomUUID()
-            val store = ContactsFakeStore()
+            val store = ContactsFakeStore(listOf(contactsDevice(radioId)))
             store.seed(contact(contactId, radioId, unreadCount = 3))
             val tracker = ContactsRecordingCleanup()
             val service = contactsService(store = store, cleanupCoordinator = tracker)

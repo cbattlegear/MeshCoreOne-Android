@@ -74,8 +74,16 @@ class RequestResponseSerializer(
         val context = RequestContext(caller)
         val task = scope.async {
             mutex.withLock {
-                caller.ensureActive()
-                context.operation()
+                try {
+                    caller.ensureActive()
+                    context.operation()
+                } catch (failure: Exception) {
+                    dispatch?.cancelled(context.cancelDispatch())
+                    throw failure
+                } finally {
+                    if (!caller.isActive) dispatch?.cancelled(context.cancelDispatch())
+                    dispatch?.exchangeFinished()
+                }
             }
         }
         task.invokeOnCompletion { cause ->

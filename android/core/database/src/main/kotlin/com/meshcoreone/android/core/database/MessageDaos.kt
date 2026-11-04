@@ -11,6 +11,7 @@ import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 
 private const val MESSAGE_ORDER = "sortDate_seconds DESC, sortDate_nanos DESC, timestamp DESC, createdAt_seconds DESC, createdAt_nanos DESC"
+private const val LOCAL_DIRECT_OCCURRENCE = "(directionRawValue = 0 AND channelIndex IS NULL AND channelOccupantID IS NULL AND COALESCE(deduplicationKey, '') IN ('local-direct-unresolved:' || lower(id), 'local-direct-candidate:' || lower(id)))"
 private const val MESSAGE_WITHOUT_BLOBS = """
 SELECT radioId, id, contactID, channelIndex, text, timestamp, createdAt_seconds, createdAt_nanos,
 sortDate_seconds, sortDate_nanos, directionRawValue, statusRawValue, textTypeRawValue, ackCode,
@@ -29,8 +30,10 @@ interface MessageDao : RowWriter<MessageEntity> {
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND id = :id") suspend fun byId(radioId: UUID, id: UUID): MessageEntity?
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND deduplicationKey = :key")
     suspend fun forDeduplicationKey(radioId: UUID, key: String): List<MessageEntity>
-    @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID ORDER BY " + MESSAGE_ORDER + " LIMIT :limit OFFSET :offset")
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID AND NOT " + LOCAL_DIRECT_OCCURRENCE + " ORDER BY " + MESSAGE_ORDER + " LIMIT :limit OFFSET :offset")
     suspend fun newestForContact(radioId: UUID, contactID: UUID, limit: Long, offset: Long = 0): List<MessageEntity>
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID ORDER BY " + MESSAGE_ORDER)
+    suspend fun forContactRemoval(radioId: UUID, contactID: UUID): List<MessageEntity>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex = :index ORDER BY " + MESSAGE_ORDER + " LIMIT :limit OFFSET :offset")
     suspend fun newestForChannel(radioId: UUID, index: Long, limit: Long, offset: Long = 0): List<MessageEntity>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID ORDER BY " + MESSAGE_ORDER + " LIMIT :limit OFFSET :offset")
@@ -45,25 +48,25 @@ interface MessageDao : RowWriter<MessageEntity> {
     suspend fun channelOccupantCandidates(radioId: UUID, index: Long, occupantID: UUID, fromTimestamp: Long, toTimestamp: Long, limit: Long): List<MessageEntity>
     @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID AND statusRawValue = 4 AND directionRawValue = 1 AND failureSeen = 0")
     suspend fun countUnseenChannelOccupantFailures(radioId: UUID, index: Long, occupantID: UUID): Long
-    @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID ORDER BY " + MESSAGE_ORDER)
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID AND NOT " + LOCAL_DIRECT_OCCURRENCE + " ORDER BY " + MESSAGE_ORDER)
     fun observeContact(radioId: UUID, contactID: UUID): Flow<List<MessageEntity>>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID IS NULL AND channelIndex IS NULL")
     suspend fun orphanedDirectMessages(radioId: UUID): List<MessageEntity>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND directionRawValue = 0 AND channelIndex IS NULL AND channelOccupantID IS NULL AND (contactID IS NULL OR deduplicationKey = 'local-direct-unresolved:' || lower(id) OR deduplicationKey = 'local-direct-candidate:' || lower(id)) ORDER BY " + MESSAGE_ORDER + ", id DESC LIMIT :limit OFFSET :offset")
     suspend fun unprovedDirectMessages(radioId: UUID, limit: Long, offset: Long): List<MessageEntity>
-    @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND contactID = :contactID")
+    @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND contactID = :contactID AND NOT " + LOCAL_DIRECT_OCCURRENCE)
     suspend fun countForContact(radioId: UUID, contactID: UUID): Long
     @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index")
     suspend fun countForChannel(radioId: UUID, index: Long): Long
-    @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND contactID = :contactID AND (sortDate_seconds > :seconds OR (sortDate_seconds = :seconds AND sortDate_nanos >= :nanos))")
+    @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND contactID = :contactID AND NOT " + LOCAL_DIRECT_OCCURRENCE + " AND (sortDate_seconds > :seconds OR (sortDate_seconds = :seconds AND sortDate_nanos >= :nanos))")
     suspend fun countContactAtOrAfter(radioId: UUID, contactID: UUID, seconds: Long, nanos: Int): Long
     @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index AND (sortDate_seconds > :seconds OR (sortDate_seconds = :seconds AND sortDate_nanos >= :nanos))")
     suspend fun countChannelAtOrAfter(radioId: UUID, index: Long, seconds: Long, nanos: Int): Long
-    @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID AND directionRawValue = 0 AND isRead = 0 ORDER BY " + MESSAGE_ORDER + " LIMIT 1")
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID AND directionRawValue = 0 AND isRead = 0 AND NOT " + LOCAL_DIRECT_OCCURRENCE + " ORDER BY " + MESSAGE_ORDER + " LIMIT 1")
     suspend fun newestUnreadIncoming(radioId: UUID, contactID: UUID): MessageEntity?
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex = :index AND timestamp BETWEEN :fromTimestamp AND :toTimestamp ORDER BY createdAt_seconds DESC, createdAt_nanos DESC, timestamp DESC LIMIT :limit")
     suspend fun channelCandidates(radioId: UUID, index: Long, fromTimestamp: Long, toTimestamp: Long, limit: Long): List<MessageEntity>
-    @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID AND timestamp BETWEEN :fromTimestamp AND :toTimestamp ORDER BY createdAt_seconds DESC, createdAt_nanos DESC, timestamp DESC LIMIT :limit")
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID AND NOT " + LOCAL_DIRECT_OCCURRENCE + " AND timestamp BETWEEN :fromTimestamp AND :toTimestamp ORDER BY createdAt_seconds DESC, createdAt_nanos DESC, timestamp DESC LIMIT :limit")
     suspend fun directCandidates(radioId: UUID, contactID: UUID, fromTimestamp: Long, toTimestamp: Long, limit: Long): List<MessageEntity>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex = :index AND timestamp = :timestamp AND text = :text AND directionRawValue = 1 ORDER BY createdAt_seconds DESC, createdAt_nanos DESC LIMIT 1")
     suspend fun sentChannelMessage(radioId: UUID, index: Long, timestamp: Long, text: String): MessageEntity?
@@ -81,7 +84,7 @@ interface MessageDao : RowWriter<MessageEntity> {
     suspend fun hasOutgoingSentDM(radioId: UUID, ackCode: Long): Boolean
     @Query("UPDATE messages SET pathNodes = :nodes, pathLength = :length WHERE radioId = :radioId AND id = :id AND pathNodes IS NULL")
     suspend fun adoptPathIfUnknown(radioId: UUID, id: UUID, nodes: Bytes, length: Long): Int
-    @Query("SELECT id FROM messages WHERE radioId = :radioId AND contactID = :contactID AND containsSelfMention = 1 AND mentionSeen = 0 ORDER BY timestamp")
+    @Query("SELECT id FROM messages WHERE radioId = :radioId AND contactID = :contactID AND containsSelfMention = 1 AND mentionSeen = 0 AND NOT " + LOCAL_DIRECT_OCCURRENCE + " ORDER BY timestamp")
     suspend fun unseenContactMentionIDs(radioId: UUID, contactID: UUID): List<UUID>
     @Query("SELECT id FROM messages WHERE radioId = :radioId AND channelIndex = :index AND containsSelfMention = 1 AND mentionSeen = 0 ORDER BY timestamp")
     suspend fun unseenChannelMentionIDs(radioId: UUID, index: Long): List<UUID>

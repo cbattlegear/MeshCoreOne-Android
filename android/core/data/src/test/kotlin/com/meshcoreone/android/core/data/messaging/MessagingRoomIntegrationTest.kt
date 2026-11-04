@@ -2380,6 +2380,58 @@ class MessagingRoomIntegrationTest {
         }
     }
 
+    @Test fun realRoomDiscoveryEventNeverPostsTentativeOccurrenceAsAnAdoptedContactNotification() = runTest(scheduler) {
+        seed()
+        val marked = store.saveIncomingDirectMessage(
+            MessageDTO(radioId = radio, text = "Unproved newest body", timestamp = 42u,
+                sortDate = base, direction = MessageDirection.INCOMING, senderKeyPrefix = target.prefix(6),
+                containsSelfMention = true),
+            store.classifyLocalDirectContact(radio, target.prefix(6)),
+        ).message
+        val legacy = MessageDTO(radioId = radio, contactID = contact.id, text = "Legacy adopted body",
+            timestamp = 41u, sortDate = base.minusSeconds(1), direction = MessageDirection.INCOMING)
+        store.saveMessage(legacy)
+        val g = RadioGeneration(123)
+        val adverts = candidateAdverts(g)
+        val events = kotlinx.coroutines.channels.Channel<SyncDiscoveryEvent>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val posted = mutableListOf<Pair<UUID, String>>()
+        var badges = 0
+        val notifications = object : SyncNotificationServicing by forbiddenCandidateCollaborator<SyncNotificationServicing>() {
+            override suspend fun postDirectMessageNotification(
+                from: String, contactID: UUID, messageText: String, messageID: UUID, isMuted: Boolean,
+            ) {
+                assertEquals(contact.id, contactID)
+                posted += messageID to messageText
+            }
+            override suspend fun updateBadgeCount() { badges++ }
+        }
+        val eventPort = object : SyncAdvertisementServicing by forbiddenCandidateCollaborator<SyncAdvertisementServicing>() {
+            override fun events(): Flow<SyncDiscoveryEvent> = flow { for (event in events) emit(event) }
+        }
+        val dependencies = candidateDependencies(g.poller(), adverts).copy(
+            notificationService = notifications, advertisementService = eventPort,
+        )
+        val coordinator = candidateCoordinator(g)
+        coordinator.startDiscoveryEventMonitoring(dependencies, radio)
+        runCurrent()
+        try {
+            events.send(SyncDiscoveryEvent.OrphanDirectMessagesAdopted(listOf(contact.id)))
+            runCurrent()
+            assertEquals(listOf(legacy.id to legacy.text), posted)
+            assertEquals(1, badges)
+            store.deleteMessage(EntityKey(radio, legacy.id))
+            events.send(SyncDiscoveryEvent.OrphanDirectMessagesAdopted(listOf(contact.id)))
+            runCurrent()
+            assertEquals(listOf(legacy.id to legacy.text), posted, "Candidate-only adoption must post no DM")
+            assertEquals(2, badges, "Unrelated adoption keeps its legacy badge refresh")
+            assertEquals(marked, store.fetchMessage(EntityKey(radio, marked.id)))
+            assertFalse(assertNotNull(store.fetchMessage(EntityKey(radio, marked.id))).isRead)
+        } finally {
+            coordinator.cancelDiscoveryEventMonitoring()
+            events.close()
+        }
+    }
+
     private fun incomingContactPacket(text: String, type: UByte = 0u): Bytes =
         ByteWriter().appendUInt8(ResponseCode.CONTACT_MESSAGE_RECEIVED.rawValue).append(target.prefix(6))
             .appendUInt8(0u).appendUInt8(type).appendUInt32LE(42u).append(Bytes.utf8(text)).toBytes()

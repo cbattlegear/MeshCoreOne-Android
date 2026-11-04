@@ -248,6 +248,50 @@ class LocalDirectAttributionRepositoryTest : RepositoryTest() {
         assertNotNull(store.fetchContact(EntityKey(RADIO_A, peer.id)))
     }
 
+    @Test fun ordinaryContactReadsCountsWindowsAndMentionsExcludeBothMarkersWithoutLosingStoredOccurrences() = runTest(scheduler) {
+        val peer = peer(10)
+        store.saveContact(peer)
+        val candidate = store.saveIncomingDirectMessage(
+            incoming().copy(containsSelfMention = true, sortDate = AT),
+            store.classifyLocalDirectContact(RADIO_A, prefix),
+        ).message
+        val importedID = UUID.randomUUID()
+        val imported = candidate.copy(id = importedID,
+            deduplicationKey = LocalDirectMessageProvenance.UNRESOLVED.occurrenceKey(importedID))
+        store.saveMessage(imported)
+        val legacy = (1L..2L).map { seconds ->
+            incoming().copy(contactID = peer.id, createdAt = AT.minusSeconds(seconds),
+                sortDate = AT.minusSeconds(seconds), containsSelfMention = true)
+        }
+        legacy.forEach { store.saveMessage(it) }
+        store.saveMessage(candidate.copy(radioId = RADIO_B))
+        val contactKey = EntityKey(RADIO_A, peer.id)
+        val expected = legacy.map { it.id }.toSet()
+        assertEquals(expected, store.fetchMessages(contactKey, 100, 0).map { it.id }.toSet())
+        assertEquals(legacy.first().id, store.fetchMessages(contactKey, 1, 0).single().id)
+        assertEquals(legacy.last().id, store.fetchMessages(contactKey, 1, 1).single().id)
+        assertEquals(expected, db.messages().observeContact(RADIO_A.value, peer.id).first().map { it.id }.toSet())
+        assertEquals(2L, db.messages().countForContact(RADIO_A.value, peer.id))
+        assertEquals(1L, db.messages().countContactAtOrAfter(RADIO_A.value, peer.id, AT.minusSeconds(1).epochSecond, 0))
+        assertEquals(legacy.first().id, store.newestUnreadIncomingMessage(contactKey)?.id)
+        assertEquals(expected, store.fetchUnseenMentionIDs(contactKey).toSet())
+        val window = store.fetchMessageWindow(contactKey, AT.minusSeconds(2), 1)
+        assertEquals(expected, window.messages.map { it.id }.toSet())
+        assertFalse(window.hasMore)
+        assertEquals(expected, store.fetchLastMessages(listOf(contactKey).snapshot(), 100)[contactKey]?.map { it.id }?.toSet())
+        assertEquals(expected, store.fetchDMMessageCandidates(contactKey, 0u..UInt.MAX_VALUE, 100).map { it.id }.toSet())
+        assertEquals(setOf(candidate.id, imported.id),
+            store.fetchUnprovedDirectMessages(RADIO_A).map { it.occurrenceID }.toSet())
+        val backedUp = db.messages().backupPageWithoutPreviewBlobs(RADIO_A.value, 100, 0)
+        assertTrue(backedUp.any { it.id == candidate.id })
+        assertTrue(backedUp.any { it.id == imported.id })
+        assertEquals(candidate, store.fetchMessage(EntityKey(RADIO_A, candidate.id)))
+        assertEquals(imported, store.fetchMessage(EntityKey(RADIO_A, imported.id)))
+        assertTrue(store.fetchMessages(EntityKey(RADIO_B, peer.id), 100, 0).isEmpty())
+        assertNull(store.newestUnreadIncomingMessage(EntityKey(RADIO_B, peer.id)))
+        assertTrue(store.fetchUnseenMentionIDs(EntityKey(RADIO_B, peer.id)).isEmpty())
+    }
+
     @Test fun scopedReadsAndMetadataReenterButRosterWritesWaitUntilScopeExits() = runTest(scheduler) {
         val peer = peer(10)
         store.saveContact(peer)
@@ -464,6 +508,8 @@ class LocalDirectAttributionRepositoryTest : RepositoryTest() {
             override val connectionState: Flow<ConnectionState> = flowOf(ConnectionState.Connected)
             override fun events(): Flow<MeshEvent> = emptyFlow()
             override fun events(filter: EventFilter): Flow<MeshEvent> = emptyFlow()
+            override suspend fun waitForEvent(filter: EventFilter, timeout: Double?): MeshEvent? =
+                error("Region reprocessing must not wait for radio events")
         }
         val service = RxLogService(events, RxLogServiceStore.from(store), null, owner, clock)
         val announced = mutableListOf<UUID>()

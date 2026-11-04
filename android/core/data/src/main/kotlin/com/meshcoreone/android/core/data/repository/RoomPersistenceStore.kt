@@ -38,7 +38,8 @@ class RoomPersistenceStore private constructor(
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
     RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
     QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending,
-    ChannelSubmissionPersisting by pending, LocalDirectContactPersisting by localDirect {
+    ChannelSubmissionPersisting by pending, LocalDirectContactPersisting by localDirect,
+    UnprovedDirectMessageReading by messages {
     constructor(
         database: MeshCoreDatabase,
         scope: CoroutineScope,

@@ -227,7 +227,71 @@ class LocalDirectAttributionRepositoryTest : RepositoryTest() {
 
     @Test fun malformedPrefixAndStorageFailureNeverBecomeAbsence() = runTest(scheduler) {
         assertFailsWith<PersistenceStoreException> { store.classifyLocalDirectContact(RADIO_A, Bytes.EMPTY) }
+        assertFailsWith<PersistenceStoreException> { store.fetchUnprovedDirectMessages(RADIO_A, -1) }
+        assertFailsWith<PersistenceStoreException> { store.fetchUnprovedDirectMessages(RADIO_A, offset = -1) }
         store.close()
         assertFailsWith<PersistenceStoreException> { store.classifyLocalDirectContact(RADIO_A, prefix) }
+        assertFailsWith<PersistenceStoreException> { store.fetchUnprovedDirectMessages(RADIO_A) }
+    }
+
+    @Test fun readSurfaceRetainsCandidateUnresolvedAndLegacyHistoryWithoutContactAuthority() = runTest(scheduler) {
+        val unknown = store.saveIncomingDirectMessage(incoming(), LocalDirectContactResolution.NotFound).message
+        store.saveContact(peer(10))
+        val observed = store.classifyLocalDirectContact(RADIO_A, prefix)
+        val candidate = store.saveIncomingDirectMessage(
+            incoming(UUID.fromString("abcdefab-cdef-abcd-efab-cdefabcdefab")), observed,
+        ).message
+        val legacy = incoming(UUID(0, 20)).copy(
+            senderTimestamp = null, timestampCorrected = true, text = "Original legacy text",
+        )
+        val plainLegacy = incoming(UUID(0, 21)).copy(senderTimestamp = null, timestampCorrected = false)
+        store.saveMessage(legacy)
+        store.saveMessage(plainLegacy)
+        store.saveMessage(incoming().copy(radioId = RADIO_B))
+        store.saveMessage(incoming().copy(direction = MessageDirection.OUTGOING))
+        store.saveMessage(incoming().copy(channelIndex = 0u))
+        store.saveMessage(incoming().copy(contactID = peer(10).id))
+        store.saveMessage(incoming().copy(
+            contactID = peer(10).id,
+            deduplicationKey = LocalDirectMessageProvenance.LOCAL_CANDIDATE.occurrenceKey(UUID.randomUUID()),
+        ))
+
+        val rows = store.fetchUnprovedDirectMessages(RADIO_A)
+        assertEquals(setOf(unknown.id, candidate.id, legacy.id, plainLegacy.id), rows.map { it.occurrenceID }.toSet())
+        assertTrue(rows.all { it.radioId == RADIO_A })
+        val byID = rows.associateBy { it.occurrenceID }
+        assertEquals(UnprovedDirectMessage(
+            unknown.id, RADIO_A, unknown.text, 0u, AT, UnprovedDirectMessageProvenance.UNRESOLVED,
+        ), byID[unknown.id])
+        assertEquals(UnprovedDirectMessage(
+            candidate.id, RADIO_A, candidate.text, 0u, AT, UnprovedDirectMessageProvenance.LOCAL_CANDIDATE,
+        ), byID[candidate.id])
+        assertEquals(UnprovedDirectMessage(
+            legacy.id, RADIO_A, legacy.text, null, null, UnprovedDirectMessageProvenance.LEGACY_UNKNOWN,
+        ), byID[legacy.id])
+        assertEquals(42u, byID[plainLegacy.id]?.wireTimestamp)
+        assertNull(byID[plainLegacy.id]?.receivedAt)
+        assertEquals(1, store.fetchUnprovedDirectMessages(RADIO_B).size)
+        assertEquals(candidate, store.fetchMessage(EntityKey(RADIO_A, candidate.id)))
+        assertEquals(unknown, store.fetchMessage(EntityKey(RADIO_A, unknown.id)))
+        assertTrue(store.adoptOrphanedDirectMessages(
+            RADIO_A, listOf(ContactIdentity(peer(10).id, peer(10).publicKey)).snapshot(),
+        ).contains(peer(10).id), "Only the legacy rows retain the existing adoption policy")
+        assertEquals(setOf(unknown.id, candidate.id), store.fetchUnprovedDirectMessages(RADIO_A).map { it.occurrenceID }.toSet())
+    }
+
+    @Test fun readSurfacePagingIsStableForDistinctEqualTimeOccurrencesAcrossStoreRecreation() = runTest(scheduler) {
+        val originals = (1L..4L).map { number ->
+            store.saveIncomingDirectMessage(incoming(UUID(0, number)), LocalDirectContactResolution.NotFound).message
+        }
+        val expected = originals.map { it.id }.reversed()
+        assertEquals(expected, store.fetchUnprovedDirectMessages(RADIO_A).map { it.occurrenceID })
+        assertEquals(expected.take(2), store.fetchUnprovedDirectMessages(RADIO_A, 2).map { it.occurrenceID })
+        assertEquals(expected.drop(2), store.fetchUnprovedDirectMessages(RADIO_A, 2, 2).map { it.occurrenceID })
+        assertTrue(store.fetchUnprovedDirectMessages(RADIO_A, 0).isEmpty())
+        assertTrue(store.fetchUnprovedDirectMessages(RADIO_A, 2, 4).isEmpty())
+        store.close()
+        store = newStore()
+        assertEquals(expected, store.fetchUnprovedDirectMessages(RADIO_A).map { it.occurrenceID })
     }
 }

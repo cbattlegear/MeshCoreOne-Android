@@ -3,6 +3,8 @@ package com.meshcoreone.android.app.container
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.test.core.app.ApplicationProvider
+import android.content.Context
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +16,8 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.model.*
+import com.meshcoreone.android.core.database.MeshCoreDatabase
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.feature.chats.composer.ComposerTarget
@@ -29,7 +33,14 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.TestScope
 import org.junit.Rule
 import org.junit.Test
 import org.robolectric.Robolectric
@@ -129,12 +140,61 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
     @Test fun mountedCancelledCopyKeepsOriginalAndNeverShowsCompletedFeedback() =
         mountedRecovery(knownOrigin = true, outcome = CopyOutcome.CANCELLED)
 
-    private fun mountedRecovery(knownOrigin: Boolean, outcome: CopyOutcome) = runTest {
+    @Test fun mountedDiskReopenRecoveryCopiesOldOriginWithoutChangingOrSendingOriginal() =
+        mountedRecovery(knownOrigin = true, outcome = CopyOutcome.COMPLETED, reopen = true)
+
+    private class DiskRecoveryStore {
+        private val context = ApplicationProvider.getApplicationContext<Context>()
+        private val name = "wp308-recovery-${UUID.randomUUID()}.db"
+        private var owner = SupervisorJob()
+        private var database = MeshCoreDatabase.open(context, name)
+        var store = RoomPersistenceStore(database, CoroutineScope(owner + Dispatchers.Default))
+            private set
+
+        suspend fun reopen() {
+            release()
+            owner = SupervisorJob()
+            database = MeshCoreDatabase.open(context, name)
+            store = RoomPersistenceStore(database, CoroutineScope(owner + Dispatchers.Default))
+        }
+
+        private suspend fun release() = withContext(NonCancellable) {
+            try { store.close() } finally {
+                owner.cancelAndJoin()
+                database.close()
+            }
+        }
+
+        suspend fun close() {
+            try { release() } finally { context.deleteDatabase(name) }
+        }
+    }
+
+    private fun mountedRecovery(
+        knownOrigin: Boolean, outcome: CopyOutcome, reopen: Boolean = false,
+    ) = runTest {
+        val disk = if (reopen) DiskRecoveryStore() else null
+        try {
+            mountedRecoveryBody(knownOrigin, outcome, disk)
+        } finally {
+            disk?.close()
+        }
+    }
+
+    private suspend fun TestScope.mountedRecoveryBody(
+        knownOrigin: Boolean, outcome: CopyOutcome, disk: DiskRecoveryStore?,
+    ) {
+        var store = disk?.store ?: this@ChannelDraftRecoveryAdapterTest.store
         store.saveChannel(radio, channel(1))
         val originA = assertNotNull(store.fetchChannelOccupantID(radio, 2u))
         val originals = (1L..45L).map { row(it, if (it % 2L == 0L) originA else null) }
         originals.forEach { store.saveMessage(it) }
         store.saveChannel(radio, channel(2))
+        if (disk != null) {
+            disk.reopen()
+            store = disk.store
+            originals.forEach { assertEquals(it, store.fetchMessage(EntityKey(radio, it.id))) }
+        }
         val selected = ComposerTarget.Channel(assertNotNull(store.fetchChannel(radio, 2u)))
         val rig = ContainerHarness(this, store)
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()

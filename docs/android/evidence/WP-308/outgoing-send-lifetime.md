@@ -97,6 +97,12 @@ preserves the source and does not display completion. All four assert no pending
 send, no radio connection and unchanged original DTOs. This is authored mounted
 coverage, not a discovery/execution claim; it does not resolve production
 navigation custody or the separate restart Send Again defect.
+An additional mounted disk-reopen method uses a named Room file, closes
+and joins the original store owner, reopens with a fresh owner/store,
+verifies all 45 original DTOs, then mounts the same paging/selection/copy
+flow over the reopened store and a fresh App container. Exact named-file
+cleanup happens after closing the fixture; no retained runtime owner is
+accessed. This additional method is also uncompiled/unexecuted.
 
 There is no production route registration or scoped-read activation in this
 preparation. Exact Android execution, App disk-reopen acceptance and the existing

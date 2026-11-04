@@ -205,7 +205,7 @@ class RoomsComposeTest {
         compose.onNodeWithText(text(Chats.chatsRoomTapToReconnect)).assertIsEnabled().assertIsDisplayed()
         compose.onNode(hasSetTextAction()).assertDoesNotExist()
         assertEquals(body, fixture.holder.state.value.draft)
-        assertEquals(listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed"), fixture.loads)
+        assertEquals(listOf("fetch", "read", "failed-seen", "badge", "changed"), fixture.loads)
         assertTrue(fixture.posts.isEmpty())
         assertTrue(fixture.joins.isEmpty())
         assertTrue(fixture.retries.isEmpty())
@@ -305,7 +305,7 @@ class RoomsComposeTest {
         }
         compose.waitUntil { holder.state.value.hasLoadedOnce && fixture.events.subscriptionCount.value == 1 }
         compose.onNode(hasSetTextAction()).performTextReplacement(body)
-        val readEffects = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
+        val readEffects = listOf("fetch", "read", "failed-seen", "badge", "changed")
         fun assertVisibleMessages(target: RoomMessageDTO, statusLabel: String) {
             assertEquals(listOf(target, other), holder.state.value.messages)
             assertEquals(
@@ -518,7 +518,7 @@ class RoomsComposeTest {
             compose.waitUntil { !fixture.holder.state.value.isLoading && fixture.loads.count { it == "changed" } == 2 }
             assertReconfiguredRows()
             assertEquals(
-                List(2) { listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed") }.flatten(),
+                List(2) { listOf("fetch", "read", "failed-seen", "badge", "changed") }.flatten(),
                 fixture.loads,
             )
             assertTrue(fixture.posts.isEmpty())
@@ -549,7 +549,7 @@ class RoomsComposeTest {
         assertTrue(originalRow.showSenderName)
         assertTrue(originalRow.showAvatar)
         compose.onAllNodesWithText("Alice", useUnmergedTree = true).assertCountEquals(1)
-        val load = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
+        val load = listOf("fetch", "read", "failed-seen", "badge", "changed")
         assertEquals(load, fixture.loads)
         val held = CompletableDeferred<Unit>()
         compose.runOnIdle {
@@ -614,7 +614,7 @@ class RoomsComposeTest {
         assertTrue(originalRow.showSenderName)
         assertTrue(originalRow.showAvatar)
         compose.onAllNodesWithText("Alice", useUnmergedTree = true).assertCountEquals(1)
-        val load = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
+        val load = listOf("fetch", "read", "failed-seen", "badge", "changed")
         assertEquals(load, fixture.loads)
         val held = CompletableDeferred<Unit>()
         compose.runOnIdle {
@@ -787,7 +787,7 @@ class RoomsComposeTest {
             }
             assertVisibleRows(initialRows)
             val before = fixture.holder.state.value.rows
-            val load = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
+            val load = listOf("fetch", "read", "failed-seen", "badge", "changed")
             assertEquals(load, fixture.loads)
             val expectedMessages = expectedRows.map { it.message }
             assertEquals(expectedMessages.size, expectedMessages.map { it.deduplicationKey }.distinct().size)
@@ -949,7 +949,7 @@ class RoomsComposeTest {
             ),
             draft = body, hasLoadedOnce = true,
         )
-        val readEffects = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
+        val readEffects = listOf("fetch", "read", "failed-seen", "badge", "changed")
         fun assertRetainedRoom() {
             assertEquals(retained, fixture.holder.state.value)
             assertEquals(body, fixture.holder.state.value.draft)
@@ -1059,7 +1059,7 @@ class RoomsComposeTest {
             rows = listOf(RoomMessageRow(mention, true, true, true), RoomMessageRow(other, false, true, true)),
             draft = body, hasLoadedOnce = true,
         )
-        val readEffects = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
+        val readEffects = listOf("fetch", "read", "failed-seen", "badge", "changed")
         fun assertRetainedRoom() {
             assertEquals(retained, fixture.holder.state.value)
             assertEquals(readEffects, fixture.loads)
@@ -1202,7 +1202,7 @@ class RoomsComposeTest {
             rows = listOf(RoomMessageRow(mention, true, true, true), RoomMessageRow(other, false, true, true)),
             draft = body, hasLoadedOnce = true,
         )
-        val readEffects = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
+        val readEffects = listOf("fetch", "read", "failed-seen", "badge", "changed")
         fun assertRetainedRoom() {
             assertEquals(retained, fixture.holder.state.value)
             assertEquals(listOf(mention, other), fixture.stored)
@@ -1340,7 +1340,7 @@ class RoomsComposeTest {
             assertEquals(listOf(mention), fixture.stored)
             assertSame(mention, fixture.holder.state.value.messages.single())
             assertEquals("@[Alice\u202e]", fixture.stored.single().text)
-            assertEquals(listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed"), fixture.loads)
+            assertEquals(listOf("fetch", "read", "failed-seen", "badge", "changed"), fixture.loads)
             assertTrue(fixture.posts.isEmpty())
             assertTrue(fixture.joins.isEmpty())
             assertTrue(fixture.retries.isEmpty())
@@ -1477,7 +1477,7 @@ class RoomsComposeTest {
         fun assertRetainedRoom(expectedReads: Int) {
             assertEquals(retained, fixture.holder.state.value)
             assertEquals(listOf(mention), fixture.stored)
-            assertEquals(listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed"), fixture.loads)
+            assertEquals(listOf("fetch", "read", "failed-seen", "badge", "changed"), fixture.loads)
             assertTrue(fixture.posts.isEmpty())
             assertTrue(fixture.joins.isEmpty())
             assertTrue(fixture.retries.isEmpty())
@@ -1606,7 +1606,7 @@ class RoomsComposeTest {
             assertEquals(listOf(mention), fixture.stored)
             assertSame(mention, fixture.holder.state.value.messages.single())
             assertEquals("@[   ]", fixture.stored.single().text)
-            assertEquals(listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed"), fixture.loads)
+            assertEquals(listOf("fetch", "read", "failed-seen", "badge", "changed"), fixture.loads)
             assertTrue(fixture.posts.isEmpty())
             assertTrue(fixture.joins.isEmpty())
             assertTrue(fixture.retries.isEmpty())
@@ -1743,7 +1743,7 @@ class RoomsComposeTest {
             assertEquals(listOf(mention), fixture.stored)
             assertSame(mention, fixture.holder.state.value.messages.single())
             assertEquals("@[Charlie]", fixture.stored.single().text)
-            assertEquals(listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed"), fixture.loads)
+            assertEquals(listOf("fetch", "read", "failed-seen", "badge", "changed"), fixture.loads)
             assertTrue(fixture.posts.isEmpty())
             assertTrue(fixture.joins.isEmpty())
             assertTrue(fixture.retries.isEmpty())
@@ -1903,7 +1903,7 @@ class RoomsComposeTest {
             .fetchSemanticsNode().boundsInRoot
         assertEquals(initialBubble.bottom, initialAvatar.bottom, 0f)
         assertEquals(6f, initialBubble.left - initialAvatar.right, 0f)
-        val load = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
+        val load = listOf("fetch", "read", "failed-seen", "badge", "changed")
         assertEquals(load, fixture.loads)
         val held = CompletableDeferred<Unit>()
         compose.runOnIdle {
@@ -2069,22 +2069,22 @@ class RoomsComposeTest {
     }
 
     @Test fun initialRoomFetchFailureShowsTheTypedErrorThenRestoresHistoryOnTheNextLiveReload() =
-        assertRoomLoadStageFailure("fetch")
+        assertRoomLoadEffects("fetch")
 
     @Test fun roomReadFailureKeepsFetchedRowsThenRepeatsAllReadEffectsOnRecovery() =
-        assertRoomLoadStageFailure("read")
+        assertRoomLoadEffects("read")
 
     @Test fun roomFailedSendSeenFailureStopsLaterReadEffectsUntilRecovery() =
-        assertRoomLoadStageFailure("failed-seen")
+        assertRoomLoadEffects("failed-seen")
 
-    @Test fun roomNotificationRemovalFailureKeepsRowsAndDefersBadgeAndChangeUntilRecovery() =
-        assertRoomLoadStageFailure("notifications")
+    @Test fun passiveRoomEntryNeverInvokesNotificationCleanupAndStillPublishesReadEffectsOnReload() =
+        assertRoomLoadEffects(null)
 
     @Test fun roomBadgeFailureKeepsRowsAndDefersConversationChangeUntilRecovery() =
-        assertRoomLoadStageFailure("badge")
+        assertRoomLoadEffects("badge")
 
     @Test fun roomConversationChangeFailureRemainsVisibleUntilDismissalAndSuccessfulReload() =
-        assertRoomLoadStageFailure("changed")
+        assertRoomLoadEffects("changed")
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun mixedRoomEventsShareTheFirstSyncDeadlineAndRefreshOnlyKnownRowsInThisSession() {
@@ -2113,7 +2113,7 @@ class RoomsComposeTest {
         compose.runOnIdle { clock.runCurrent() }
         compose.waitUntil { holder.state.value.hasLoadedOnce && fixture.events.subscriptionCount.value == 1 }
         compose.onNode(hasSetTextAction()).performTextReplacement(body)
-        val effects = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
+        val effects = listOf("fetch", "read", "failed-seen", "badge", "changed")
         fun emit(event: RoomConversationEvent) {
             assertTrue(fixture.events.tryEmit(event))
             clock.runCurrent()
@@ -2240,14 +2240,15 @@ class RoomsComposeTest {
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private fun assertRoomLoadStageFailure(failingStage: String) {
-        val stages = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
-        assertTrue(failingStage in stages)
+    private fun assertRoomLoadEffects(failingStage: String?) {
+        val stages = listOf("fetch", "read", "failed-seen", "badge", "changed")
+        assertTrue(failingStage == null || failingStage in stages)
         val cached = liveMessage(1, 100u, "cached", Bytes.of(0xaa), "Alice")
         val arrival = liveMessage(2, 160u, "arrived", Bytes.of(0xaa), "Alice")
         val fixture = Fixture()
         val failure = RoomServerError.PermissionDenied()
         val calls = mutableListOf<String>()
+        var notificationCleanupCalls = 0
         var failureStage: String? = failingStage
         var stored = listOf(cached)
         var gate = CompletableDeferred<Unit>()
@@ -2278,8 +2279,11 @@ class RoomsComposeTest {
                 override suspend fun contactFor(session: RemoteNodeSessionDTO): ContactDTO? =
                     error("Load must not look up authentication")
             }
-            override suspend fun removeDeliveredNotifications(session: RemoteNodeSessionDTO) =
+            override suspend fun removeDeliveredNotifications(session: RemoteNodeSessionDTO) {
+                notificationCleanupCalls++
                 sessionStep("notifications", session)
+                throw failure
+            }
             override suspend fun updateBadgeCount() = step("badge")
             override fun conversationsChanged() = step("changed")
         }
@@ -2299,10 +2303,14 @@ class RoomsComposeTest {
         compose.onNodeWithText(text(Rooms.remoteNodesRoomNoMessagesYet)).assertDoesNotExist()
         compose.onNode(hasSetTextAction()).performTextReplacement(body)
         compose.runOnIdle { assertTrue(gate.complete(Unit)) }
-        compose.waitUntil { holder.state.value.failure === failure }
-        val failedCalls = stages.take(stages.indexOf(failingStage) + 1)
+        compose.waitUntil {
+            if (failingStage == null) calls == stages else holder.state.value.failure === failure
+        }
+        val failedCalls = if (failingStage == null) stages else stages.take(stages.indexOf(failingStage) + 1)
+        val expectedReports = if (failingStage == null) emptyList() else listOf("load room" to failure)
         assertEquals(failedCalls, calls)
-        assertEquals(listOf("load room" to failure), fixture.reported)
+        assertEquals(expectedReports, fixture.reported)
+        assertEquals(0, notificationCleanupCalls)
         assertTrue(holder.state.value.hasLoadedOnce)
         assertFalse(holder.state.value.isLoading)
         val cachedBeforeRecovery = if (failingStage == "fetch") emptyList() else listOf(cached)
@@ -2323,7 +2331,11 @@ class RoomsComposeTest {
         if (cachedBeforeRecovery.isEmpty()) {
             compose.onNodeWithTag("room-bubble:${cached.id}", useUnmergedTree = true).assertDoesNotExist()
         }
-        compose.onNodeWithText(text(Strings.errorRoomServerPermissionDenied)).assertIsDisplayed().performClick()
+        if (failingStage == null) {
+            compose.onNodeWithText(text(Strings.errorRoomServerPermissionDenied)).assertDoesNotExist()
+        } else {
+            compose.onNodeWithText(text(Strings.errorRoomServerPermissionDenied)).assertIsDisplayed().performClick()
+        }
         assertNull(holder.state.value.failure)
         assertEquals(failedCalls, calls)
         val recoveryGate = CompletableDeferred<Unit>()
@@ -2362,7 +2374,8 @@ class RoomsComposeTest {
             holder.state.value.rows,
         )
         assertNull(holder.state.value.failure)
-        assertEquals(listOf("load room" to failure), fixture.reported)
+        assertEquals(expectedReports, fixture.reported)
+        assertEquals(0, notificationCleanupCalls)
         assertEquals(failedCalls + stages, calls)
         assertEquals(1, fixture.events.subscriptionCount.value)
         assertEquals(body, holder.state.value.draft)
@@ -2407,7 +2420,7 @@ class RoomsComposeTest {
         mountRoute(fixture)
         compose.waitUntil { fixture.holder.state.value.hasLoadedOnce && fixture.events.subscriptionCount.value == 1 }
         compose.onNode(hasSetTextAction()).performTextReplacement(body)
-        val load = listOf("fetch", "read", "failed-seen", "notifications", "badge", "changed")
+        val load = listOf("fetch", "read", "failed-seen", "badge", "changed")
         assertEquals(load, fixture.loads)
         val held = CompletableDeferred<Unit>()
         compose.runOnIdle {

@@ -5,6 +5,7 @@
 package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.LocalDirectMessageProvenance
 import com.meshcoreone.android.core.contracts.domain.ChannelSubmissionConflict
 import com.meshcoreone.android.core.contracts.domain.ChannelSubmissionRejected
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
@@ -57,8 +58,20 @@ internal suspend fun RepositoryTransaction.deleteMessageDependents(
     }
 }
 
-internal suspend fun RepositoryTransaction.deleteContactMessages(key: EntityKey) {
-    val messages = database.messages().newestForContact(key.radioId.value, key.id, -1)
+internal suspend fun RepositoryTransaction.deleteContactMessages(
+    key: EntityKey, preserveLocalOccurrences: Boolean = false,
+) {
+    val (preserved, messages) = database.messages().newestForContact(key.radioId.value, key.id, -1).partition { row ->
+        preserveLocalOccurrences && row.directionRawValue == MessageDirection.INCOMING.rawValue &&
+            row.channelIndex == null && row.channelOccupantID == null &&
+            LocalDirectMessageProvenance.of(row.toDTO()) != null
+    }
+    for (row in preserved) {
+        database.messages().upsert(row.copy(
+            contactID = null,
+            deduplicationKey = LocalDirectMessageProvenance.UNRESOLVED.occurrenceKey(row.id),
+        ))
+    }
     deleteMessageDependents(key.radioId, messages, reactionsByMessage = false)
     database.reactions().deleteForContact(key.radioId.value, key.id)
     database.messages().deleteContactMessages(key.radioId.value, key.id)

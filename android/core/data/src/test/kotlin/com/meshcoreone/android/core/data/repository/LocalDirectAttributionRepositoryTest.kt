@@ -130,6 +130,124 @@ class LocalDirectAttributionRepositoryTest : RepositoryTest() {
         assertNull(retry.message.contactID)
     }
 
+    @Test fun matchingLegacyOrMismarkedUuidIsNotAnOccurrenceReplayAndIsNeverOverwritten() = runTest(scheduler) {
+        val keys = listOf(null, "legacy-content-key",
+            LocalDirectMessageProvenance.UNRESOLVED.occurrenceKey(UUID.randomUUID()))
+        for (key in keys) {
+            val dto = incoming().copy(deduplicationKey = key)
+            store.saveMessage(dto)
+            val before = assertNotNull(store.fetchMessage(EntityKey(RADIO_A, dto.id)))
+            val failure = assertFailsWith<PersistenceStoreException> {
+                store.saveIncomingDirectMessage(dto, LocalDirectContactResolution.NotFound)
+            }
+            assertEquals(PersistenceStoreError.InvalidData, failure.error)
+            assertEquals(before, store.fetchMessage(EntityKey(RADIO_A, dto.id)))
+        }
+    }
+
+    @Test fun bothExactOccurrenceMarkersReplayIdempotentlyWithoutCrossRadioUuidCapture() = runTest(scheduler) {
+        val peer = peer(10)
+        store.saveContact(peer)
+        for (observed in listOf(
+            LocalDirectContactResolution.NotFound,
+            store.classifyLocalDirectContact(RADIO_A, prefix),
+        )) {
+            val dto = incoming()
+            val first = store.saveIncomingDirectMessage(dto, observed)
+            store.saveMessage(dto.copy(radioId = RADIO_B, deduplicationKey = "foreign-legacy-key"))
+            val foreign = assertNotNull(store.fetchMessage(EntityKey(RADIO_B, dto.id)))
+            val retry = store.saveIncomingDirectMessage(dto, observed)
+            assertTrue(first.inserted)
+            assertFalse(retry.inserted)
+            assertEquals(first.message, retry.message)
+            assertEquals(
+                if (observed == LocalDirectContactResolution.NotFound) LocalDirectMessageProvenance.UNRESOLVED
+                else LocalDirectMessageProvenance.LOCAL_CANDIDATE,
+                LocalDirectMessageProvenance.of(retry.message),
+            )
+            assertEquals(foreign, store.fetchMessage(EntityKey(RADIO_B, dto.id)))
+        }
+    }
+
+    @Test fun singleAndBatchContactRemovalDetachLocalOccurrencesButKeepLegacyAndRadioDeletionSemantics() = runTest(scheduler) {
+        val peer = peer(10)
+        val skipped = peer(11)
+        for (batch in listOf(false, true)) {
+            store.saveContact(peer)
+            store.saveContact(peer.copy(radioId = RADIO_B))
+            val dto = incoming()
+            val saved = store.saveIncomingDirectMessage(dto, store.classifyLocalDirectContact(RADIO_A, prefix)).message
+            val foreign = store.saveIncomingDirectMessage(
+                dto.copy(radioId = RADIO_B), store.classifyLocalDirectContact(RADIO_B, prefix),
+            ).message
+            val legacy = incoming().copy(contactID = peer.id)
+            store.saveMessage(legacy)
+            store.saveContact(skipped)
+            if (batch) {
+                assertEquals(listOf(peer.id), store.deleteContacts(
+                    RADIO_A, setOf(peer.publicKey, skipped.publicKey).snapshotSet(),
+                ) { setOf(skipped.publicKey).snapshotSet() }.toList())
+            } else {
+                store.deleteContact(EntityKey(RADIO_A, peer.id))
+            }
+            val detached = saved.copy(contactID = null,
+                deduplicationKey = LocalDirectMessageProvenance.UNRESOLVED.occurrenceKey(saved.id))
+            assertEquals(detached, store.fetchMessage(EntityKey(RADIO_A, saved.id)))
+            assertNull(store.fetchContact(EntityKey(RADIO_A, peer.id)))
+            assertNull(store.fetchMessage(EntityKey(RADIO_A, legacy.id)))
+            assertEquals(foreign, store.fetchMessage(EntityKey(RADIO_B, foreign.id)))
+            assertNotNull(store.fetchContact(EntityKey(RADIO_A, skipped.id)))
+            store.close()
+            store = newStore()
+            assertEquals(detached, store.fetchMessage(EntityKey(RADIO_A, saved.id)))
+            store.deleteContact(EntityKey(RADIO_A, skipped.id))
+            store.saveContact(peer)
+            assertTrue(store.adoptOrphanedDirectMessages(
+                RADIO_A, listOf(ContactIdentity(peer.id, peer.publicKey)).snapshot(),
+            ).isEmpty())
+            assertEquals(detached, store.fetchMessage(EntityKey(RADIO_A, saved.id)))
+        }
+    }
+
+    @Test fun singleAndBatchContactRemovalRollBackOccurrenceDetachmentWithTheContactDelete() = runTest(scheduler) {
+        val peer = peer(10)
+        store.saveContact(peer)
+        val saved = store.saveIncomingDirectMessage(incoming(), store.classifyLocalDirectContact(RADIO_A, prefix)).message
+        val legacy = incoming().copy(contactID = peer.id)
+        store.saveMessage(legacy)
+        val legacyBefore = assertNotNull(store.fetchMessage(EntityKey(RADIO_A, legacy.id)))
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_local_contact_delete BEFORE DELETE ON contacts " +
+                "BEGIN SELECT RAISE(ABORT, 'controlled contact deletion failure'); END",
+        )
+        try {
+            for (batch in listOf(false, true)) {
+                assertFailsWith<PersistenceStoreException> {
+                    if (batch) store.deleteContacts(RADIO_A, setOf(peer.publicKey).snapshotSet()) { emptySet<Bytes>().snapshotSet() }
+                    else store.deleteContact(EntityKey(RADIO_A, peer.id))
+                }
+                assertEquals(saved, store.fetchMessage(EntityKey(RADIO_A, saved.id)))
+                assertEquals(legacyBefore, store.fetchMessage(EntityKey(RADIO_A, legacy.id)))
+                assertEquals(peer, store.fetchContact(EntityKey(RADIO_A, peer.id)))
+            }
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_local_contact_delete")
+        }
+    }
+
+    @Test fun explicitMessageAndConversationDeletionStillDeleteMarkedOccurrences() = runTest(scheduler) {
+        val peer = peer(10)
+        store.saveContact(peer)
+        val observed = store.classifyLocalDirectContact(RADIO_A, prefix)
+        val first = store.saveIncomingDirectMessage(incoming(), observed).message
+        val second = store.saveIncomingDirectMessage(incoming(), observed).message
+        store.deleteMessage(EntityKey(RADIO_A, first.id))
+        assertNull(store.fetchMessage(EntityKey(RADIO_A, first.id)))
+        store.deleteMessagesForContact(EntityKey(RADIO_A, peer.id))
+        assertNull(store.fetchMessage(EntityKey(RADIO_A, second.id)))
+        assertNotNull(store.fetchContact(EntityKey(RADIO_A, peer.id)))
+    }
+
     @Test fun scopedReadsAndMetadataReenterButRosterWritesWaitUntilScopeExits() = runTest(scheduler) {
         val peer = peer(10)
         store.saveContact(peer)

@@ -207,6 +207,9 @@ class AppRemoteNodeCliCopyTest {
             }
             compose.onNodeWithTag("remote-cli-copy").performClick()
             compose.onNode(
+                SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex) and hasAnyAncestor(isDialog())
+            ).performScrollToIndex(999)
+            compose.onNode(
                 hasText(host.get().getString(AppToolsStrings.toolsCliChannelEmpty)) and hasAnyAncestor(isDialog())
             ).performScrollTo().assertHasClickAction().performClick()
             compose.runOnIdle {

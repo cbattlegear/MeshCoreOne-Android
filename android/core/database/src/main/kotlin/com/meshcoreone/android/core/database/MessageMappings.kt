@@ -10,9 +10,15 @@ import com.meshcoreone.android.core.protocol.event.RouteType
 import java.time.Instant
 import java.util.UUID
 
-fun MessageDTO.toEntity(): MessageEntity = MessageEntity(
-    radioId.value, id, contactID, channelIndex?.toLong(), text,
+fun MessageDTO.toEntity(): MessageEntity = messageEntity(
     if (timestamp > 0u) timestamp.toLong() else createdAt.truncatedUnixSeconds().uint("message.timestamp").toLong(),
+)
+
+/** Caller-ID producers already supply the wire timestamp; zero is a value, not a missing timestamp. */
+fun MessageDTO.toEntityPreservingTimestamp(): MessageEntity = messageEntity(timestamp.toLong())
+
+private fun MessageDTO.messageEntity(storedTimestamp: Long): MessageEntity = MessageEntity(
+    radioId.value, id, contactID, channelIndex?.toLong(), text, storedTimestamp,
     StoredInstant.from(createdAt), StoredInstant.from(sortDate), direction.rawValue, status.rawValue, textType.rawValue.toLong(),
     ackCode?.toLong(), pathLength.toLong(), snr, pathNodes, senderKeyPrefix, senderNodeName, isRead, replyToID, roundTripTime?.toLong(),
     heardRepeats, sendCount, retryAttempt, maxRetryAttempts, deduplicationKey, linkPreviewURL, linkPreviewTitle,

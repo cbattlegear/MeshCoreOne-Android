@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executor
 import kotlin.test.*
@@ -77,6 +78,28 @@ class PendingDirectMessageCreationTest : RepositoryTest() {
             }
         }
         assertTrue(issues.isEmpty())
+    }
+
+    @Test fun zeroTimestampIsIndependentOfCreationTimeAndLegacyMappingStillRejectsInvalidDerivedTime() = runTest {
+        for (createdAt in listOf(
+            Instant.ofEpochSecond(-1),
+            Instant.ofEpochSecond(-2, 500_000_000),
+            Instant.ofEpochSecond(UInt.MAX_VALUE.toLong() + 1),
+            Instant.ofEpochSecond(UInt.MAX_VALUE.toLong() + 1, 999_999_999),
+        )) {
+            val intent = intent()
+            val actual = store.createOrReconcilePendingDirectMessage(intent, 0u, createdAt)
+            assertEquals(0u, actual.timestamp)
+            assertEquals(createdAt, actual.createdAt)
+            assertEquals(createdAt, actual.sortDate)
+            val row = assertNotNull(db.messages().byId(RADIO_A.value, intent.messageID))
+            assertEquals(0L, row.timestamp)
+            assertEquals(actual, row.toDTO())
+            assertEquals(actual, store.createOrReconcilePendingDirectMessage(intent, 99u, AT))
+            val failure = assertFailsWith<PersistenceStoreException> { store.saveMessage(actual.copy(id = UUID.randomUUID())) }
+            assertIs<PersistenceStoreError.SaveFailed>(failure.error)
+            assertEquals(listOf(row), db.messages().forIdentity(intent.messageID))
+        }
     }
 
     @Test fun conflictingImmutableIntentFailsTypedWithoutReplacingAnyRow() = runTest {

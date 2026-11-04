@@ -238,6 +238,6 @@ the separately captured width/dotless-i vectors are stamped `en_US`.
 These are intended assertions, not test discovery or passing runtime results.
 No compilation, hosted dispatch, local Gradle or instrumented execution occurred
 for this local fixture. WP-503 still needs a trusted exact-source App-test
-runner/family binding and actual API31/37 execution of both methods. No
+runner/family binding and actual API31/37 execution of all three methods. No
 WP-503 runner/selector or build configuration was changed, and no device or
 whole-WP acceptance is claimed.

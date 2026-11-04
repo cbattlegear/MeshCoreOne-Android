@@ -33,7 +33,18 @@ class WriteBehindOnboardingFlags(
         val value: Boolean,
         val revision: Long,
         val persisted: CompletableDeferred<Unit>? = null,
+        val requireCurrent: (() -> Unit)? = null,
     )
+
+    private class RejectedWrite(val failure: Exception) : Exception(failure)
+
+    private fun validate(write: Write) {
+        try {
+            write.requireCurrent?.invoke()
+        } catch (failure: Exception) {
+            throw RejectedWrite(failure)
+        }
+    }
 
     private val lock = Any()
     private var values: Map<String, Boolean> = initial
@@ -51,8 +62,10 @@ class WriteBehindOnboardingFlags(
             try {
                 for (write in writes) {
                     try {
+                        validate(write)
                         persist(write.key, write.value)
                         synchronized(lock) {
+                            validate(write)
                             if (write.revision >= (snapshotRevision[write.key] ?: 0L)) {
                                 snapshotRevision[write.key] = write.revision
                                 values = values + (write.key to write.value)
@@ -60,6 +73,8 @@ class WriteBehindOnboardingFlags(
                             }
                         }
                         write.persisted?.complete(Unit)
+                    } catch (rejected: RejectedWrite) {
+                        write.persisted?.completeExceptionally(rejected.failure)
                     } catch (cancelled: CancellationException) {
                         write.persisted?.completeExceptionally(cancelled)
                         throw cancelled
@@ -97,11 +112,15 @@ class WriteBehindOnboardingFlags(
         }
     }
 
-    override suspend fun persistBoolean(key: String, value: Boolean) {
+    override suspend fun persistBoolean(key: String, value: Boolean) =
+        persistBoolean(key, value) {}
+
+    override suspend fun persistBoolean(key: String, value: Boolean, requireCurrent: () -> Unit) {
+        requireCurrent()
         val persisted = CompletableDeferred<Unit>()
         synchronized(lock) {
             val revision = nextRevision + 1
-            check(writes.trySend(Write(key, value, revision, persisted)).isSuccess) {
+            check(writes.trySend(Write(key, value, revision, persisted, requireCurrent)).isSuccess) {
                 "Onboarding preference writer is unavailable"
             }
             nextRevision = revision

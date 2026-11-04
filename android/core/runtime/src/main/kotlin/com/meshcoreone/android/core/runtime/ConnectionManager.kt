@@ -1607,6 +1607,12 @@ class ConnectionManager(
     /** Clears the auth-failure latch so the next failure episode for the same device re-presents recovery. */
     fun clearSurfacedAuthenticationFailure() { synchronized(lock) { authFailureDevice = null } }
 
+    /** A suspended producer must supply its originating token, never the token observed on return. */
+    fun replaceConnectedDevice(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? = synchronized(lock) {
+        if (active?.token != expectedToken) return@synchronized null
+        replaceConnectedDevice(device)
+    }
+
     /** Swift updateDevice(with:) after a device edit, limited to the current generation's radio. */
     fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? = synchronized(lock) {
         val owner = active ?: return@synchronized null

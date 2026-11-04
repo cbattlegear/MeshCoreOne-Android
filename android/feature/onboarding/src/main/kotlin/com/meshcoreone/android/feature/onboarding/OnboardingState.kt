@@ -1,6 +1,8 @@
 // PortedFrom: MC1/State/OnboardingState.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.onboarding
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +19,12 @@ interface OnboardingFlagStore {
 
     /** Waits for durable adapters to confirm the write before publishing completion. */
     suspend fun persistBoolean(key: String, value: Boolean) = setBoolean(key, value)
+
+    suspend fun persistBoolean(key: String, value: Boolean, requireCurrent: () -> Unit) {
+        requireCurrent()
+        persistBoolean(key, value)
+        requireCurrent()
+    }
 }
 
 class InMemoryOnboardingFlagStore(initial: Map<String, Boolean> = emptyMap()) : OnboardingFlagStore {
@@ -55,8 +63,13 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         return true
     }
 
-    suspend fun completeOnboarding() {
-        store.persistBoolean(KEY_HAS_COMPLETED, true)
+    suspend fun completeOnboarding(requireCurrent: () -> Unit = {}) {
+        val caller = currentCoroutineContext()
+        val validate = { caller.ensureActive(); requireCurrent() }
+        validate()
+        store.persistBoolean(KEY_HAS_COMPLETED, true, validate)
+        // A committed preference is not rolled back; a retired producer must not publish live completion.
+        validate()
         completed.value = true
     }
 

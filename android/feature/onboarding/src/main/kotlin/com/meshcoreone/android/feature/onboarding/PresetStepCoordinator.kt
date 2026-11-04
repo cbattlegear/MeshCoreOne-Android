@@ -29,6 +29,8 @@ data class PresetStepState(
     val completionNeedsRetry: Boolean = false,
 )
 
+internal class OnboardingPresetTargetChangedException : IllegalStateException("Onboarding radio session changed")
+
 class PresetStepCoordinator(
     private val scope: CoroutineScope,
     private val regionPort: OnboardingRegionPort,
@@ -68,7 +70,7 @@ class PresetStepCoordinator(
         }
         scope.launch {
             val outcome = try {
-                presets.apply(option.id)
+                presets.apply(option.id, target)
             } catch (cancel: CancellationException) {
                 mutable.update { it.copy(isApplying = false) }
                 throw cancel
@@ -80,6 +82,14 @@ class PresetStepCoordinator(
     }
 
     private suspend fun finish(id: String, target: OnboardingPresetTarget?, outcome: OnboardingPresetOutcome) {
+        if (presets.currentTarget() != target) {
+            appliedPresetId = null
+            appliedPresetTarget = null
+            mutable.update {
+                it.copy(isApplying = false, completionNeedsRetry = false, error = UiText.Resource(O.presetErrorNotConnected))
+            }
+            return
+        }
         when (outcome) {
             OnboardingPresetOutcome.Applied, OnboardingPresetOutcome.NoRadioToConfigure -> {
                 retryCount = 0
@@ -98,16 +108,30 @@ class PresetStepCoordinator(
         }
     }
 
+    internal fun completionTargetGuard(): () -> Unit {
+        val target = appliedPresetTarget
+        return {
+            if (presets.currentTarget() != target) throw OnboardingPresetTargetChangedException()
+        }
+    }
+
     private fun beginCompletionPersistence() {
         if (completionPersistenceJob?.isActive == true) return
         mutable.update { it.copy(isApplying = true, error = null, retryAlert = null) }
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
+                completionTargetGuard().invoke()
                 onCompleted()
                 appliedPresetId = null
                 appliedPresetTarget = null
                 mutable.update {
                     it.copy(isApplying = false, completionNeedsRetry = false, commitTick = it.commitTick + 1)
+                }
+            } catch (_: OnboardingPresetTargetChangedException) {
+                appliedPresetId = null
+                appliedPresetTarget = null
+                mutable.update {
+                    it.copy(isApplying = false, completionNeedsRetry = false, error = UiText.Resource(O.presetErrorNotConnected))
                 }
             } catch (cancelled: CancellationException) {
                 mutable.update { it.copy(isApplying = false) }

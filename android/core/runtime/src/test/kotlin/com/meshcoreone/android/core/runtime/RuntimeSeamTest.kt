@@ -1,4 +1,5 @@
 // AndroidOnly: WP-207 Runtime seams consumed by WP-206 pairing and connectivity: auth latch, device edits, health and switch failures.
+// AndroidOnly: WP-305 Token-bound preset updates cannot replace a successor connection's device.
 package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.*
@@ -79,6 +80,39 @@ class RuntimeSeamTest {
                 connect(); manager.disconnect()
                 manager.replaceConnectedDevice(DeviceDTO(radioId = RadioId(UUID.randomUUID()), publicKey = publicKey, nodeName = "Ghost"))
                 assertNull(manager.connectedDevice)
+            }
+        },
+        nativeCase("token-bound device replacement accepts only the current session") {
+            withFixture {
+                connect()
+                val token = assertNotNull(manager.snapshot.value.token)
+                val updated = assertNotNull(manager.connectedDevice).copy(nodeName = "Current preset")
+                val edit = assertNotNull(manager.replaceConnectedDevice(updated, token))
+                assertEquals(token, edit.token)
+                assertEquals(updated, manager.connectedDevice)
+                assertNull(manager.replaceConnectedDevice(updated.copy(nodeName = "Other generation"),
+                    token.copy(generation = Generation(token.generation.value + 1))))
+                assertEquals(updated, manager.connectedDevice)
+            }
+        },
+        nativeCase("token-bound device replacement rejects disconnect and same-radio rebuilt generation") {
+            withFixture {
+                connect()
+                val original = assertNotNull(manager.snapshot.value.token)
+                val stale = assertNotNull(manager.connectedDevice).copy(nodeName = "Stale preset")
+                val callbacks = links.single().callbacks!!
+                callbacks.onAutoReconnecting("dropped"); runCurrent()
+                assertNull(manager.replaceConnectedDevice(stale, original))
+                callbacks.onReconnected(); runCurrent()
+                val successor = assertNotNull(manager.snapshot.value.token)
+                assertEquals(original.radioId, successor.radioId)
+                assertNotEquals(original.generation, successor.generation)
+                val live = assertNotNull(manager.connectedDevice)
+                assertNull(manager.replaceConnectedDevice(stale, original))
+                assertEquals(live, manager.connectedDevice)
+                assertNotNull(manager.replaceConnectedDevice(live.copy(nodeName = "Fresh preset"), successor))
+                manager.disconnect(); runCurrent()
+                assertNull(manager.replaceConnectedDevice(stale, successor))
             }
         },
         // C-04: Swift attemptOpportunisticReconnect logs a failed foreground reconnect and returns.

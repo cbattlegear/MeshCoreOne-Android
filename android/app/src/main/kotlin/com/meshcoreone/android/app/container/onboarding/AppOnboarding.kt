@@ -48,6 +48,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingWiFiPort
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -135,10 +136,19 @@ class AppStateRadioConfigurator(private val container: AppContainer) : Onboardin
             OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
         }
 
-    override suspend fun applyPreset(preset: RadioPreset) {
+    override suspend fun applyPreset(preset: RadioPreset) = applyPreset(preset, currentTarget())
+
+    override suspend fun applyPreset(preset: RadioPreset, expectedTarget: OnboardingPresetTarget?) {
         val session = container.appState.services ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+        val token = session.token
+        if (expectedTarget != OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)) {
+            throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
         val info = session.settingsService.applyRadioPresetVerified(preset)
-        container.connectionPort.updateDevice(info, preset.id)
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        if (!container.connectionPort.updateDevice(info, preset.id, token)) {
+            throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
     }
 }
 

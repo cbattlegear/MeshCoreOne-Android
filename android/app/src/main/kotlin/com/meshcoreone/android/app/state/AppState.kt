@@ -536,7 +536,14 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             try {
                 subscription.events.collect { wrapped ->
                     when (val event = wrapped.event) {
-                        is SettingsEvent.DeviceUpdated -> connection.updateDevice(event.info, event.appliedRadioPresetID)
+                        is SettingsEvent.DeviceUpdated -> {
+                            val presetId = event.appliedRadioPresetID
+                            if (presetId == null) {
+                                connection.updateDevice(event.info, null)
+                            } else if (!connection.updateDevice(event.info, presetId, wrapped.token)) {
+                                logger.fine("Ignored radio preset update from a retired session")
+                            }
+                        }
                         is SettingsEvent.AutoAddConfigUpdated -> {
                             connection.updateAutoAddConfig(event.config)
                             // Clear the storage-full flag when overwrite-oldest is enabled.

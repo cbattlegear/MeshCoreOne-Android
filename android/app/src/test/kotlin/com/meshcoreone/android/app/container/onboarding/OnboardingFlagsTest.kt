@@ -144,6 +144,60 @@ class OnboardingFlagsTest {
         }
     }
 
+    @Test fun `retired producer during durable write cannot open the process gate`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        var current = true
+        var durable = false
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, persist = { _, value ->
+                release.await()
+                durable = value
+            })
+            val state = OnboardingState(flags)
+            val result = async {
+                runCatching { state.completeOnboarding { check(current) { "retired producer" } } }
+            }
+            runCurrent()
+            current = false
+            release.complete(Unit)
+            assertEquals("retired producer", result.await().exceptionOrNull()?.message)
+            assertTrue(durable, "Do not pretend a completed disk write was rolled back")
+            assertFalse(flags.hasCompleted.value)
+            assertFalse(state.hasCompletedOnboarding)
+            assertFalse(flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+            current = true
+            state.completeOnboarding { check(current) }
+            assertTrue(flags.hasCompleted.value)
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `cancelled completion does not publish late or stop the process writer`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        var writes = 0
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, persist = { _, _ ->
+                writes++
+                if (writes == 1) release.await()
+            })
+            val state = OnboardingState(flags)
+            val completion = async { state.completeOnboarding() }
+            runCurrent()
+            completion.cancel()
+            completion.join()
+            release.complete(Unit)
+            runCurrent()
+            assertFalse(flags.hasCompleted.value)
+            assertFalse(state.hasCompletedOnboarding)
+            state.completeOnboarding()
+            assertEquals(2, writes)
+            assertTrue(flags.hasCompleted.value)
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { scope.cancel() }
+    }
+
     @Test fun `production flag adapter atomically persists completion with the show-once donation`() =
         kotlinx.coroutines.runBlocking {
             val directory = temporary.newFolder()

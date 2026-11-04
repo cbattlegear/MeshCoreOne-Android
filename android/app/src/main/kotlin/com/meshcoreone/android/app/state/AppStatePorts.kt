@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.state
 import com.meshcoreone.android.core.connectivity.device.RemoveUnfavoritedResult
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RegionSelection
@@ -49,6 +50,8 @@ interface AppConnectionPort {
 
     // Connected-device edits driven by the settings event stream (Swift `connectionManager.update*`).
     fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?)
+    fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean =
+        throw UnsupportedOperationException("Session-bound radio preset updates are not supported")
     fun updateDevice(device: DeviceDTO)
     fun updateAutoAddConfig(config: AutoAddConfig)
     fun updateClientRepeat(enabled: Boolean)

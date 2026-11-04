@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.connectivity.ConnectivityError
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
@@ -30,6 +31,8 @@ import kotlinx.coroutines.launch
 interface ConnectedDeviceAccess {
     val connectedDevice: DeviceDTO?
     fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit?
+    fun replaceConnectedDevice(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? =
+        throw UnsupportedOperationException("Session-bound connected-device replacement is not supported")
 }
 
 /** The current session's contact service operations used by bulk node removal. */
@@ -79,6 +82,17 @@ class ConnectedDeviceEditor(
             if (current != null && current !in matches) updated = updated.copy(appliedRadioPresetID = null)
         }
         return replaceAndSave(updated, "updateDevice")
+    }
+
+    fun updateDevice(info: SelfInfo, appliedRadioPresetID: String, expectedToken: SessionToken): Job? {
+        val device = access.connectedDevice ?: return null
+        if (device.radioId != expectedToken.radioId) return null
+        val updated = device.updating(info).copy(appliedRadioPresetID = appliedRadioPresetID)
+        val edit = access.replaceConnectedDevice(updated, expectedToken) ?: return null
+        if (edit.previousKnownRegions != updated.knownRegions) {
+            onKnownRegionsChanged(edit, updated.knownRegions.toList())
+        }
+        return scope.launch { report("updateDevice") { devices.saveDevice(updated) } }
     }
 
     fun updateDevice(device: DeviceDTO) {

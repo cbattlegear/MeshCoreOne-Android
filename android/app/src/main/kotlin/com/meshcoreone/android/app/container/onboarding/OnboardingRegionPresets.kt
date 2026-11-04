@@ -102,6 +102,10 @@ interface OnboardingRadioConfigurator {
 
     /** Throws [SettingsServiceException] (or a runtime failure) when the radio cannot be configured. */
     suspend fun applyPreset(preset: RadioPreset)
+    suspend fun applyPreset(preset: RadioPreset, expectedTarget: OnboardingPresetTarget?) {
+        if (currentTarget() != expectedTarget) throw SettingsServiceException(SettingsServiceError.NotConnected)
+        applyPreset(preset)
+    }
 }
 
 class AppOnboardingPresetPort(
@@ -113,12 +117,16 @@ class AppOnboardingPresetPort(
         radio.connectionStates().map { it.isOperational }.stateIn(scope, SharingStarted.Eagerly, false)
     override fun currentTarget(): OnboardingPresetTarget? = radio.currentTarget()
 
-    override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+    override suspend fun apply(presetId: String): OnboardingPresetOutcome = apply(presetId, currentTarget())
+
+    override suspend fun apply(presetId: String, expectedTarget: OnboardingPresetTarget?): OnboardingPresetOutcome {
+        if (currentTarget() != expectedTarget) return OnboardingPresetOutcome.NotConnected
         if (radio.isDemoRadio) return OnboardingPresetOutcome.NoRadioToConfigure
         val preset = lookup(presetId)
             ?: return OnboardingPresetOutcome.Failed(UiText.Verbatim("Unknown radio preset: $presetId"))
         return try {
-            radio.applyPreset(preset)
+            radio.applyPreset(preset, expectedTarget)
+            if (currentTarget() != expectedTarget) return OnboardingPresetOutcome.NotConnected
             OnboardingPresetOutcome.Applied
         } catch (cancelled: CancellationException) {
             throw cancelled

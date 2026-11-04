@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.ConnectionIntent
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DevicePlatform
 import com.meshcoreone.android.core.model.RadioId
@@ -121,6 +122,8 @@ class ConnectionManagerAppPort(
     override suspend fun removeStaleNodes(olderThanDays: Int): RemoveUnfavoritedResult = editor.removeStaleNodes(olderThanDays)
 
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) { editor.updateDevice(info, appliedRadioPresetId) }
+    override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean =
+        editor.updateDevice(info, appliedRadioPresetId, expectedToken) != null
     override fun updateDevice(device: DeviceDTO) = editor.updateDevice(device)
     override fun updateAutoAddConfig(config: AutoAddConfig) { editor.updateAutoAddConfig(config) }
     override fun updateClientRepeat(enabled: Boolean) { editor.updateClientRepeat(enabled) }
@@ -138,6 +141,14 @@ class ManagerDeviceAccess(private val manager: ConnectionManager) : ConnectedDev
     override val connectedDevice: DeviceDTO? get() = manager.connectedDevice
     override fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? {
         val edit = manager.replaceConnectedDevice(device)
+        if (edit != null) {
+            mutableChanges.update { Math.incrementExact(it) }
+        }
+        return edit
+    }
+
+    override fun replaceConnectedDevice(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? {
+        val edit = manager.replaceConnectedDevice(device, expectedToken)
         if (edit != null) {
             mutableChanges.update { Math.incrementExact(it) }
         }

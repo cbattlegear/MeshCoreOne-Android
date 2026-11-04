@@ -132,6 +132,10 @@ interface OnboardingPresetPort {
     val canApply: StateFlow<Boolean>
     fun currentTarget(): OnboardingPresetTarget? = null
     suspend fun apply(presetId: String): OnboardingPresetOutcome
+    suspend fun apply(presetId: String, expectedTarget: OnboardingPresetTarget?): OnboardingPresetOutcome {
+        if (currentTarget() != expectedTarget) return OnboardingPresetOutcome.NotConnected
+        return apply(presetId)
+    }
 }
 
 /** Everything the app layer (WP-303) binds for the onboarding flow. */

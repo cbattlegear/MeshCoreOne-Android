@@ -320,6 +320,97 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
+    fun unresolvedRawReplyRefusesContactOperationsWithoutCreatingRecovery() = unresolvedReplyRefusesContactOperations(raw = true)
+
+    @Test
+    fun unresolvedBatteryErrorRefusesContactOperationsAfterAdmissionWithoutCreatingRecovery() =
+        unresolvedReplyRefusesContactOperations(raw = false)
+
+    private fun unresolvedReplyRefusesContactOperations(raw: Boolean) = runTest {
+        for (remove in listOf(false, true)) {
+            withFixture {
+                val row = ContactDTO.fromFrame(radioA, frame(2, "Retained"))
+                store.seed(row)
+                val flags = PendingMarkerFlags()
+                val logs = mutableListOf<Pair<ContactLogLevel, String>>()
+                val producer = service(
+                    flags = flags,
+                    logger = ContactServiceLogger { level, message -> logs += level to message },
+                )
+                var addDispatch: ContactWriteDispatch? = null
+                var removeDispatch: ChannelWriteDispatch? = null
+                val observedSession = object : ContactSessionOps by session {
+                    override suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+                        addDispatch = dispatch
+                        session.addContact(contact, dispatch, onCommitted)
+                    }
+                    override suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+                        removeDispatch = dispatch
+                        session.removeContact(publicKey, dispatch)
+                    }
+                }
+                val observedProducer = service(
+                    connection = observedSession, flags = flags,
+                    logger = ContactServiceLogger { level, message -> logs += level to message },
+                )
+                val timedOut = async {
+                    assertFailsWith<MeshCoreException.Timeout> {
+                        if (raw) session.sendAndWait<Unit>(Bytes.of(0x14), timeout = 0.1) { null }
+                        else session.getBattery()
+                    }
+                }
+                runCurrent()
+                advanceTimeBy(if (raw) 101 else 5_001)
+                runCurrent()
+                timedOut.await()
+                repeat(2) {
+                    val failure = assertFailsWith<ContactServiceError.SessionError> {
+                        if (remove) observedProducer.removeContact(radioA, row.publicKey)
+                        else observedProducer.addOrUpdateContact(radioA, frame(3, "Must not send"))
+                    }
+                    assertIs<MeshCoreException.ConnectionLost>(failure.error)
+                    assertSame(failure.error, failure.cause)
+                    if (remove) {
+                        assertEquals(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT, assertNotNull(removeDispatch).cancellationDisposition)
+                    } else {
+                        val dispatch = assertNotNull(addDispatch)
+                        assertTrue(dispatch.definitelyUnsent)
+                        if (!raw) assertIs<MeshCoreException.ConnectionLost>(dispatch.terminalFailure)
+                    }
+                }
+                assertTrue(radio.writes.isEmpty())
+                assertTrue(radio.removeRequests.isEmpty())
+                assertEquals(row, store.fetchContact(EntityKey(radioA, row.id)))
+                assertNull(store.fetchContact(radioA, contactsKey(3)))
+                assertTrue(store.deletedContactIDs.isEmpty())
+                assertTrue(flags.attempts.isEmpty())
+                assertFalse(producer.needsContactWriteReconciliation(radioA))
+                assertTrue(logs.isEmpty())
+
+                session.stop()
+                val replacementRadio = radio.replacementView()
+                val replacement = service(newSession(replacementRadio), flags = flags)
+                assertEquals(0L, replacement.syncContacts(radioA, Instant.ofEpochSecond(50)).contactsReceived)
+                if (remove) {
+                    replacement.removeContact(radioA, row.publicKey)
+                    assertEquals(1, replacementRadio.removeRequests.size)
+                    assertNull(store.fetchContact(radioA, row.publicKey))
+                } else {
+                    val accepted = async { replacement.addOrUpdateContact(radioA, frame(3, "Replacement")) }
+                    runCurrent()
+                    assertEquals(1, replacementRadio.writes.size)
+                    replacementRadio.accept()
+                    runCurrent()
+                    accepted.await()
+                    assertEquals("Replacement", store.fetchContact(radioA, contactsKey(3))?.name)
+                }
+                assertFalse(replacement.needsContactWriteReconciliation(radioA))
+                assertTrue(flags.attempts.isEmpty())
+            }
+        }
+    }
+
+    @Test
     fun cancellationQueuedBehindAnActualExchangeIsDefinitelyUnsent() = runTest {
         withFixture {
             val blocking = async { session.addContact(frame(1, "Blocking").toMeshContact()) }

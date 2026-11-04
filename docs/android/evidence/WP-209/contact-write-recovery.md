@@ -738,3 +738,34 @@ The WP-209 deviation text now describes the actual fail-closed marked state:
 full/incremental sync refuses before fetch and there is no production
 `reconciled` caller. No count-based marker clearing was added. Fresh hosted
 execution and full-series independent review remain necessary.
+
+### Ordinary serializer pre-send refusal
+
+The serializer now accounts every ordinary exchange exception using the existing
+request-context send fence before invoking `exchangeFinished`. This covers
+unresolved arbitrary-response correlation and transport-ownership refusal before
+`ExchangeOwner` or any send, rather than identifying unsent work by exception
+type. An entered send remains `MAY_HAVE_WRITTEN`. Successful exchanges retain
+their normal outcome. A proven-unsent Add abandons its own tracking; it may retry
+an already-existing pending recovery marker, but never creates or rotates an
+epoch for the refused attempt. Existing marker-error identity diagnostics remain
+covered by their actual queued controls.
+
+Real-session controls time out an unrelated raw `sendAndWait`, then repeatedly
+attempt Add or Remove. They assert the unresolved-reply `ConnectionLost` mapping,
+no contact command/local mutation/new marker/warning, and successful contact
+operations after physical stop and a fresh session. The serializer control
+checks ordinary failures both before and after `beforeSend`, observing the
+disposition inside the completion callback itself. Earlier-epoch and on-wire
+cancellation controls remain unchanged. No unresolved-reply fence is relaxed.
+
+The inside-command refusal successor also tests a timed-out real `getBattery`
+request, whose unresolved error correlation rejects Add inside `simple` after
+`beforeDispatch`. Its tentative terminal `MAY_HAVE_WRITTEN` must not override
+the serializer's definitive no-send receipt. `ContactWriteDispatch.outcome`
+therefore refines only that tentative uncertainty when the actual serializer
+proves `DEFINITELY_UNSENT`; accepted/rejected outcomes and actual entered-send
+ambiguity remain unchanged. Both raw and battery timeout families exercise Add
+and Remove, assert the real dispatch receipt and original public error mapping,
+then verify ordinary work is possible on a safely replaced session without a
+false persistent contact recovery lock.

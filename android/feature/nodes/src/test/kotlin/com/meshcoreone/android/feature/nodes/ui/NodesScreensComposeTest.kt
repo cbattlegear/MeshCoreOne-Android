@@ -261,8 +261,14 @@ abstract class NodesScreensComposeTestBase {
     }
 
     abstract class ContactHopSortComposeTestBase : NodesScreensComposeTestBase() {
+        private var sortMenuOpen = false
+
         override fun rootView(): View =
-            WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown } ?: super.rootView()
+            if (sortMenuOpen) {
+                checkNotNull(WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown })
+            } else {
+                super.rootView()
+            }
 
         @Test
         fun hopOnlyRefreshReordersVisibleContactsWithoutReselectingSort() {
@@ -293,7 +299,10 @@ abstract class NodesScreensComposeTestBase {
             awaitText(fixed.name)
             awaitText(flood.name)
             click(awaitAction(context.getString(C.contactsListSort)))
-            click(awaitAction(context.getString(sortOrder.titleRes)))
+            sortMenuOpen = true
+            val sortAction = awaitAction(context.getString(sortOrder.titleRes))
+            sortMenuOpen = false
+            click(sortAction)
             assertVisibleOrder(fixed.name, flood.name)
 
             listOf(1L, 3L, null).forEach { hops ->

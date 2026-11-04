@@ -2,6 +2,18 @@
 
 ## Recovery-list consumer preparation (not activated)
 
+The immutable storage handoff
+`2e62c5e28f46184c71915f93ba15829fa93f528e` is now composed locally
+as `88baffb4732c4dd07774d151dd5b66c9abdf3b59`. Its independent
+`ChannelDraftRecoveryPersisting` role takes radio ID and Long limit/offset,
+returns original DTOs, and performs eligibility filtering before paging.
+It is a per-call snapshot, not an original-display or dispatch witness.
+The only textual merge conflict was a duplicate
+`ChannelWriteCancellationDisposition` import in MessageService. A prior
+merge-tree check isolated that conflict; deterministic `-Xours` retained
+the identical existing import. The resulting tree matched the checked
+merge tree exactly. No service logic was manually authored or removed.
+
 The separately assigned R1 consumer fix includes known-old-occupant and
 unbound outgoing recovery text in a separate list with explicit copy into a
 selected composer, never automatic adoption or resend. Storage owns the
@@ -19,9 +31,30 @@ Six unit controls cover ordered pagination, failed refresh, explicit selection
 and destination, destination-draft conflict, cancelled copy, and a foreign-radio
 page. These controls are authored, **not compiled or executed**. They do not
 replace required actual App/Room A-to-B/reopen/summary/timeline/copy regressions.
-There is no production adapter, mounted recovery surface or scoped-read
-activation in this preparation. The existing enabled restart Send Again defect
-and all producer/invalidation dependencies remain open.
+`ChannelDraftRecoveryAdapter` binds that actual recovery query and exact-key
+message read without a persistence fallback. It rejects foreign-radio, missing,
+incoming and non-channel sources before invoking the destination owner. The
+destination callback retains draft-conflict/navigation custody; the adapter has
+no queue dependency and never saves or relabels the original.
+
+`RecoveredDraftList` supplies a native scrolling, radio/message-keyed,
+single-selection content surface with explicit destination selection and copy.
+All content and controls scroll, including at 200% font. UI copy/status labels
+are supplied as shared `UiText`, with no production English fallback or
+assertion that a recovered row was definitely unsent.
+
+Four App controls are authored, **not compiled or executed**: actual Room
+A-to-B recovery and exact-current-text copy, missing/foreign sources, destination
+conflict/deleted source, and mounted 200%-font 45-row paging/selection/destination/
+explicit-copy into the actual App draft store with no radio or pending send.
+The mounted control injects its destination owner; it does not demonstrate
+production navigation custody or original-display capture.
+
+There is no production route registration or scoped-read activation in this
+preparation. Exact Android execution, App disk-reopen acceptance and the existing
+enabled restart Send Again defect remain open, as does the original
+display-capture/invalidation prerequisite. Producer execution is not consumer
+acceptance, and the incoming-history UNBOUND_HISTORY policy is unchanged.
 
 Local source checks: `python tools\android-port\portmap.py`,
 `python tools\android-port\controller\validate.py`, and `git diff --check`

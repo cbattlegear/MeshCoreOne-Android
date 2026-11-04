@@ -276,7 +276,7 @@ class LocalDirectAttributionRepositoryTest : RepositoryTest() {
         assertEquals(unknown, store.fetchMessage(EntityKey(RADIO_A, unknown.id)))
         assertTrue(store.adoptOrphanedDirectMessages(
             RADIO_A, listOf(ContactIdentity(peer(10).id, peer(10).publicKey)).snapshot(),
-        ).contains(peer(10).id), "Only the legacy rows retain the existing adoption policy")
+        ).containsKey(peer(10).id), "Only the legacy rows retain the existing adoption policy")
         assertEquals(setOf(unknown.id, candidate.id), store.fetchUnprovedDirectMessages(RADIO_A).map { it.occurrenceID }.toSet())
     }
 

@@ -7,7 +7,9 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
 import com.meshcoreone.android.app.navigation.ChatSelection
+import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
+import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.AppTab
@@ -217,6 +219,27 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             override val connectedDevicePublicKey get() = app.connectedDevice?.publicKey
             override fun captureContactLinkContext(publicKey: Bytes, publications: ContactLinkPublications) =
                 container.captureContactLinkContext(publicKey, publications)
+            override fun resolveContactLinkContext(context: ContactLinkContext, publicKey: Bytes) =
+                when (val resolution = container.resolveContactLinkContext(context, publicKey)) {
+                    ContactLinkLookupResolution.Stale -> ContactLinkTargetResolution.Stale
+                    is ContactLinkLookupResolution.Current -> ContactLinkTargetResolution.Current(resolution)
+                }
+            override fun completeResolvedContactLookup(
+                context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+            ): ContactLinkTargetCompletion {
+                cancellation.ensureActive()
+                if (target !is ContactLinkLookupResolution.Current) {
+                    return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
+                }
+                return when (val completion = container.completeResolvedContactLookup(
+                    context, target, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
+                    selectChats = false, publications = publications, cancellation = cancellation,
+                )) {
+                    ContactLinkResolvedCompletion.TargetChanged -> ContactLinkTargetCompletion.TargetChanged
+                    is ContactLinkResolvedCompletion.Completed -> ContactLinkTargetCompletion.Completed(completion.outcome)
+                }
+            }
             override fun completeContactLookup(
                 context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?,
                 publications: ContactLinkPublications,

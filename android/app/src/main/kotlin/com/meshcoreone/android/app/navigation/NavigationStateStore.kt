@@ -20,8 +20,27 @@ internal class NavigationStateStore(initial: NavigationState) {
         internal val pending: List<Publication>,
     )
 
+    // Flow publication does not prove that a UI frame rendered this revision.
+    data class PublishedSnapshot internal constructor(
+        val revision: Long,
+        val value: NavigationState,
+    )
+
     private val current = AtomicReference(Snapshot(0, initial, emptyList()))
     private val published = MutableStateFlow(current.get())
+    val publishedSnapshots: StateFlow<PublishedSnapshot> = object : StateFlow<PublishedSnapshot> {
+        override val value: PublishedSnapshot
+            get() = published.value.let { PublishedSnapshot(it.revision, it.value) }
+        override val replayCache: List<PublishedSnapshot> get() = listOf(value)
+
+        @OptIn(InternalCoroutinesApi::class)
+        override suspend fun collect(collector: FlowCollector<PublishedSnapshot>): Nothing =
+            published.collect(object : FlowCollector<Snapshot> {
+                override suspend fun emit(value: Snapshot) {
+                    collector.emit(PublishedSnapshot(value.revision, value.value))
+                }
+            })
+    }
     val state: StateFlow<NavigationState> = object : StateFlow<NavigationState> {
         override val value: NavigationState get() = published.value.value
         override val replayCache: List<NavigationState> get() = listOf(value)

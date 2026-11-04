@@ -64,6 +64,7 @@ internal fun AppChatsContent(
     coordinator: NavigationCoordinator,
 ) {
     val state by coordinator.state.collectAsState()
+    val entryId = LocalNavigationEntryId.current
     AppPendingChannel(feature, coordinator)
     var newChannel by remember { mutableStateOf(false) }
     if (newChannel) AppChannelsContent(feature, coordinator) { newChannel = false }
@@ -97,7 +98,7 @@ internal fun AppChatsContent(
         )
         return
     }
-    key(selected) { AppChatConversation(feature, selected, coordinator, state) }
+    key(selected) { AppChatConversation(feature, selected, coordinator, state, entryId) }
 }
 
 @Composable
@@ -106,6 +107,7 @@ private fun AppChatConversation(
     selected: ChatSelection,
     coordinator: NavigationCoordinator,
     state: NavigationState,
+    entryId: Long?,
 ) {
         val scope = rememberCoroutineScope()
         val connection by feature.connectionState.collectAsState()
@@ -283,10 +285,9 @@ private fun AppChatConversation(
             messageAccessibilityLabel = bubbleLabels,
             incomingAvatar = { message -> AppChannelAvatar(message, avatarTable, mentionContacts, avatarCache) },
             onPickContact = { pickContact = true },
-            scrollTo = state.pendingScrollToMessageID,
-            onScrollConsumed = { requested ->
-                if (coordinator.state.value.pendingScrollToMessageID == requested) coordinator.clearPendingScrollToMessage()
-            },
+            scrollTo = state.pendingMessageScrollFor(entryId),
+            isScrollCurrent = { request -> entryId != null && coordinator.isPendingMessageScroll(entryId, request) },
+            onScrollConsumed = { request -> entryId != null && coordinator.consumePendingMessageScroll(entryId, request) },
             report = feature::report,
             emojiPicker = emojiPicker,
             emojiStatus = {

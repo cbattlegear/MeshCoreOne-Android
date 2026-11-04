@@ -25,46 +25,73 @@ import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
 import com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome
 import com.meshcoreone.android.app.deeplinks.PendingExternalRoute
 import com.meshcoreone.android.app.navigation.*
+import com.meshcoreone.android.app.state.AccessibilityAnnouncer
+import com.meshcoreone.android.app.state.AppSession
+import com.meshcoreone.android.app.state.AppStatePlatform
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
+import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.MonitoringOptions
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.NotificationId
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.notifications.*
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.ContactType
-import com.meshcoreone.android.core.runtime.LastConnectionStore
-import com.meshcoreone.android.core.runtime.SystemRuntimeClock
+import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
+import com.meshcoreone.android.core.protocol.session.MeshCoreSession
+import com.meshcoreone.android.core.runtime.*
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
+import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ChatLinkEnvironment
 import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkContext
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
+import com.meshcoreone.android.feature.chats.list.ContactLinkResolvedTarget
+import com.meshcoreone.android.feature.chats.list.ContactLinkResult
+import com.meshcoreone.android.feature.chats.list.ContactLinkTargetCompletion
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesSession
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -73,38 +100,268 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestName
 import org.robolectric.Robolectric
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowDialog
+import java.lang.management.ManagementFactory
 import java.util.UUID
+import java.time.Instant
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.*
 
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
 @OptIn(ExperimentalCoroutinesApi::class)
 class NavigationFlowIntegrationTest : RoomProcessTest() {
     @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule val executionName = TestName()
     private lateinit var host: ActivityController<ComponentActivity>
     private val width = mutableStateOf(390.dp)
 
     @Before fun mountActivity() {
+        emitNavigationExecutionBinding(javaClass.name, executionName.methodName, Build.VERSION.SDK_INT.toString())
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
     }
 
+    private class PublicationTestGraph(
+        val inputs: RuntimeServiceInputs,
+        private val slot: RuntimePublicationSlot<PublicationTestGraph>,
+    ) : RuntimePublishableServices {
+        override val token: SessionToken = inputs.connection.token
+        override val publicationSession: MeshCoreSession = inputs.connection.session
+        override val publicationFence = inputs.publication.fence(this)
+        var retirement: RuntimePublicationRetirement? = null
+
+        override suspend fun awaitChannelQueryAccounting() = Unit
+        override suspend fun hydrate() = Unit
+        override suspend fun startMonitoring(options: MonitoringOptions) = Unit
+        override suspend fun initialSync(forceFullSync: Boolean) = RuntimeSyncResult.Usable
+        override suspend fun remoteDisconnected(): Set<UUID> = emptySet()
+        override suspend fun reauthenticate(sessionIds: Set<UUID>) = Unit
+        override suspend fun resetSyncState() = Unit
+        override suspend fun ensureListeners() = Unit
+        override suspend fun tearDown(): TeardownReport {
+            publicationFence.close()
+            retirement = slot.withdraw(this)
+            return TeardownReport(SnapshotList.empty())
+        }
+    }
+
+    private class PublicationTestSimulator(
+        private val device: DeviceDTO,
+        private val store: RoomPersistenceStore,
+    ) : RuntimeSimulatorLink {
+        private val link = HarnessLink(FirmwareRadio(device.publicKey), TransportType.SIMULATOR, ConnectionTarget.Simulator)
+        override val transport get() = link.transport
+        override val type get() = TransportType.SIMULATOR
+        override fun register(callbacks: LinkCallbacks): AutoCloseable = link.register(callbacks)
+        override suspend fun configure(capabilities: DeviceCapabilities, platform: DevicePlatform) =
+            link.configure(capabilities, platform)
+        override suspend fun setSessionLive(token: SessionToken?) = link.setSessionLive(token)
+        override suspend fun recordBondVerification(deviceId: UUID, at: Instant) = link.recordBondVerification(deviceId, at)
+        override suspend fun clearBondVerification(deviceId: UUID) = link.clearBondVerification(deviceId)
+        override suspend fun mayRefreshBond(deviceId: UUID): Boolean = link.mayRefreshBond(deviceId)
+        override suspend fun connectSimulator(): DeviceDTO = device
+        override suspend fun seedSimulator() { store.saveDevice(device) }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private class PublicationTestFixture(
+        private val test: TestScope,
+        private val store: RoomPersistenceStore,
+        val slot: RuntimePublicationSlot<PublicationTestGraph> = RuntimePublicationSlot(),
+        epoch: ProcessEpoch = ProcessEpoch(UUID.randomUUID()),
+        platform: ConnectionPlatform = RuntimePlatformAdapter(newConnectivity()),
+    ) {
+        val clock = SchedulerClock { test.testScheduler.currentTime }
+        val lastConnection = LastConnectionStore(MemoryConnectionPreferences(), clock)
+        val links = HarnessLinks { key(7) }
+        val graphs = CopyOnWriteArrayList<PublicationTestGraph>()
+        val simulatorId = UUID.randomUUID()
+        val simulatorDevice = DeviceDTO(
+            id = simulatorId, radioId = RadioId(simulatorId), publicKey = key(7), nodeName = "Publication simulator",
+        )
+        val deviceId = UUID.randomUUID()
+        val target = ConnectionTarget.Bluetooth(
+            BluetoothPairingHandle(BluetoothAddress(syntheticAddress(deviceId)), null), deviceId,
+        )
+        var onFactory: suspend (RuntimeServiceInputs, PublicationTestGraph) -> Unit = { inputs, graph ->
+            check(inputs.publication.publish(slot.target(graph)) == RuntimePublicationOutcome.PUBLISHED)
+        }
+        val manager = ConnectionManager(
+            devices = store,
+            rooms = store,
+            contacts = store,
+            maintenance = object : ProcessRuntimeMaintenance {
+                override suspend fun warmUp() = Unit
+                override suspend fun initializeDevicePreferences(device: DeviceDTO) = Unit
+            },
+            lastConnection = lastConnection,
+            platform = platform,
+            linkFactory = RuntimeLinkFactory { requested ->
+                if (requested == ConnectionTarget.Simulator) PublicationTestSimulator(simulatorDevice, store)
+                else links.create(requested)
+            },
+            serviceFactory = RuntimeServiceFactory { inputs, ownership ->
+                val graph = PublicationTestGraph(inputs, slot)
+                ownership.register(graph)
+                graphs += graph
+                onFactory(inputs, graph)
+                graph
+            },
+            observer = ConnectionObserver(
+                onServicesAvailable = {}, onConnectionLost = {}, onAutoReconnectStarted = {},
+                onDeviceSynced = {}, onAuthenticationFailure = {}, onLastDeviceCleared = {},
+            ),
+            reporter = RuntimeIssueReporter {},
+            clock = clock,
+            context = test.backgroundScope.coroutineContext,
+            configuration = SessionConfiguration(defaultTimeout = 1.0, clientIdentifier = "MCore"),
+            jitter = { 0.0 },
+            epoch = epoch,
+            simulatorDeviceId = simulatorId,
+            publicationRegistry = slot.identity,
+        )
+
+        fun eventually(message: String, virtualBudgetMillis: Long = 30_000, condition: () -> Boolean) {
+            val deadline = System.nanoTime() + 10_000_000_000L
+            var advanced = 0L
+            while (System.nanoTime() < deadline) {
+                test.testScheduler.runCurrent()
+                if (condition()) return
+                if (advanced < virtualBudgetMillis) {
+                    test.testScheduler.advanceTimeBy(5)
+                    advanced += 5
+                }
+                test.testScheduler.runCurrent()
+                if (condition()) return
+                Thread.sleep(2)
+            }
+            throw AssertionError("Timed out waiting for $message (state=${manager.connectionState})")
+        }
+    }
+
+    private fun awaitBlockedOnLock(
+        publisherThread: AtomicReference<Thread>,
+        holderThread: AtomicReference<Thread>,
+        ownerClass: Class<*>,
+        methodPrefix: String,
+    ) {
+        val threads = ManagementFactory.getThreadMXBean()
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (System.nanoTime() < deadline) {
+            val publisher = publisherThread.get()
+            val holder = holderThread.get()
+            if (publisher != null && holder != null) {
+                val info = threads.getThreadInfo(publisher.id, Int.MAX_VALUE)
+                if (info?.threadState == Thread.State.BLOCKED && info.lockOwnerId == holder.id &&
+                    info.stackTrace.any {
+                        it.className == ownerClass.name && it.methodName.startsWith(methodPrefix)
+                    }
+                ) return
+            }
+            Thread.sleep(2)
+        }
+        throw AssertionError("Thread did not block on the held lock in ${ownerClass.name}.$methodPrefix")
+    }
+
+    private fun combineFailures(previous: Throwable?, next: Throwable): Throwable {
+        if (previous == null) return next
+        if (previous !== next) previous.addSuppressed(next)
+        return previous
+    }
+
+    private class TrackingDispatcher : CoroutineDispatcher() {
+        private val lock = Any()
+        private val queued = java.util.ArrayDeque<Runnable>()
+        val dispatched = AtomicInteger()
+        val completed = AtomicInteger()
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            synchronized(lock) {
+                queued.addLast(block)
+                dispatched.incrementAndGet()
+            }
+        }
+
+        fun runCurrent() {
+            while (true) {
+                val next = synchronized(lock) {
+                    if (queued.isEmpty()) null else queued.removeFirst()
+                } ?: return
+                try {
+                    next.run()
+                } finally {
+                    completed.incrementAndGet()
+                }
+            }
+        }
+    }
+
+    private suspend fun finishContactCancellationTest(
+        primaryFailure: Throwable?,
+        routingJob: Job,
+        failures: ConcurrentLinkedQueue<Throwable>,
+        container: AppContainer,
+        vararg workers: Pair<Thread, FutureTask<*>>,
+        extraCleanup: suspend () -> Unit = {},
+    ) = withContext(NonCancellable) {
+        var cleanupFailure: Throwable? = null
+        for ((thread, task) in workers) {
+            if (thread.state == Thread.State.NEW) continue
+            try {
+                thread.join(10_000)
+                check(!thread.isAlive) { "${thread.name} did not terminate" }
+                task.get(1, TimeUnit.SECONDS)
+            } catch (caught: Throwable) {
+                cleanupFailure = combineFailures(cleanupFailure, caught)
+            }
+        }
+        try {
+            extraCleanup()
+        } catch (caught: Throwable) {
+            cleanupFailure = combineFailures(cleanupFailure, caught)
+        }
+        try {
+            withContext(Dispatchers.IO) { withTimeout(10_000) { routingJob.cancelAndJoin() } }
+        } catch (caught: Throwable) {
+            cleanupFailure = combineFailures(cleanupFailure, caught)
+        }
+        try {
+            container.close()
+        } catch (caught: Throwable) {
+            cleanupFailure = combineFailures(cleanupFailure, caught)
+        }
+        while (true) {
+            val caught = failures.poll() ?: break
+            cleanupFailure = combineFailures(cleanupFailure, caught)
+        }
+        val cleanup = cleanupFailure ?: return@withContext
+        if (primaryFailure == null) throw cleanup
+        if (primaryFailure !== cleanup) primaryFailure.addSuppressed(cleanup)
+    }
+
     @After fun destroyActivity() { host.pause().stop().destroy() }
 
-    private fun mount(h: ContainerHarness, nodes: NodesFeatureDependencies = h.container.nodesFeature) = compose.runOnUiThread {
+    private fun mount(
+        h: ContainerHarness,
+        nodes: NodesFeatureDependencies = h.container.nodesFeature,
+        motionScale: Float = 0f,
+    ) = compose.runOnUiThread {
         host.get().setContent {
             Box(Modifier.width(width.value).height(1000.dp)) {
-                MeshCoreTheme(motionScale = 0f) {
+                MeshCoreTheme(motionScale = motionScale) {
                     NativeNavigationShell(
                         h.container.navigation, chats = h.container.chatsFeature, nodes = nodes,
                     )
@@ -133,6 +390,18 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     private fun confirmationEnabled(): Boolean {
         val nodes = compose.onAllNodesWithTag("contact-link-confirm").fetchSemanticsNodes()
         return nodes.size == 1 && !nodes.single().config.contains(SemanticsProperties.Disabled)
+    }
+
+    private suspend fun assertMountedDirectNotification(h: ContainerHarness, contact: ContactDTO) {
+        mount(h)
+        assertTrue(h.container.handleNotificationResponse(NotificationResponse(
+            NotificationPayload.DirectMessage(EntityKey(contact.radioId, contact.id), UUID.randomUUID()), null, null,
+        )))
+        compose.waitForIdle()
+        val state = h.container.navigation.state.value
+        assertEquals(AppTab.CHATS, state.selectedTab)
+        assertEquals(contact, assertIs<ChatSelection.Direct>(state.chatsSelectedRoute).contact)
+        compose.onNodeWithTag("entry:${state.activeStack.last().id}").assertIsDisplayed()
     }
 
     @Test fun productionNotificationCallbacksReachMountedDirectChannelDiscoveryAndContactDetails() = runTest {
@@ -196,6 +465,237 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 }
             }
         } finally { unmount(); h.container.close() }
+    }
+
+    @Test fun staleNotificationConfigureCannotRetireReplacementGraphBinding() = runTest {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val hold = AtomicBoolean(false)
+        val oldSession = AtomicReference<AppSession?>()
+        val platform = object : AppStatePlatform {
+            override fun configureNotificationNavigation(session: AppSession, connectedDevice: () -> DeviceDTO?) {
+                if (session === oldSession.get() && hold.compareAndSet(true, false)) {
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS)) { "Timed out waiting to release stale configure" }
+                }
+            }
+        }
+        val h = ContainerHarness(this, store, platform = platform)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Replacement notification peer") }
+        var staleTask: kotlinx.coroutines.Job? = null
+        try {
+            val target = h.target()
+            connect(h, target)
+            val first = assertNotNull(h.sessions.current)
+            oldSession.set(first)
+            hold.set(true)
+            val stale = async(Dispatchers.IO) { h.appState.wireServicesIfConnected() }
+            staleTask = stale
+            h.eventually("old configure pauses after its entry check") { entered.count == 0L }
+
+            h.manager.disconnect()
+            h.settle()
+            connect(h, target)
+            val replacement = assertNotNull(h.sessions.current)
+            assertNotSame(first, replacement)
+            assertNotEquals(first.token, replacement.token)
+            assertEquals(first.token.radioId, replacement.token.radioId)
+            val callback = assertNotNull(replacement.notificationService.onNotificationTapped)
+            val before = h.container.navigation.state.value
+            assertTrue(before.navigationReady)
+            assertEquals(replacement.token, before.boundSessionToken)
+
+            release.countDown()
+            stale.await()
+            val after = h.container.navigation.state.value
+            assertSame(callback, replacement.notificationService.onNotificationTapped)
+            assertTrue(after.navigationReady)
+            assertEquals(before.generation, after.generation)
+            assertEquals(before.selectedTab, after.selectedTab)
+            assertEquals(before.stacks, after.stacks)
+            assertEquals(replacement.token, after.boundSessionToken)
+            assertMountedDirectNotification(h, assertNotNull(store.fetchContact(replacement.token.radioId, key(20))))
+        } finally {
+            release.countDown()
+            staleTask?.cancelAndJoin()
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun staleNotificationLossCannotRetireReplacementGraphBinding() = runTest {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val hold = AtomicBoolean(false)
+        val lostAnnouncement = UiText.Resource(AppLocalizableStrings.accessibilityConnectionDeviceConnectionLost)
+        val announcements = AccessibilityAnnouncer { text ->
+            if (text == lostAnnouncement && hold.compareAndSet(true, false)) {
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Timed out waiting to release stale loss" }
+            }
+        }
+        val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val h = ContainerHarness(
+            this, store, runtimeContext = runtimeScope.coroutineContext, accessibility = announcements,
+        )
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Replacement loss peer") }
+        var staleTask: kotlinx.coroutines.Job? = null
+        try {
+            val target = h.target()
+            connect(h, target)
+            val first = assertNotNull(h.sessions.current)
+            val firstCallback = assertNotNull(first.notificationService.onNotificationTapped)
+            val firstGeneration = h.container.navigation.state.value.generation
+
+            val disconnected = async(Dispatchers.IO) { h.manager.disconnect() }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (!disconnected.isCompleted && System.nanoTime() < deadline) Thread.sleep(2)
+            assertTrue(disconnected.isCompleted, "Real graph teardown must finish before the held loss")
+            disconnected.await()
+            assertNull(h.sessions.current)
+            assertSame(firstCallback, first.notificationService.onNotificationTapped)
+            assertEquals(first.token, h.container.navigation.currentState.boundSessionToken)
+
+            hold.set(true)
+            val stale = async(Dispatchers.IO) { h.appState.wireServicesIfConnected() }
+            staleTask = stale
+            assertTrue(entered.await(5, TimeUnit.SECONDS), "Loss must pause after capturing the old owner")
+            assertEquals(firstGeneration + 1, h.container.navigation.currentState.generation)
+            assertNull(h.container.navigation.currentState.boundSessionToken)
+
+            connect(h, target)
+            val replacement = assertNotNull(h.sessions.current)
+            assertNotSame(first, replacement)
+            assertNotEquals(first.token, replacement.token)
+            assertEquals(first.token.radioId, replacement.token.radioId)
+            val callback = assertNotNull(replacement.notificationService.onNotificationTapped)
+            val before = h.container.navigation.state.value
+            assertTrue(before.navigationReady)
+            assertEquals(replacement.token, before.boundSessionToken)
+
+            release.countDown()
+            stale.await()
+            val after = h.container.navigation.state.value
+            assertSame(callback, replacement.notificationService.onNotificationTapped)
+            assertTrue(after.navigationReady)
+            assertEquals(before.generation, after.generation)
+            assertEquals(before.selectedTab, after.selectedTab)
+            assertEquals(before.stacks, after.stacks)
+            assertEquals(replacement.token, after.boundSessionToken)
+            assertSame(replacement.syncCoordinator, h.appState.syncCoordinator)
+            assertMountedDirectNotification(h, assertNotNull(store.fetchContact(replacement.token.radioId, key(20))))
+
+            val currentLoss = async(Dispatchers.IO) { h.manager.disconnect() }
+            val currentDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (!currentLoss.isCompleted && System.nanoTime() < currentDeadline) Thread.sleep(2)
+            assertTrue(currentLoss.isCompleted, "Replacement graph teardown must finish before loss reconciliation")
+            currentLoss.await()
+            assertSame(callback, replacement.notificationService.onNotificationTapped)
+            h.appState.wireServicesIfConnected()
+            assertNull(replacement.notificationService.onNotificationTapped)
+            assertFalse(h.container.navigation.currentState.navigationReady)
+        } finally {
+            release.countDown()
+            staleTask?.cancelAndJoin()
+            unmount()
+            try { h.container.close() } finally { runtimeScope.cancel() }
+        }
+    }
+
+    @Test fun staleSessionWiringCannotReplaceTheReadyGraphsCollectors() = runTest {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val hold = AtomicBoolean(false)
+        val oldSession = AtomicReference<AppSession?>()
+        val platform = object : AppStatePlatform {
+            override fun onSessionWired(session: AppSession, device: DeviceDTO?) {
+                if (session === oldSession.get() && hold.compareAndSet(true, false)) {
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS)) { "Stale session wiring was not released" }
+                }
+            }
+        }
+        val h = ContainerHarness(this, store, platform = platform)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Replacement collector peer") }
+        val events = CopyOnWriteArrayList<MessageEvent>()
+        val subscription = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            h.appState.messageEventStream.events().collect { events += it }
+        }
+        var staleTask: kotlinx.coroutines.Job? = null
+        try {
+            val target = h.target()
+            connect(h, target)
+            val first = assertNotNull(h.sessions.current)
+            oldSession.set(first)
+            hold.set(true)
+            val stale = async(Dispatchers.IO) { h.appState.wireServicesIfConnected() }
+            staleTask = stale
+            h.eventually("old wiring pauses before collector installation") { entered.count == 0L }
+
+            h.manager.disconnect()
+            h.settle()
+            connect(h, target)
+            val replacement = assertNotNull(h.sessions.current)
+            assertNotEquals(first.token, replacement.token)
+            assertEquals(first.token.radioId, replacement.token.radioId)
+            h.eventually("replacement collectors are subscribed") {
+                replacement.syncCoordinator.dataEventBroadcaster.subscriberCount >= 2 &&
+                    h.appState.activeSessionJobCount > 0 && h.appState.messageEventDispatcher.activeJobCount == 6
+            }
+            val appJobs = h.appState.activeSessionJobCount
+            val dispatcherJobs = h.appState.messageEventDispatcher.activeJobCount
+            val callback = assertNotNull(replacement.notificationService.onNotificationTapped)
+            val before = h.container.navigation.state.value
+
+            release.countDown()
+            stale.await()
+            h.settle()
+            assertSame(replacement.syncCoordinator, h.appState.syncCoordinator)
+            assertEquals(appJobs, h.appState.activeSessionJobCount)
+            assertEquals(dispatcherJobs, h.appState.messageEventDispatcher.activeJobCount)
+            assertSame(callback, replacement.notificationService.onNotificationTapped)
+            assertEquals(before.generation, h.container.navigation.state.value.generation)
+            assertEquals(replacement.token, h.container.navigation.state.value.boundSessionToken)
+
+            val version = h.appState.contactsVersion.value
+            replacement.syncCoordinator.dataEventBroadcaster.yield(SyncDataEvent.ContactsChanged)
+            h.eventually("replacement app collector receives contacts") { h.appState.contactsVersion.value > version }
+            val contact = assertNotNull(store.fetchContact(replacement.token.radioId, key(20)))
+            val message = MessageDTO(
+                radioId = replacement.token.radioId, contactID = contact.id,
+                text = "replacement collector", timestamp = 1u, createdAt = EPOCH,
+            )
+            replacement.syncCoordinator.dataEventBroadcaster.yield(SyncDataEvent.DirectMessageReceived(message, contact))
+            h.eventually("replacement dispatcher receives a direct message") {
+                events.filterIsInstance<MessageEvent.DirectMessageReceived>().any { it.message.id == message.id }
+            }
+            assertMountedDirectNotification(h, contact)
+        } finally {
+            release.countDown()
+            staleTask?.cancelAndJoin()
+            subscription.cancelAndJoin()
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun normallyCompletedSyncStreamDoesNotAbortTheRestOfSessionWiring() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val session = assertNotNull(h.sessions.current)
+            session.syncCoordinator.dataEventBroadcaster.finish()
+            h.settle()
+            session.notificationService.onQuickReply = null
+
+            h.appState.wireServicesIfConnected()
+
+            assertSame(session.syncCoordinator, h.appState.syncCoordinator)
+            assertNotNull(session.notificationService.onQuickReply)
+            assertNotNull(session.notificationService.onNotificationTapped)
+        } finally {
+            h.container.close()
+        }
     }
 
     @Test fun disconnectedRoomNotificationFromChatsRootShowsAuthenticationWithoutOpeningTheRoom() = runTest {
@@ -730,70 +1230,435 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { unmount(); h.container.close() }
     }
 
+    @Test fun animatedOutgoingChatCannotConsumeAReplacementReactionWhileTheIncomingHistoryIsHeld() = runTest {
+        for ((windowWidth, expectedIndex) in listOf(390 to 1u.toUByte(), 834 to 2u.toUByte())) {
+            val olderRead = CompletableDeferred<Unit>()
+            val releaseOlder = CompletableDeferred<Unit>()
+            val holdOlder = AtomicBoolean(false)
+            val persistence = object : PersistenceStoreProtocol by store {
+                override suspend fun fetchMessages(
+                    radioId: RadioId, channelIndex: UByte, limit: Long, offset: Long,
+                ): SnapshotList<MessageDTO> {
+                    if (holdOlder.get() && channelIndex == expectedIndex && offset > 0) {
+                        olderRead.complete(Unit)
+                        releaseOlder.await()
+                    }
+                    return store.fetchMessages(radioId, channelIndex, limit, offset)
+                }
+            }
+            val h = ContainerHarness(this, store, persistenceOverride = persistence)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Outgoing reaction peer") }
+            try {
+                connect(h)
+                val radio = assertNotNull(h.appState.currentRadioId)
+                val contact = assertNotNull(store.fetchContact(radio, key(20)))
+                val channel = ChannelDTO(radioId = radio, index = expectedIndex, name = "Incoming reaction channel")
+                store.saveChannel(channel)
+                val outgoingMessage = MessageDTO(
+                    radioId = radio, contactID = contact.id, text = "Outgoing conversation",
+                    timestamp = 10u, createdAt = EPOCH, direction = MessageDirection.INCOMING,
+                )
+                store.saveMessage(outgoingMessage)
+                val messages = (0 until 80).map { index ->
+                    MessageDTO(
+                        radioId = radio, channelIndex = channel.index, text = "Incoming history $index",
+                        timestamp = (1000 + index).toUInt(), createdAt = EPOCH.plusSeconds(index.toLong()),
+                        sortDate = EPOCH.plusSeconds(index.toLong()), direction = MessageDirection.INCOMING,
+                    ).also { store.saveMessage(it) }
+                }
+                val target = messages.first()
+                val navigation = h.container.navigation
+                navigation.navigateToChat(contact)
+                val outgoingEntry = navigation.state.value.activeStack.last().id
+                compose.runOnUiThread { width.value = windowWidth.dp }
+                mount(h, motionScale = 1f)
+                await(h) {
+                    compose.onAllNodesWithTag("timeline-bubble:${outgoingMessage.id}", useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+
+                compose.mainClock.autoAdvance = false
+                holdOlder.set(true)
+                val reaction = NotificationResponse(
+                    NotificationPayload.Reaction(target.id, null, channel.index, radio), null, null,
+                )
+                assertTrue(h.container.handleNotificationResponse(reaction))
+                val first = assertNotNull(navigation.state.value.pendingMessageScroll)
+                assertNotEquals(outgoingEntry, first.entryId)
+                repeat(6) {
+                    compose.mainClock.advanceTimeByFrame()
+                    h.settle()
+                }
+                await(h) { olderRead.isCompleted }
+                compose.onNodeWithTag("entry:$outgoingEntry", useUnmergedTree = true).assertExists()
+                compose.onNodeWithTag("entry:${first.entryId}", useUnmergedTree = true).assertExists()
+                assertEquals(first, navigation.state.value.pendingMessageScroll)
+                compose.onNode(isDialog()).assertDoesNotExist()
+
+                assertTrue(h.container.handleNotificationResponse(reaction))
+                val replacement = assertNotNull(navigation.state.value.pendingMessageScroll)
+                assertEquals(first.entryId, replacement.entryId)
+                assertEquals(first.messageId, replacement.messageId)
+                assertNotEquals(first.deliveryId, replacement.deliveryId)
+                assertFalse(navigation.consumePendingMessageScroll(first.entryId, first))
+                assertEquals(replacement, navigation.state.value.pendingMessageScroll)
+
+                holdOlder.set(false)
+                releaseOlder.complete(Unit)
+                compose.mainClock.autoAdvance = true
+                await(h) {
+                    navigation.state.value.pendingMessageScroll == null &&
+                        compose.onAllNodesWithTag("timeline-bubble:${target.id}", useUnmergedTree = true)
+                            .fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithTag("timeline-bubble:${target.id}", useUnmergedTree = true).assertIsDisplayed()
+                assertEquals(ChatSelection.Channel(channel), navigation.state.value.chatsSelectedRoute)
+                compose.onNode(isDialog()).assertDoesNotExist()
+            } finally {
+                holdOlder.set(false)
+                releaseOlder.complete(Unit)
+                compose.mainClock.autoAdvance = true
+                unmount()
+                h.container.close()
+            }
+        }
+    }
+
     @Test fun actualPlatformTapSurvivesSyncBeyondTheRetryWindowAndReachesTheMountedDestinationExactlyOnce() = runTest {
         val context = ApplicationProvider.getApplicationContext<android.app.Application>()
         if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val manager = context.getSystemService(NotificationManager::class.java)
         lateinit var delivery: AndroidMessagingNotificationDelivery
-        var readinessSignals = 0
+        val readinessSignals = AtomicInteger()
+        val attempts = AtomicInteger()
+        val accepted = CopyOnWriteArrayList<UUID>()
+        val syncRequested = CompletableDeferred<Unit>()
+        val timeRequested = CompletableDeferred<Unit>()
         val h = ContainerHarness(
             this, store, sessionConfiguration = SessionConfiguration(contactStreamInactivityTimeout = 60.0),
-            notificationNavigationReady = { readinessSignals++; delivery.retryPendingActions() },
+            notificationNavigationReady = { readinessSignals.incrementAndGet(); delivery.retryPendingActions() },
         )
-        delivery = AndroidMessagingNotificationDelivery(context, backgroundScope, h.container::handleNotificationResponse)
+        delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { response ->
+            attempts.incrementAndGet()
+            val handled = h.container.handleNotificationResponse(response)
+            if (handled) accepted += (response.payload as NotificationPayload.DirectMessage).messageID
+            handled
+        }
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(key(20), "Cold notification peer")
-            radio.respond = { frame -> if (frame[0].toInt() == 0x04) listOf(Bytes.of(2) + le32(1)) else null }
+            radio.respond = { frame ->
+                when (frame[0].toInt()) {
+                    0x04 -> {
+                        syncRequested.complete(Unit)
+                        listOf(Bytes.of(2) + le32(1))
+                    }
+                    0x05 -> {
+                        timeRequested.complete(Unit)
+                        emptyList()
+                    }
+                    else -> null
+                }
+            }
         }
         try {
+            val started = h.container.start()
+            h.eventually("production activation completes") { started.isCompleted }
+            assertFalse(started.isCancelled)
+            manager.cancelAll()
             val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
             val contact = ContactDTO(
                 radioId = radio, publicKey = key(20), name = "Cold notification peer", lastHeardTimestamp = null,
             )
             store.saveContact(contact)
+            val messageId = UUID.randomUUID()
             delivery.registerCategories(SnapshotList.empty())
             delivery.post(NotificationRequest(
                 NotificationId("wp302-cold"), NotificationCategory.DIRECT_MESSAGE, contact.name, "Cold tap",
-                false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), UUID.randomUUID()),
+                false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), messageId),
             ))
-            val manager = context.getSystemService(NotificationManager::class.java)
             manager.activeNotifications.single().notification.contentIntent.send()
             shadowOf(android.os.Looper.getMainLooper()).idle()
             testScheduler.runCurrent()
             assertNull(h.sessions.current)
             assertEquals(1, h.container.navigation.state.value.activeStack.size, "No destination before real readiness")
+            mount(h)
             val connecting = async { h.manager.connect(h.target()) }
             h.eventually("callbacks installed while initial contact sync is held") {
                 h.manager.connectionState == DeviceConnectionState.SYNCING &&
                     h.container.navigation.state.value.navigationReady &&
-                    h.links.radios.last().sent.any { it[0].toInt() == 0x04 }
+                    syncRequested.isCompleted
             }
             testScheduler.advanceTimeBy(16_000)
             testScheduler.runCurrent()
             assertEquals(DeviceConnectionState.SYNCING, h.manager.connectionState)
             assertNull(h.container.navigation.state.value.pendingChatContact)
-            val beforeReady = readinessSignals
+            val attemptsAfterRetryWindow = attempts.get()
+            assertTrue(attemptsAfterRetryWindow >= 60)
+            testScheduler.advanceTimeBy(500)
+            testScheduler.runCurrent()
+            assertEquals(attemptsAfterRetryWindow, attempts.get(), "The capped retry must already have stopped")
+            val beforeReady = readinessSignals.get()
             val firmware = h.links.radios.last()
             firmware.push(firmware.knownContacts.single())
             firmware.push(Bytes.of(4) + le32(0))
-            h.eventually("held sync completes through the real READY edge") {
-                h.manager.connectionState == DeviceConnectionState.READY && readinessSignals > beforeReady
+            h.eventually("the READY edge retries while the time response is held") {
+                h.manager.connectionState == DeviceConnectionState.READY && readinessSignals.get() > beforeReady &&
+                    timeRequested.isCompleted
             }
-            connecting.await()
-            mount(h)
-            await(h) {
-                (h.container.navigation.state.value.chatsSelectedRoute as? ChatSelection.Direct)?.contact?.id == contact.id
+            assertFalse(connecting.isCompleted, "The later onDeviceSynced callback must still be blocked")
+            compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
+                val state = h.container.navigation.state.value
+                (state.chatsSelectedRoute as? ChatSelection.Direct)?.contact?.id == contact.id &&
+                    accepted.contains(messageId) &&
+                    compose.onAllNodesWithTag("entry:${state.activeStack.last().id}")
+                        .fetchSemanticsNodes().isNotEmpty()
             }
             val state = h.container.navigation.state.value
             val synchronizedContact = assertNotNull(store.fetchContact(radio, contact.publicKey))
             assertEquals(contact.id, synchronizedContact.id, "Sync must preserve the notification's original target")
             compose.onNodeWithTag("entry:${state.activeStack.last().id}").assertIsDisplayed()
             assertEquals(synchronizedContact, assertIs<ChatSelection.Direct>(state.chatsSelectedRoute).contact)
+            assertEquals(listOf(messageId), accepted.toList())
+            assertFalse(connecting.isCompleted, "Navigation must precede the held time response")
+            firmware.push(Bytes.of(9) + le32(EPOCH.epochSecond))
+            connecting.await()
             val stack = state.activeStack
+            val attemptsAfterDelivery = attempts.get()
             delivery.retryPendingActions()
             h.settle()
             assertEquals(stack, h.container.navigation.state.value.activeStack)
+            assertEquals(listOf(messageId), accepted.toList())
+            assertEquals(attemptsAfterDelivery, attempts.get())
+        } finally {
+            h.links.radios.lastOrNull()?.push(Bytes.of(9) + le32(EPOCH.epochSecond))
             manager.cancelAll()
-        } finally { unmount(); h.container.close() }
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun queuedTapRetriesWhenNavigationReadinessIsRestoredAfterTheReadyEdge() = runTest {
+        val context = ApplicationProvider.getApplicationContext<android.app.Application>()
+        if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val signalDispatcher = TrackingDispatcher()
+        val readinessSignals = AtomicInteger()
+        val attempts = AtomicInteger()
+        val accepted = CopyOnWriteArrayList<UUID>()
+        val syncRequested = CompletableDeferred<Unit>()
+        val timeRequested = CompletableDeferred<Unit>()
+        lateinit var delivery: AndroidMessagingNotificationDelivery
+        val h = ContainerHarness(
+            this, store, sessionConfiguration = SessionConfiguration(contactStreamInactivityTimeout = 60.0),
+            notificationReadyDispatcher = signalDispatcher,
+            notificationNavigationReady = { readinessSignals.incrementAndGet(); delivery.retryPendingActions() },
+        )
+        delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { response ->
+            attempts.incrementAndGet()
+            val handled = h.container.handleNotificationResponse(response)
+            if (handled) accepted += (response.payload as NotificationPayload.DirectMessage).messageID
+            handled
+        }
+        h.links.configureRadio = { radio ->
+            radio.knownContacts += contactFrame(key(20), "Late binding peer")
+            radio.respond = { frame ->
+                when (frame[0].toInt()) {
+                    0x04 -> {
+                        syncRequested.complete(Unit)
+                        listOf(Bytes.of(2) + le32(1))
+                    }
+                    0x05 -> {
+                        timeRequested.complete(Unit)
+                        emptyList()
+                    }
+                    else -> null
+                }
+            }
+        }
+        try {
+            val started = h.container.start()
+            h.eventually("production activation completes") { started.isCompleted }
+            assertFalse(started.isCancelled)
+            manager.cancelAll()
+            val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
+            val contact = ContactDTO(
+                radioId = radio, publicKey = key(20), name = "Late binding peer", lastHeardTimestamp = null,
+            )
+            store.saveContact(contact)
+            val messageId = UUID.randomUUID()
+            delivery.registerCategories(SnapshotList.empty())
+            delivery.post(NotificationRequest(
+                NotificationId("wp302-late-navigation-ready"), NotificationCategory.DIRECT_MESSAGE,
+                contact.name, "Queued tap", false, null, null,
+                NotificationPayload.DirectMessage(EntityKey(radio, contact.id), messageId),
+            ))
+            manager.activeNotifications.single().notification.contentIntent.send()
+            shadowOf(android.os.Looper.getMainLooper()).idle()
+            testScheduler.runCurrent()
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("navigation callbacks are installed while sync is held") {
+                h.manager.connectionState == DeviceConnectionState.SYNCING &&
+                    h.container.navigation.state.value.navigationReady &&
+                    syncRequested.isCompleted
+            }
+            testScheduler.advanceTimeBy(16_000)
+            testScheduler.runCurrent()
+            val attemptsAfterRetryWindow = attempts.get()
+            assertTrue(attemptsAfterRetryWindow >= 60)
+            testScheduler.advanceTimeBy(500)
+            testScheduler.runCurrent()
+            assertEquals(attemptsAfterRetryWindow, attempts.get())
+            val navigation = h.container.navigation
+            navigation.setNavigationReady(false)
+            assertFalse(navigation.state.value.navigationReady)
+            val beforeReady = readinessSignals.get()
+            val firmware = h.links.radios.last()
+            firmware.push(firmware.knownContacts.single())
+            firmware.push(Bytes.of(4) + le32(0))
+            h.eventually("READY retry is queued before the navigation rewire") {
+                h.manager.connectionState == DeviceConnectionState.READY &&
+                    timeRequested.isCompleted && signalDispatcher.dispatched.get() >= 1
+            }
+            signalDispatcher.runCurrent()
+            assertTrue(signalDispatcher.completed.get() >= 1)
+            assertEquals(beforeReady, readinessSignals.get(), "An unready navigation binding cannot signal retry")
+            assertNull(navigation.state.value.pendingChatContact)
+            assertFalse(connecting.isCompleted)
+
+            h.appState.onSessionStateChanged()
+            assertTrue(navigation.state.value.navigationReady)
+            assertTrue(readinessSignals.get() > beforeReady)
+            mount(h)
+            compose.waitUntil(10_000) {
+                testScheduler.runCurrent()
+                val state = navigation.state.value
+                (state.chatsSelectedRoute as? ChatSelection.Direct)?.contact?.id == contact.id &&
+                    accepted.contains(messageId) &&
+                    compose.onAllNodesWithTag("entry:${state.activeStack.last().id}")
+                        .fetchSemanticsNodes().isNotEmpty()
+            }
+            val state = navigation.state.value
+            compose.onNodeWithTag("entry:${state.activeStack.last().id}").assertIsDisplayed()
+            assertEquals(listOf(messageId), accepted.toList())
+            assertFalse(connecting.isCompleted, "Rebinding must retry before the time response")
+            firmware.push(Bytes.of(9) + le32(EPOCH.epochSecond))
+            connecting.await()
+            delivery.retryPendingActions()
+            h.settle()
+            assertEquals(listOf(messageId), accepted.toList())
+            assertEquals(state.activeStack, navigation.state.value.activeStack)
+        } finally {
+            h.links.radios.lastOrNull()?.push(Bytes.of(9) + le32(EPOCH.epochSecond))
+            manager.cancelAll()
+            unmount()
+            val closing = async { h.container.close() }
+            h.eventually("process cleanup drains the readiness dispatcher") {
+                signalDispatcher.runCurrent()
+                closing.isCompleted
+            }
+            closing.await()
+        }
+    }
+
+    @Test fun queuedReadyRetryRejectsTheRetiredGenerationWhenItsReplacementIsReady() = runTest {
+        val signalDispatcher = TrackingDispatcher()
+        val signals = CopyOnWriteArrayList<Triple<DeviceConnectionState, SessionToken?, Long>>()
+        val requestGates = CopyOnWriteArrayList<Pair<CompletableDeferred<Unit>, CompletableDeferred<Unit>>>()
+        lateinit var h: ContainerHarness
+        h = ContainerHarness(
+            this, store, sessionConfiguration = SessionConfiguration(contactStreamInactivityTimeout = 60.0),
+            notificationReadyDispatcher = signalDispatcher,
+            notificationNavigationReady = {
+                val snapshot = h.manager.snapshot.value
+                signals += Triple(snapshot.state, snapshot.token, h.container.navigation.currentState.generation)
+            },
+        )
+        h.links.configureRadio = { radio ->
+            val syncRequested = CompletableDeferred<Unit>()
+            val timeRequested = CompletableDeferred<Unit>()
+            requestGates += syncRequested to timeRequested
+            radio.respond = { frame ->
+                when (frame[0].toInt()) {
+                    0x04 -> {
+                        syncRequested.complete(Unit)
+                        listOf(Bytes.of(2) + le32(0))
+                    }
+                    0x05 -> {
+                        timeRequested.complete(Unit)
+                        emptyList()
+                    }
+                    else -> null
+                }
+            }
+        }
+        try {
+            val target = h.target()
+            val first = backgroundScope.async { h.manager.connect(target) }
+            h.eventually("first session installs navigation during its held sync") {
+                h.manager.connectionState == DeviceConnectionState.SYNCING &&
+                    h.container.navigation.state.value.navigationReady &&
+                    requestGates.getOrNull(0)?.first?.isCompleted == true
+            }
+            val firstSession = assertNotNull(h.sessions.current)
+            val firstGeneration = h.container.navigation.currentState.generation
+            val firstRadio = h.links.radios.last()
+            firstRadio.push(Bytes.of(4) + le32(0))
+            h.eventually("first session is READY before process observation starts") {
+                h.manager.connectionState == DeviceConnectionState.READY &&
+                    requestGates[0].second.isCompleted
+            }
+            assertEquals(0, signalDispatcher.dispatched.get())
+            val started = h.container.start()
+            h.eventually("the already-READY initial snapshot queues a retry") {
+                started.isCompleted && signalDispatcher.dispatched.get() >= 1
+            }
+            assertFalse(started.isCancelled)
+            assertFalse(first.isCompleted)
+
+            val disconnect = backgroundScope.async { h.manager.disconnect() }
+            h.eventually("first session disconnects before its queued retry") {
+                h.manager.connectionState == DeviceConnectionState.DISCONNECTED && disconnect.isCompleted
+            }
+            disconnect.await()
+            assertFailsWith<CancellationException> { first.await() }
+
+            val replacement = backgroundScope.async { h.manager.connect(target) }
+            h.eventually("replacement session installs its own navigation") {
+                h.manager.connectionState == DeviceConnectionState.SYNCING &&
+                    h.sessions.current?.token != firstSession.token &&
+                    h.container.navigation.state.value.navigationReady &&
+                    h.links.radios.size == 2 && requestGates.getOrNull(1)?.first?.isCompleted == true
+            }
+            val nextSession = assertNotNull(h.sessions.current)
+            val nextGeneration = h.container.navigation.currentState.generation
+            assertNotEquals(firstSession.token, nextSession.token)
+            assertTrue(nextGeneration > firstGeneration)
+            val signalsBeforeReady = signals.size
+            val nextRadio = h.links.radios.last()
+            nextRadio.push(Bytes.of(4) + le32(0))
+            h.eventually("replacement READY retry is queued beside the stale one") {
+                h.manager.connectionState == DeviceConnectionState.READY &&
+                    requestGates[1].second.isCompleted && signalDispatcher.dispatched.get() >= 2
+            }
+            assertFalse(replacement.isCompleted)
+            assertEquals(signalsBeforeReady, signals.size)
+            signalDispatcher.runCurrent()
+            h.eventually("both queued readiness checks finish") { signalDispatcher.completed.get() >= 2 }
+            assertEquals(signalsBeforeReady + 1, signals.size, "Only the replacement may request a retry")
+            assertEquals(Triple(DeviceConnectionState.READY, nextSession.token, nextGeneration), signals.last())
+            assertFalse(replacement.isCompleted)
+            nextRadio.push(Bytes.of(9) + le32(EPOCH.epochSecond))
+            replacement.await()
+        } finally {
+            h.links.radios.lastOrNull()?.push(Bytes.of(9) + le32(EPOCH.epochSecond))
+            val closing = async { h.container.close() }
+            h.eventually("process cleanup drains queued readiness checks") {
+                signalDispatcher.runCurrent()
+                closing.isCompleted
+            }
+            closing.await()
+        }
     }
 
     @Test fun actualReadyDuringTheFinalRetryDelayDeliversTheQueuedTapOnce() = runTest {
@@ -1092,6 +1957,102 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun selfContactFromEitherProducerSupersedesAHeldLookupFromEitherProducer() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Older contact") }
+        try {
+            connect(h)
+            val session = assertNotNull(h.sessions.current)
+            val radio = session.token.radioId
+            val oldContact = assertNotNull(store.fetchContact(radio, key(20)))
+            val navigation = h.container.navigation
+            for (olderFromChat in listOf(false, true)) for (selfFromChat in listOf(false, true)) {
+                for (olderFound in listOf(false, true)) {
+                    navigation.clearPendingLinks()
+                    assertTrue(navigation.bindNotificationSession(radio, session.navigationPublicKey, session.token) {
+                        h.container.isCurrentSession(session)
+                    })
+                    navigation.navigateToMap(51.5, -0.1)
+                    val entered = CompletableDeferred<RadioId>()
+                    val release = CompletableDeferred<ContactDTO?>()
+                    val rejected = CompletableDeferred<Unit>()
+                    val reads = AtomicInteger()
+                    suspend fun fetch(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        reads.incrementAndGet()
+                        check(publicKey == key(20)) { "Self-contact must not be fetched" }
+                        entered.complete(radioId)
+                        return release.await()
+                    }
+                    val external = AppDeepLinkRouter(object :
+                        AppDeepLinkEnvironment by ContainerDeepLinkEnvironment(h.container, navigation) {
+                        override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes) = fetch(radioId, publicKey)
+                    })
+                    val chat = ChatLinkRouter(object : ChatLinkEnvironment by h.container.chatsFeature.list.links {
+                        override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes) = fetch(radioId, publicKey)
+                    }, backgroundScope, com.meshcoreone.android.feature.chats.list.ChatListDiagnostics { message, _ ->
+                        if (message == "Contact-link lookup context is no longer current") rejected.complete(Unit)
+                    })
+                    val oldUri = h.container.nodesFeature.uriCodec.exportContactUri("Older claim", key(20), ContactType.ROOM)
+                    val older = if (olderFromChat) {
+                        assertTrue(chat.route(oldUri))
+                        null
+                    } else async { external.routeExternal(oldUri) }
+                    assertEquals(radio, entered.await())
+                    val selfUri = h.container.nodesFeature.uriCodec.exportContactUri(
+                        "Self", session.navigationPublicKey, ContactType.CHAT,
+                    )
+                    if (selfFromChat) assertTrue(chat.route(selfUri))
+                    else assertEquals(DeepLinkRouteOutcome.IgnoredSelfContact, external.routeExternal(selfUri))
+                    assertEquals(1, reads.get())
+                    assertEquals(if (selfFromChat) AppTab.MAP else AppTab.CHATS, navigation.state.value.selectedTab)
+                    val beforeOlderCompletion = navigation.state.value
+                    release.complete(if (olderFound) oldContact else null)
+                    if (older != null) assertEquals(DeepLinkRouteOutcome.ContactLookupRejected, older.await())
+                    else h.eventually("older chat lookup is rejected after self contact") { rejected.isCompleted }
+                    assertEquals(beforeOlderCompletion, navigation.state.value)
+                    assertNull(navigation.state.value.pendingContactLink)
+                    assertNull(navigation.state.value.pendingContactDetail)
+                }
+            }
+        } finally { h.container.close() }
+    }
+
+    @Test fun newerChatContactPreventsOlderExternalSelfContactFromChangingSelection() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val session = assertNotNull(h.sessions.current)
+            val navigation = h.container.navigation
+            navigation.navigateToMap(51.5, -0.1)
+            val newKey = key(30)
+            val newUri = h.container.nodesFeature.uriCodec.exportContactUri("Newer claim", newKey, ContactType.REPEATER)
+            val chat = ChatLinkRouter(h.container.chatsFeature.list.links, backgroundScope)
+            val base = ContainerDeepLinkEnvironment(h.container, navigation)
+            val external = AppDeepLinkRouter(object : AppDeepLinkEnvironment by base {
+                override fun captureContactLinkContext(publicKey: Bytes, publications: ContactLinkPublications) =
+                    base.captureContactLinkContext(publicKey, publications).also {
+                        if (publicKey == session.navigationPublicKey) assertTrue(chat.route(newUri))
+                    }
+
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? =
+                    error("Self-contact must not be fetched")
+            })
+            val selfUri = h.container.nodesFeature.uriCodec.exportContactUri(
+                "Older self claim", session.navigationPublicKey, ContactType.CHAT,
+            )
+            assertEquals(DeepLinkRouteOutcome.ContactLookupRejected, external.routeExternal(selfUri))
+            h.eventually("newer chat contact confirmation is staged") {
+                navigation.state.value.pendingContactLink?.publicKey == newKey
+            }
+            val pending = assertNotNull(navigation.state.value.pendingContactLink)
+            assertEquals("Newer claim", pending.name)
+            assertEquals(ContactType.REPEATER, pending.type)
+            assertEquals(session.token.radioId, pending.targetRadioId)
+            assertEquals(AppTab.MAP, navigation.state.value.selectedTab)
+            assertNull(navigation.state.value.pendingContactDetail)
+        } finally { h.container.close() }
+    }
+
     @Test fun coldContactDeliverySurvivesTheInitialHandshakeAndRequiresMountedConsent() = runTest {
         val h = ContainerHarness(this, store)
         val handshake = CompletableDeferred<Unit>()
@@ -1183,6 +2144,578 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally {
             deferredChat.cancel()
             h.container.close()
+        }
+    }
+
+    @Test fun pendingSubmissionCapturesSurviveUnexposedFactoryFailureAndSuccessfulPendingClear() = runTest {
+        val saving = CompletableDeferred<Unit>()
+        val releaseSave = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDevice(device: DeviceDTO) {
+                saving.complete(Unit)
+                releaseSave.await()
+                store.saveDevice(device)
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val created = AtomicInteger()
+        h.lifecycle.onCreated = {
+            if (created.incrementAndGet() == 1) throw IllegalStateException("Before registry publication")
+        }
+        val target = h.target()
+        val idleStamp = h.manager.captureNavigationLifecycle()
+        val connecting = async(start = CoroutineStart.UNDISPATCHED) { h.manager.connect(target) }
+        var duplicate: Deferred<Unit>? = null
+        try {
+            assertEquals(target.deviceId, h.manager.activeConnectionAttemptDeviceId)
+            assertTrue(h.links.radios.isEmpty(), "Capture must precede the first generation")
+            val pendingStamp = h.manager.captureNavigationLifecycle()
+            val context = ContactLinkPublications().use {
+                h.container.captureContactLinkContext(key(30), it)
+            }
+            assertIs<ContactLinkLookupResolution.Current>(h.container.resolveContactLinkContext(context, key(30)))
+            val coalesced = async(start = CoroutineStart.UNDISPATCHED) { h.manager.connect(target) }
+            duplicate = coalesced
+            val duplicateStamp = h.manager.captureNavigationLifecycle()
+            assertTrue(h.links.radios.isEmpty())
+
+            h.eventually("the retry publishes its graph before device persistence", virtualBudgetMillis = 30_000) {
+                saving.isCompleted && h.sessions.current != null
+            }
+            val graph = assertNotNull(h.sessions.current)
+            assertEquals(2, created.get())
+            assertTrue(h.lifecycle.created.first().isTornDown)
+            assertEquals(RuntimePublicationCounts(1, 0), h.sessions.counts)
+            for (stamp in listOf(idleStamp, pendingStamp, duplicateStamp)) {
+                assertTrue(h.manager.isInitialNavigationSession(stamp, graph.token, h.sessions.publicationIdentity, graph))
+            }
+            val firstTarget = assertIs<ContactLinkLookupResolution.Current>(
+                h.container.resolveContactLinkContext(context, key(30)),
+            )
+            assertEquals(graph.token.radioId, firstTarget.radioId)
+
+            releaseSave.complete(Unit)
+            h.eventually("both callers complete the same submission", virtualBudgetMillis = 30_000) {
+                connecting.isCompleted && coalesced.isCompleted
+            }
+            connecting.await()
+            coalesced.await()
+            h.settle()
+            h.assertReady()
+            assertSame(graph, h.sessions.current)
+            for (stamp in listOf(idleStamp, pendingStamp, duplicateStamp)) {
+                assertTrue(h.manager.isInitialNavigationSession(stamp, graph.token, h.sessions.publicationIdentity, graph))
+            }
+            val resolved = assertIs<ContactLinkLookupResolution.Current>(
+                h.container.resolveContactLinkContext(context, key(30)),
+            )
+            assertEquals(ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.ConfirmationStaged),
+                ContactLinkPublications().use {
+                    h.container.completeResolvedContactLookup(
+                        context, resolved, ContactLinkRequest("Pending claim", key(30), ContactType.REPEATER),
+                        null, false, it,
+                    )
+                })
+            assertEquals(graph.token.radioId, assertNotNull(h.container.navigation.currentState.pendingContactLink).targetRadioId)
+        } finally {
+            releaseSave.complete(Unit)
+            duplicate?.cancelAndJoin()
+            connecting.cancelAndJoin()
+            h.container.close()
+        }
+    }
+
+    @Test fun publishedGraphRemainsFirstExposureWhenItsFactoryThrowsAndRetryReplacesIt() = runTest {
+        val f = PublicationTestFixture(this, store)
+        var firstOwnerStamp: ConnectionManager.NavigationLifecycleStamp? = null
+        val replacementEntered = CompletableDeferred<Unit>()
+        val releaseReplacement = CompletableDeferred<Unit>()
+        f.onFactory = { inputs, graph ->
+            val target = f.slot.target(graph)
+            if (f.graphs.size > 1) {
+                replacementEntered.complete(Unit)
+                releaseReplacement.await()
+            }
+            assertEquals(RuntimePublicationOutcome.PUBLISHED, inputs.publication.publish(target))
+            assertEquals(RuntimePublicationOutcome.ALREADY_PUBLISHED, inputs.publication.publish(target))
+            if (f.graphs.size == 1) {
+                firstOwnerStamp = f.manager.captureNavigationLifecycle()
+                assertTrue(f.manager.isInitialNavigationSession(
+                    assertNotNull(firstOwnerStamp), graph.token, f.slot.identity, graph,
+                ))
+                throw IllegalStateException("Factory failed after publishing its graph")
+            }
+        }
+        val idleStamp = f.manager.captureNavigationLifecycle()
+        val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+        try {
+            assertEquals(f.target.deviceId, f.manager.activeConnectionAttemptDeviceId)
+            assertTrue(f.graphs.isEmpty())
+            val pendingStamp = f.manager.captureNavigationLifecycle()
+            f.eventually("the replacement owner enters its factory") { replacementEntered.isCompleted }
+            assertNull(f.slot.current)
+            val replacementStamp = f.manager.captureNavigationLifecycle()
+            assertTrue(f.manager.isNavigationLifecycleCurrent(replacementStamp))
+            releaseReplacement.complete(Unit)
+            f.eventually("the submission retries after the published factory failure") { work.isCompleted }
+            work.await()
+            val first = f.graphs.first()
+            val replacement = f.graphs.last()
+            assertNotSame(first, replacement)
+            assertEquals(2, f.graphs.size)
+            assertEquals(RuntimePublicationRetirement.LIVE, first.retirement)
+            assertTrue(first.publicationFence.isClosed)
+            assertSame(replacement, f.slot.current)
+            assertEquals(RuntimePublicationCounts(2, 1), f.slot.counts)
+            for (stamp in listOf(idleStamp, pendingStamp, assertNotNull(firstOwnerStamp))) {
+                assertFalse(f.manager.isInitialNavigationSession(stamp, replacement.token, f.slot.identity, replacement))
+            }
+            assertTrue(f.manager.isInitialNavigationSession(
+                replacementStamp, replacement.token, f.slot.identity, replacement,
+            ))
+            val fresh = f.manager.captureNavigationLifecycle()
+            assertTrue(f.manager.isInitialNavigationSession(fresh, replacement.token, f.slot.identity, replacement))
+        } finally {
+            releaseReplacement.complete(Unit)
+            work.cancelAndJoin()
+            f.manager.close()
+        }
+    }
+
+    @Test fun cancelledUnpublishedOwnerCannotPublishOrRetargetItsCapture() = runTest {
+        val f = PublicationTestFixture(this, store)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        f.onFactory = { _, _ ->
+            entered.complete(Unit)
+            release.await()
+        }
+        val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+        try {
+            val pendingStamp = f.manager.captureNavigationLifecycle()
+            f.eventually("factory is held before registry publication") { entered.isCompleted }
+            val unexposed = f.graphs.single()
+            val authority = unexposed.inputs.publication
+            val target = f.slot.target(unexposed)
+            val wrongSlot = RuntimePublicationSlot<PublicationTestGraph>()
+            assertFailsWith<IllegalArgumentException> { wrongSlot.target(unexposed) }
+            assertEquals(RuntimePublicationRetirement.DIFFERENT_REGISTRY, wrongSlot.withdraw(unexposed))
+            assertNull(f.slot.current)
+            assertEquals(RuntimePublicationCounts(0, 0), f.slot.counts)
+            work.cancel()
+            f.eventually("the cancelled owner tears down its unexposed graph") {
+                work.isCompleted && unexposed.retirement != null
+            }
+            assertEquals(RuntimePublicationRetirement.NEVER_PUBLISHED, unexposed.retirement)
+            assertEquals(RuntimePublicationCounts(0, 0), f.slot.counts)
+            assertEquals(RuntimePublicationOutcome.STALE_OWNER, authority.publish(target))
+            assertFalse(f.manager.isNavigationLifecycleCurrent(pendingStamp))
+
+            f.onFactory = { inputs, graph ->
+                assertEquals(RuntimePublicationOutcome.PUBLISHED, inputs.publication.publish(f.slot.target(graph)))
+            }
+            val replacementWork = backgroundScope.async { f.manager.connect(f.target) }
+            f.eventually("a new submission publishes after cancellation") { replacementWork.isCompleted }
+            replacementWork.await()
+            val replacement = assertNotNull(f.slot.current)
+            assertNotSame(unexposed, replacement)
+            assertFalse(f.manager.isInitialNavigationSession(pendingStamp, replacement.token, f.slot.identity, replacement))
+            assertTrue(f.manager.isInitialNavigationSession(
+                f.manager.captureNavigationLifecycle(), replacement.token, f.slot.identity, replacement,
+            ))
+        } finally {
+            release.complete(Unit)
+            work.cancelAndJoin()
+            f.manager.close()
+        }
+    }
+
+    @Test fun failedSubmissionDoesNotBecomeAnUnboundCaptureForTheNextSubmission() = runTest {
+        val f = PublicationTestFixture(this, store)
+        f.onFactory = { _, _ -> throw IllegalStateException("Factory failed before publication") }
+        val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching { f.manager.connect(f.target) }
+        }
+        try {
+            val failedStamp = f.manager.captureNavigationLifecycle()
+            f.eventually("the first submission reaches terminal failure") { work.isCompleted }
+            assertIs<IllegalStateException>(work.await().exceptionOrNull())
+            assertTrue(f.graphs.isNotEmpty())
+            assertTrue(f.graphs.all { it.retirement == RuntimePublicationRetirement.NEVER_PUBLISHED })
+            assertEquals(RuntimePublicationCounts(0, 0), f.slot.counts)
+            assertFalse(f.manager.isNavigationLifecycleCurrent(failedStamp))
+
+            f.onFactory = { inputs, graph ->
+                assertEquals(RuntimePublicationOutcome.PUBLISHED, inputs.publication.publish(f.slot.target(graph)))
+            }
+            val replacementWork = backgroundScope.async { f.manager.connect(f.target) }
+            f.eventually("the later submission publishes a new graph") { replacementWork.isCompleted }
+            replacementWork.await()
+            val replacement = assertNotNull(f.slot.current)
+            assertFalse(f.manager.isInitialNavigationSession(failedStamp, replacement.token, f.slot.identity, replacement))
+            assertTrue(f.manager.isInitialNavigationSession(
+                f.manager.captureNavigationLifecycle(), replacement.token, f.slot.identity, replacement,
+            ))
+        } finally {
+            work.cancelAndJoin()
+            f.manager.close()
+        }
+    }
+
+    @Test fun duplicateAndDisplacedGraphRetirementUseOneSlotAndRejectCrossManagerStamps() = runTest {
+        val slot = RuntimePublicationSlot<PublicationTestGraph>()
+        val epoch = ProcessEpoch(UUID.randomUUID())
+        val firstManager = PublicationTestFixture(this, store, slot, epoch)
+        val secondManager = PublicationTestFixture(this, store, slot, epoch)
+        try {
+            val firstStamp = firstManager.manager.captureNavigationLifecycle()
+            val firstWork = backgroundScope.async { firstManager.manager.connect(firstManager.target) }
+            firstManager.eventually("the first manager publishes") { firstWork.isCompleted }
+            firstWork.await()
+            val first = assertNotNull(slot.current)
+            val authority = first.inputs.publication
+            val target = slot.target(first)
+            assertEquals(RuntimePublicationOutcome.ALREADY_PUBLISHED, authority.publish(target))
+            assertEquals(RuntimePublicationCounts(1, 0), slot.counts)
+            val wrongSlot = RuntimePublicationSlot<PublicationTestGraph>()
+            assertFailsWith<IllegalArgumentException> { wrongSlot.target(first) }
+            assertEquals(RuntimePublicationRetirement.DIFFERENT_REGISTRY, wrongSlot.withdraw(first))
+            assertEquals(RuntimePublicationCounts(0, 0), wrongSlot.counts)
+
+            val secondWork = backgroundScope.async { secondManager.manager.connect(secondManager.target) }
+            secondManager.eventually("the second manager replaces the shared live graph") { secondWork.isCompleted }
+            secondWork.await()
+            val second = assertNotNull(slot.current)
+            assertNotSame(first, second)
+            assertEquals(first.token, second.token, "Equal epoch, generation and radio do not identify a manager")
+            assertEquals(RuntimePublicationCounts(2, 0), slot.counts)
+            assertEquals(RuntimePublicationOutcome.DISPLACED, authority.publish(target))
+            assertFalse(firstManager.manager.isInitialNavigationSession(firstStamp, first.token, slot.identity, first))
+            assertFalse(secondManager.manager.isInitialNavigationSession(firstStamp, second.token, slot.identity, second))
+            assertEquals(RuntimePublicationRetirement.DISPLACED, slot.withdraw(first))
+            assertEquals(RuntimePublicationRetirement.ALREADY_WITHDRAWN, slot.withdraw(first))
+            assertSame(second, slot.current)
+            assertEquals(RuntimePublicationCounts(2, 1), slot.counts)
+            assertEquals(RuntimePublicationOutcome.WITHDRAWN, authority.publish(target))
+            firstManager.manager.close()
+            assertEquals(RuntimePublicationRetirement.ALREADY_WITHDRAWN, first.retirement)
+            assertSame(second, slot.current)
+            assertEquals(RuntimePublicationCounts(2, 1), slot.counts)
+            assertEquals(RuntimePublicationOutcome.STALE_OWNER, authority.publish(target))
+        } finally {
+            firstManager.manager.close()
+            secondManager.manager.close()
+        }
+        assertNull(slot.current)
+        assertEquals(RuntimePublicationCounts(2, 2), slot.counts)
+    }
+
+    @Test fun graphClosedBeforePublicationLeavesNoReceiptAndTheRetryCanPublish() = runTest {
+        val f = PublicationTestFixture(this, store)
+        f.onFactory = { inputs, graph ->
+            val target = f.slot.target(graph)
+            if (f.graphs.size == 1) {
+                graph.publicationFence.close()
+                assertEquals(RuntimePublicationOutcome.CLOSED_GRAPH, inputs.publication.publish(target))
+                assertNull(f.slot.current)
+                assertEquals(RuntimePublicationCounts(0, 0), f.slot.counts)
+                throw IllegalStateException("Graph closed before publication")
+            }
+            assertEquals(RuntimePublicationOutcome.PUBLISHED, inputs.publication.publish(target))
+        }
+        val idleStamp = f.manager.captureNavigationLifecycle()
+        val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+        try {
+            val pendingStamp = f.manager.captureNavigationLifecycle()
+            f.eventually("the unexposed closed graph is retried") { work.isCompleted }
+            work.await()
+            assertEquals(RuntimePublicationRetirement.NEVER_PUBLISHED, f.graphs.first().retirement)
+            assertEquals(RuntimePublicationCounts(1, 0), f.slot.counts)
+            val published = assertNotNull(f.slot.current)
+            assertTrue(f.manager.isInitialNavigationSession(idleStamp, published.token, f.slot.identity, published))
+            assertTrue(f.manager.isInitialNavigationSession(pendingStamp, published.token, f.slot.identity, published))
+        } finally {
+            work.cancelAndJoin()
+            f.manager.close()
+        }
+    }
+
+    @Test fun withdrawingAnUnpublishedGraphDoesNotCountItOrAllowItsPublication() = runTest {
+        val f = PublicationTestFixture(this, store)
+        f.onFactory = { inputs, graph ->
+            val target = f.slot.target(graph)
+            if (f.graphs.size == 1) {
+                assertEquals(RuntimePublicationRetirement.NEVER_PUBLISHED, f.slot.withdraw(graph))
+                assertEquals(RuntimePublicationRetirement.ALREADY_WITHDRAWN, f.slot.withdraw(graph))
+                assertEquals(RuntimePublicationOutcome.WITHDRAWN, inputs.publication.publish(target))
+                assertEquals(RuntimePublicationCounts(0, 0), f.slot.counts)
+                throw IllegalStateException("Graph was withdrawn before publication")
+            }
+            assertEquals(RuntimePublicationOutcome.PUBLISHED, inputs.publication.publish(target))
+        }
+        val idleStamp = f.manager.captureNavigationLifecycle()
+        val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+        try {
+            val pendingStamp = f.manager.captureNavigationLifecycle()
+            f.eventually("the submission retries after an unexposed withdrawal") { work.isCompleted }
+            work.await()
+            assertEquals(RuntimePublicationRetirement.ALREADY_WITHDRAWN, f.graphs.first().retirement)
+            assertEquals(RuntimePublicationCounts(1, 0), f.slot.counts)
+            val graph = assertNotNull(f.slot.current)
+            assertTrue(f.manager.isInitialNavigationSession(idleStamp, graph.token, f.slot.identity, graph))
+            assertTrue(f.manager.isInitialNavigationSession(pendingStamp, graph.token, f.slot.identity, graph))
+        } finally {
+            work.cancelAndJoin()
+            f.manager.close()
+        }
+    }
+
+    @Test fun graphClosureWhilePublicationWaitsForTheSlotCannotExposeTheClosedGraph() = runTest {
+        val f = PublicationTestFixture(this, store)
+        val slotHeld = CountDownLatch(1)
+        val releaseSlot = CountDownLatch(1)
+        val holderThread = AtomicReference<Thread>()
+        val publisherThread = AtomicReference<Thread>()
+        val entered = CompletableDeferred<PublicationTestGraph>()
+        val result = CompletableDeferred<RuntimePublicationOutcome>()
+        val holder = async(Dispatchers.IO) {
+            f.slot.withCurrent {
+                holderThread.set(Thread.currentThread())
+                slotHeld.countDown()
+                check(releaseSlot.await(10, TimeUnit.SECONDS)) { "Publication slot was not released" }
+            }
+        }
+        assertTrue(slotHeld.await(10, TimeUnit.SECONDS))
+        f.onFactory = { inputs, graph ->
+            if (f.graphs.size == 1) {
+                val target = f.slot.target(graph)
+                entered.complete(graph)
+                result.complete(withContext(Dispatchers.IO) {
+                    publisherThread.set(Thread.currentThread())
+                    inputs.publication.publish(target)
+                })
+                throw IllegalStateException("Closed graph cannot be published")
+            }
+            assertEquals(RuntimePublicationOutcome.PUBLISHED, inputs.publication.publish(f.slot.target(graph)))
+        }
+        val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+        try {
+            val pendingStamp = f.manager.captureNavigationLifecycle()
+            f.eventually("the first graph enters its factory") { entered.isCompleted }
+            val first = entered.await()
+            awaitBlockedOnLock(publisherThread, holderThread, ConnectionManager::class.java, "publishNavigationService")
+            first.publicationFence.close()
+            releaseSlot.countDown()
+            f.eventually("the closed graph is rejected and its retry succeeds") { result.isCompleted && work.isCompleted }
+            assertEquals(RuntimePublicationOutcome.CLOSED_GRAPH, result.await())
+            work.await()
+            holder.await()
+            assertEquals(RuntimePublicationRetirement.NEVER_PUBLISHED, first.retirement)
+            assertEquals(RuntimePublicationCounts(1, 0), f.slot.counts)
+            val replacement = assertNotNull(f.slot.current)
+            assertTrue(f.manager.isInitialNavigationSession(pendingStamp, replacement.token, f.slot.identity, replacement))
+        } finally {
+            releaseSlot.countDown()
+            holder.cancelAndJoin()
+            work.cancelAndJoin()
+            f.manager.close()
+        }
+    }
+
+    @Test fun cancellationWhilePublicationWaitsForTheSlotRejectsBeforeAnyExposure() = runTest {
+        val f = PublicationTestFixture(this, store)
+        val slotHeld = CountDownLatch(1)
+        val releaseSlot = CountDownLatch(1)
+        val holderThread = AtomicReference<Thread>()
+        val publisherThread = AtomicReference<Thread>()
+        val entered = CompletableDeferred<PublicationTestGraph>()
+        val result = CompletableDeferred<RuntimePublicationOutcome>()
+        val holder = async(Dispatchers.IO) {
+            f.slot.withCurrent {
+                holderThread.set(Thread.currentThread())
+                slotHeld.countDown()
+                check(releaseSlot.await(10, TimeUnit.SECONDS)) { "Publication slot was not released" }
+            }
+        }
+        assertTrue(slotHeld.await(10, TimeUnit.SECONDS))
+        f.onFactory = { inputs, graph ->
+            val target = f.slot.target(graph)
+            entered.complete(graph)
+            withContext(Dispatchers.IO) {
+                publisherThread.set(Thread.currentThread())
+                result.complete(inputs.publication.publish(target))
+            }
+            throw CancellationException("Publication owner was cancelled")
+        }
+        val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+        try {
+            val pendingStamp = f.manager.captureNavigationLifecycle()
+            f.eventually("the graph enters its factory") { entered.isCompleted }
+            val graph = entered.await()
+            awaitBlockedOnLock(publisherThread, holderThread, ConnectionManager::class.java, "publishNavigationService")
+            work.cancel()
+            releaseSlot.countDown()
+            f.eventually("the cancelled publication is rejected and retired") {
+                result.isCompleted && work.isCompleted && graph.retirement != null
+            }
+            assertEquals(RuntimePublicationOutcome.STALE_OWNER, result.await())
+            assertEquals(RuntimePublicationRetirement.NEVER_PUBLISHED, graph.retirement)
+            assertEquals(RuntimePublicationCounts(0, 0), f.slot.counts)
+            assertNull(f.slot.current)
+            assertFalse(f.manager.isNavigationLifecycleCurrent(pendingStamp))
+        } finally {
+            releaseSlot.countDown()
+            holder.cancelAndJoin()
+            work.cancelAndJoin()
+            f.manager.close()
+        }
+    }
+
+    @Test fun simulatorPublicationCarriesTheSameFirstSubmissionWitness() = runTest {
+        val f = PublicationTestFixture(this, store)
+        f.onFactory = { inputs, graph ->
+            assertEquals(TransportType.SIMULATOR, inputs.transportType)
+            assertEquals(RuntimePublicationOutcome.PUBLISHED, inputs.publication.publish(f.slot.target(graph)))
+        }
+        val idleStamp = f.manager.captureNavigationLifecycle()
+        val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+            f.manager.connect(ConnectionTarget.Simulator)
+        }
+        try {
+            assertTrue(f.manager.isSimulatorConnection)
+            assertTrue(f.graphs.isEmpty())
+            val pendingStamp = f.manager.captureNavigationLifecycle()
+            f.eventually("the simulator publishes its graph") { work.isCompleted }
+            work.await()
+            val graph = assertNotNull(f.slot.current)
+            assertEquals(RadioId(f.simulatorId), graph.token.radioId)
+            assertEquals(RuntimePublicationCounts(1, 0), f.slot.counts)
+            for (stamp in listOf(idleStamp, pendingStamp)) {
+                assertTrue(f.manager.isInitialNavigationSession(stamp, graph.token, f.slot.identity, graph))
+            }
+        } finally {
+            work.cancelAndJoin()
+            f.manager.close()
+        }
+    }
+
+    @Test fun failedSubmissionOwnedAdoptionFallsThroughBeforeTheFirstExposure() = runTest {
+        lateinit var f: PublicationTestFixture
+        val adoptionEntered = CompletableDeferred<Unit>()
+        val releaseAdoption = CompletableDeferred<Unit>()
+        val platform = object : ConnectionPlatform by RuntimePlatformAdapter(newConnectivity()) {
+            override suspend fun state(target: ConnectionTarget) = PlatformLinkState(
+                connected = false, autoReconnecting = false, bluetoothPoweredOff = false,
+                connectedDeviceId = f.deviceId, phase = "idle", systemConnected = true,
+            )
+            override suspend fun adoptSystemLink(target: ConnectionTarget): Boolean {
+                adoptionEntered.complete(Unit)
+                releaseAdoption.await()
+                return false
+            }
+        }
+        f = PublicationTestFixture(this, store, platform = platform)
+        val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
+        f.lastConnection.persist(f.deviceId, radio, "System-connected radio")
+        val idleStamp = f.manager.captureNavigationLifecycle()
+        val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+        try {
+            val pendingStamp = f.manager.captureNavigationLifecycle()
+            f.eventually("the submitted adoption route is active") { adoptionEntered.isCompleted }
+            val adoptionStamp = f.manager.captureNavigationLifecycle()
+            assertTrue(f.manager.isNavigationLifecycleCurrent(adoptionStamp))
+            releaseAdoption.complete(Unit)
+            f.eventually("a failed adoption falls through to a fresh radio generation") { work.isCompleted }
+            work.await()
+            assertTrue(f.links.links.size >= 2, "The adoption route and connection use distinct owners")
+            val graph = assertNotNull(f.slot.current)
+            assertEquals(RuntimePublicationCounts(1, 0), f.slot.counts)
+            assertTrue(f.manager.isInitialNavigationSession(idleStamp, graph.token, f.slot.identity, graph))
+            assertTrue(f.manager.isInitialNavigationSession(pendingStamp, graph.token, f.slot.identity, graph))
+            assertFalse(f.manager.isInitialNavigationSession(adoptionStamp, graph.token, f.slot.identity, graph))
+            assertTrue(f.manager.isInitialNavigationSession(
+                f.manager.captureNavigationLifecycle(), graph.token, f.slot.identity, graph,
+            ))
+        } finally {
+            releaseAdoption.complete(Unit)
+            work.cancelAndJoin()
+            f.manager.close()
+        }
+    }
+
+    @Test fun successfulAdoptionDoesNotAuthorizeItsLaterIndependentRebuild() = runTest {
+        lateinit var f: PublicationTestFixture
+        val platform = object : ConnectionPlatform by RuntimePlatformAdapter(newConnectivity()) {
+            override suspend fun targetForDevice(deviceId: UUID): ConnectionTarget = f.target
+            override suspend fun state(target: ConnectionTarget) = PlatformLinkState(
+                connected = false, autoReconnecting = false, bluetoothPoweredOff = false,
+                connectedDeviceId = f.deviceId, phase = "idle", systemConnected = true,
+            )
+            override suspend fun adoptSystemLink(target: ConnectionTarget): Boolean = true
+        }
+        f = PublicationTestFixture(this, store, platform = platform)
+        val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
+        store.saveDevice(DeviceDTO(id = f.deviceId, radioId = radio, publicKey = key(7), nodeName = "Adopted radio"))
+        f.lastConnection.persist(f.deviceId, radio, "Adopted radio")
+        val idleStamp = f.manager.captureNavigationLifecycle()
+        val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+        try {
+            val pendingStamp = f.manager.captureNavigationLifecycle()
+            f.eventually("the system adoption finishes without publishing a graph") { work.isCompleted }
+            work.await()
+            assertNull(f.slot.current)
+            val adoptionStamp = f.manager.captureNavigationLifecycle()
+            assertTrue(f.manager.isNavigationLifecycleCurrent(adoptionStamp))
+            assertNotNull(f.links.links.single().callbacks).onReconnected()
+            f.eventually("the adopted route independently rebuilds its graph") {
+                f.slot.current != null && f.manager.connectionState == DeviceConnectionState.READY
+            }
+            val graph = assertNotNull(f.slot.current)
+            for (stamp in listOf(idleStamp, pendingStamp, adoptionStamp)) {
+                assertFalse(f.manager.isInitialNavigationSession(stamp, graph.token, f.slot.identity, graph))
+            }
+            assertTrue(f.manager.isInitialNavigationSession(
+                f.manager.captureNavigationLifecycle(), graph.token, f.slot.identity, graph,
+            ))
+        } finally {
+            work.cancelAndJoin()
+            f.manager.close()
+        }
+    }
+
+    @Test fun restoredRouteRebuildCannotSatisfyAnUnsubmittedCapture() = runTest {
+        lateinit var f: PublicationTestFixture
+        val platform = object : ConnectionPlatform by RuntimePlatformAdapter(newConnectivity()) {
+            override suspend fun targetForDevice(deviceId: UUID): ConnectionTarget = f.target
+            override suspend fun state(target: ConnectionTarget) = PlatformLinkState(
+                connected = false, autoReconnecting = true, bluetoothPoweredOff = false,
+                connectedDeviceId = f.deviceId, phase = "idle", systemConnected = false,
+            )
+        }
+        f = PublicationTestFixture(this, store, platform = platform)
+        val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
+        store.saveDevice(DeviceDTO(id = f.deviceId, radioId = radio, publicKey = key(7), nodeName = "Restored radio"))
+        f.lastConnection.persist(f.deviceId, radio, "Restored radio")
+        val idleStamp = f.manager.captureNavigationLifecycle()
+        try {
+            val activating = backgroundScope.async { f.manager.activate() }
+            f.eventually("the restoration route is registered") { activating.isCompleted }
+            activating.await()
+            assertNull(f.slot.current)
+            assertFalse(f.manager.isNavigationLifecycleCurrent(idleStamp))
+            assertEquals(1, f.links.links.size)
+            assertNotNull(f.links.links.single().callbacks).onReconnected()
+            f.eventually("the restored route rebuilds its own graph") {
+                f.slot.current != null && f.manager.connectionState == DeviceConnectionState.READY
+            }
+            val graph = assertNotNull(f.slot.current)
+            assertTrue(f.links.links.size >= 2)
+            assertFalse(f.manager.isInitialNavigationSession(idleStamp, graph.token, f.slot.identity, graph))
+            assertTrue(f.manager.isInitialNavigationSession(
+                f.manager.captureNavigationLifecycle(), graph.token, f.slot.identity, graph,
+            ))
+        } finally {
+            f.manager.close()
         }
     }
 
@@ -1675,6 +3208,461 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(existing, navigation.currentState.selectedContact)
             assertNull(navigation.currentState.pendingContactLink)
         } finally { h.container.close() }
+    }
+
+    @Test fun chatContactLookupRereadsRealStoreWhenFirstGraphBindsBeforeCompletion() = runTest {
+        val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
+        for (found in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val reads = CopyOnWriteArrayList<Pair<RadioId, Bytes>>()
+            val diagnostics = CopyOnWriteArrayList<String>()
+            val targetChanges = AtomicInteger()
+            val completion = CompletableDeferred<ContactLinkCompletion>()
+            val routingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val requestedKey = if (found) key(20) else key(31)
+            val saved = ContactDTO(
+                radioId = radio, publicKey = requestedKey, name = "Stored first-graph peer", lastHeardTimestamp = null,
+            )
+            if (found) h.links.configureRadio = { it.knownContacts += contactFrame(saved.publicKey, saved.name) }
+            try {
+                store.saveDevice(DeviceDTO(id = radio.value, radioId = radio, publicKey = key(7), nodeName = "Saved radio"))
+                if (found) store.saveContact(saved)
+                val base = h.container.chatsFeature.list.links
+                val environment = object : ChatLinkEnvironment by base {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        reads += radioId to publicKey
+                        return store.fetchContact(radioId, publicKey)
+                    }
+
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion {
+                        if (target.radioId == null) {
+                            assertNull(existing)
+                            entered.countDown()
+                            check(release.await(30, TimeUnit.SECONDS)) { "Unbound completion was not released" }
+                        }
+                        val result = base.completeResolvedContactLookup(
+                            context, target, link, existing, publications, cancellation,
+                        )
+                        when (result) {
+                            ContactLinkTargetCompletion.TargetChanged -> targetChanges.incrementAndGet()
+                            is ContactLinkTargetCompletion.Completed -> completion.complete(result.outcome)
+                        }
+                        return result
+                    }
+                }
+                val link = h.container.nodesFeature.uriCodec.exportContactUri(
+                    "Unbound claim", requestedKey, ContactType.REPEATER,
+                )
+                assertTrue(ChatLinkRouter(environment, routingScope,
+                    com.meshcoreone.android.feature.chats.list.ChatListDiagnostics { message, _ -> diagnostics += message },
+                ).route(link))
+                assertTrue(entered.await(10, TimeUnit.SECONDS), "The unbound target must reach completion first")
+                val connecting = backgroundScope.async { h.manager.connect(h.target(radio.value)) }
+                h.eventually("the first graph binds while the old target is held", virtualBudgetMillis = 30_000) {
+                    connecting.isCompleted && h.container.navigation.currentState.boundSessionToken != null
+                }
+                connecting.await()
+                release.countDown()
+                h.eventually("chat lookup finishes against the bound graph") { completion.isCompleted }
+                h.eventually("the contact navigation commit is published") {
+                    h.container.navigation.state.value == h.container.navigation.currentState
+                }
+                assertEquals(1, targetChanges.get())
+                assertEquals(listOf(radio to requestedKey), reads.toList())
+                assertTrue(diagnostics.isEmpty())
+                val state = h.container.navigation.currentState
+                if (found) {
+                    assertEquals(ContactLinkCompletion.Navigated, completion.await())
+                    assertEquals(store.fetchContact(radio, requestedKey), state.selectedContact)
+                    assertNull(state.pendingContactLink)
+                } else {
+                    assertEquals(ContactLinkCompletion.ConfirmationStaged, completion.await())
+                    val pending = assertNotNull(state.pendingContactLink)
+                    assertEquals("Unbound claim", pending.name)
+                    assertEquals(requestedKey, pending.publicKey)
+                    assertEquals(ContactType.REPEATER, pending.type)
+                    assertEquals(radio, pending.targetRadioId)
+                    assertEquals(state.generation, pending.generation)
+                }
+                mount(h)
+                compose.waitForIdle()
+                if (found) compose.onNodeWithTag("entry:${state.activeStack.last().id}").assertIsDisplayed()
+                else compose.onNodeWithTag("contact-link-confirmation").assertIsDisplayed()
+            } finally {
+                release.countDown()
+                routingScope.cancel()
+                unmount()
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun cancelledChatContactLookupWaitingForTheCommitBoundaryCannotMutateNavigation() = runTest {
+        val h = ContainerHarness(this, store)
+        val fetchEntered = CompletableDeferred<Unit>()
+        val releaseFetch = CompletableDeferred<Unit>()
+        val slotHeld = CountDownLatch(1)
+        val releaseSlot = CountDownLatch(1)
+        val holderThread = AtomicReference<Thread>()
+        val publisherThread = AtomicReference<Thread>()
+        val diagnostics = CopyOnWriteArrayList<String>()
+        val routingJob = SupervisorJob()
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val routingScope = CoroutineScope(routingJob + Dispatchers.IO + CoroutineExceptionHandler { _, failure ->
+            failures.add(failure)
+        })
+        var holder: Deferred<Unit>? = null
+        var failure: Throwable? = null
+        try {
+            connect(h)
+            val base = h.container.chatsFeature.list.links
+            val environment = object : ChatLinkEnvironment by base {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    fetchEntered.complete(Unit)
+                    releaseFetch.await()
+                    return store.fetchContact(radioId, publicKey)
+                }
+
+                override fun completeResolvedContactLookup(
+                    context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                    existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                ): ContactLinkTargetCompletion {
+                    publisherThread.set(Thread.currentThread())
+                    return base.completeResolvedContactLookup(context, target, link, existing, publications, cancellation)
+                }
+            }
+            val link = h.container.nodesFeature.uriCodec.exportContactUri(
+                "Cancelled claim", key(31), ContactType.REPEATER,
+            )
+            assertTrue(ChatLinkRouter(environment, routingScope,
+                com.meshcoreone.android.feature.chats.list.ChatListDiagnostics { message, _ -> diagnostics += message },
+            ).route(link))
+            fetchEntered.await()
+            val before = h.container.navigation.currentState
+            val holding = async(Dispatchers.IO) {
+                h.manager.withNavigationCommitBoundary {
+                    holderThread.set(Thread.currentThread())
+                    slotHeld.countDown()
+                    check(releaseSlot.await(30, TimeUnit.SECONDS)) { "Commit boundary was not released" }
+                }
+            }
+            holder = holding
+            assertTrue(slotHeld.await(10, TimeUnit.SECONDS))
+            releaseFetch.complete(Unit)
+            awaitBlockedOnLock(publisherThread, holderThread, ConnectionManager::class.java, "withNavigationCommitBoundary")
+            routingJob.cancel()
+            releaseSlot.countDown()
+            holding.await()
+            routingJob.join()
+            assertEquals(before, h.container.navigation.currentState)
+            assertNull(h.container.navigation.currentState.pendingContactLink)
+            assertNull(h.container.navigation.currentState.pendingContactDetail)
+            assertTrue(diagnostics.isEmpty())
+        } catch (caught: Throwable) {
+            failure = caught
+            throw caught
+        } finally {
+            releaseFetch.complete(Unit)
+            releaseSlot.countDown()
+            finishContactCancellationTest(failure, routingJob, failures, h.container, extraCleanup = {
+                holder?.let { work -> withContext(Dispatchers.IO) { withTimeout(10_000) { work.await() } } }
+            })
+        }
+    }
+
+    @Test fun parentCancelDuringSiblingTraversalDoesNotFenceRealContactPublication() = runTest {
+        for (cancelChild in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            val completionEntered = CountDownLatch(1)
+            val releaseCompletion = CountDownLatch(1)
+            val siblingEntered = CountDownLatch(1)
+            val releaseSibling = CountDownLatch(1)
+            val routingJob = SupervisorJob()
+            val lookupJob = AtomicReference<Job>()
+            val failures = ConcurrentLinkedQueue<Throwable>()
+            val routingScope = CoroutineScope(routingJob + Dispatchers.IO + CoroutineExceptionHandler { _, failure ->
+                failures.add(failure)
+            })
+            val sibling = Job(routingJob)
+            sibling.invokeOnCompletion {
+                siblingEntered.countDown()
+                check(releaseSibling.await(30, TimeUnit.SECONDS)) { "Sibling cancellation was not released" }
+            }
+            val firstCancel = FutureTask { routingJob.cancel() }
+            val repeatCancel = FutureTask { routingJob.cancel() }
+            val firstThread = Thread(firstCancel, "contact-parent-cancel").apply { isDaemon = true }
+            val repeatThread = Thread(repeatCancel, "contact-repeat-parent-cancel").apply { isDaemon = true }
+            val result = AtomicReference<ContactLinkTargetCompletion>()
+            var failure: Throwable? = null
+            try {
+                connect(h)
+                val base = h.container.chatsFeature.list.links
+                val environment = object : ChatLinkEnvironment by base {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        lookupJob.set(checkNotNull(currentCoroutineContext()[Job]))
+                        return base.fetchContact(radioId, publicKey)
+                    }
+
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion {
+                        completionEntered.countDown()
+                        check(releaseCompletion.await(30, TimeUnit.SECONDS)) { "Contact completion was not released" }
+                        return base.completeResolvedContactLookup(
+                            context, target, link, existing, publications, cancellation,
+                        ).also(result::set)
+                    }
+                }
+                val link = h.container.nodesFeature.uriCodec.exportContactUri(
+                    "Delayed parent", key(31), ContactType.REPEATER,
+                )
+                assertTrue(ChatLinkRouter(environment, routingScope).route(link))
+                assertTrue(completionEntered.await(10, TimeUnit.SECONDS), "Contact completion was not reached")
+                val child = checkNotNull(lookupJob.get())
+                val before = h.container.navigation.currentState
+                assertEquals(before, h.container.navigation.state.value)
+                firstThread.start()
+                assertTrue(siblingEntered.await(10, TimeUnit.SECONDS), "Parent did not enter the earlier child")
+                assertTrue(routingJob.isCancelled)
+                assertTrue(child.isActive, "Lookup child must not have received parent cancellation yet")
+                assertFalse(firstCancel.isDone)
+                repeatThread.start()
+                repeatCancel.get(10, TimeUnit.SECONDS)
+                assertFalse(firstCancel.isDone)
+                assertTrue(child.isActive)
+                if (cancelChild) {
+                    child.cancel()
+                    child.cancel()
+                    assertTrue(child.isCancelled)
+                }
+                releaseCompletion.countDown()
+                withContext(Dispatchers.IO) { withTimeout(10_000) { child.join() } }
+                if (cancelChild) {
+                    assertNull(result.get())
+                    assertEquals(before, h.container.navigation.currentState)
+                    assertEquals(before, h.container.navigation.state.value)
+                } else {
+                    assertEquals(
+                        ContactLinkTargetCompletion.Completed(ContactLinkCompletion.ConfirmationStaged),
+                        result.get(),
+                    )
+                    val current = h.container.navigation.currentState
+                    assertEquals("Delayed parent", assertNotNull(current.pendingContactLink).name)
+                    assertEquals(current, h.container.navigation.state.value)
+                }
+            } catch (caught: Throwable) {
+                failure = caught
+                throw caught
+            } finally {
+                releaseCompletion.countDown()
+                releaseSibling.countDown()
+                finishContactCancellationTest(
+                    failure, routingJob, failures, h.container, firstThread to firstCancel, repeatThread to repeatCancel,
+                )
+            }
+        }
+    }
+
+    @Test fun cancelledAfterContactCasStillPublishesTheDeferredDestination() = runTest {
+        for (found in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            val committed = CountDownLatch(1)
+            val releasePublication = CountDownLatch(1)
+            val routingJob = SupervisorJob()
+            val lookupJob = AtomicReference<Job>()
+            val failures = ConcurrentLinkedQueue<Throwable>()
+            val routingScope = CoroutineScope(routingJob + Dispatchers.IO + CoroutineExceptionHandler { _, failure ->
+                failures.add(failure)
+            })
+            val result = AtomicReference<ContactLinkTargetCompletion>()
+            var failure: Throwable? = null
+            try {
+                connect(h)
+                val radio = checkNotNull(h.container.navigation.currentState.radioId)
+                val requestedKey = if (found) key(20) else key(31)
+                if (found) store.saveContact(ContactDTO(
+                    radioId = radio, publicKey = requestedKey, name = "Stored publication peer", lastHeardTimestamp = null,
+                ))
+                val base = h.container.chatsFeature.list.links
+                val environment = object : ChatLinkEnvironment by base {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        lookupJob.set(checkNotNull(currentCoroutineContext()[Job]))
+                        return base.fetchContact(radioId, publicKey)
+                    }
+
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion {
+                        val outcome = base.completeResolvedContactLookup(
+                            context, target, link, existing, publications, cancellation,
+                        )
+                        result.set(outcome)
+                        committed.countDown()
+                        check(releasePublication.await(30, TimeUnit.SECONDS)) { "Contact publication was not released" }
+                        return outcome
+                    }
+                }
+                val link = h.container.nodesFeature.uriCodec.exportContactUri(
+                    "Deferred publication", requestedKey, ContactType.REPEATER,
+                )
+                assertTrue(ChatLinkRouter(environment, routingScope).route(link))
+                assertTrue(committed.await(10, TimeUnit.SECONDS), "Contact CAS was not reached")
+                val child = checkNotNull(lookupJob.get())
+                val navigation = h.container.navigation
+                val beforePublication = navigation.state.value
+                val raw = navigation.currentState
+                assertNotEquals(beforePublication, raw)
+                if (found) {
+                    assertEquals(ContactLinkTargetCompletion.Completed(ContactLinkCompletion.Navigated), result.get())
+                    assertEquals(requestedKey, raw.selectedContact?.publicKey)
+                    assertNull(beforePublication.selectedContact)
+                } else {
+                    assertEquals(
+                        ContactLinkTargetCompletion.Completed(ContactLinkCompletion.ConfirmationStaged),
+                        result.get(),
+                    )
+                    assertEquals("Deferred publication", assertNotNull(raw.pendingContactLink).name)
+                    assertNull(beforePublication.pendingContactLink)
+                }
+                routingJob.cancel()
+                child.cancel()
+                routingJob.cancel()
+                child.cancel()
+                assertEquals(beforePublication, navigation.state.value)
+                releasePublication.countDown()
+                withContext(Dispatchers.IO) { withTimeout(10_000) { child.join() } }
+                h.eventually("the already-committed contact destination is published") {
+                    navigation.state.value == navigation.currentState
+                }
+                if (found) assertEquals(requestedKey, navigation.state.value.selectedContact?.publicKey)
+                else assertEquals("Deferred publication", navigation.state.value.pendingContactLink?.name)
+            } catch (caught: Throwable) {
+                failure = caught
+                throw caught
+            } finally {
+                releasePublication.countDown()
+                finishContactCancellationTest(failure, routingJob, failures, h.container)
+            }
+        }
+    }
+
+    @Test fun externalContactLinksUseTheFirstGraphStoreBeforeLastConnectionPublication() = runTest {
+        val saving = CompletableDeferred<Unit>()
+        val publication = CompletableDeferred<Unit>()
+        val reads = CopyOnWriteArrayList<Pair<RadioId, Bytes>>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDevice(device: DeviceDTO) {
+                saving.complete(Unit)
+                publication.await()
+                store.saveDevice(device)
+            }
+
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                reads.add(radioId to publicKey)
+                return store.fetchContact(radioId, publicKey)
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
+        val saved = ContactDTO(
+            radioId = radio, publicKey = key(20), name = "First graph saved peer", lastHeardTimestamp = null,
+        )
+        h.links.configureRadio = { it.knownContacts += contactFrame(saved.publicKey, saved.name) }
+        try {
+            store.saveDevice(DeviceDTO(id = radio.value, radioId = radio, publicKey = key(7), nodeName = "Saved radio"))
+            store.saveContact(saved)
+            val persisted = assertNotNull(store.fetchContact(radio, saved.publicKey))
+            assertNull(h.container.connectionPort.lastConnectedDeviceId)
+            val connecting = async { h.manager.connect(h.target(radio.value)) }
+            h.eventually("first graph exists while device persistence and preference publication are held") {
+                saving.isCompleted && h.sessions.current != null && h.manager.snapshot.value.token == null
+            }
+            val session = assertNotNull(h.sessions.current)
+            assertEquals(radio, session.token.radioId)
+            assertNull(h.container.connectionPort.lastConnectedDeviceId)
+            assertNull(h.appState.offlineDataStore)
+            assertNull(h.appState.connectedDevice)
+            val navigation = h.container.navigation
+            assertNull(navigation.state.value.radioId)
+            val pending = PendingExternalRoute(
+                AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))::routeExternal,
+            )
+            pending.markReady()
+            mount(h)
+            val accounted = mutableSetOf<String>()
+            for (windowWidth in listOf(390, 834)) {
+                compose.runOnIdle { width.value = windowWidth.dp }
+                val found = PendingExternalRoute.Delivery(
+                    "saved-before-preference-$windowWidth",
+                    h.container.nodesFeature.uriCodec.exportContactUri(
+                        "Untrusted alias", saved.publicKey, ContactType.ROOM,
+                    ),
+                )
+                val readsBefore = reads.size
+                assertEquals(
+                    DeepLinkRouteOutcome.Navigated,
+                    assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.submit(found)).outcome,
+                )
+                assertTrue(reads.drop(readsBefore).contains(radio to saved.publicKey))
+                accounted += found.id
+                val state = navigation.state.value
+                assertEquals(AppTab.NODES, state.selectedTab)
+                assertEquals(NavigationDestination.ContactDetail(persisted), state.activeStack.last().destination)
+                assertNull(state.pendingContactLink)
+                assertEquals(accounted, pending.consumedDeliveryIds())
+                compose.waitForIdle()
+                compose.onNodeWithTag("entry:${state.activeStack.last().id}").assertIsDisplayed()
+                compose.onAllNodesWithText(persisted.displayName).onFirst().assertIsDisplayed()
+                assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(pending.submit(found))
+                navigation.back()
+
+                val request = ContactLinkRequest("Unknown first-graph peer", key(30), ContactType.REPEATER)
+                val absent = PendingExternalRoute.Delivery(
+                    "absent-before-preference-$windowWidth",
+                    h.container.nodesFeature.uriCodec.exportContactUri(request.name, request.publicKey, request.type),
+                )
+                assertEquals(
+                    DeepLinkRouteOutcome.ConfirmationStaged,
+                    assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.submit(absent)).outcome,
+                )
+                accounted += absent.id
+                val staged = assertNotNull(navigation.state.value.pendingContactLink)
+                assertEquals(
+                    request.copy(
+                        targetRadioId = radio, generation = navigation.state.value.generation,
+                        deliveryId = staged.deliveryId,
+                    ),
+                    staged,
+                )
+                assertEquals(accounted, pending.consumedDeliveryIds())
+                compose.waitForIdle()
+                compose.onNodeWithTag("contact-link-confirmation").assertIsDisplayed()
+                compose.onNodeWithTag("contact-link-cancel").performClick()
+                assertNull(navigation.state.value.pendingContactLink)
+                assertNull(store.fetchContact(radio, request.publicKey))
+                assertSame(session, h.sessions.current)
+                assertNull(h.manager.snapshot.value.token)
+                assertNull(h.container.connectionPort.lastConnectedDeviceId)
+            }
+            assertTrue(h.links.radios.all { firmware -> firmware.sent.none { it[0].toInt() == 0x09 } })
+            publication.complete(Unit)
+            h.eventually("first graph completes device and preference publication") { connecting.isCompleted }
+            connecting.await()
+            h.settle()
+            h.assertReady()
+            assertSame(session, h.sessions.current)
+        } finally {
+            publication.complete(Unit)
+            unmount()
+            h.container.close()
+        }
     }
 
     @Test fun contactLinksFromBothProducersSurviveProvisionalFirstGraphBeforeTokenPublication() = runTest {
@@ -2192,6 +4180,119 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             await(h) { n.state.value.pendingContactLink == null }
             assertEquals(existing.id, n.state.value.pendingContactDetail?.id)
             assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+        } finally { unmount(); h.container.close() }
+    }
+
+    @Test fun cancelledContactImportDoesNotNavigateOrConsumeIdenticalReplacementWhenLateAckPersists() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) emptyList() else null }
+        }
+        val cancelledWrites = ConcurrentLinkedQueue<Bytes>()
+        try {
+            connect(h)
+            val radioId = assertNotNull(h.appState.currentRadioId)
+            val firmware = h.links.radios.last()
+            val actual = h.container.nodesFeature
+            val service = assertNotNull(actual.session.contactService())
+            val observingService = object : NodesContactService by service {
+                override suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
+                    try {
+                        service.addOrUpdateContact(radioId, contact)
+                    } catch (cancelled: CancellationException) {
+                        cancelledWrites.add(contact.publicKey)
+                        throw cancelled
+                    }
+                }
+            }
+            val dependencies = NodesFeatureDependencies(
+                object : NodesSession by actual.session {
+                    override fun contactService() = observingService
+                },
+                actual.uriCodec, actual.timeouts, actual.messages, actual.announcer,
+                actual.preferences, actual.clock, actual.locale,
+            )
+            mount(h, dependencies)
+            val navigation = h.container.navigation
+            val external = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))
+            val chat = ChatLinkRouter(h.container.chatsFeature.list.links, backgroundScope)
+            val publicKey = key(30)
+            val name = "Late acknowledgement peer"
+            val type = ContactType.CHAT
+            val uri = actual.uriCodec.exportContactUri(name, publicKey, type)
+
+            assertEquals(DeepLinkRouteOutcome.ConfirmationStaged, external.routeExternal(uri))
+            val first = assertNotNull(navigation.state.value.pendingContactLink)
+            assertEquals(radioId, first.targetRadioId)
+            assertEquals(navigation.state.value.generation, first.generation)
+            assertEquals(name, first.name)
+            assertEquals(publicKey, first.publicKey)
+            assertEquals(type, first.type)
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            h.eventually("contact write reaches the radio", virtualBudgetMillis = 100) {
+                firmware.sent.count { it[0].toInt() == 0x09 } == 1
+            }
+            assertNull(store.fetchContact(radioId, publicKey))
+            compose.onNodeWithTag("contact-link-cancel").performClick()
+            h.eventually("cancelled confirmation leaves the real contact service", virtualBudgetMillis = 100) {
+                publicKey in cancelledWrites
+            }
+            assertNull(navigation.state.value.pendingContactLink)
+            assertNull(store.fetchContact(radioId, publicKey))
+
+            assertTrue(chat.route(uri))
+            h.eventually("identical chat link reaches a new confirmation", virtualBudgetMillis = 100) {
+                navigation.state.value.pendingContactLink?.publicKey == publicKey
+            }
+            val replacement = assertNotNull(navigation.state.value.pendingContactLink)
+            assertNotEquals(assertNotNull(first.deliveryId), assertNotNull(replacement.deliveryId))
+            assertEquals(radioId, replacement.targetRadioId)
+            assertEquals(first.generation, replacement.generation)
+            assertEquals(name, replacement.name)
+            assertEquals(type, replacement.type)
+            h.eventually("replacement confirmation is mounted", virtualBudgetMillis = 100) {
+                compose.onAllNodesWithTag("contact-link-confirmation").fetchSemanticsNodes().isNotEmpty()
+            }
+            val beforeAcknowledgement = navigation.state.value
+            firmware.knownContacts += contactFrame(publicKey, name, actual.clock.wallNow.epochSecond)
+            firmware.push(Bytes.of(0))
+            val persisted = backgroundScope.async {
+                var contact = store.fetchContact(radioId, publicKey)
+                while (contact == null) {
+                    delay(1)
+                    contact = store.fetchContact(radioId, publicKey)
+                }
+                contact
+            }
+            h.eventually("late acknowledgement persists the real Room row", virtualBudgetMillis = 100) {
+                persisted.isCompleted
+            }
+            val added = assertNotNull(persisted.await())
+            assertEquals(radioId, added.radioId)
+            assertEquals(publicKey, added.publicKey)
+            assertEquals(name, added.name)
+            assertEquals(type, added.type)
+            assertEquals(PacketBuilder.FLOOD_PATH_SENTINEL, added.outPathLength)
+            assertEquals(beforeAcknowledgement, navigation.state.value)
+            assertFalse(navigation.completeContactLink(first))
+            assertEquals(replacement, navigation.state.value.pendingContactLink)
+            compose.onNodeWithTag("contact-link-confirmation").assertIsDisplayed()
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 0x09 })
+
+            compose.onNodeWithTag("contact-link-cancel").performClick()
+            assertNull(navigation.state.value.pendingContactLink)
+            val sync = backgroundScope.async { service.syncContactsForRefresh(radioId) }
+            h.eventually("complete radio contact sync finishes") { sync.isCompleted }
+            sync.await()
+            val reloaded = assertNotNull(store.fetchContact(radioId, publicKey))
+            assertEquals(added.id, reloaded.id)
+            assertEquals(DeepLinkRouteOutcome.Navigated, external.routeExternal(uri))
+            await(h) { navigation.state.value.selectedContact?.id == reloaded.id }
+            assertEquals(AppTab.NODES, navigation.state.value.selectedTab)
+            assertEquals(NavigationDestination.ContactDetail(reloaded), navigation.state.value.activeStack.last().destination)
+            compose.onNodeWithTag("entry:${navigation.state.value.activeStack.last().id}").assertIsDisplayed()
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 0x09 })
         } finally { unmount(); h.container.close() }
     }
 

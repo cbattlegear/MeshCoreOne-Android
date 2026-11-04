@@ -12,6 +12,11 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import java.time.Clock
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.DisposableHandle
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -110,6 +115,51 @@ interface ContactLinkContext {
     val disposition: ContactLinkCaptureDisposition
 }
 
+interface ContactLinkResolvedTarget {
+    val radioId: RadioId?
+    val selfPublicKey: com.meshcoreone.android.core.protocol.bytes.Bytes?
+}
+
+sealed interface ContactLinkTargetResolution {
+    data object Stale : ContactLinkTargetResolution
+    data class Current(val target: ContactLinkResolvedTarget) : ContactLinkTargetResolution
+}
+
+sealed interface ContactLinkTargetCompletion {
+    data object TargetChanged : ContactLinkTargetCompletion
+    data class Completed(val outcome: ContactLinkCompletion) : ContactLinkTargetCompletion
+}
+
+class ContactLinkCancellation private constructor() {
+    private val cancelled = AtomicBoolean(false)
+    private val commitGate = Any()
+
+    fun ensureActive() {
+        if (cancelled.get()) throw CancellationException("Contact-link lookup was cancelled")
+    }
+
+    /** Orders this token's cancellation observer with the non-publishing commit, not with Job.cancel or publication. */
+    fun <T> commitIfActive(commit: () -> T): T = synchronized(commitGate) {
+        ensureActive()
+        commit()
+    }
+
+    companion object {
+        @OptIn(InternalCoroutinesApi::class)
+        internal fun observe(job: Job): Pair<ContactLinkCancellation, DisposableHandle> {
+            val cancellation = ContactLinkCancellation()
+            val handle = job.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+                if (cause != null) {
+                    cancellation.cancelled.set(true)
+                    // An already-claimed commit may finish before this observer exits.
+                    synchronized(cancellation.commitGate) { }
+                }
+            }
+            return cancellation to handle
+        }
+    }
+}
+
 interface ContactLinkPublication {
     fun release()
 }
@@ -147,6 +197,13 @@ interface ChatLinkEnvironment {
     fun captureContactLinkContext(
         publicKey: com.meshcoreone.android.core.protocol.bytes.Bytes, publications: ContactLinkPublications,
     ): ContactLinkContext
+    fun resolveContactLinkContext(
+        context: ContactLinkContext, publicKey: com.meshcoreone.android.core.protocol.bytes.Bytes,
+    ): ContactLinkTargetResolution
+    fun completeResolvedContactLookup(
+        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+    ): ContactLinkTargetCompletion
     fun completeContactLookup(
         context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?, publications: ContactLinkPublications,
     ): ContactLinkCompletion

@@ -14,7 +14,6 @@ import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.composer.ui.*
 import com.meshcoreone.android.feature.chats.timeline.*
 import com.meshcoreone.android.feature.chats.timeline.ui.*
-import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -27,8 +26,9 @@ internal fun AppChatConversationScreen(
     links: ConversationLinkActions,
     currentUserName: String?,
     onPickContact: () -> Unit,
-    scrollTo: UUID?,
-    onScrollConsumed: (UUID) -> Unit,
+    scrollTo: PendingMessageScroll?,
+    isScrollCurrent: (PendingMessageScroll) -> Boolean,
+    onScrollConsumed: (PendingMessageScroll) -> Boolean,
     report: (String, Throwable?) -> Unit,
     attachments: @Composable (MessageDTO, Boolean) -> Unit,
     messageAccessibilityLabel: ((MessageDTO) -> String)? = null,
@@ -59,36 +59,43 @@ internal fun AppChatConversationScreen(
     DisposableEffect(timeline) { onDispose { timeline.close() } }
     LaunchedEffect(timeline, scrollTo) {
         val requested = scrollTo ?: return@LaunchedEffect
+        if (!isScrollCurrent(requested)) return@LaunchedEffect
         timeline.state.first { it.hasLoadedOnce && !it.isLoading }
         try {
-            while (timeline.state.value.messages.none { it.id == requested } && timeline.state.value.hasMoreMessages) {
+            while (timeline.state.value.messages.none { it.id == requested.messageId } && timeline.state.value.hasMoreMessages) {
+                if (!isScrollCurrent(requested)) return@LaunchedEffect
                 timeline.state.first { !it.isLoadingOlder }
+                if (!isScrollCurrent(requested)) return@LaunchedEffect
                 val fetched = timeline.state.value.totalFetchedCount
                 timeline.loadOlder()
+                if (!isScrollCurrent(requested)) return@LaunchedEffect
                 timeline.state.value.passiveError?.let { throw it }
                 check(timeline.state.value.totalFetchedCount > fetched || !timeline.state.value.hasMoreMessages) {
                     "Older message loading made no progress"
                 }
             }
-            check(timeline.state.value.messages.any { it.id == requested }) { "Requested message is not in this conversation" }
+            if (!isScrollCurrent(requested)) return@LaunchedEffect
+            check(timeline.state.value.messages.any { it.id == requested.messageId }) {
+                "Requested message is not in this conversation"
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (problem: Exception) {
-            report("Notification message could not be opened", problem)
-            failure = problem
-            onScrollConsumed(requested)
+            if (onScrollConsumed(requested)) {
+                report("Notification message could not be opened", problem)
+                failure = problem
+            }
         }
     }
-    val requested = scrollTo?.takeIf { id -> state.messages.any { it.id == id } }
+    val requested = scrollTo?.takeIf { request -> state.messages.any { it.id == request.messageId } }
     val presented = if (requested == null) state else state.copy(
-        initialAnchor = InitialTimelineAnchor.Message(requested), initialAnchorConsumed = false,
+        initialAnchor = InitialTimelineAnchor.Message(requested.messageId), initialAnchorConsumed = false,
         scrollAnchor = null,
     )
     val callbacks = ChatTimelineCallbacks(
         onLoadOlder = { scope.launch { timeline.loadOlder() } },
         onRetry = { scope.launch { timeline.retry(it.id) } },
         onInitialAnchorConsumed = {
-            timeline.consumeInitialAnchor()
-            requested?.let(onScrollConsumed)
+            if (requested == null || onScrollConsumed(requested)) timeline.consumeInitialAnchor()
         },
         onScrollPositionChanged = timeline::updateScrollPosition,
         onJumpToLatest = timeline::jumpToLatest,
@@ -98,6 +105,7 @@ internal fun AppChatConversationScreen(
         Box(Modifier.weight(1f)) {
             ChatTimeline(
                 presented, callbacks,
+                initialAnchorRequestId = requested?.deliveryId,
                 showSenderName = configuration.showSenderName,
                 showsIncomingAvatars = configuration.showsIncomingAvatars,
                 incomingAvatar = incomingAvatar,

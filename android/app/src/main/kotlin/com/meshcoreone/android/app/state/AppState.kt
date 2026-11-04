@@ -42,6 +42,9 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,6 +73,7 @@ class AppStateDependencies(
     val scope: CoroutineScope,
     /** The live session graph, or null while disconnected (Swift `connectionManager.services`). */
     val session: () -> AppSession?,
+    val isSessionCurrent: (AppSession) -> Boolean = { candidate -> session() === candidate },
     /** Process-lifetime store once a radio has been paired; null so never-paired browsing stays empty. */
     val processStore: () -> PersistenceStoreProtocol?,
     val draftStore: DraftStore,
@@ -114,6 +118,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     val messageEventDispatcher = MessageEventDispatcher(this, messageEventStream, scope)
 
     private val lock = Any()
+    private val sessionLock = Any()
 
     // region Observable counters and references
 
@@ -146,12 +151,15 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     // region Per-session jobs (cancelled on disconnect and re-wire)
 
     private data class SessionJob(val token: SessionToken?, val job: Job)
+    private class SessionWiringAttempt(val session: AppSession)
 
     private var settingsEventsJob: SessionJob? = null
     private var syncDataEventsJob: SessionJob? = null
     private var advertisementEventsJob: SessionJob? = null
     private var rxLogEventsJob: SessionJob? = null
     private var collectorSessionToken: SessionToken? = null
+    private var wiringAttempt: SessionWiringAttempt? = null
+    private var shuttingDown = false
     private var activeRecoveryFallbackJob: Job? = null
     private var bleTransitionTail: Job? = null
 
@@ -161,13 +169,13 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     private val sessionScope = CoroutineScope(scope.coroutineContext + sessionGroup)
 
     /** Test visibility for the per-session collectors (Swift `settingsEventsTask`). */
-    val hasSettingsEventsJob: Boolean get() = synchronized(lock) { settingsEventsJob != null }
+    val hasSettingsEventsJob: Boolean get() = synchronized(sessionLock) { settingsEventsJob != null }
     val activeSessionJobCount: Int get() = sessionGroup.children.count { it.isActive }
 
     /** Installs a long-running job in the settings slot (Swift tests assign `settingsEventsTask` directly). */
     fun installSettingsEventsJobForTesting(job: Job) {
         val token = navigation.currentState.boundSessionToken ?: services?.token
-        val previous = synchronized(lock) { settingsEventsJob.also { settingsEventsJob = SessionJob(token, job) } }
+        val previous = synchronized(sessionLock) { settingsEventsJob.also { settingsEventsJob = SessionJob(token, job) } }
         previous?.job?.cancel()
     }
 
@@ -465,7 +473,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     private fun tearDownAppStateSessionJobs() {
-        val cancelled = synchronized(lock) {
+        val cancelled = synchronized(sessionLock) {
             listOfNotNull(settingsEventsJob, syncDataEventsJob, advertisementEventsJob, rxLogEventsJob).also {
                 settingsEventsJob = null; syncDataEventsJob = null; advertisementEventsJob = null; rxLogEventsJob = null
                 collectorSessionToken = null
@@ -476,7 +484,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     private fun tearDownAppStateSessionJobs(token: SessionToken?) {
-        val cancelled = synchronized(lock) {
+        val cancelled = synchronized(sessionLock) {
             listOfNotNull(
                 settingsEventsJob?.takeIf { it.token == token }?.also { settingsEventsJob = null },
                 syncDataEventsJob?.takeIf { it.token == token }?.also { syncDataEventsJob = null },
@@ -494,51 +502,84 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     suspend fun wireServicesIfConnected() {
         val session = services
         if (session == null) {
-            tearDownAppStateSessionState()
-            syncCoordinator = null
+            var retiringOwner: NavigationCleanupOwner? = null
+            var retiringToken: SessionToken? = null
+            var retiringSync: SyncCoordinator? = null
+            var retiringBump: Any? = null
+            navigation.retireBinding {
+                if (services == null) {
+                    val owner = navigation.captureCleanupOwner()
+                    retiringOwner = owner
+                    synchronized(sessionLock) {
+                        retiringToken = owner.sessionToken ?: collectorSessionToken
+                        retiringSync = syncCoordinator
+                        retiringBump = lastBumpedSession
+                        wiringAttempt = null
+                    }
+                }
+            }
+            val owner = retiringOwner ?: return
+            if (!navigation.clearPendingLinksIfCurrent(owner)) return
+            tearDownAppStateSessionJobs(retiringToken)
+            synchronized(sessionLock) {
+                if (syncCoordinator === retiringSync) syncCoordinator = null
+                if (lastBumpedSession === retiringBump) lastBumpedSession = null
+            }
             connectionUI.handleDisconnect(
                 connectionState, connection.lastConnectedDeviceId, connection.shouldSuppressDisconnectedPill,
             )
             batteryMonitor.stop()
             batteryMonitor.clearThresholds()
-            deps.platform.onConnectionLost()
-            synchronized(lock) { lastBumpedSession = null }
+            deps.platform.onConnectionLost(owner.sessionToken, owner.generation)
             return
         }
+        val attempt = beginSessionWiring(session) ?: return
 
         // The link is up, so drop any pairing-failure alert latched while backgrounded.
         connectionUI.clearPairingFailure()
         // Set before onConnectionEstablished to avoid a race with the first sync-activity event.
         connectionUI.wireCallbacks(session.syncCoordinator, session.advertisementService, session.contactService, deps.resyncFailure)
+        if (!isSessionWiringCurrent(attempt)) return
 
         // A device switch does not fire onConnectionLost, so reset per-radio UI state here.
-        val newDeviceId = connectedDevice?.id
-        val oldDeviceId = lastConnectedDeviceIdForCli
-        if (newDeviceId != null && oldDeviceId != null && newDeviceId != oldDeviceId) navigation.clearPerRadioSelection()
-        lastConnectedDeviceIdForCli = newDeviceId
+        var radioChanged = false
+        if (!commitSessionWiring(attempt) {
+                val newDeviceId = connectedDevice?.id
+                val oldDeviceId = lastConnectedDeviceIdForCli
+                radioChanged = newDeviceId != null && oldDeviceId != null && newDeviceId != oldDeviceId
+                lastConnectedDeviceIdForCli = newDeviceId
+                syncCoordinator = session.syncCoordinator
+            }
+        ) return
+        if (radioChanged && !navigation.clearPerRadioSelectionWhen { ownsSessionWiring(attempt) }) return
 
-        syncCoordinator = session.syncCoordinator
         deps.platform.onSessionWired(session, connectedDevice)
 
-        synchronized(lock) { collectorSessionToken = session.token }
-        wireSyncDataEvents(session)
-        wireSettingsEventStream(session)
-        wireDeviceUpdateCallbacks(session)
-        messageEventDispatcher.wire(session.token, session.subscribeMessageEvents())
-        wirePacketCallbacks(session)
+        if (!commitSessionWiring(attempt) { collectorSessionToken = session.token }) return
+        if (!wireSyncDataEvents(attempt)) return
+        if (!wireSettingsEventStream(attempt)) return
+        if (!wireDeviceUpdateCallbacks(attempt)) return
+        if (!messageEventDispatcher.wireIfCurrent(
+                session.token, session.subscribeMessageEvents(), navigation::retireBinding, reuseExistingSameSession = true,
+            ) { ownsSessionWiring(attempt) }
+        ) return
+        if (!wirePacketCallbacks(attempt)) return
         session.channelService.setSlotOccupantChangedHandler { radioId, indices -> handleChannelSlotOccupantChanged(radioId, indices) }
 
         // Bump only when the container actually changed: connect fires onConnectionReady and then an explicit rewire.
-        val changed = synchronized(lock) {
-            if (lastBumpedSession !== session) { lastBumpedSession = session; true } else false
-        }
+        var changed = false
+        if (!commitSessionWiring(attempt) {
+                changed = lastBumpedSession !== session
+                if (changed) lastBumpedSession = session
+            }
+        ) return
         if (changed) {
             servicesVersionFlow.update { it + 1 }
             deps.platform.onSessionChanged()
         }
 
         session.notificationService.updateBadgeCount()
-        configureNotificationHandlers(session)
+        if (!configureNotificationHandlers(session)) return
         if (session.transportType == TransportType.SIMULATOR) {
             batteryMonitor.stop()
             batteryMonitor.deviceBattery = null
@@ -547,77 +588,115 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         }
     }
 
-    private fun wireSyncDataEvents(session: AppSession) {
-        val events = session.syncCoordinator.dataEvents()
-        replaceJob(session.token, { syncDataEventsJob }, { syncDataEventsJob = it }, sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            events.collect { event ->
-                when (event) {
-                    com.meshcoreone.android.core.services.sync.SyncDataEvent.ContactsChanged -> bumpContactsVersion()
-                    com.meshcoreone.android.core.services.sync.SyncDataEvent.ConversationsChanged -> refreshConversations()
-                    else -> Unit
-                }
-            }
-        })
-    }
-
-    private fun wireSettingsEventStream(session: AppSession) {
-        val subscription = session.settingsService.events()
-        replaceJob(session.token, { settingsEventsJob }, { settingsEventsJob = it }, sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            try {
-                subscription.events.collect { wrapped ->
-                    when (val event = wrapped.event) {
-                        is SettingsEvent.DeviceUpdated -> connection.updateDevice(event.info, event.appliedRadioPresetID)
-                        is SettingsEvent.AutoAddConfigUpdated -> {
-                            connection.updateAutoAddConfig(event.config)
-                            // Clear the storage-full flag when overwrite-oldest is enabled.
-                            if ((event.config.bitmask and AutoAddConfig.OVERWRITE_OLDEST_BIT) != 0.toUByte()) {
-                                connectionUI.isNodeStorageFull = false
-                            }
-                        }
-                        is SettingsEvent.ClientRepeatUpdated -> connection.updateClientRepeat(event.enabled)
-                        is SettingsEvent.PathHashModeUpdated -> connection.updatePathHashMode(event.mode)
-                        is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges)
-                        is SettingsEvent.DefaultFloodScopeUpdated -> connection.updateDefaultFloodScopeName(event.name)
+    private fun beginSessionWiring(session: AppSession): SessionWiringAttempt? {
+        val attempt = SessionWiringAttempt(session)
+        var accepted = false
+        navigation.retireBinding {
+            if (deps.isSessionCurrent(session)) {
+                synchronized(sessionLock) {
+                    if (!shuttingDown) {
+                        wiringAttempt = attempt
+                        accepted = true
                     }
                 }
-            } finally {
-                subscription.close()
             }
-        })
+        }
+        return attempt.takeIf { accepted }
     }
 
-    private fun wireDeviceUpdateCallbacks(session: AppSession) {
+    // Called within the lifecycle boundary; the action may only change local, non-observable fields.
+    private fun commitSessionWiring(attempt: SessionWiringAttempt, action: () -> Unit): Boolean {
+        var committed = false
+        navigation.retireBinding {
+            if (deps.isSessionCurrent(attempt.session)) {
+                synchronized(sessionLock) {
+                    if (wiringAttempt === attempt && !shuttingDown) {
+                        action()
+                        committed = true
+                    }
+                }
+            }
+        }
+        return committed
+    }
+
+    private fun ownsSessionWiring(attempt: SessionWiringAttempt): Boolean =
+        deps.isSessionCurrent(attempt.session) && synchronized(sessionLock) { wiringAttempt === attempt && !shuttingDown }
+
+    private fun isSessionWiringCurrent(attempt: SessionWiringAttempt): Boolean {
+        var current = false
+        navigation.retireBinding { current = ownsSessionWiring(attempt) }
+        return current
+    }
+
+    private fun wireSyncDataEvents(attempt: SessionWiringAttempt): Boolean {
+        val session = attempt.session
+        val events = session.syncCoordinator.dataEvents()
+        return replaceSessionCollector(attempt, events, { syncDataEventsJob }, { syncDataEventsJob = it }) { event ->
+            when (event) {
+                com.meshcoreone.android.core.services.sync.SyncDataEvent.ContactsChanged -> bumpContactsVersion()
+                com.meshcoreone.android.core.services.sync.SyncDataEvent.ConversationsChanged -> refreshConversations()
+                else -> Unit
+            }
+        }
+    }
+
+    private fun wireSettingsEventStream(attempt: SessionWiringAttempt): Boolean {
+        val session = attempt.session
+        val subscription = session.settingsService.events()
+        return replaceSessionCollector(
+            attempt, subscription.events, { settingsEventsJob }, { settingsEventsJob = it }, subscription::close,
+        ) { wrapped ->
+            when (val event = wrapped.event) {
+                is SettingsEvent.DeviceUpdated -> connection.updateDevice(event.info, event.appliedRadioPresetID)
+                is SettingsEvent.AutoAddConfigUpdated -> {
+                    connection.updateAutoAddConfig(event.config)
+                    // Clear the storage-full flag when overwrite-oldest is enabled.
+                    if ((event.config.bitmask and AutoAddConfig.OVERWRITE_OLDEST_BIT) != 0.toUByte()) {
+                        connectionUI.isNodeStorageFull = false
+                    }
+                }
+                is SettingsEvent.ClientRepeatUpdated -> connection.updateClientRepeat(event.enabled)
+                is SettingsEvent.PathHashModeUpdated -> connection.updatePathHashMode(event.mode)
+                is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges)
+                is SettingsEvent.DefaultFloodScopeUpdated -> connection.updateDefaultFloodScopeName(event.name)
+            }
+        }
+    }
+
+    private fun wireDeviceUpdateCallbacks(attempt: SessionWiringAttempt): Boolean {
+        val session = attempt.session
+        if (!isSessionWiringCurrent(attempt)) return false
         session.deviceService.setDeviceUpdateCallback { event -> connection.updateDevice(event.event) }
 
         // ConnectionManager nils the session before teardown yields contactDeletedCleanup; capture the notification service.
         val notifications = session.notificationService
         val events = session.advertisementService.events()
-        replaceJob(session.token, { advertisementEventsJob }, { advertisementEventsJob = it }, sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            events.collect { event ->
-                when (event) {
-                    AdvertisementEvent.ContactUpdated -> bumpContactsVersion()
-                    AdvertisementEvent.ConversationsChanged -> refreshConversations()
-                    is AdvertisementEvent.ContactDeletedCleanup -> {
-                        notifications.removeDeliveredNotifications(event.contactIDs.toSet())
-                        if (event.contactIDs.isNotEmpty()) notifications.updateBadgeCount()
-                    }
-                    else -> Unit
+        return replaceSessionCollector(attempt, events, { advertisementEventsJob }, { advertisementEventsJob = it }) { event ->
+            when (event) {
+                AdvertisementEvent.ContactUpdated -> bumpContactsVersion()
+                AdvertisementEvent.ConversationsChanged -> refreshConversations()
+                is AdvertisementEvent.ContactDeletedCleanup -> {
+                    notifications.removeDeliveredNotifications(event.contactIDs.toSet())
+                    if (event.contactIDs.isNotEmpty()) notifications.updateBadgeCount()
                 }
+                else -> Unit
             }
-        })
+        }
     }
 
     /** Every received RF packet refreshes platform freshness and may trigger an overdue battery read. */
-    private fun wirePacketCallbacks(session: AppSession) {
+    private fun wirePacketCallbacks(attempt: SessionWiringAttempt): Boolean {
+        val session = attempt.session
         val entries = session.rxLogService.entryStream()
-        replaceJob(session.token, { rxLogEventsJob }, { rxLogEventsJob = it }, sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            entries.collect {
+        if (!replaceSessionCollector(attempt, entries, { rxLogEventsJob }, { rxLogEventsJob = it }) {
                 deps.platform.onPacketReceived()
                 if (session.transportType != TransportType.SIMULATOR && deps.platform.hasActiveConnectionActivity()) {
                     batteryMonitor.fetchBatteryIfOverdue(services?.batteryServices, connectedDevice)
                 }
             }
-        })
+        ) return false
+        if (!isSessionWiringCurrent(attempt)) return false
         batteryMonitor.onBatteryChanged = { battery -> scope.launch { deps.platform.onBatteryChanged(battery) } }
         val device = connectedDevice
         if (device != null) {
@@ -625,16 +704,58 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                 deps.platform.onConnectionReady(device, batteryMonitor.activeBatteryOcvArray(device), totalUnreadCount(session))
             }
         }
+        return true
     }
 
-    private fun replaceJob(token: SessionToken, read: () -> SessionJob?, write: (SessionJob?) -> Unit, next: Job) {
-        val previous = synchronized(lock) { read().also { write(SessionJob(token, next)) } }
-        previous?.job?.cancel()
+    private fun <T> replaceSessionCollector(
+        attempt: SessionWiringAttempt,
+        source: Flow<T>,
+        read: () -> SessionJob?,
+        write: (SessionJob?) -> Unit,
+        close: () -> Unit = {},
+        handle: suspend (T) -> Unit,
+    ): Boolean {
+        val admitted = CompletableDeferred<Unit>()
+        val next = sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                source.collect { value ->
+                    admitted.await()
+                    currentCoroutineContext().ensureActive()
+                    handle(value)
+                }
+            } finally {
+                close()
+            }
+        }
+        var previous: SessionJob? = null
+        var installed = false
+        var reused = false
+        try {
+            commitSessionWiring(attempt) {
+                val current = read()
+                if (current != null && current.token == attempt.session.token && current.job.isActive) {
+                    reused = true
+                } else if (!next.isCancelled) {
+                    previous = current
+                    write(SessionJob(attempt.session.token, next))
+                    installed = true
+                }
+            }
+        } finally {
+            if (installed) {
+                admitted.complete(Unit)
+                previous?.job?.cancel()
+            } else {
+                next.cancel()
+            }
+        }
+        return installed || reused
     }
 
     /** Configures notification interaction handlers once services are available (installed on every wire, idempotent). */
-    private fun configureNotificationHandlers(session: AppSession) {
+    private fun configureNotificationHandlers(session: AppSession): Boolean {
         deps.platform.configureNotificationNavigation(session) { connectedDevice }
+        if (services !== session) return false
         val handler = session.notificationActionHandler
         handler.configure(
             isConnectionReady = { connectionState == DeviceConnectionState.READY },
@@ -646,6 +767,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         notifications.onMarkAsRead = { contact, messageId -> handler.handleMarkAsRead(contact, messageId) }
         notifications.onChannelMarkAsRead = { radioId, index, messageId -> handler.handleChannelMarkAsRead(radioId, index, messageId) }
         notifications.onRoomMarkAsRead = { sessionKey, messageId -> handler.handleRoomMarkAsRead(sessionKey, messageId) }
+        return true
     }
 
     suspend fun totalUnreadCount(session: AppSession): Int {
@@ -808,7 +930,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         var retiring: Pair<NavigationCleanupOwner, SessionToken?>? = null
         navigation.retireBinding {
             val owner = navigation.captureCleanupOwner()
-            val token = owner.sessionToken ?: synchronized(lock) { collectorSessionToken }
+            val token = owner.sessionToken ?: synchronized(sessionLock) { collectorSessionToken }
             retiring = owner to token
         }
         val (retiringOwner, retiringToken) = checkNotNull(retiring)
@@ -829,6 +951,12 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     /** Cancels every collaborator job; the process owner calls it at shutdown. */
     fun shutdown() {
+        navigation.retireBinding {
+            synchronized(sessionLock) {
+                shuttingDown = true
+                wiringAttempt = null
+            }
+        }
         tearDownAppStateSessionState()
         prewarmRefresher?.cancelAll()
         batteryMonitor.stop()

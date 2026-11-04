@@ -110,6 +110,35 @@ class AppDeepLinkRouterTest {
     }
 
     @Test
+    fun contactLookupFailureIsUncommittedAndCanRetryWithoutImportConfirmation() = runTest {
+        val failure = IllegalStateException("store unavailable")
+        val environment = FakeEnvironment().apply { contactFailure = failure }
+        val router = AppDeepLinkRouter(environment)
+        val guard = PendingExternalRoute.CommitGuard()
+        val outcome = withContext(guard) { router.routeExternal(contactUri()) }
+        assertSame(failure, assertIs<DeepLinkRouteOutcome.ContactLookupFailed>(outcome).cause)
+        assertFalse(guard.wasCommitted())
+        assertNull(environment.completedContext)
+        assertNull(environment.pendingContact)
+        assertEquals(0, environment.mutations)
+
+        val pending = PendingExternalRoute(router::routeExternal)
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("retry-contact", contactUri())
+        val failed = assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(pending.submit(delivery))
+        assertSame(failure, failed.failure.cause)
+        assertEquals(delivery, pending.snapshot())
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
+        environment.contactFailure = null
+        environment.contacts = listOf(contact(Bytes.fromHex("AB".repeat(32))))
+        val recovered = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.retry())
+        assertEquals(DeepLinkRouteOutcome.Navigated, recovered.outcome)
+        assertNull(environment.pendingContact)
+        assertNull(pending.snapshot())
+        assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
+    }
+
+    @Test
     fun contactLookupUsesCapturedRadioAndSelfRatherThanLiveResampling() = runTest {
         val key = Bytes(ByteArray(32) { 0xAB.toByte() })
         val environment = FakeEnvironment()

@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.state
 import com.meshcoreone.android.core.connectivity.device.RemoveUnfavoritedResult
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RegionSelection
@@ -80,6 +81,7 @@ interface AppStatePlatform {
     suspend fun flushDebugLog() {}
     suspend fun onUnreadCountChanged(totalUnread: Int) {}
     suspend fun onConnectionLost() {}
+    suspend fun onConnectionLost(sessionToken: SessionToken?, navigationGeneration: Long) = onConnectionLost()
     suspend fun onConnectionReady(device: DeviceDTO, ocvArray: List<Long>, unreadCount: Int) {}
     suspend fun onAutoReconnectStarted() {}
     fun onEnterBackground() {}

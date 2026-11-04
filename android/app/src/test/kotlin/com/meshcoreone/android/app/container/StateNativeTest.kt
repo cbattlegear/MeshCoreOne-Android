@@ -38,6 +38,8 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -45,14 +47,17 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
@@ -283,6 +288,591 @@ class StateNativeTest {
         dispatcher.cancelAll()
         testScheduler.runCurrent()
         assertEquals(0, dispatcher.activeJobCount)
+        assertEquals(1, second.statusClosed)
+    }
+
+    @Test fun stalePreparedDispatcherClosesEverySubscriptionWithoutReplacingTheCurrentSession() = runTest {
+        val radio = RadioId(UUID.randomUUID())
+        val epoch = ProcessEpoch(UUID.randomUUID())
+        val first = Sources(SessionToken(epoch, Generation(1), radio))
+        val second = Sources(SessionToken(epoch, Generation(2), radio))
+        val current = AtomicReference(first.token)
+        val boundaryLock = Any()
+        val boundary: (() -> Unit) -> Unit = { action -> synchronized(boundaryLock) { action() } }
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val started = AtomicInteger()
+        val closed = AtomicInteger()
+        val registered = SyncDataEventBroadcaster()
+        val data = registered.subscribe()
+        val firstData = flow {
+            try {
+                started.incrementAndGet()
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Prepared dispatcher was not released" }
+                emitAll(data)
+            } finally {
+                closed.incrementAndGet()
+            }
+        }
+        fun <T> tracked(): Flow<T> = flow {
+            try {
+                started.incrementAndGet()
+                awaitCancellation()
+            } finally {
+                closed.incrementAndGet()
+            }
+        }
+        val firstSources = first.build(firstData, tracked())
+        val prepared = MessageEventSources(
+            firstSources.dataEvents, firstSources.heardRepeats, tracked(), tracked(), tracked(), firstSources.messageStatus,
+        )
+        val host = Host()
+        val stream = MessageEventStream()
+        val dispatcher = MessageEventDispatcher(host, stream, backgroundScope)
+        val received = mutableListOf<MessageEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
+        val stale = async(Dispatchers.IO) {
+            dispatcher.wireIfCurrent(first.token, prepared, boundary) { current.get() == first.token }
+        }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { entered.await(10, TimeUnit.SECONDS) })
+            val contact = ContactDTO(radioId = radio, publicKey = key(2), name = "Old", lastHeardTimestamp = null)
+            val message = MessageDTO(radioId = radio, contactID = contact.id, text = "old", timestamp = 1u, createdAt = EPOCH)
+            registered.yield(SyncDataEvent.DirectMessageReceived(message, contact))
+            synchronized(boundaryLock) { current.set(second.token) }
+            assertTrue(dispatcher.wireIfCurrent(second.token, second.build(), boundary) { current.get() == second.token })
+
+            release.countDown()
+            assertFalse(stale.await())
+            testScheduler.runCurrent()
+            assertEquals(5, started.get())
+            assertEquals(5, closed.get())
+            assertEquals(0, registered.subscriberCount)
+            assertEquals(1, first.statusClosed)
+            assertEquals(0, second.statusClosed)
+            assertEquals(6, dispatcher.activeJobCount)
+            assertTrue(host.prewarmDirect.isEmpty(), "Rejected buffered events must not reach the host")
+            assertFalse(received.any { it is MessageEvent.DirectMessageReceived })
+
+            val messageId = UUID.randomUUID()
+            second.send(MessageStatusEvent.Failed(messageId))
+            testScheduler.runCurrent()
+            assertTrue(received.contains(MessageEvent.MessageFailed(messageId)))
+        } finally {
+            release.countDown()
+            stale.cancelAndJoin()
+            dispatcher.cancelAll()
+            registered.finish()
+        }
+        assertEquals(1, second.statusClosed)
+    }
+
+    @Test fun preparedDispatcherBuffersEventsUntilItsAdmissionCommits() = runTest {
+        val sources = Sources()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val stream = MessageEventStream()
+        val dispatcher = MessageEventDispatcher(Host(), stream, backgroundScope)
+        val received = mutableListOf<MessageEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            stream.events().collect { received += it }
+        }
+        val admitted = async(Dispatchers.IO) {
+            dispatcher.wireIfCurrent(sources.token, sources.build(), { action ->
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Dispatcher admission was not released" }
+                action()
+            }) { true }
+        }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { entered.await(10, TimeUnit.SECONDS) })
+            val messageId = UUID.randomUUID()
+            sources.send(MessageStatusEvent.Failed(messageId))
+            testScheduler.runCurrent()
+            assertTrue(received.isEmpty())
+            release.countDown()
+            assertTrue(admitted.await())
+            testScheduler.runCurrent()
+            assertTrue(received.contains(MessageEvent.MessageFailed(messageId)))
+        } finally {
+            release.countDown()
+            admitted.cancelAndJoin()
+            dispatcher.cancelAll()
+        }
+        assertEquals(1, sources.statusClosed)
+    }
+
+    @Test fun sameSessionRewireDoesNotReplayEventsAlreadyHandledByItsExistingDispatcher() = runTest {
+        val first = Sources()
+        val second = Sources(first.token)
+        val broadcaster = SyncDataEventBroadcaster()
+        val stream = MessageEventStream()
+        val dispatcher = MessageEventDispatcher(Host(), stream, backgroundScope)
+        val received = mutableListOf<MessageEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
+        dispatcher.wire(first.token, first.build(broadcaster.subscribe()))
+
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val next = second.build(broadcaster.subscribe())
+        val pending = async(Dispatchers.IO) {
+            dispatcher.wireIfCurrent(first.token, next, { action ->
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Same-session dispatcher was not released" }
+                action()
+            }, reuseExistingSameSession = true) { true }
+        }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { entered.await(10, TimeUnit.SECONDS) })
+            val contact = ContactDTO(radioId = first.token.radioId, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
+            val message = MessageDTO(
+                radioId = first.token.radioId, contactID = contact.id, text = "once", timestamp = 1u, createdAt = EPOCH,
+            )
+            broadcaster.yield(SyncDataEvent.DirectMessageReceived(message, contact))
+            testScheduler.runCurrent()
+            assertEquals(1, received.filterIsInstance<MessageEvent.DirectMessageReceived>().count { it.message.id == message.id })
+
+            release.countDown()
+            assertTrue(pending.await())
+            testScheduler.runCurrent()
+            assertEquals(1, received.filterIsInstance<MessageEvent.DirectMessageReceived>().count { it.message.id == message.id })
+            assertEquals(1, broadcaster.subscriberCount)
+            assertEquals(0, first.statusClosed)
+            assertEquals(1, second.statusClosed)
+            assertEquals(6, dispatcher.activeJobCount)
+
+            val later = message.copy(id = UUID.randomUUID(), text = "later")
+            broadcaster.yield(SyncDataEvent.DirectMessageReceived(later, contact))
+            testScheduler.runCurrent()
+            assertEquals(1, received.filterIsInstance<MessageEvent.DirectMessageReceived>().count { it.message.id == later.id })
+        } finally {
+            release.countDown()
+            pending.cancelAndJoin()
+            dispatcher.cancelAll()
+            broadcaster.finish()
+        }
+        assertEquals(1, first.statusClosed)
+    }
+
+    @Test fun sameSessionRewireRetainsLiveCollectorsAfterAnotherStreamCompletesNormally() = runTest {
+        val first = Sources()
+        val second = Sources(first.token)
+        val broadcaster = SyncDataEventBroadcaster()
+        val stream = MessageEventStream()
+        val dispatcher = MessageEventDispatcher(Host(), stream, backgroundScope)
+        val received = mutableListOf<MessageEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
+        val original = first.build(broadcaster.subscribe())
+        val completed = MessageEventSources(
+            original.dataEvents, original.heardRepeats, original.regionUpdates,
+            flow<RemoteNodeEvent> {}, original.roomServer, original.messageStatus,
+        )
+        dispatcher.wire(first.token, completed)
+        assertEquals(5, dispatcher.activeJobCount)
+
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val next = second.build(broadcaster.subscribe())
+        val pending = async(Dispatchers.IO) {
+            dispatcher.wireIfCurrent(first.token, next, { action ->
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Same-session dispatcher was not released" }
+                action()
+            }, reuseExistingSameSession = true) { true }
+        }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { entered.await(10, TimeUnit.SECONDS) })
+            val contact = ContactDTO(radioId = first.token.radioId, publicKey = key(3), name = "Peer", lastHeardTimestamp = null)
+            val message = MessageDTO(
+                radioId = first.token.radioId, contactID = contact.id, text = "once", timestamp = 1u, createdAt = EPOCH,
+            )
+            broadcaster.yield(SyncDataEvent.DirectMessageReceived(message, contact))
+            testScheduler.runCurrent()
+            assertEquals(1, received.filterIsInstance<MessageEvent.DirectMessageReceived>().count { it.message.id == message.id })
+            release.countDown()
+            assertTrue(pending.await())
+            testScheduler.runCurrent()
+            assertEquals(1, received.filterIsInstance<MessageEvent.DirectMessageReceived>().count { it.message.id == message.id })
+            assertEquals(1, broadcaster.subscriberCount)
+            assertEquals(0, first.statusClosed)
+            assertEquals(1, second.statusClosed)
+            val later = message.copy(id = UUID.randomUUID(), text = "later")
+            broadcaster.yield(SyncDataEvent.DirectMessageReceived(later, contact))
+            testScheduler.runCurrent()
+            assertEquals(1, received.filterIsInstance<MessageEvent.DirectMessageReceived>().count { it.message.id == later.id })
+        } finally {
+            release.countDown()
+            pending.cancelAndJoin()
+            dispatcher.cancelAll()
+            broadcaster.finish()
+        }
+        assertEquals(1, first.statusClosed)
+    }
+
+    @Test fun failedSameSessionStreamRejectsReplacementWithoutReplayingOtherStreams() = runTest {
+        val first = Sources()
+        val second = Sources(first.token)
+        val broadcaster = SyncDataEventBroadcaster()
+        val stream = MessageEventStream()
+        val dispatcher = MessageEventDispatcher(Host(), stream, backgroundScope)
+        val received = mutableListOf<MessageEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
+        val failure = CompletableDeferred<Unit>()
+        val original = first.build(broadcaster.subscribe())
+        val failing = MessageEventSources(
+            original.dataEvents, original.heardRepeats, original.regionUpdates,
+            flow<RemoteNodeEvent> {
+                failure.await()
+                throw IllegalStateException("remote event source failed")
+            },
+            original.roomServer, original.messageStatus,
+        )
+        assertTrue(dispatcher.wireIfCurrent(first.token, failing, { it() }) { true })
+        failure.complete(Unit)
+        testScheduler.runCurrent()
+
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val next = second.build(broadcaster.subscribe())
+        val pending = async(Dispatchers.IO) {
+            dispatcher.wireIfCurrent(first.token, next, { action ->
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Same-session dispatcher was not released" }
+                action()
+            }, reuseExistingSameSession = true) { true }
+        }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { entered.await(10, TimeUnit.SECONDS) })
+            val contact = ContactDTO(radioId = first.token.radioId, publicKey = key(4), name = "Peer", lastHeardTimestamp = null)
+            val message = MessageDTO(
+                radioId = first.token.radioId, contactID = contact.id, text = "once", timestamp = 1u, createdAt = EPOCH,
+            )
+            broadcaster.yield(SyncDataEvent.DirectMessageReceived(message, contact))
+            testScheduler.runCurrent()
+            release.countDown()
+            assertFalse(pending.await())
+            testScheduler.runCurrent()
+            assertEquals(1, received.filterIsInstance<MessageEvent.DirectMessageReceived>().count { it.message.id == message.id })
+            assertEquals(1, broadcaster.subscriberCount)
+            assertEquals(0, first.statusClosed)
+            assertEquals(1, second.statusClosed)
+            val later = message.copy(id = UUID.randomUUID(), text = "later")
+            broadcaster.yield(SyncDataEvent.DirectMessageReceived(later, contact))
+            testScheduler.runCurrent()
+            assertEquals(1, received.filterIsInstance<MessageEvent.DirectMessageReceived>().count { it.message.id == later.id })
+        } finally {
+            release.countDown()
+            pending.cancelAndJoin()
+            dispatcher.cancelAll()
+            broadcaster.finish()
+        }
+        assertEquals(1, first.statusClosed)
+    }
+
+    @Test fun aStreamFailureDuringPreparationDoesNotInstallTheDispatcher() = runTest {
+        val sources = Sources()
+        val original = sources.build()
+        val failing = MessageEventSources(
+            original.dataEvents, original.heardRepeats, original.regionUpdates,
+            flow<RemoteNodeEvent> { throw IllegalStateException("remote event source failed") },
+            original.roomServer, original.messageStatus,
+        )
+        val dispatcher = MessageEventDispatcher(Host(), MessageEventStream(), backgroundScope)
+        assertFalse(dispatcher.wireIfCurrent(sources.token, failing, { it() }) { true })
+        assertEquals(0, dispatcher.activeJobCount)
+        assertEquals(1, sources.statusClosed)
+    }
+
+    @Test fun aFailedPreparedRewireDoesNotReplaceAHealthyCurrentDispatcher() = runTest {
+        val first = Sources()
+        val second = Sources(first.token)
+        val dispatcher = MessageEventDispatcher(Host(), MessageEventStream(), backgroundScope)
+        dispatcher.wire(first.token, first.build())
+        val next = second.build()
+        val failing = MessageEventSources(
+            next.dataEvents, next.heardRepeats, next.regionUpdates,
+            flow<RemoteNodeEvent> { throw IllegalStateException("remote event source failed") },
+            next.roomServer, next.messageStatus,
+        )
+        try {
+            assertFalse(
+                dispatcher.wireIfCurrent(first.token, failing, { it() }, reuseExistingSameSession = true) { true },
+            )
+            assertEquals(6, dispatcher.activeJobCount)
+            assertEquals(0, first.statusClosed)
+            assertEquals(1, second.statusClosed)
+        } finally {
+            dispatcher.cancelAll()
+        }
+        assertEquals(1, first.statusClosed)
+    }
+
+    @Test fun failedReplacementSessionRetiresTheOldDispatcher() = runTest {
+        val first = Sources()
+        val replacement = Sources(
+            SessionToken(first.token.epoch, Generation(first.token.generation.value + 1), first.token.radioId),
+        )
+        val dispatcher = MessageEventDispatcher(Host(), MessageEventStream(), backgroundScope)
+        dispatcher.wire(first.token, first.build())
+        val next = replacement.build()
+        val failing = MessageEventSources(
+            next.dataEvents, next.heardRepeats, next.regionUpdates,
+            flow<RemoteNodeEvent> { throw IllegalStateException("remote event source failed") },
+            next.roomServer, next.messageStatus,
+        )
+        assertFalse(dispatcher.wireIfCurrent(replacement.token, failing, { it() }) { true })
+        assertEquals(0, dispatcher.activeJobCount)
+        assertEquals(1, first.statusClosed)
+        assertEquals(1, replacement.statusClosed)
+    }
+
+    @Test fun failedStalePreparationDoesNotRetireTheCurrentDispatcher() = runTest {
+        val stale = Sources()
+        val current = Sources(
+            SessionToken(stale.token.epoch, Generation(stale.token.generation.value + 1), stale.token.radioId),
+        )
+        val dispatcher = MessageEventDispatcher(Host(), MessageEventStream(), backgroundScope)
+        dispatcher.wire(current.token, current.build())
+        val next = stale.build()
+        val failing = MessageEventSources(
+            next.dataEvents, next.heardRepeats, next.regionUpdates,
+            flow<RemoteNodeEvent> { throw IllegalStateException("remote event source failed") },
+            next.roomServer, next.messageStatus,
+        )
+        try {
+            assertFalse(dispatcher.wireIfCurrent(stale.token, failing, { it() }) { false })
+            assertEquals(6, dispatcher.activeJobCount)
+            assertEquals(0, current.statusClosed)
+            assertEquals(1, stale.statusClosed)
+        } finally {
+            dispatcher.cancelAll()
+        }
+        assertEquals(1, current.statusClosed)
+    }
+
+    @Test fun aHealthyNewSessionCanReplaceAFailedDispatcher() = runTest {
+        val first = Sources()
+        val replacement = Sources(
+            SessionToken(first.token.epoch, Generation(first.token.generation.value + 1), first.token.radioId),
+        )
+        val failure = CompletableDeferred<Unit>()
+        val original = first.build()
+        val failing = MessageEventSources(
+            original.dataEvents, original.heardRepeats, original.regionUpdates,
+            flow<RemoteNodeEvent> {
+                failure.await()
+                throw IllegalStateException("remote event source failed")
+            },
+            original.roomServer, original.messageStatus,
+        )
+        val dispatcher = MessageEventDispatcher(Host(), MessageEventStream(), backgroundScope)
+        try {
+            assertTrue(dispatcher.wireIfCurrent(first.token, failing, { it() }) { true })
+            failure.complete(Unit)
+            testScheduler.runCurrent()
+            assertTrue(dispatcher.wireIfCurrent(replacement.token, replacement.build(), { it() }) { true })
+            assertEquals(1, first.statusClosed)
+            assertEquals(0, replacement.statusClosed)
+            assertEquals(6, dispatcher.activeJobCount)
+        } finally {
+            dispatcher.cancelAll()
+        }
+        assertEquals(1, replacement.statusClosed)
+    }
+
+    @Test fun aStreamCancelledBeforeRetirementRejectsSameSessionReplacement() = runTest {
+        val first = Sources()
+        val second = Sources(first.token)
+        val cancelled = CompletableDeferred<Unit>()
+        val original = first.build()
+        val cancelling = MessageEventSources(
+            original.dataEvents, original.heardRepeats, original.regionUpdates,
+            flow<RemoteNodeEvent> {
+                cancelled.await()
+                throw CancellationException("remote event source cancelled")
+            },
+            original.roomServer, original.messageStatus,
+        )
+        val dispatcher = MessageEventDispatcher(Host(), MessageEventStream(), backgroundScope)
+        try {
+            assertTrue(dispatcher.wireIfCurrent(first.token, cancelling, { it() }) { true })
+            cancelled.complete(Unit)
+            testScheduler.runCurrent()
+            assertFalse(
+                dispatcher.wireIfCurrent(first.token, second.build(), { it() }, reuseExistingSameSession = true) { true },
+            )
+            assertEquals(0, first.statusClosed)
+            assertEquals(1, second.statusClosed)
+        } finally {
+            dispatcher.cancelAll()
+        }
+        assertEquals(1, first.statusClosed)
+    }
+
+    @Test fun cancellingAllRejectsAStillPreparedDispatcher() = runTest {
+        val sources = Sources()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val dispatcher = MessageEventDispatcher(Host(), MessageEventStream(), backgroundScope)
+        val pending = async(Dispatchers.IO) {
+            dispatcher.wireIfCurrent(sources.token, sources.build(), { action ->
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Dispatcher admission was not released" }
+                action()
+            }) { true }
+        }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { entered.await(10, TimeUnit.SECONDS) })
+            dispatcher.cancelAll()
+            assertEquals(1, sources.statusClosed)
+            release.countDown()
+            assertFalse(pending.await())
+            testScheduler.runCurrent()
+            assertEquals(0, dispatcher.activeJobCount)
+            assertEquals(1, sources.statusClosed)
+        } finally {
+            release.countDown()
+            pending.cancelAndJoin()
+            dispatcher.cancelAll()
+        }
+    }
+
+    @Test fun retiringASessionRejectsItsPreparedDispatcherWithoutRetiringTheReplacement() = runTest {
+        val radio = RadioId(UUID.randomUUID())
+        val epoch = ProcessEpoch(UUID.randomUUID())
+        val first = Sources(SessionToken(epoch, Generation(1), radio))
+        val second = Sources(SessionToken(epoch, Generation(2), radio))
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val stream = MessageEventStream()
+        val dispatcher = MessageEventDispatcher(Host(), stream, backgroundScope)
+        val received = mutableListOf<MessageEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
+        val pending = async(Dispatchers.IO) {
+            dispatcher.wireIfCurrent(first.token, first.build(), { action ->
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Retiring dispatcher was not released" }
+                action()
+            }) { true }
+        }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { entered.await(10, TimeUnit.SECONDS) })
+            dispatcher.wire(second.token, second.build())
+            dispatcher.cancelForSession(first.token)
+            assertEquals(1, first.statusClosed)
+            assertEquals(0, second.statusClosed)
+            release.countDown()
+            assertFalse(pending.await())
+            testScheduler.runCurrent()
+            assertEquals(6, dispatcher.activeJobCount)
+            val messageId = UUID.randomUUID()
+            second.send(MessageStatusEvent.Failed(messageId))
+            testScheduler.runCurrent()
+            assertTrue(received.contains(MessageEvent.MessageFailed(messageId)))
+        } finally {
+            release.countDown()
+            pending.cancelAndJoin()
+            dispatcher.cancelAll()
+        }
+        assertEquals(1, first.statusClosed)
+        assertEquals(1, second.statusClosed)
+    }
+
+    @Test fun retiringDuringPreparationStillCollectsAndClosesEveryRegisteredSource() = runTest {
+        val radio = RadioId(UUID.randomUUID())
+        val epoch = ProcessEpoch(UUID.randomUUID())
+        val first = Sources(SessionToken(epoch, Generation(1), radio))
+        val second = Sources(SessionToken(epoch, Generation(2), radio))
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val started = AtomicInteger()
+        val closed = AtomicInteger()
+        val broadcaster = SyncDataEventBroadcaster()
+        val registered = broadcaster.subscribe()
+        val data = flow {
+            try {
+                started.incrementAndGet()
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Source preparation was not released" }
+                emitAll(registered)
+            } finally {
+                closed.incrementAndGet()
+            }
+        }
+        fun <T> tracked(): Flow<T> = flow {
+            try {
+                started.incrementAndGet()
+                awaitCancellation()
+            } finally {
+                closed.incrementAndGet()
+            }
+        }
+        val initial = first.build(data, tracked())
+        val sources = MessageEventSources(
+            initial.dataEvents, initial.heardRepeats, tracked(), tracked(), tracked(), initial.messageStatus,
+        )
+        val dispatcher = MessageEventDispatcher(Host(), MessageEventStream(), backgroundScope)
+        val pending = async(Dispatchers.IO) { dispatcher.wireIfCurrent(first.token, sources, { it() }) { true } }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { entered.await(10, TimeUnit.SECONDS) })
+            dispatcher.cancelForSession(first.token)
+            dispatcher.wire(second.token, second.build())
+            release.countDown()
+            assertFalse(pending.await())
+            testScheduler.runCurrent()
+            assertEquals(5, started.get())
+            assertEquals(5, closed.get())
+            assertEquals(0, broadcaster.subscriberCount)
+            assertEquals(1, first.statusClosed)
+            assertEquals(0, second.statusClosed)
+            assertEquals(6, dispatcher.activeJobCount)
+        } finally {
+            release.countDown()
+            pending.cancelAndJoin()
+            dispatcher.cancelAll()
+            broadcaster.finish()
+        }
+        assertEquals(1, second.statusClosed)
+    }
+
+    @Test fun retiringThePredecessorDoesNotRejectAValidPreparedReplacement() = runTest {
+        val radio = RadioId(UUID.randomUUID())
+        val epoch = ProcessEpoch(UUID.randomUUID())
+        val first = Sources(SessionToken(epoch, Generation(1), radio))
+        val second = Sources(SessionToken(epoch, Generation(2), radio))
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val stream = MessageEventStream()
+        val dispatcher = MessageEventDispatcher(Host(), stream, backgroundScope)
+        val received = mutableListOf<MessageEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { stream.events().collect { received += it } }
+        dispatcher.wire(first.token, first.build())
+        val replacement = async(Dispatchers.IO) {
+            dispatcher.wireIfCurrent(second.token, second.build(), { action ->
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Replacement dispatcher was not released" }
+                action()
+            }) { true }
+        }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { entered.await(10, TimeUnit.SECONDS) })
+            dispatcher.cancelForSession(first.token)
+            release.countDown()
+            assertTrue(replacement.await())
+            testScheduler.runCurrent()
+            assertEquals(1, first.statusClosed)
+            assertEquals(0, second.statusClosed)
+            assertEquals(6, dispatcher.activeJobCount)
+            val messageId = UUID.randomUUID()
+            second.send(MessageStatusEvent.Failed(messageId))
+            testScheduler.runCurrent()
+            assertTrue(received.contains(MessageEvent.MessageFailed(messageId)))
+        } finally {
+            release.countDown()
+            replacement.cancelAndJoin()
+            dispatcher.cancelAll()
+        }
         assertEquals(1, second.statusClosed)
     }
 

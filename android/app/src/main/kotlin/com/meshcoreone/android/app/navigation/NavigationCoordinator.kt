@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.model.snapshotMap
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.chats.list.ChatRoute
 import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublication
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
@@ -120,15 +121,25 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         val selection = ChatSelection.Direct(contact)
         it.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
             pendingChatContact = contact, chatsSelectedRoute = selection,
-            pendingScrollToMessageID = scrollToMessageID, tabBarVisible = false,
-        )
+            tabBarVisible = false,
+        ).withMessageScroll(scrollToMessageID)
     }
 
     fun navigateToChannel(channel: ChannelDTO, scrollToMessageID: UUID? = null) = mutableState.update {
         val selection = ChatSelection.Channel(channel)
         it.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
             pendingChannel = channel, chatsSelectedRoute = selection,
-            pendingScrollToMessageID = scrollToMessageID, tabBarVisible = false,
+            tabBarVisible = false,
+        ).withMessageScroll(scrollToMessageID)
+    }
+
+    private fun NavigationState.withMessageScroll(messageId: UUID?): NavigationState {
+        if (messageId == null) return copy(pendingMessageScroll = null)
+        val entry = stacks.getValue(AppTab.CHATS).last()
+        check(entry.destination is NavigationDestination.Chat) { "A message scroll requires a chat destination" }
+        return copy(
+            pendingMessageScroll = PendingMessageScroll(nextEntryId, entry.id, messageId),
+            nextEntryId = Math.incrementExact(nextEntryId),
         )
     }
 
@@ -380,7 +391,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         link: ContactLinkRequest, contact: ContactDTO?,
         currentToken: SessionToken?, allowInitialBinding: Boolean, identifiedSelfPublicKey: Bytes?,
         selectChats: Boolean, publications: ContactLinkPublications,
+        cancellation: ContactLinkCancellation? = null,
     ): ContactLinkResolvedCompletion {
+        cancellation?.ensureActive()
         if (target.origin !== lookup) return ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.StaleContext)
         var publication: NavigationStateStore.Publication? = null
         while (true) {
@@ -414,7 +427,10 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             }
             val next = destination.copy(contactLookupRevision = Math.incrementExact(current.contactLookupRevision))
             val deferred = publication ?: contactLinkPublication(publications).also { publication = it }
-            if (mutableState.compareAndSet(snapshot, next, deferred)) {
+            val committed = cancellation?.commitIfActive {
+                mutableState.compareAndSet(snapshot, next, deferred)
+            } ?: mutableState.compareAndSet(snapshot, next, deferred)
+            if (committed) {
                 return ContactLinkResolvedCompletion.Completed(outcome)
             }
         }
@@ -495,7 +511,20 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     fun clearPendingRoomAuthentication() = mutableState.update { it.withoutRoomAuthentication() }
     fun clearPendingChannelNavigation() = mutableState.update { it.copy(pendingChannel = null) }
     fun clearPendingDiscoveryNavigation() = mutableState.update { it.copy(pendingDiscoveryNavigation = false) }
-    fun clearPendingScrollToMessage() = mutableState.update { it.copy(pendingScrollToMessageID = null) }
+    fun clearPendingScrollToMessage() = mutableState.update { it.copy(pendingMessageScroll = null) }
+
+    internal fun isPendingMessageScroll(entryId: Long, request: PendingMessageScroll): Boolean =
+        mutableState.value.pendingMessageScrollFor(entryId) == request
+
+    internal fun consumePendingMessageScroll(entryId: Long, request: PendingMessageScroll): Boolean {
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
+            if (current.pendingMessageScrollFor(entryId) != request) return false
+            if (mutableState.compareAndSet(snapshot, current.copy(pendingMessageScroll = null))) return true
+        }
+    }
+
     fun clearPendingContactDetailNavigation() = mutableState.update { it.copy(pendingContactDetail = null) }
     fun clearPendingMapFocus() = mutableState.update { it.copy(pendingMapFocus = null) }
     fun clearPendingContactLink() = stageContactLink(null)
@@ -507,6 +536,17 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     // AndroidOnly: WP-302 WP303 signals real graph readiness; composition never claims readiness or performs lookup.
     fun setNavigationReady(ready: Boolean) = mutableState.update { it.copy(navigationReady = ready) }
+
+    internal fun setNavigationReadyWhen(ready: Boolean, isCurrent: () -> Boolean): Boolean {
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            when (commitIfCurrent(snapshot, snapshot.value.copy(navigationReady = ready), isCurrent)) {
+                null -> return false
+                true -> return true
+                false -> Unit
+            }
+        }
+    }
 
     fun enqueueNotification(payload: NotificationPayload, manualAddContacts: Boolean = false): Long {
         val request = NotificationNavigationRequest.fromPayload(payload, manualAddContacts)
@@ -540,6 +580,18 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         clearRadioSelection(it).copy(generation = Math.incrementExact(it.generation))
     }
 
+    internal fun clearPerRadioSelectionWhen(isCurrent: () -> Boolean): Boolean {
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val next = clearRadioSelection(snapshot.value).copy(generation = Math.incrementExact(snapshot.value.generation))
+            when (commitIfCurrent(snapshot, next, isCurrent)) {
+                null -> return false
+                true -> return true
+                false -> Unit
+            }
+        }
+    }
+
     internal fun captureCleanupOwner(): NavigationCleanupOwner = mutableState.value.let {
         NavigationCleanupOwner(it.boundSessionToken, it.radioId, it.generation)
     }
@@ -559,6 +611,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                     } else {
                         val next = clearRadioSelection(current).copy(
                             generation = Math.incrementExact(current.generation),
+                            navigationReady = false,
                             pendingContactLink = null, pendingChannelLink = null, pendingHashtag = null,
                         )
                         if (mutableState.compareAndSet(snapshot, next, publication)) result = true
@@ -587,7 +640,14 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         localPublicKey: Bytes?,
         token: SessionToken? = null,
         isCurrentSession: () -> Boolean = { true },
-    ): Boolean {
+    ): Boolean = bindNotificationSessionOwned(radioId, localPublicKey, token, isCurrentSession) != null
+
+    internal fun bindNotificationSessionOwned(
+        radioId: RadioId,
+        localPublicKey: Bytes?,
+        token: SessionToken?,
+        isCurrentSession: () -> Boolean,
+    ): NavigationCleanupOwner? {
         require(token == null || token.radioId == radioId) { "Session token must match the navigation radio" }
         while (true) {
             val snapshot = mutableState.snapshot()
@@ -611,8 +671,8 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             val withContact = if (eligible == null) next else next.stageContactLink(eligible, radioId)
             val withRoom = if (eligibleRoom == null) withContact else withContact.stageRoomAuthentication(eligibleRoom)
             when (commitIfCurrent(snapshot, withRoom, isCurrentSession)) {
-                null -> return false
-                true -> return true
+                null -> return null
+                true -> return NavigationCleanupOwner(token, radioId, withRoom.generation)
                 false -> Unit
             }
         }
@@ -646,7 +706,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             pendingRoomAuthentication = null, roomAuthenticationDeliveryId = null, roomAuthenticationGeneration = null,
             roomAuthenticationSessionToken = null,
             pendingContactDetail = pendingContactDetail?.takeIf { it.radioId == radioId },
-            pendingScrollToMessageID = pendingScrollToMessageID.takeIf { chats != null },
+            pendingMessageScroll = retained.pendingMessageScroll?.takeIf {
+                chats != null && it.entryId == retained.stacks.getValue(AppTab.CHATS).last().id
+            },
         )
     }
 
@@ -659,7 +721,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             pendingRoomAuthentication = null, roomAuthenticationDeliveryId = null, roomAuthenticationGeneration = null,
             roomAuthenticationSessionToken = null,
             pendingContactDetail = null,
-            pendingDiscoveryNavigation = false, pendingScrollToMessageID = null, pendingMapFocus = null,
+            pendingDiscoveryNavigation = false, pendingMessageScroll = null, pendingMapFocus = null,
         )
 
     fun manuallyDisconnect() = mutableState.update {
@@ -693,7 +755,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                         pendingChatContact = if (current.selectedTab == AppTab.CHATS) null else current.pendingChatContact,
                         pendingChannel = if (current.selectedTab == AppTab.CHATS) null else current.pendingChannel,
                         pendingRoomSession = if (current.selectedTab == AppTab.CHATS) null else current.pendingRoomSession,
-                        pendingScrollToMessageID = if (current.selectedTab == AppTab.CHATS) null else current.pendingScrollToMessageID,
+                        pendingMessageScroll = if (current.selectedTab == AppTab.CHATS) null else current.pendingMessageScroll,
                         pendingContactDetail = if (current.selectedTab == AppTab.NODES) null else current.pendingContactDetail,
                         pendingDiscoveryNavigation = if (current.selectedTab == AppTab.NODES) false else current.pendingDiscoveryNavigation,
                     )
@@ -764,16 +826,15 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                         val selection = ChatSelection.Direct(resolved.contact)
                         delivery.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
                             pendingChatContact = resolved.contact, chatsSelectedRoute = selection,
-                            pendingScrollToMessageID = resolved.messageId, tabBarVisible = false,
-                        )
+                            tabBarVisible = false,
+                        ).withMessageScroll(resolved.messageId)
                     }
                     is Resolved.Channel -> {
                         val selection = ChatSelection.Channel(resolved.channel)
                         delivery.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
                             pendingChannel = resolved.channel, chatsSelectedRoute = selection,
-                            pendingScrollToMessageID = resolved.messageId, tabBarVisible = false,
-                            failure = resolved.recoveryFailure,
-                        )
+                            tabBarVisible = false, failure = resolved.recoveryFailure,
+                        ).withMessageScroll(resolved.messageId)
                     }
                     is Resolved.Room -> {
                         if (resolved.session.isConnected) {

@@ -6,6 +6,7 @@ import com.meshcoreone.android.app.navigation.CapturedContactLinkContext
 import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
+import com.meshcoreone.android.app.navigation.NavigationCleanupOwner
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationDestination
 import com.meshcoreone.android.app.navigation.NavigationFailure
@@ -40,7 +41,9 @@ import com.meshcoreone.android.core.connectivity.service.ForegroundServiceStarte
 import com.meshcoreone.android.core.contracts.domain.Capability
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
+import com.meshcoreone.android.core.contracts.domain.ConnectionSnapshot
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.MessagingIssueReporter
 import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
@@ -85,10 +88,12 @@ import com.meshcoreone.android.feature.nodes.deps.Announcer
 import com.meshcoreone.android.feature.nodes.deps.StringListPreferences
 import com.meshcoreone.android.feature.nodes.deps.UserFacingMessages
 import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import java.time.Instant
 import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -172,6 +177,8 @@ class AppContainerDependencies(
     internal val chatContent: AppChatContent? = null,
     val newBootstrapDebugLog: (CoroutineScope) -> DebugLogBuffer? = { null },
     val runtimeRecoveryDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    /** Dispatcher for the process-owned, session-checked notification READY retry. */
+    val notificationReadyDispatcher: CoroutineDispatcher = Dispatchers.Default,
     /** The actual process-store adapter used by simulator generations; physical-only test compositions may omit it. */
     val simulatorSeedStore: SimulatorSeedStore? = null,
     /** Passive pre-barrier persistence observer; must not block, throw or perform lifecycle work. */
@@ -273,6 +280,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         configuration = dependencies.sessionConfiguration,
         recoveryDispatcher = dependencies.runtimeRecoveryDispatcher,
         simulatorDeviceId = MockDataProvider.simulatorDeviceID,
+        publicationRegistry = sessions.publicationIdentity,
     )
 
     val pairing: PairingCoordinator = PairingCoordinator(
@@ -305,6 +313,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         isCurrentSession = ::isCurrentSession,
     )
     private val disconnectWatcher: Job by lazy { watchDisconnects() }
+    private val notificationReadyWatcher: Job by lazy { watchNotificationReadiness() }
 
     private fun <T> withNavigationCommitBoundary(action: () -> T): T =
         connectionManager.withNavigationCommitBoundary {
@@ -321,23 +330,27 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         }
 
     internal fun captureContactNavigationSession(generation: Long): () -> Boolean {
-        val (initiating, stamp) = connectionManager.withNavigationCommitBoundary {
-            sessions.withNavigationCommitBoundary { it to connectionManager.captureNavigationLifecycle() }
+        val (initiating, stamp) = withNavigationCommitBoundary {
+            sessions.current to connectionManager.captureNavigationLifecycle()
         }
         return {
-            if (initiating != null) {
-                isCurrentSession(initiating) ||
-                    sessions.current === initiating && !initiating.isTornDown &&
-                    connectionManager.isNavigationSessionCurrent(initiating.token, allowUnpublished = true) &&
-                    connectionManager.snapshot.value.token == null &&
-                    navigation.currentState.let { it.radioId == null && it.generation == generation }
-            } else {
+            withNavigationCommitBoundary {
                 val current = sessions.current
-                if (current == null) {
+                if (initiating != null) {
+                    current === initiating && !initiating.isTornDown &&
+                        connectionManager.isInitialNavigationSession(
+                            stamp, initiating.token, sessions.publicationIdentity, initiating,
+                        ) &&
+                        (connectionManager.snapshot.value.token == initiating.token ||
+                            connectionManager.snapshot.value.token == null &&
+                            navigation.currentState.let { it.radioId == null && it.generation == generation })
+                } else if (current == null) {
                     connectionManager.isNavigationLifecycleCurrent(stamp)
                 } else {
                     !current.isTornDown &&
-                        connectionManager.isInitialNavigationSession(stamp, current.token) &&
+                        connectionManager.isInitialNavigationSession(
+                            stamp, current.token, sessions.publicationIdentity, current,
+                        ) &&
                         navigation.currentState.let {
                             it.radioId == null && it.generation == generation ||
                                 it.initialContactLinkGeneration == generation &&
@@ -367,7 +380,9 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                 publicKey, radio, selfKey, graph?.token, connectionManager.snapshot.value.token,
                 if (graph == null) connectionManager.isNavigationLifecycleCurrent(lifecycle)
                 else !graph.isTornDown &&
-                    connectionManager.isNavigationSessionCurrent(graph.token, allowUnpublished = true),
+                    connectionManager.isInitialNavigationSession(
+                        lifecycle, graph.token, sessions.publicationIdentity, graph,
+                    ),
                 publications,
             ),
             graph, lifecycle,
@@ -393,17 +408,19 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     internal fun completeResolvedContactLookup(
         context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
         link: ContactLinkRequest, existing: ContactDTO?, selectChats: Boolean, publications: ContactLinkPublications,
+        cancellation: ContactLinkCancellation? = null,
     ): ContactLinkResolvedCompletion {
         val captured = context as? CapturedContactLinkContext
             ?: return ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.StaleContext)
         return withNavigationCommitBoundary {
+            cancellation?.ensureActive()
             val current = sessions.current
             val lookup = captured.lookup
             if (!isCapturedContactGraphCurrent(captured, current)) {
                 ContactLinkResolvedCompletion.Completed(ContactLinkCompletion.StaleContext)
             } else navigation.completeResolvedCapturedContactLookup(
                 lookup, target, link, existing, current?.token, lookup.allowsInitialBinding,
-                current?.navigationPublicKey.takeIf { lookup.allowsInitialBinding }, selectChats, publications,
+                current?.navigationPublicKey.takeIf { lookup.allowsInitialBinding }, selectChats, publications, cancellation,
             )
         }
     }
@@ -437,12 +454,14 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                 connectionManager.isNavigationLifecycleCurrent(captured.lifecycle)
             current.isTornDown -> false
             captured.graph != null -> current === captured.graph &&
-                if (lookup.boundToken == current.token)
-                    connectionManager.isNavigationSessionCurrent(current.token)
-                else lookup.allowsInitialBinding &&
-                    connectionManager.isInitialNavigationSession(captured.lifecycle, current.token)
+                (lookup.boundToken == current.token || lookup.allowsInitialBinding) &&
+                connectionManager.isInitialNavigationSession(
+                    captured.lifecycle, current.token, sessions.publicationIdentity, current,
+                )
             else -> lookup.allowsInitialBinding &&
-                connectionManager.isInitialNavigationSession(captured.lifecycle, current.token)
+                connectionManager.isInitialNavigationSession(
+                    captured.lifecycle, current.token, sessions.publicationIdentity, current,
+                )
         }
     }
 
@@ -451,6 +470,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             connection = connectionPort,
             scope = dependencies.mainScope,
             session = { sessions.current },
+            isSessionCurrent = ::isCurrentSession,
             processStore = { dependencies.store },
             draftStore = dependencies.draftStore,
             connectionUi = ConnectionUiState(dependencies.mainScope, dependencies.runtimeClock, dependencies.accessibility),
@@ -594,6 +614,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     fun start(): Job {
         hostBinding?.start()
         disconnectWatcher.start()
+        notificationReadyWatcher.start()
         watchPermissions()
         return dependencies.mainScope.launch { appState.initialize() }
     }
@@ -607,6 +628,46 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                     if (connectionManager.activeReconnectDeviceId == null) appState.reconcileSessionLoss()
                 }
         }
+
+    private fun watchNotificationReadiness(): Job =
+        uiScope.launch {
+            val subscription = connectionManager.subscribeTransitions()
+            try {
+                var previousReady: SessionToken? = null
+                fun observe(snapshot: ConnectionSnapshot) {
+                    val ready = snapshot.token.takeIf { snapshot.state == DeviceConnectionState.READY }
+                    if (ready != null && ready != previousReady) scheduleNotificationReadyRetry(ready)
+                    previousReady = ready
+                }
+                observe(subscription.initial)
+                subscription.transitions.collect { observe(it) }
+            } finally {
+                subscription.close()
+            }
+        }
+
+    private fun scheduleNotificationReadyRetry(token: SessionToken) {
+        // A transition may resume its collector while the manager publishes under its lock.
+        processScope.launch(Dispatchers.Default) {
+            withContext(dependencies.notificationReadyDispatcher) {
+                val ready = withNavigationCommitBoundary {
+                    val snapshot = connectionManager.snapshot.value
+                    val current = sessions.current
+                    snapshot.state == DeviceConnectionState.READY && snapshot.token == token &&
+                        current != null && current.token == token && statePlatform.isReadyFor(current)
+                }
+                if (ready) {
+                    try {
+                        dependencies.onNotificationNavigationReady()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        dependencies.connectivityDiagnostics.report("notificationNavigation.ready", failure)
+                    }
+                }
+            }
+        }
+    }
 
     /** Checks permission revocation on each foreground edge (the first read becomes the baseline). */
     private fun watchPermissions() {
@@ -682,13 +743,19 @@ private class ContainerAppStatePlatform(
     private val isCurrentSession: (com.meshcoreone.android.app.state.AppSession) -> Boolean,
 ) : AppStatePlatform by delegate, AutoCloseable {
     private val lookup = PersistenceNavigationLookup(store)
-    private var session: com.meshcoreone.android.app.state.AppSession? = null
-    private var generation: Long? = null
-    private var binding: NotificationNavigationBinding? = null
+    private data class InstalledBinding(
+        val session: com.meshcoreone.android.app.state.AppSession,
+        val owner: NavigationCleanupOwner,
+        val binding: NotificationNavigationBinding,
+    )
+
+    @Volatile private var installed: InstalledBinding? = null
+    @Volatile private var closed = false
 
     fun isReadyFor(current: com.meshcoreone.android.app.state.AppSession): Boolean {
+        val binding = installed ?: return false
         val state = navigation.currentState
-        return isCurrentSession(current) && session === current && binding != null && generation == state.generation &&
+        return isCurrentSession(current) && binding.session === current && binding.owner.generation == state.generation &&
             state.boundSessionToken == current.token && state.navigationReady
     }
 
@@ -698,50 +765,92 @@ private class ContainerAppStatePlatform(
     ) {
         if (!isCurrentSession(session)) return
         delegate.configureNotificationNavigation(session, connectedDevice)
-        val current = navigation.currentState
-        if (this.session !== session || generation != current.generation || current.boundSessionToken != session.token) {
-            binding?.close()
-            binding = null
-            if (this.session !== session || current.boundSessionToken != session.token ||
-                current.radioId != session.token.radioId
-            ) {
-                if (!navigation.bindNotificationSession(session.token.radioId, connectedDevice()?.publicKey, session.token) {
-                    isCurrentSession(session)
-                }) return
+        var adopted: InstalledBinding? = null
+        var existingOwner: NavigationCleanupOwner? = null
+        navigation.retireBinding {
+            if (!closed && isCurrentSession(session)) {
+                val owner = navigation.captureCleanupOwner()
+                if (owner.sessionToken == session.token && owner.radioId == session.token.radioId) {
+                    existingOwner = owner
+                    installed?.takeIf { it.session === session && it.owner == owner }?.let { adopted = it }
+                }
             }
-            binding = NotificationNavigationBinding(
-                session.notificationService, navigation, lookup, connectedDevice,
-                onOutcome = { outcome ->
-                    if (outcome is com.meshcoreone.android.app.navigation.NavigationOutcome.Failed) {
-                        java.util.logging.Logger.getLogger("com.mc1.Navigation").warning(
-                            "Notification navigation failed: ${outcome.failure.javaClass.simpleName}",
-                        )
-                    }
-                },
-                isCurrentSession = { isCurrentSession(session) },
-            )
-            this.session = session
-            generation = navigation.currentState.generation
         }
-        navigation.setNavigationReady(true)
+        if (adopted == null) {
+            val owner = existingOwner ?: navigation.bindNotificationSessionOwned(
+                session.token.radioId, connectedDevice()?.publicKey, session.token,
+            ) { !closed && isCurrentSession(session) } ?: return
+            var previous: InstalledBinding? = null
+            navigation.retireBinding {
+                if (!closed && isCurrentSession(session) && navigation.captureCleanupOwner() == owner) {
+                    val next = InstalledBinding(
+                        session, owner,
+                        NotificationNavigationBinding(
+                            session.notificationService, navigation, lookup, connectedDevice,
+                            onOutcome = { outcome ->
+                                if (outcome is com.meshcoreone.android.app.navigation.NavigationOutcome.Failed) {
+                                    java.util.logging.Logger.getLogger("com.mc1.Navigation").warning(
+                                        "Notification navigation failed: ${outcome.failure.javaClass.simpleName}",
+                                    )
+                                }
+                            },
+                            isCurrentSession = { isCurrentSession(session) },
+                        ),
+                    )
+                    previous = installed
+                    installed = next
+                    adopted = next
+                }
+            }
+            previous?.binding?.close()
+        }
+        val current = adopted ?: return
+        if (!navigation.setNavigationReadyWhen(true) {
+                !closed && installed === current && isCurrentSession(session) &&
+                    navigation.captureCleanupOwner() == current.owner
+            }) return
         onNavigationReady()
     }
 
     override suspend fun onConnectionLost() {
-        close()
+        val owner = installed?.owner
+        if (owner != null) retireOwned { it.owner == owner }
         delegate.onConnectionLost()
     }
 
+    override suspend fun onConnectionLost(sessionToken: SessionToken?, navigationGeneration: Long) {
+        retireOwned { it.owner.sessionToken == sessionToken && it.owner.generation == navigationGeneration }
+        delegate.onConnectionLost(sessionToken, navigationGeneration)
+    }
+
     fun retire(retired: com.meshcoreone.android.app.state.AppSession) {
-        if (session === retired) close()
+        retireOwned { it.session === retired }
+    }
+
+    private fun retireOwned(matches: (InstalledBinding) -> Boolean) {
+        var retiring: InstalledBinding? = null
+        navigation.retireBinding {
+            val current = installed
+            if (current != null && matches(current)) {
+                retiring = current
+                installed = null
+            }
+        }
+        retiring?.let { current ->
+            navigation.setNavigationReadyWhen(false) { navigation.captureCleanupOwner() == current.owner }
+            current.binding.close()
+        }
     }
 
     override fun close() {
+        var retiring: InstalledBinding? = null
+        navigation.retireBinding {
+            closed = true
+            retiring = installed
+            installed = null
+        }
         navigation.setNavigationReady(false)
-        binding?.close()
-        binding = null
-        session = null
-        generation = null
+        retiring?.binding?.close()
     }
 
     override suspend fun flushDebugLog() {

@@ -435,6 +435,12 @@ class RoomAccessibilityComposeTest {
         val revision: Long,
     ) : ContactLinkContext
 
+    private class ResolvedRoomContact(
+        val capture: CapturedRoomContact,
+        override val radioId: RadioId?,
+        override val selfPublicKey: Bytes?,
+    ) : ContactLinkResolvedTarget
+
     private inner class Fixture(
         messages: List<RoomMessageDTO>,
         private val room: RemoteNodeSessionDTO = session,
@@ -497,6 +503,27 @@ class RoomAccessibilityComposeTest {
             return CapturedRoomContact(
                 this, currentRadioId, connectedDevicePublicKey, disposition, publicKey, contactRevision,
             )
+        }
+        override fun resolveContactLinkContext(context: ContactLinkContext, publicKey: Bytes): ContactLinkTargetResolution {
+            val captured = context as? CapturedRoomContact ?: return ContactLinkTargetResolution.Stale
+            if (captured.owner !== this || captured.publicKey != publicKey || captured.radioId != currentRadioId ||
+                captured.selfPublicKey != connectedDevicePublicKey || captured.revision != contactRevision
+            ) return ContactLinkTargetResolution.Stale
+            return ContactLinkTargetResolution.Current(
+                ResolvedRoomContact(captured, captured.radioId, captured.selfPublicKey),
+            )
+        }
+        override fun completeResolvedContactLookup(
+            context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+            existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+        ): ContactLinkTargetCompletion {
+            cancellation.ensureActive()
+            val resolved = target as? ResolvedRoomContact
+                ?: return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
+            if (resolved.capture !== context || resolved.capture.owner !== this ||
+                resolved.radioId != resolved.capture.radioId || resolved.selfPublicKey != resolved.capture.selfPublicKey
+            ) return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
+            return ContactLinkTargetCompletion.Completed(completeContactLookup(context, link, existing, publications))
         }
         override fun completeContactLookup(
             context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?,

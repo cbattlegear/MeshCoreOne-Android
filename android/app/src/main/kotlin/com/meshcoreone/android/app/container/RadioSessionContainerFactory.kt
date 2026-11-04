@@ -2,9 +2,15 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.runtime.FactoryOwnership
+import com.meshcoreone.android.core.runtime.RuntimePublicationAuthority
+import com.meshcoreone.android.core.runtime.RuntimePublicationCounts
+import com.meshcoreone.android.core.runtime.RuntimePublicationOutcome
+import com.meshcoreone.android.core.runtime.RuntimePublicationRetirement
+import com.meshcoreone.android.core.runtime.RuntimePublicationSlot
 import com.meshcoreone.android.core.runtime.RuntimeServiceFactory
 import com.meshcoreone.android.core.runtime.RuntimeServiceInputs
 import com.meshcoreone.android.core.runtime.RuntimeServices
+import kotlinx.coroutines.CancellationException
 
 /**
  * Creates a [RadioSessionContainer] for each generation the runtime connection manager starts. The runtime calls it
@@ -21,8 +27,11 @@ class RadioSessionContainerFactory(
             inputs, ownership,
             environment.withLifecycle(registry),
         )
-        registry.publish(container)
-        return container
+        return when (val outcome = registry.publish(container, inputs.publication)) {
+            RuntimePublicationOutcome.PUBLISHED, RuntimePublicationOutcome.ALREADY_PUBLISHED -> container
+            RuntimePublicationOutcome.STALE_OWNER -> throw CancellationException("Session publication owner is stale")
+            else -> throw IllegalStateException("Session publication rejected: $outcome")
+        }
     }
 
     private fun SessionEnvironment.withLifecycle(registry: SessionRegistry): SessionEnvironment {
@@ -51,30 +60,28 @@ class RadioSessionContainerFactory(
  * late teardown can never clear its successor.
  */
 class SessionRegistry {
-    private val lock = Any()
-    private var live: RadioSessionContainer? = null
-    private var createdCount = 0
-    private var tornDownCount = 0
+    private val slot = RuntimePublicationSlot<RadioSessionContainer>()
 
-    val current: RadioSessionContainer? get() = synchronized(lock) { live }
+    val current: RadioSessionContainer? get() = slot.current
+    internal val publicationIdentity get() = slot.identity
 
     internal fun <T> withNavigationCommitBoundary(action: (RadioSessionContainer?) -> T): T =
-        synchronized(lock) { action(live) }
+        slot.withCurrent(action)
 
-    /** Containers created since process start (leak accounting). */
-    val created: Int get() = synchronized(lock) { createdCount }
-    val tornDown: Int get() = synchronized(lock) { tornDownCount }
+    /** A coherent snapshot of registry publications and their completed withdrawals. */
+    val counts: RuntimePublicationCounts get() = slot.counts
+    val created: Int get() = counts.created
+    val tornDown: Int get() = counts.tornDown
 
-    /** Containers created and not yet torn down. */
-    val outstanding: Int get() = synchronized(lock) { createdCount - tornDownCount }
+    /** Published containers not yet torn down, including a displaced predecessor. */
+    val outstanding: Int get() = counts.outstanding
 
-    fun publish(container: RadioSessionContainer) = synchronized(lock) {
-        createdCount += 1
-        live = container
-    }
+    internal fun publish(container: RadioSessionContainer, authority: RuntimePublicationAuthority): RuntimePublicationOutcome =
+        authority.publish(slot.target(container))
 
-    fun withdraw(container: RadioSessionContainer) = synchronized(lock) {
-        tornDownCount += 1
-        if (live === container) live = null
+    fun withdraw(container: RadioSessionContainer) {
+        check(slot.withdraw(container) != RuntimePublicationRetirement.DIFFERENT_REGISTRY) {
+            "Session belongs to another registry"
+        }
     }
 }

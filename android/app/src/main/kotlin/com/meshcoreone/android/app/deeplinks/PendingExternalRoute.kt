@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.deeplinks
 
 import com.meshcoreone.android.core.model.SnapshotSet
 import com.meshcoreone.android.core.model.snapshotSet
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
@@ -13,6 +14,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -21,12 +25,15 @@ class PendingExternalRoute(
     private val route: suspend (String) -> DeepLinkRouteOutcome,
 ) {
     data class Delivery(val id: String, val uri: String)
+    data class LookupFailure(val deliveryId: String, val attempt: Long, val cause: Exception)
 
     sealed interface SubmitOutcome {
         data object Staged : SubmitOutcome
         data object Duplicate : SubmitOutcome
         data object Superseded : SubmitOutcome
+        data object Cancelled : SubmitOutcome
         data class Routed(val outcome: DeepLinkRouteOutcome) : SubmitOutcome
+        data class RetryableFailure(val failure: DeepLinkRouteOutcome.ContactLookupFailed) : SubmitOutcome
     }
 
     private val mutex = Mutex()
@@ -34,10 +41,25 @@ class PendingExternalRoute(
     private var ready = false
     private var pending: Delivery? = null
     private var inFlight: Routing? = null
+    private var attemptSequence = 0L
+    private val mutableLookupFailure = MutableStateFlow<LookupFailure?>(null)
+    val lookupFailure: StateFlow<LookupFailure?> = mutableLookupFailure.asStateFlow()
 
     suspend fun submit(delivery: Delivery): SubmitOutcome = drain(delivery)
     suspend fun markReady(): SubmitOutcome = drain(becomeReady = true)
     suspend fun retry(): SubmitOutcome = drain()
+
+    suspend fun retry(expectedDeliveryId: String, expectedAttempt: Long): SubmitOutcome =
+        drain(expectedFailure = expectedDeliveryId to expectedAttempt)
+
+    suspend fun cancel(expectedDeliveryId: String, expectedAttempt: Long): SubmitOutcome = mutex.withLock {
+        currentCoroutineContext().ensureActive()
+        if (!matchesFailure(expectedDeliveryId, expectedAttempt)) return@withLock SubmitOutcome.Superseded
+        pending = null
+        mutableLookupFailure.value = null
+        rememberConsumed(expectedDeliveryId)
+        SubmitOutcome.Cancelled
+    }
 
     suspend fun snapshot(): Delivery? = mutex.withLock { pending }
 
@@ -47,9 +69,16 @@ class PendingExternalRoute(
      */
     suspend fun consumedDeliveryIds(): SnapshotSet<String> = mutex.withLock { consumed.snapshotSet() }
 
-    private suspend fun drain(delivery: Delivery? = null, becomeReady: Boolean = false): SubmitOutcome = coroutineScope {
+    private suspend fun drain(
+        delivery: Delivery? = null,
+        becomeReady: Boolean = false,
+        expectedFailure: Pair<String, Long>? = null,
+    ): SubmitOutcome = coroutineScope {
         val routing = mutex.withLock {
             currentCoroutineContext().ensureActive()
+            if (expectedFailure != null && !matchesFailure(expectedFailure.first, expectedFailure.second)) {
+                return@coroutineScope SubmitOutcome.Superseded
+            }
             if (delivery != null) {
                 if (delivery.id in consumed || delivery.id == pending?.id) {
                     return@coroutineScope SubmitOutcome.Duplicate
@@ -62,13 +91,20 @@ class PendingExternalRoute(
                     inFlight = null
                 }
                 pending = delivery
+                mutableLookupFailure.value = null
             }
             if (becomeReady) ready = true
             val next = pending ?: return@coroutineScope SubmitOutcome.Staged
             if (!ready || inFlight != null) return@coroutineScope SubmitOutcome.Staged
+            mutableLookupFailure.value = null
             val guard = CommitGuard()
-            Routing(next, guard, async(guard, start = CoroutineStart.LAZY) {
-                route(next.uri).also { guard.recordCompletion() }
+            attemptSequence = Math.incrementExact(attemptSequence)
+            val lookupFailure = AtomicReference<DeepLinkRouteOutcome.ContactLookupFailed?>(null)
+            Routing(next, attemptSequence, guard, lookupFailure, async(guard, start = CoroutineStart.LAZY) {
+                route(next.uri).also {
+                    if (it is DeepLinkRouteOutcome.ContactLookupFailed) lookupFailure.set(it)
+                    else guard.recordCompletion()
+                }
             })
                 .also { inFlight = it }
         }
@@ -78,6 +114,8 @@ class PendingExternalRoute(
                 currentCoroutineContext().ensureActive()
                 if (routing.superseded) {
                     SubmitOutcome.Superseded
+                } else if (outcome is DeepLinkRouteOutcome.ContactLookupFailed) {
+                    SubmitOutcome.RetryableFailure(outcome)
                 } else {
                     pending = null
                     rememberConsumed(routing.delivery.id)
@@ -98,11 +136,22 @@ class PendingExternalRoute(
                             rememberConsumed(routing.delivery.id)
                         }
                         inFlight = null
+                        routing.lookupFailure.get()?.let {
+                            if (!routing.guard.wasCommitted() && pending?.id == routing.delivery.id) {
+                                mutableLookupFailure.value = LookupFailure(
+                                    routing.delivery.id, routing.attempt, it.cause,
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
+
+    private fun matchesFailure(deliveryId: String, attempt: Long): Boolean =
+        pending?.id == deliveryId && inFlight == null &&
+            mutableLookupFailure.value?.let { it.deliveryId == deliveryId && it.attempt == attempt } == true
 
     private fun rememberConsumed(id: String) {
         consumed += id
@@ -131,7 +180,9 @@ class PendingExternalRoute(
 
     private class Routing(
         val delivery: Delivery,
+        val attempt: Long,
         val guard: CommitGuard,
+        val lookupFailure: AtomicReference<DeepLinkRouteOutcome.ContactLookupFailed?>,
         val execution: Deferred<DeepLinkRouteOutcome>,
     ) {
         var superseded = false

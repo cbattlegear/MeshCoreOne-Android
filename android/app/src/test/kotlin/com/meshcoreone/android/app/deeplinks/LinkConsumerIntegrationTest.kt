@@ -40,6 +40,106 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
     private val sanFrancisco = "meshcore://map?lat=37.7749&lon=-122.4194"
     private val focus = MapFocusRequest(37.7749, -122.4194)
 
+    @Test fun externalContactAdapterReadsCapturedRadioWithoutLastConnectionPreference() = runTest {
+        val radio = RadioId(java.util.UUID.fromString("447175B7-557D-4F48-B671-4B2CEE2DC932"))
+        val foreignRadio = RadioId(java.util.UUID.fromString("547175B7-557D-4F48-B671-4B2CEE2DC932"))
+        store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Restored"))
+        store.saveDevice(DeviceDTO(radioId = foreignRadio, publicKey = key(8), nodeName = "Other"))
+        val saved = ContactDTO(radioId = radio, publicKey = key(20), name = "Restored peer", lastHeardTimestamp = null)
+        val foreign = ContactDTO(radioId = foreignRadio, publicKey = key(21), name = "Other peer", lastHeardTimestamp = null)
+        store.saveContact(saved)
+        store.saveContact(foreign)
+        val h = ContainerHarness(this, store)
+        try {
+            assertNull(h.container.appState.offlineDataStore)
+            val adapter = ContainerDeepLinkEnvironment(h.container, h.container.navigation)
+            assertEquals(saved, adapter.fetchContact(radio, saved.publicKey))
+            assertNull(adapter.fetchContact(radio, foreign.publicKey))
+            assertEquals(foreign, adapter.fetchContact(foreignRadio, foreign.publicKey))
+            assertNull(adapter.fetchContact(radio, key(22)))
+            assertNull(h.sessions.current)
+            assertTrue(h.links.radios.isEmpty())
+        } finally { h.container.close() }
+    }
+
+    @Test fun externalContactAdapterDoesNotTurnProcessStoreFailureIntoAbsence() = runTest {
+        val radio = RadioId(java.util.UUID.fromString("447175B7-557D-4F48-B671-4B2CEE2DC932"))
+        val failure = IllegalStateException("contact lookup failed")
+        val failingStore = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? = throw failure
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = failingStore)
+        try {
+            assertNull(h.container.appState.offlineDataStore)
+            val adapter = ContainerDeepLinkEnvironment(h.container, h.container.navigation)
+            assertSame(failure, assertFailsWith<IllegalStateException> { adapter.fetchContact(radio, key(20)) })
+            assertNull(h.sessions.current)
+            assertTrue(h.links.radios.isEmpty())
+        } finally { h.container.close() }
+    }
+
+    @Test fun externalContactStoreFailureRetainsDeliveryUntilRecoveredRoomLookup() = runTest {
+        val failure = IllegalStateException("contact lookup unavailable")
+        var failLookup = false
+        val observedRadios = mutableListOf<RadioId>()
+        val recoveringStore = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                observedRadios += radioId
+                if (failLookup) throw failure
+                return store.fetchContact(radioId, publicKey)
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = recoveringStore)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved peer") }
+        try {
+            val started = h.container.start()
+            h.eventually("lookup recovery fixture starts") { started.isCompleted }
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("lookup recovery graph is ready") {
+                connecting.isCompleted && h.manager.connectionState == DeviceConnectionState.READY &&
+                    h.container.navigation.state.value.navigationReady
+            }
+            connecting.await()
+            val radio = assertNotNull(h.sessions.current).token.radioId
+            val saved = assertNotNull(store.fetchContact(radio, key(20)))
+            val navigation = h.container.navigation
+            navigation.navigateToMap(focus.latitude, focus.longitude)
+            val router = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))
+            val pending = PendingExternalRoute(router::routeExternal)
+            pending.markReady()
+            val delivery = PendingExternalRoute.Delivery(
+                "recover-contact",
+                h.container.nodesFeature.uriCodec.exportContactUri("Alias", key(20), ContactType.REPEATER),
+            )
+            observedRadios.clear()
+            failLookup = true
+            val failed = assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(pending.submit(delivery))
+            assertSame(failure, failed.failure.cause)
+            assertEquals(delivery, pending.snapshot())
+            assertTrue(pending.consumedDeliveryIds().isEmpty())
+            assertNull(navigation.currentState.pendingContactLink)
+            assertEquals(AppTab.MAP, navigation.currentState.selectedTab)
+            assertEquals(focus, navigation.currentState.pendingMapFocus)
+
+            failLookup = false
+            val recovered = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.retry())
+            assertEquals(DeepLinkRouteOutcome.Navigated, recovered.outcome)
+            assertEquals(saved, navigation.currentState.selectedContact)
+            assertEquals(listOf(radio, radio), observedRadios)
+            assertNull(pending.snapshot())
+            assertTrue(delivery.id in pending.consumedDeliveryIds())
+            assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(pending.submit(delivery))
+            val absent = assertIs<PendingExternalRoute.SubmitOutcome.Routed>(
+                pending.submit(PendingExternalRoute.Delivery(
+                    "absent-contact",
+                    h.container.nodesFeature.uriCodec.exportContactUri("Absent", key(30), ContactType.REPEATER),
+                )),
+            )
+            assertEquals(DeepLinkRouteOutcome.ConfirmationStaged, absent.outcome)
+            assertEquals(key(30), assertNotNull(navigation.currentState.pendingContactLink).publicKey)
+        } finally { h.container.close() }
+    }
+
     @Test fun initialViewIntentIsHeldUntilActualContainerBinding() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val h = ContainerHarness(this, store)

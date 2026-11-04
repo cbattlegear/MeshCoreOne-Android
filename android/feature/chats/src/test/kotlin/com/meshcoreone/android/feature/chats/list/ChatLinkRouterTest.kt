@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.support.FakeLinks
 import com.meshcoreone.android.feature.chats.list.support.Fixtures
 import com.meshcoreone.android.feature.chats.list.support.OriginalCase
@@ -14,31 +15,156 @@ import com.meshcoreone.android.feature.chats.list.support.settle
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertSame
 import kotlin.test.assertFailsWith
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import java.lang.management.ManagementFactory
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Test
 
 class ChatLinkRouterTest {
     private fun Scenario.router(links: FakeLinks = FakeLinks()) = links to ChatLinkRouter(links, scope)
 
+    private fun finishThreads(vararg workers: Pair<Thread, FutureTask<*>>) {
+        var failure: Throwable? = null
+        for ((thread, task) in workers) {
+            if (thread.state == Thread.State.NEW) continue
+            try {
+                thread.join(10_000)
+                check(!thread.isAlive) { "${thread.name} did not terminate" }
+                task.get(1, TimeUnit.SECONDS)
+            } catch (caught: Throwable) {
+                val previous = failure
+                if (previous == null) failure = caught else previous.addSuppressed(caught)
+            }
+        }
+        failure?.let { throw it }
+    }
+
     @Test fun contactCaptureDoesNotResampleRadioOrSelfIdentityAfterInitiation() = scenario {
         val publicKey = Bytes(ByteArray(32) { 0x23 })
         val links = FakeLinks()
         val initiatingRadio = links.currentRadioId
+        val diagnostics = mutableListOf<String>()
         links.afterContactCapture = {
             links.currentRadioId = RadioId(UUID.fromString("22222222-2222-2222-2222-222222222222"))
             links.connectedDevicePublicKey = publicKey
             links.contactLinkGeneration++
         }
-        ChatLinkRouter(links, scope).route("meshcore://contact/add?name=Captured&public_key=${publicKey.hexString}&type=1")
+        ChatLinkRouter(links, scope, ChatListDiagnostics { message, _ -> diagnostics += message })
+            .route("meshcore://contact/add?name=Captured&public_key=${publicKey.hexString}&type=1")
         settle()
-        assertEquals(listOf(initiatingRadio), links.contactFetchRadios)
-        assertEquals(listOf(ContactLinkCompletion.StaleContext), links.contactCompletions)
+        assertNotEquals(initiatingRadio, links.currentRadioId)
+        assertTrue(links.contactFetchRadios.isEmpty())
+        assertTrue(links.contactCompletions.isEmpty())
+        assertEquals(listOf("Contact-link lookup context is no longer current"), diagnostics)
+        assertNull(links.pendingContact)
+        assertNull(links.contactDetail)
+    }
+
+    @Test fun firstBindingReresolvesTheSameCaptureAndReadsOnlyTheBoundRadio() = scenario {
+        val publicKey = Bytes(ByteArray(32) { 0x29 })
+        for (found in listOf(false, true)) {
+            val links = FakeLinks(currentRadioId = null)
+            val saved = Fixtures.contact(publicKey = publicKey)
+            if (found) links.storedContacts = listOf(saved)
+            var resolutions = 0
+            links.afterContactResolve = {
+                if (resolutions++ == 0) {
+                    links.currentRadioId = Fixtures.radio
+                    links.contactLinkGeneration++
+                }
+            }
+            assertTrue(ChatLinkRouter(links, scope).route(
+                "meshcore://contact/add?name=Initial&public_key=${publicKey.hexString}&type=2",
+            ))
+            settle()
+            assertEquals(2, resolutions)
+            assertEquals(listOf(Fixtures.radio), links.contactFetchRadios)
+            if (found) {
+                assertEquals(saved, links.contactDetail)
+                assertNull(links.pendingContact)
+                assertEquals(listOf(ContactLinkCompletion.Navigated), links.contactCompletions)
+            } else {
+                val pending = assertNotNull(links.pendingContact)
+                assertEquals("Initial", pending.name)
+                assertEquals(publicKey, pending.publicKey)
+                assertEquals(ContactType.REPEATER, pending.contactType)
+                assertNull(links.contactDetail)
+                assertEquals(listOf(ContactLinkCompletion.ConfirmationStaged), links.contactCompletions)
+            }
+        }
+    }
+
+    @Test fun firstBindingToSelfCompletesWithoutFetchingOrStaging() = scenario {
+        val publicKey = Bytes(ByteArray(32) { 0x2a })
+        val links = FakeLinks(currentRadioId = null)
+        var resolutions = 0
+        links.afterContactResolve = {
+            if (resolutions++ == 0) {
+                links.currentRadioId = Fixtures.radio
+                links.connectedDevicePublicKey = publicKey
+                links.contactLinkGeneration++
+            }
+        }
+        assertTrue(ChatLinkRouter(links, scope).route(
+            "meshcore://contact/add?name=Self&public_key=${publicKey.hexString}&type=1",
+        ))
+        settle()
+        assertEquals(2, resolutions)
+        assertTrue(links.contactFetchRadios.isEmpty())
+        assertEquals(listOf(ContactLinkCompletion.IgnoredSelfContact), links.contactCompletions)
+        assertNull(links.pendingContact)
+        assertNull(links.contactDetail)
+    }
+
+    @Test fun contactStorageFailureIsReportedWithoutPretendingTheContactIsAbsent() = scenario {
+        val links = FakeLinks()
+        val failure = IllegalStateException("contact store unavailable")
+        val diagnostics = mutableListOf<Pair<String, Throwable?>>()
+        links.contactFetch = { _, _ -> throw failure }
+        assertTrue(ChatLinkRouter(links, scope, ChatListDiagnostics { message, cause ->
+            diagnostics += message to cause
+        }).route("meshcore://contact/add?name=Unavailable&public_key=${"2b".repeat(32)}&type=1"))
+        settle()
+        assertEquals(1, diagnostics.size)
+        assertEquals("Contact-link lookup failed", diagnostics.single().first)
+        assertSame(failure, diagnostics.single().second)
+        assertTrue(links.contactCompletions.isEmpty())
+        assertNull(links.pendingContact)
+        assertNull(links.contactDetail)
+    }
+
+    @Test fun repeatedTargetChangesStopAfterOneReresolution() = scenario {
+        val links = FakeLinks()
+        val diagnostics = mutableListOf<String>()
+        var completions = 0
+        val environment = object : ChatLinkEnvironment by links {
+            override fun completeResolvedContactLookup(
+                context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                existing: com.meshcoreone.android.core.model.ContactDTO?, publications: ContactLinkPublications,
+                cancellation: ContactLinkCancellation,
+            ): ContactLinkTargetCompletion {
+                cancellation.ensureActive()
+                completions++
+                return ContactLinkTargetCompletion.TargetChanged
+            }
+        }
+        assertTrue(ChatLinkRouter(environment, scope, ChatListDiagnostics { message, _ -> diagnostics += message })
+            .route("meshcore://contact/add?name=Moving&public_key=${"2c".repeat(32)}&type=1"))
+        settle()
+        assertEquals(2, completions)
+        assertEquals(listOf("Contact-link target changed repeatedly"), diagnostics)
         assertNull(links.pendingContact)
         assertNull(links.contactDetail)
     }
@@ -94,20 +220,113 @@ class ChatLinkRouterTest {
         assertEquals(listOf(cleanupFailure), thrown.suppressed.toList())
     }
 
+    @Test fun processedCancellationPreventsANewContactNavigationCommit() {
+        val job = Job()
+        val (cancellation, observation) = ContactLinkCancellation.observe(job)
+        var writes = 0
+        try {
+            job.cancel()
+            assertFailsWith<CancellationException> {
+                cancellation.commitIfActive { writes++ }
+            }
+            assertEquals(0, writes)
+        } finally {
+            observation.dispose()
+        }
+    }
+
+    @Test fun repeatedCancelsDoNotJoinAnAlreadyClaimedContactCommit() {
+        val parent = SupervisorJob()
+        val job = Job(parent)
+        val (cancellation, observation) = ContactLinkCancellation.observe(job)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val writes = AtomicInteger()
+        val commit = FutureTask {
+            cancellation.commitIfActive {
+                entered.countDown()
+                check(release.await(30, TimeUnit.SECONDS)) { "Contact commit was not released" }
+                writes.incrementAndGet()
+            }
+        }
+        val cancel = FutureTask { parent.cancel() }
+        val repeatParent = FutureTask { parent.cancel() }
+        val repeatChild = FutureTask { job.cancel() }
+        val committingThread = Thread(commit, "contact-commit").apply { isDaemon = true }
+        val cancellingThread = Thread(cancel, "contact-cancel").apply { isDaemon = true }
+        val repeatParentThread = Thread(repeatParent, "contact-repeat-parent-cancel").apply { isDaemon = true }
+        val repeatChildThread = Thread(repeatChild, "contact-repeat-child-cancel").apply { isDaemon = true }
+        var failure: Throwable? = null
+        try {
+            committingThread.start()
+            assertTrue(entered.await(10, TimeUnit.SECONDS), "Contact commit did not acquire the gate")
+            cancellingThread.start()
+            val threads = ManagementFactory.getThreadMXBean()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            var blocked = false
+            while (System.nanoTime() < deadline && cancellingThread.isAlive) {
+                val info = threads.getThreadInfo(cancellingThread.id, Int.MAX_VALUE)
+                if (info?.threadState == Thread.State.BLOCKED && info.lockOwnerId == committingThread.id) {
+                    blocked = true
+                    break
+                }
+                Thread.yield()
+            }
+            assertTrue(blocked, "The first observer must wait for the claimed commit")
+            assertFalse(cancel.isDone)
+            repeatParentThread.start()
+            repeatParent.get(10, TimeUnit.SECONDS)
+            repeatChildThread.start()
+            repeatChild.get(10, TimeUnit.SECONDS)
+            assertFalse(cancel.isDone)
+            assertEquals(0, writes.get())
+            assertFailsWith<CancellationException> { cancellation.ensureActive() }
+            release.countDown()
+            assertEquals(1, commit.get(10, TimeUnit.SECONDS))
+            cancel.get(10, TimeUnit.SECONDS)
+            assertTrue(parent.isCancelled)
+            assertTrue(job.isCancelled)
+            assertFailsWith<CancellationException> {
+                cancellation.commitIfActive { writes.incrementAndGet() }
+            }
+            assertEquals(1, writes.get())
+        } catch (caught: Throwable) {
+            failure = caught
+            throw caught
+        } finally {
+            release.countDown()
+            try {
+                finishThreads(
+                    committingThread to commit, cancellingThread to cancel,
+                    repeatParentThread to repeatParent, repeatChildThread to repeatChild,
+                )
+                if (cancellingThread.state == Thread.State.NEW) parent.cancel()
+            } catch (cleanup: Throwable) {
+                val original = failure
+                if (original == null) throw cleanup else original.addSuppressed(cleanup)
+            } finally {
+                observation.dispose()
+            }
+        }
+    }
+
     @Test fun identicalCurrentSessionDeliverySupersedesAnOlderFoundResult() = scenario {
         val publicKey = Bytes(ByteArray(32) { 0x25 })
         val release = CompletableDeferred<com.meshcoreone.android.core.model.ContactDTO?>()
+        val entered = CompletableDeferred<Unit>()
         val links = FakeLinks()
         var first = true
         links.contactFetch = { _, _ ->
             if (first) {
                 first = false
+                entered.complete(Unit)
                 release.await()
             } else null
         }
         val router = ChatLinkRouter(links, scope)
         val uri = "meshcore://contact/add?name=Same&public_key=${publicKey.hexString}&type=1"
         assertTrue(router.route(uri))
+        entered.await()
         assertTrue(router.route(uri))
         settle()
         val replacement = assertNotNull(links.pendingContact)
@@ -116,6 +335,31 @@ class ChatLinkRouterTest {
         assertSame(replacement, links.pendingContact)
         assertNull(links.contactDetail)
         assertEquals(listOf(ContactLinkCompletion.ConfirmationStaged, ContactLinkCompletion.StaleContext), links.contactCompletions)
+    }
+
+    @Test fun selfContactSupersedesHeldLookupWithoutFetchingSelf() = scenario {
+        val publicKey = Bytes(ByteArray(32) { 0x27 })
+        val selfKey = Bytes(ByteArray(32) { 0x28 })
+        for (found in listOf(false, true)) {
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<com.meshcoreone.android.core.model.ContactDTO?>()
+            val links = FakeLinks(connectedDevicePublicKey = selfKey)
+            links.contactFetch = { _, key ->
+                assertEquals(publicKey, key)
+                entered.complete(Unit)
+                release.await()
+            }
+            val router = ChatLinkRouter(links, scope)
+            assertTrue(router.route("meshcore://contact/add?name=Older&public_key=${publicKey.hexString}&type=1"))
+            entered.await()
+            assertTrue(router.route("meshcore://contact/add?name=Self&public_key=${selfKey.hexString}&type=1"))
+            assertEquals(listOf(links.currentRadioId), links.contactFetchRadios)
+            release.complete(Fixtures.contact(publicKey = publicKey).takeIf { found })
+            settle()
+            assertEquals(listOf(ContactLinkCompletion.StaleContext), links.contactCompletions)
+            assertNull(links.pendingContact)
+            assertNull(links.contactDetail)
+        }
     }
 
     @Test fun contactLookupCancellationDoesNotStageAnAbsentResult() = scenario {

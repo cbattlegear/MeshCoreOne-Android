@@ -13,6 +13,8 @@ import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -20,9 +22,144 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PendingExternalRouteTest {
+    @Test
+    fun computedFailureSurvivesSubmitterCancellationBeforeAwaitConsumption() = runTest {
+        val failure = IllegalStateException("store unavailable")
+        lateinit var submission: Job
+        var fail = true
+        var calls = 0
+        val pending = PendingExternalRoute {
+            calls++
+            if (fail) {
+                val computed = DeepLinkRouteOutcome.ContactLookupFailed(failure)
+                submission.cancel()
+                computed
+            } else DeepLinkRouteOutcome.Navigated
+        }
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("A", "contact-A")
+        submission = launch(start = CoroutineStart.LAZY) { pending.submit(delivery) }
+        submission.start()
+        submission.join()
+        assertTrue(submission.isCancelled)
+        val observed = assertNotNull(pending.lookupFailure.value)
+        assertEquals("A", observed.deliveryId)
+        assertEquals(failure, observed.cause)
+        assertEquals(delivery, pending.snapshot())
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
+        fail = false
+        assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.retry(observed.deliveryId, observed.attempt))
+        assertNull(pending.lookupFailure.value)
+        assertNull(pending.snapshot())
+        assertEquals(setOf("A"), pending.consumedDeliveryIds())
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun lookupFailureCanRetryOnceWithItsExactObservedAttempt() = runTest {
+        var fail = true
+        var calls = 0
+        val error = IllegalStateException("store unavailable")
+        val pending = PendingExternalRoute {
+            calls++
+            if (fail) DeepLinkRouteOutcome.ContactLookupFailed(error) else DeepLinkRouteOutcome.Navigated
+        }
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("A", "contact-A")
+        assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(pending.submit(delivery))
+        val observed = assertNotNull(pending.lookupFailure.value)
+        assertEquals(delivery.id, observed.deliveryId)
+        assertEquals(error, observed.cause)
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
+        fail = false
+        assertIs<PendingExternalRoute.SubmitOutcome.Routed>(pending.retry(observed.deliveryId, observed.attempt))
+        assertNull(pending.lookupFailure.value)
+        assertNull(pending.snapshot())
+        assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(pending.retry(observed.deliveryId, observed.attempt))
+        assertEquals(2, calls)
+        assertEquals(setOf("A"), pending.consumedDeliveryIds())
+    }
+
+    @Test
+    fun staleFailureActionsCannotRetryOrCancelAReplacementDelivery() = runTest {
+        val calls = mutableListOf<String>()
+        val pending = PendingExternalRoute {
+            calls += it
+            DeepLinkRouteOutcome.ContactLookupFailed(IllegalStateException("store unavailable"))
+        }
+        pending.markReady()
+        pending.submit(PendingExternalRoute.Delivery("A", "contact-A"))
+        val a = assertNotNull(pending.lookupFailure.value)
+        val bDelivery = PendingExternalRoute.Delivery("B", "contact-B")
+        pending.submit(bDelivery)
+        val b = assertNotNull(pending.lookupFailure.value)
+        assertEquals("B", b.deliveryId)
+        assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(pending.retry(a.deliveryId, a.attempt))
+        assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(pending.cancel(a.deliveryId, a.attempt))
+        assertEquals(b, pending.lookupFailure.value)
+        assertEquals(bDelivery, pending.snapshot())
+        assertEquals(listOf("contact-A", "contact-B"), calls)
+        assertEquals(setOf("A"), pending.consumedDeliveryIds())
+        assertIs<PendingExternalRoute.SubmitOutcome.Cancelled>(pending.cancel(b.deliveryId, b.attempt))
+        assertNull(pending.lookupFailure.value)
+        assertNull(pending.snapshot())
+        assertEquals(setOf("A", "B"), pending.consumedDeliveryIds())
+    }
+
+    @Test
+    fun oldAttemptActionsCannotClaimANewerFailureOfTheSameDelivery() = runTest {
+        var calls = 0
+        val pending = PendingExternalRoute {
+            calls++
+            DeepLinkRouteOutcome.ContactLookupFailed(IllegalStateException("store unavailable"))
+        }
+        pending.markReady()
+        val delivery = PendingExternalRoute.Delivery("A", "contact-A")
+        pending.submit(delivery)
+        val first = assertNotNull(pending.lookupFailure.value)
+        assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(
+            pending.retry(first.deliveryId, first.attempt),
+        )
+        val second = assertNotNull(pending.lookupFailure.value)
+        assertTrue(second.attempt > first.attempt)
+        assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(pending.cancel(first.deliveryId, first.attempt))
+        assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(pending.retry(first.deliveryId, first.attempt))
+        assertEquals(second, pending.lookupFailure.value)
+        assertEquals(delivery, pending.snapshot())
+        assertTrue(pending.consumedDeliveryIds().isEmpty())
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun lateFailureOfSupersededAttemptCannotReplaceCurrentFailure() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val pending = PendingExternalRoute { uri ->
+            if (uri == "contact-A") {
+                started.complete(Unit)
+                withContext(NonCancellable) { release.await() }
+            }
+            DeepLinkRouteOutcome.ContactLookupFailed(IllegalStateException("store unavailable"))
+        }
+        pending.markReady()
+        val a = async { pending.submit(PendingExternalRoute.Delivery("A", "contact-A")) }
+        started.await()
+        val bDelivery = PendingExternalRoute.Delivery("B", "contact-B")
+        try {
+            assertIs<PendingExternalRoute.SubmitOutcome.RetryableFailure>(pending.submit(bDelivery))
+            val b = assertNotNull(pending.lookupFailure.value)
+            release.complete(Unit)
+            assertIs<PendingExternalRoute.SubmitOutcome.Superseded>(a.await())
+            assertEquals(b, pending.lookupFailure.value)
+            assertEquals(bDelivery, pending.snapshot())
+            assertEquals(setOf("A"), pending.consumedDeliveryIds())
+        } finally { release.complete(Unit) }
+    }
+
     @Test
     @SourceCases("PendingExternalURLTests::A URL submitted before ready is held, not routed, until markReady()")
     fun coldStartHoldsUntilReady() = runTest {

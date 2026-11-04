@@ -99,6 +99,9 @@ data class PendingNotificationRoute(
     val id: Long, val generation: Long?, val request: NotificationNavigationRequest,
 )
 
+// Native adaptation: Bind a reaction anchor to one delivery and mounted navigation entry.
+data class PendingMessageScroll(val deliveryId: Long, val entryId: Long, val messageId: UUID)
+
 // Native adaptation: Material rail replaces the 64-point Apple sidebar; actual window width owns layout.
 object NavigationLayout {
     const val RAIL_MIN_WIDTH_DP = 600
@@ -138,7 +141,7 @@ data class NavigationState(
     val nodesShowingDiscovery: Boolean = false,
     val selectedTool: ToolSelection? = null,
     val selectedSetting: SettingsDetail? = null,
-    val pendingScrollToMessageID: UUID? = null,
+    val pendingMessageScroll: PendingMessageScroll? = null,
     val pendingDeviceMenuTipDonation: Boolean = false,
     val pendingMapFocus: MapFocusRequest? = null,
     val pendingContactLink: ContactLinkRequest? = null,
@@ -160,10 +163,13 @@ data class NavigationState(
                 stack.all { it.ownerTab == tab }
         }) { "Every stack must start at its matching root" }
         val ids = stacks.values.flatten().map { it.id } + pendingNotifications.map { it.id } +
-            listOfNotNull(pendingContactLink?.deliveryId, roomAuthenticationDeliveryId)
+            listOfNotNull(pendingContactLink?.deliveryId, roomAuthenticationDeliveryId, pendingMessageScroll?.deliveryId)
         require(ids.distinct().size == ids.size && ids.all { it >= 0 && it < nextEntryId }) {
             "Entry identities must be unique, nonnegative and below the next identity"
         }
+        require(pendingMessageScroll == null || stacks.getValue(AppTab.CHATS).any {
+            it.id == pendingMessageScroll.entryId && it.destination is NavigationDestination.Chat
+        }) { "A pending message scroll must belong to a chat entry" }
         require(
             roomAuthenticationDeliveryId == null && roomAuthenticationGeneration == null ||
                 roomAuthenticationDeliveryId != null && roomAuthenticationGeneration != null &&
@@ -187,10 +193,17 @@ data class NavigationState(
         require(widthDp.isFinite() && widthDp >= 0f) { "Window width must be finite and nonnegative" }
     }
     val activeStack: SnapshotList<NavigationEntry> get() = stacks.getValue(selectedTab)
+    val pendingScrollToMessageID: UUID? get() = pendingMessageScroll?.messageId
     val isSidebarWide: Boolean get() = NavigationLayout.tilesListDetail(widthDp)
     val isOnValidTabForDeviceMenuTip: Boolean
         get() = selectedTab == AppTab.CHATS || selectedTab == AppTab.NODES || selectedTab == AppTab.MAP
     val canGoBack: Boolean get() = activeStack.size > 1 || selectedTab != AppTab.CHATS
+
+    internal fun pendingMessageScrollFor(entryId: Long?): PendingMessageScroll? =
+        pendingMessageScroll?.takeIf {
+            entryId != null && selectedTab == AppTab.CHATS &&
+                it.entryId == entryId && activeStack.last().id == entryId
+        }
 
     internal fun select(tab: AppTab): NavigationState {
         val next = copy(selectedTab = tab, tabBarVisible = stacks.getValue(tab).size == 1)
@@ -221,7 +234,13 @@ data class NavigationState(
         val nextStacks = stacks.mapValues { (_, stack) ->
             stack.filterNot { predicate(it.destination) }.snapshot()
         }.snapshotMap()
-        return copy(stacks = nextStacks, tabBarVisible = nextStacks.getValue(selectedTab).size == 1)
+        val scroll = pendingMessageScroll?.takeIf { target ->
+            nextStacks.getValue(AppTab.CHATS).any { it.id == target.entryId }
+        }
+        return copy(
+            stacks = nextStacks, pendingMessageScroll = scroll,
+            tabBarVisible = nextStacks.getValue(selectedTab).size == 1,
+        )
     }
 }
 

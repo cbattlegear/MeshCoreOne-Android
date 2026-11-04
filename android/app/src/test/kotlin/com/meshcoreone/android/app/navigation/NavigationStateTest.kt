@@ -83,6 +83,68 @@ class NavigationStateTest {
         assertFalse(store.compareAndSet(original, initial.copy(selectedTab = AppTab.TOOLS)))
     }
 
+    @Test fun publishedRevisionDoesNotExposeADeferredNavigationCommit() {
+        val initial = NavigationState()
+        val store = NavigationStateStore(initial)
+        val observed = store.publishedSnapshots.value
+        val guarded = NavigationStateStore.Publication()
+        assertTrue(store.compareAndSet(store.snapshot(), initial.copy(selectedTab = AppTab.NODES), guarded))
+        store.update { it.copy(selectedTab = AppTab.MAP) }
+
+        assertEquals(2L, store.snapshot().revision)
+        assertEquals(0L, store.publishedSnapshots.value.revision)
+        assertSame(initial, store.publishedSnapshots.value.value)
+        assertSame(initial, store.state.value)
+
+        store.release(guarded)
+        val published = store.publishedSnapshots.value
+        assertEquals(2L, published.revision)
+        assertEquals(AppTab.MAP, published.value.selectedTab)
+        assertEquals(published.value, store.state.value)
+        assertEquals(0L, observed.revision)
+        assertSame(initial, observed.value)
+    }
+
+    @Test fun publishedRevisionsRemainObservableWhenNavigationValuesAreEqual() = runTest {
+        val initial = NavigationState()
+        val store = NavigationStateStore(initial)
+        val revisions = mutableListOf<Long>()
+        val states = mutableListOf<NavigationState>()
+        backgroundScope.launch { store.publishedSnapshots.collect { revisions.add(it.revision) } }
+        backgroundScope.launch { store.state.collect { states.add(it) } }
+        runCurrent()
+
+        assertTrue(store.compareAndSet(store.snapshot(), initial, forceRevision = true))
+        runCurrent()
+
+        assertEquals(listOf(0L, 1L), revisions)
+        assertEquals(listOf(initial), states)
+        assertEquals(1L, store.publishedSnapshots.value.revision)
+        assertSame(initial, store.publishedSnapshots.value.value)
+    }
+
+    @Test fun publishedRevisionStreamWaitsForEveryOutstandingGuard() = runTest {
+        val initial = NavigationState()
+        val store = NavigationStateStore(initial)
+        val snapshots = mutableListOf<NavigationStateStore.PublishedSnapshot>()
+        backgroundScope.launch { store.publishedSnapshots.collect { snapshots.add(it) } }
+        runCurrent()
+
+        val first = NavigationStateStore.Publication()
+        val second = NavigationStateStore.Publication()
+        assertTrue(store.compareAndSet(store.snapshot(), initial.copy(selectedTab = AppTab.NODES), first))
+        assertTrue(store.compareAndSet(store.snapshot(), initial.copy(selectedTab = AppTab.MAP), second))
+        store.release(second)
+        runCurrent()
+        assertEquals(listOf(0L), snapshots.map { it.revision })
+        assertSame(initial, snapshots.single().value)
+
+        store.release(first)
+        runCurrent()
+        assertEquals(listOf(0L, 2L), snapshots.map { it.revision })
+        assertEquals(AppTab.MAP, snapshots.last().value.selectedTab)
+    }
+
     @Test fun coherentContactCaptureRejectsReplacementGraphBeforeItsNavigationBinding() {
         val n = NavigationCoordinator()
         val epoch = ProcessEpoch(UUID.fromString("00000000-0000-0000-0000-000000000041"))
@@ -750,6 +812,104 @@ class NavigationStateTest {
         val selection = n.state.value.activeStack.last().destination as NavigationDestination.Chat
         assertEquals("Updated fixture", (selection.selection as ChatSelection.Direct).contact.name)
         assertEquals(refreshed, n.state.value.pendingChatContact)
+    }
+
+    @Test fun reactionScrollBelongsToTheCurrentEntryAcrossResizeAndBackPreview() = runTest {
+        val n = NavigationCoordinator()
+        n.navigateToChat(contact, message)
+        val outgoing = requireNotNull(n.state.value.pendingMessageScroll)
+        val reaction = NotificationPayload.Reaction(message, null, channel.index, radio)
+        assertEquals(NavigationOutcome.Navigated, n.handleNotification(reaction, lookup()))
+        val incoming = requireNotNull(n.state.value.pendingMessageScroll)
+        val stack = n.state.value.activeStack
+
+        assertNotEquals(outgoing.entryId, incoming.entryId)
+        assertNotEquals(outgoing.deliveryId, incoming.deliveryId)
+        for (width in listOf(390f, 600f, 780f, 834f)) {
+            n.measureWindow(width)
+            val observed = n.state.value
+            assertEquals(stack, observed.activeStack)
+            assertNull(observed.pendingMessageScrollFor(outgoing.entryId))
+            assertEquals(incoming, observed.pendingMessageScrollFor(incoming.entryId))
+            assertFalse(n.consumePendingMessageScroll(outgoing.entryId, incoming))
+            assertFalse(n.consumePendingMessageScroll(outgoing.entryId, outgoing))
+            assertEquals(observed, n.state.value)
+        }
+
+        n.selectTab(AppTab.NODES)
+        assertNull(n.state.value.pendingMessageScrollFor(incoming.entryId))
+        assertFalse(n.consumePendingMessageScroll(incoming.entryId, incoming))
+        n.selectTab(AppTab.CHATS)
+        assertEquals(incoming, n.state.value.pendingMessageScrollFor(incoming.entryId))
+        assertTrue(n.back())
+        assertEquals(stack.dropLast(1), n.state.value.activeStack)
+        assertEquals(ChatSelection.Direct(contact), n.state.value.chatsSelectedRoute)
+        assertNull(n.state.value.pendingMessageScroll)
+        assertFalse(n.consumePendingMessageScroll(incoming.entryId, incoming))
+    }
+
+    @Test fun identicalReactionReplacementsHaveDistinctDeliveriesAndCannotClearEachOther() = runTest {
+        val n = NavigationCoordinator()
+        val reaction = NotificationPayload.Reaction(message, EntityKey(radio, contact.id), null, null)
+        assertEquals(NavigationOutcome.Navigated, n.handleNotification(reaction, lookup()))
+        val first = requireNotNull(n.state.value.pendingMessageScroll)
+        val stack = n.state.value.activeStack
+        assertEquals(NavigationOutcome.Navigated, n.handleNotification(reaction, lookup()))
+        val replacement = requireNotNull(n.state.value.pendingMessageScroll)
+
+        assertEquals(stack, n.state.value.activeStack)
+        assertEquals(first.entryId, replacement.entryId)
+        assertEquals(first.messageId, replacement.messageId)
+        assertNotEquals(first.deliveryId, replacement.deliveryId)
+        assertFalse(n.isPendingMessageScroll(first.entryId, first))
+        assertFalse(n.consumePendingMessageScroll(first.entryId, first))
+        assertEquals(replacement, n.state.value.pendingMessageScroll)
+        assertTrue(n.isPendingMessageScroll(replacement.entryId, replacement))
+        assertTrue(n.consumePendingMessageScroll(replacement.entryId, replacement))
+        assertNull(n.state.value.pendingMessageScroll)
+        assertFalse(n.consumePendingMessageScroll(replacement.entryId, replacement))
+    }
+
+    @Test fun unpublishedReplacementRejectsAnOlderPublishedScrollAcknowledgement() = runTest {
+        val n = NavigationCoordinator()
+        n.navigateToChat(contact, message)
+        val observed = n.state.value
+        val outgoing = requireNotNull(observed.pendingMessageScroll)
+        val committed = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        n.installCommitBoundary { action ->
+            action()
+            committed.countDown()
+            check(release.await(5, TimeUnit.SECONDS)) { "The test must release the navigation publication" }
+        }
+        val reaction = NotificationPayload.Reaction(message, null, channel.index, radio)
+        val replacement = async(Dispatchers.Default) { n.handleNotification(reaction, lookup()) }
+        try {
+            assertTrue(committed.await(5, TimeUnit.SECONDS))
+            assertEquals(observed, n.state.value)
+            val incoming = requireNotNull(n.currentState.pendingMessageScroll)
+            assertNotEquals(outgoing.entryId, incoming.entryId)
+            assertFalse(n.isPendingMessageScroll(outgoing.entryId, outgoing))
+            assertFalse(n.consumePendingMessageScroll(outgoing.entryId, outgoing))
+            assertEquals(incoming, n.currentState.pendingMessageScroll)
+            assertEquals(observed, n.state.value)
+        } finally {
+            release.countDown()
+        }
+        assertEquals(NavigationOutcome.Navigated, replacement.await())
+        assertEquals(ChatSelection.Channel(channel), n.state.value.chatsSelectedRoute)
+    }
+
+    @Test fun provisionalMessageScrollSurvivesItsRadioBindingButNotRadioReplacement() {
+        val n = NavigationCoordinator()
+        n.navigateToChat(contact, message)
+        val pending = requireNotNull(n.state.value.pendingMessageScroll)
+        assertTrue(n.bindNotificationSession(radio, null))
+        assertEquals(pending, n.state.value.pendingMessageScroll)
+        assertTrue(n.isPendingMessageScroll(pending.entryId, pending))
+        n.replaceRadio(otherRadio)
+        assertNull(n.state.value.pendingMessageScroll)
+        assertFalse(n.consumePendingMessageScroll(pending.entryId, pending))
     }
     @Test fun auxiliaryRoutesAreOwnedByTheSelectedTabAndDoNotCreateAnotherRoot() {
         val n = NavigationCoordinator(); n.selectTab(AppTab.NODES)

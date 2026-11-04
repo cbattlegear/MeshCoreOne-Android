@@ -6,6 +6,7 @@ import java.net.URI
 import java.net.URISyntaxException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -83,19 +84,51 @@ class ChatLinkRouter(
             ContactLinkCaptureDisposition.Lookup -> Unit
         }
         launchLookup {
-            val existing = context.radioId?.let {
-                runCatchingNonCancellation { environment.fetchContact(it, link.publicKey) }
-            }
-            currentCoroutineContext().ensureActive()
-            when (ContactLinkPublications().use { publications ->
-                environment.completeContactLookup(context, link, existing, publications)
-            }) {
-                ContactLinkCompletion.StaleContext ->
-                    diagnostics.report("Contact-link lookup context is no longer current", null)
-                ContactLinkCompletion.WrongTarget ->
-                    diagnostics.report("Contact-link lookup returned the wrong target", null)
-                ContactLinkCompletion.Navigated, ContactLinkCompletion.ConfirmationStaged,
-                ContactLinkCompletion.IgnoredSelfContact -> Unit
+            val job = checkNotNull(currentCoroutineContext()[Job])
+            val (cancellation, observation) = ContactLinkCancellation.observe(job)
+            try {
+                var targetChanges = 0
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val target = when (val resolution = environment.resolveContactLinkContext(context, link.publicKey)) {
+                        ContactLinkTargetResolution.Stale -> {
+                            diagnostics.report("Contact-link lookup context is no longer current", null)
+                            return@launchLookup
+                        }
+                        is ContactLinkTargetResolution.Current -> resolution.target
+                    }
+                    val existing = if (target.selfPublicKey == link.publicKey) null else target.radioId?.let { radio ->
+                        try {
+                            environment.fetchContact(radio, link.publicKey)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            diagnostics.report("Contact-link lookup failed", failure)
+                            return@launchLookup
+                        }
+                    }
+                    currentCoroutineContext().ensureActive()
+                    when (val completion = ContactLinkPublications().use { publications ->
+                        environment.completeResolvedContactLookup(context, target, link, existing, publications, cancellation)
+                    }) {
+                        ContactLinkTargetCompletion.TargetChanged -> {
+                            if (targetChanges++ == 0) continue
+                            diagnostics.report("Contact-link target changed repeatedly", null)
+                            return@launchLookup
+                        }
+                        is ContactLinkTargetCompletion.Completed -> when (completion.outcome) {
+                            ContactLinkCompletion.StaleContext ->
+                                diagnostics.report("Contact-link lookup context is no longer current", null)
+                            ContactLinkCompletion.WrongTarget ->
+                                diagnostics.report("Contact-link lookup returned the wrong target", null)
+                            ContactLinkCompletion.Navigated, ContactLinkCompletion.ConfirmationStaged,
+                            ContactLinkCompletion.IgnoredSelfContact -> Unit
+                        }
+                    }
+                    return@launchLookup
+                }
+            } finally {
+                observation.dispose()
             }
         }
     }

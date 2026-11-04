@@ -8,9 +8,11 @@ import com.meshcoreone.android.core.services.remote.RemoteNodeEvent
 import com.meshcoreone.android.core.services.remote.RoomServerEvent
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -31,9 +33,9 @@ interface MessageEventHost {
 /**
  * Owns the service event-stream subscriptions that feed [MessageEventStream] and the session-state counter.
  * Each wiring subscribes synchronously (via [MessageEventSources]) before its consuming job starts, so events
- * emitted during the connection-ready window are not dropped. [cancelAll] cancels every job and closes the
- * message-status subscription; a re-wire cancels the previous jobs first, so a reconnect never leaves a stale
- * collector running against a torn-down graph.
+ * emitted during the connection-ready window are not dropped. Prepared collectors buffer their first event until
+ * their session is admitted. Rejected preparations and retired wirings cancel their jobs and close status
+ * subscriptions without affecting a replacement.
  */
 class MessageEventDispatcher(
     private val host: MessageEventHost,
@@ -42,13 +44,21 @@ class MessageEventDispatcher(
 ) {
     private val logger: Logger = Logger.getLogger("com.mc1.MessageEventDispatcher")
     private val lock = Any()
-    private data class Wiring(
+    private class Wiring(
         val token: SessionToken,
         val group: Job,
         val statusSubscription: AutoCloseable,
-    )
+        val admitted: CompletableDeferred<Unit> = CompletableDeferred(),
+    ) {
+        var preparing = true
+        var retired = false
+        val closed = AtomicBoolean(false)
+        val failed = AtomicBoolean(false)
+    }
 
     private var wiring: Wiring? = null
+    private val prepared = mutableSetOf<Wiring>()
+    private var cancelRevision = 0L
 
     // Each wiring has its own child group so retiring one session cannot cancel a replacement's consumers.
     private val group = SupervisorJob(scope.coroutineContext[Job])
@@ -57,39 +67,118 @@ class MessageEventDispatcher(
     val activeJobCount: Int get() = group.children.sumOf { owner -> owner.children.count { it.isActive } }
 
     fun wire(token: SessionToken, sources: MessageEventSources) {
+        wireIfCurrent(token, sources, { it() }) { true }
+    }
+
+    internal fun wireIfCurrent(
+        token: SessionToken,
+        sources: MessageEventSources,
+        boundary: (() -> Unit) -> Unit,
+        reuseExistingSameSession: Boolean = false,
+        isCurrent: () -> Boolean,
+    ): Boolean {
         val next = Wiring(token, SupervisorJob(group), sources.messageStatus)
-        val previous = synchronized(lock) { wiring.also { wiring = next } }
-        previous?.let(::cancel)
-        consume(next, "syncData", sources.dataEvents, ::handleDataEvent)
-        consume(next, "heardRepeats", sources.heardRepeats) { event ->
-            stream.send(MessageEvent.HeardRepeatRecorded(event.messageID, event.count))
+        val (expectedCancelRevision, observedWiring) = synchronized(lock) {
+            prepared.add(next)
+            cancelRevision to wiring
         }
-        consume(next, "regionUpdates", sources.regionUpdates) { ids ->
-            if (ids.isNotEmpty()) stream.send(MessageEvent.MessagesRegionUpdated(ids.toList()))
-        }
-        consume(next, "remoteNode", sources.remoteNode) { event ->
-            when (event) {
-                is RemoteNodeEvent.SessionStateChanged -> host.handleSessionStateChange()
+        var previous: Wiring? = null
+        var installed = false
+        var reused = false
+        var failedWiring = false
+        try {
+            consume(next, "syncData", sources.dataEvents, ::handleDataEvent)
+            consume(next, "heardRepeats", sources.heardRepeats) { event ->
+                stream.send(MessageEvent.HeardRepeatRecorded(event.messageID, event.count))
+            }
+            consume(next, "regionUpdates", sources.regionUpdates) { ids ->
+                if (ids.isNotEmpty()) stream.send(MessageEvent.MessagesRegionUpdated(ids.toList()))
+            }
+            consume(next, "remoteNode", sources.remoteNode) { event ->
+                when (event) {
+                    is RemoteNodeEvent.SessionStateChanged -> host.handleSessionStateChange()
+                }
+            }
+            consume(next, "roomServer", sources.roomServer, ::handleRoomServerEvent)
+            consume(next, "messageStatus", sources.messageStatus.events) { event -> handleStatusEvent(event.event) }
+            val retired = synchronized(lock) {
+                next.preparing = false
+                next.retired
+            }
+            if (retired) return false
+            boundary {
+                if (next.group.isActive && isCurrent()) {
+                    synchronized(lock) {
+                        if (!next.retired && next.group.isActive && cancelRevision == expectedCancelRevision) {
+                            val current = wiring
+                            if (next.failed.get()) {
+                                failedWiring = true
+                                if (current != null && current.token != token) {
+                                    previous = current
+                                    wiring = null
+                                }
+                            } else if (reuseExistingSameSession && current != null && current.token == token && current.group.isActive) {
+                                if (current.failed.get()) {
+                                    failedWiring = true
+                                } else {
+                                    prepared.remove(next)
+                                    reused = true
+                                }
+                            } else if (current == null || current === observedWiring) {
+                                prepared.remove(next)
+                                previous = current
+                                wiring = next
+                                installed = true
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            synchronized(lock) { prepared.remove(next) }
+            if (installed) {
+                next.admitted.complete(Unit)
+                previous?.let(::cancel)
+            } else {
+                try {
+                    cancel(next)
+                } finally {
+                    previous?.let(::cancel)
+                }
             }
         }
-        consume(next, "roomServer", sources.roomServer, ::handleRoomServerEvent)
-        consume(next, "messageStatus", sources.messageStatus.events) { event -> handleStatusEvent(event.event) }
+        if (failedWiring) {
+            logger.warning("Message event wiring rejected because an event stream failed or was cancelled")
+        }
+        return installed || reused
     }
 
     /** Cancels every stream-consuming job; called before re-wiring and from the disconnect teardown. */
     fun cancelAll() {
-        val previous = synchronized(lock) { wiring.also { wiring = null } }
-        previous?.let(::cancel)
+        val retired = synchronized(lock) {
+            cancelRevision = Math.incrementExact(cancelRevision)
+            // Each source is already registered; preparation must start its collector before cancellation can clean it up.
+            val pending = prepared.onEach { it.retired = true }.filterNot { it.preparing }
+            val current = wiring
+            wiring = null
+            pending + listOfNotNull(current)
+        }
+        retired.forEach(::cancel)
     }
 
     internal fun cancelForSession(token: SessionToken?) {
-        val previous = synchronized(lock) {
-            wiring?.takeIf { it.token == token }?.also { wiring = null }
+        val retired = synchronized(lock) {
+            val pending = prepared.filter { it.token == token }.onEach { it.retired = true }
+                .filterNot { it.preparing }
+            val current = wiring?.takeIf { it.token == token }
+            if (current != null) wiring = null
+            pending + listOfNotNull(current)
         }
-        previous?.let(::cancel)
+        retired.forEach(::cancel)
     }
 
     private fun cancel(wiring: Wiring) {
+        if (!wiring.closed.compareAndSet(false, true)) return
         wiring.group.cancel()
         try {
             wiring.statusSubscription.close()
@@ -103,6 +192,7 @@ class MessageEventDispatcher(
         consumers.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 source.collect { value ->
+                    wiring.admitted.await()
                     currentCoroutineContext().ensureActive()
                     try {
                         handle(value)
@@ -114,8 +204,13 @@ class MessageEventDispatcher(
                     }
                 }
             } catch (cancelled: CancellationException) {
+                if (wiring.group.isActive) {
+                    wiring.failed.set(true)
+                    logger.log(Level.WARNING, "$label stream cancelled before session retirement")
+                }
                 throw cancelled
             } catch (failure: Exception) {
+                wiring.failed.set(true)
                 logger.log(Level.SEVERE, "$label stream ended with failure: ${failure.message}")
             }
         }

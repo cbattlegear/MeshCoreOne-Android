@@ -52,19 +52,23 @@ class NotificationNavigationBinding(
     }
 
     init {
-        service.onNotificationTapped = direct
-        service.onNewContactNotificationTapped = newContact
-        service.onChannelNotificationTapped = channel
-        service.onRoomNotificationTapped = room
-        service.onReactionNotificationTapped = reaction
+        coordinator.retireBinding {
+            service.onNotificationTapped = direct
+            service.onNewContactNotificationTapped = newContact
+            service.onChannelNotificationTapped = channel
+            service.onRoomNotificationTapped = room
+            service.onReactionNotificationTapped = reaction
+        }
     }
 
     override fun close() {
-        coordinator.retireBinding { active = false }
-        if (service.onNotificationTapped === direct) service.onNotificationTapped = null
-        if (service.onNewContactNotificationTapped === newContact) service.onNewContactNotificationTapped = null
-        if (service.onChannelNotificationTapped === channel) service.onChannelNotificationTapped = null
-        if (service.onRoomNotificationTapped === room) service.onRoomNotificationTapped = null
-        if (service.onReactionNotificationTapped === reaction) service.onReactionNotificationTapped = null
+        coordinator.retireBinding {
+            active = false
+            if (service.onNotificationTapped === direct) service.onNotificationTapped = null
+            if (service.onNewContactNotificationTapped === newContact) service.onNewContactNotificationTapped = null
+            if (service.onChannelNotificationTapped === channel) service.onChannelNotificationTapped = null
+            if (service.onRoomNotificationTapped === room) service.onRoomNotificationTapped = null
+            if (service.onReactionNotificationTapped === reaction) service.onReactionNotificationTapped = null
+        }
     }
 }

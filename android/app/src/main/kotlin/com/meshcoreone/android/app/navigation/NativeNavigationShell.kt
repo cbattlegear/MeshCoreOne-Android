@@ -48,10 +48,12 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffo
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteItem
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRestorer
@@ -110,6 +112,8 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as Contact
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as Settings
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as Tools
 import com.meshcoreone.android.core.l10n.R as Strings
+
+internal val LocalNavigationEntryId = staticCompositionLocalOf<Long?> { null }
 
 internal fun AppTab.titleResource(): Int = when (this) {
     AppTab.CHATS -> Strings.string.tab_chats
@@ -333,8 +337,10 @@ fun NativeNavigationShell(
                             metadata = mapOf("destination" to entry.destination, "ownerTab" to entry.ownerTab) +
                                 predictiveTransition,
                         ) {
-                            Box(Modifier.fillMaxSize().focusRestorer().focusGroup().testTag("entry:${entry.id}")) {
-                                content(entry.destination, coordinator::navigate)
+                            CompositionLocalProvider(LocalNavigationEntryId provides entry.id) {
+                                Box(Modifier.fillMaxSize().focusRestorer().focusGroup().testTag("entry:${entry.id}")) {
+                                    content(entry.destination, coordinator::navigate)
+                                }
                             }
                         }
                     },

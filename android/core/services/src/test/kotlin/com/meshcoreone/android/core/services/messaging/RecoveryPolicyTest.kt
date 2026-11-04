@@ -126,10 +126,10 @@ class RecoveryPolicyTest {
             assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(message.id)), observed)
             assertTrue(h.service.close().isComplete); h.close()
         },
-        native("ACK received during failure cleanup is retained across inline, expiry and fail-all") {
-            for (cleanupPath in listOf("inline", "expiry", "fail-all")) {
+        native("ACK during cleanup preserves recorded delivery without resurrecting terminal rows") {
+            for (cleanupPath in listOf("inline", "expiry", "fail-all")) for (alreadyFailed in listOf(false, true)) {
                 val h = Harness(this); h.start(); h.service.startEventMonitoring()
-                val message = h.message()
+                val message = h.message(if (alreadyFailed) MessageStatus.FAILED else MessageStatus.SENT)
                 val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
                 h.service.installPendingAck(h.tracking(message, code, age = if (cleanupPath == "expiry") 3600 else 0))
                 val entered = CompletableDeferred<Unit>()
@@ -146,7 +146,7 @@ class RecoveryPolicyTest {
                                 assertEquals(code, h.service.pendingAck(message.id)?.acknowledgement?.code)
                                 release.await()
                             }
-                            1 -> if (cleanupPath == "inline") throw restoreFailure
+                            1 -> if (cleanupPath == "inline" && !alreadyFailed) throw restoreFailure
                         }
                     }
                 }
@@ -167,17 +167,21 @@ class RecoveryPolicyTest {
                 failing.await()
                 runCurrent()
                 val delivered = h.stored(message.id)
-                assertEquals(MessageStatus.DELIVERED, delivered.status)
-                assertEquals(code.ackCodeUInt32, delivered.ackCode)
-                assertEquals(123u, delivered.roundTripTime)
+                if (alreadyFailed) assertEquals(message, delivered)
+                else {
+                    assertEquals(MessageStatus.DELIVERED, delivered.status)
+                    assertEquals(code.ackCodeUInt32, delivered.ackCode)
+                    assertEquals(123u, delivered.roundTripTime)
+                }
                 assertNull(h.service.pendingAck(message.id))
                 assertEquals(
-                    listOf<MessageStatusEvent>(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u)),
+                    if (alreadyFailed) emptyList() else
+                        listOf<MessageStatusEvent>(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u)),
                     observed,
                 )
                 assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
-                assertEquals(if (cleanupPath == "inline") 3 else 2, statusWrites)
-                if (cleanupPath == "inline") {
+                assertEquals(if (alreadyFailed) 1 else if (cleanupPath == "inline") 3 else 2, statusWrites)
+                if (cleanupPath == "inline" && !alreadyFailed) {
                     assertTrue(failure.suppressed.any { it === restoreFailure })
                     assertTrue(h.diagnostics.any { it is MessagingDiagnostic.Failure &&
                         it.operation == "failMessage.${message.id}" && it.cause === restoreFailure })

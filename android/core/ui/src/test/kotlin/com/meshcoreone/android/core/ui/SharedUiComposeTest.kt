@@ -66,6 +66,11 @@ import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.test.swipe
+import androidx.compose.ui.test.pinch
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -739,6 +744,72 @@ class SharedUiComposeTest {
         }
         compose.waitForIdle()
         bitmap.recycle()
+    }
+
+    @Test fun shortCropPreviewTouchDragScrollsToControlsWithoutPanningAndTwoFingerZoomStillWorks() {
+        configureSystemFontAndDirection(2f, LayoutDirection.Ltr)
+        val image = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888).asImageBitmap()
+        val geometry = mutableStateOf(AvatarCropGeometry(300.0, CropSize(200.0, 200.0)))
+        var density = 1f
+        var chosen: AvatarCropGeometry? = null
+        content {
+            SideEffect { density = resources.displayMetrics.density }
+            MeshCoreTheme(motionScale = 0f) {
+                AvatarCropView(image, geometry.value, { geometry.value = it }, {}, { chosen = it })
+            }
+        }
+        resizeDp(360, 220, density)
+        val preview = compose.onNodeWithTag("avatar-crop-canvas", useUnmergedTree = true)
+        preview.performScrollTo()
+        val scroll = compose.onNodeWithTag("avatar-crop-scroll")
+        val before = scroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+        val selection = compose.runOnIdle { geometry.value }
+        preview.performTouchInput { swipeUp(durationMillis = 500) }
+        compose.waitForIdle()
+        val after = scroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+        assertTrue(after > before, "A drag starting on the crop preview must scroll toward controls")
+        compose.runOnIdle { assertEquals(selection, geometry.value) }
+
+        fun revealWithTouch(tag: String) {
+            repeat(24) {
+                val target = compose.onNodeWithTag(tag).fetchSemanticsNode()
+                val bounds = target.boundsInRoot
+                if (bounds.height >= 49f * density - 1f) return
+                val viewport = scroll.fetchSemanticsNode().boundsInRoot
+                val direction = if (target.positionInRoot.y < viewport.top) 1f else -1f
+                scroll.performTouchInput {
+                    swipe(center, center + androidx.compose.ui.geometry.Offset(0f, direction * 32f * density), 500)
+                }
+                compose.waitForIdle()
+            }
+            error("Touch scrolling did not reveal $tag")
+        }
+        revealWithTouch("avatar-crop-zoom")
+        compose.onNodeWithTag("avatar-crop-zoom").assertIsDisplayed()
+            .assertHeightIsAtLeast(49.dp)
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(2f) }
+        repeat(8) {
+            scroll.performTouchInput { swipeDown(durationMillis = 500) }
+            compose.waitForIdle()
+        }
+        compose.onNodeWithText(resources.getString(AppContactsStrings.contactsDetailAvatarCropChoose))
+            .assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(geometry.value, chosen) }
+
+        preview.performScrollTo()
+        val scale = compose.runOnIdle { geometry.value.scale }
+        preview.performTouchInput {
+            pinch(
+                androidx.compose.ui.geometry.Offset(center.x - 20f, center.y),
+                androidx.compose.ui.geometry.Offset(center.x + 20f, center.y),
+                androidx.compose.ui.geometry.Offset(center.x - 30f, center.y),
+                androidx.compose.ui.geometry.Offset(center.x + 50f, center.y),
+            )
+        }
+        compose.runOnIdle {
+            assertTrue(geometry.value.scale > scale, "Two-finger zoom must remain available")
+            assertTrue(geometry.value.offset.x > 0.0, "Two-finger pan must remain available")
+        }
     }
 
     private fun assertVisibleCropGuide(node: SemanticsNode, cropSizeDp: Double, density: Float) {

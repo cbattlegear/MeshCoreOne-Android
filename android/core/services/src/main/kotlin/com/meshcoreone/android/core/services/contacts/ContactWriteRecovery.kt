@@ -40,6 +40,7 @@ internal object ContactWriteRecovery {
     private class RadioState {
         var epoch: Any? = null
         var epochLoadedWithoutProvenance = false
+        var markerRecordingPending = false
         var syncing = false
         val syncMutex = Mutex()
         val writes = linkedSetOf<ContactWriteDispatch>()
@@ -48,6 +49,7 @@ internal object ContactWriteRecovery {
         val invalidatedWrites = linkedSetOf<ContactWriteDispatch>()
         val locallyCompletedWrites = linkedSetOf<ContactWriteDispatch>()
         val reportedUncertainties = linkedSetOf<ContactWriteDispatch>()
+        val pendingUncertainties = linkedSetOf<ContactWriteDispatch>()
     }
 
     private val states = WeakHashMap<ContactPreferenceFlags, MutableMap<RadioId, RadioState>>()
@@ -67,7 +69,7 @@ internal object ContactWriteRecovery {
         return state.syncMutex.withLock {
             synchronized(this) {
                 loadEpoch(preferences, radioId, state)
-                if (hasUnresolvedWrite(state)) throw ContactServiceError.SyncInterrupted()
+                if (state.epoch != null || hasUnresolvedWrite(state)) throw ContactServiceError.SyncInterrupted()
                 state.syncing = true
                 state.writes.filterNot { it in state.dispatchingWrites }.forEach {
                     state.invalidatedWrites.add(it)
@@ -119,6 +121,7 @@ internal object ContactWriteRecovery {
     @Synchronized
     fun beforeDispatch(preferences: ContactPreferenceFlags, radioId: RadioId, dispatch: ContactWriteDispatch) {
         val state = state(preferences, radioId)
+        loadEpoch(preferences, radioId, state)
         if (dispatch in state.invalidatedWrites) {
             throw ContactWriteAdmissionBlocked(radioId, ContactWriteAdmissionBlockReason.SYNC_IN_PROGRESS)
         }
@@ -191,17 +194,23 @@ internal object ContactWriteRecovery {
     @Synchronized
     fun require(preferences: ContactPreferenceFlags, radioId: RadioId, dispatch: ContactWriteDispatch? = null) {
         val state = state(preferences, radioId)
-        if (dispatch != null && dispatch in state.reportedUncertainties) return
+        if (dispatch != null && dispatch in state.reportedUncertainties) {
+            recordPendingMarker(preferences, radioId, state)
+            return
+        }
         state.epoch = Any()
-        preferences.set(key(radioId), true)
-        if (dispatch != null) state.reportedUncertainties.add(dispatch)
+        state.markerRecordingPending = true
+        if (dispatch != null) state.pendingUncertainties.add(dispatch)
+        recordPendingMarker(preferences, radioId, state)
     }
 
     @Synchronized
     fun reconciled(preferences: ContactPreferenceFlags, radioId: RadioId, epoch: Any): Boolean {
         val state = state(preferences, radioId)
         if (state.epoch !== epoch || hasUnresolvedWrite(state)) return false
+        recordPendingMarker(preferences, radioId, state)
         preferences.set(key(radioId), false)
+        state.markerRecordingPending = false
         state.epoch = null
         state.epochLoadedWithoutProvenance = false
         state.writes.clear()
@@ -209,6 +218,7 @@ internal object ContactWriteRecovery {
         state.finishedWrites.clear()
         state.locallyCompletedWrites.clear()
         state.reportedUncertainties.clear()
+        state.pendingUncertainties.clear()
         return true
     }
 
@@ -217,15 +227,17 @@ internal object ContactWriteRecovery {
         radioId: RadioId,
         state: RadioState,
         dispatch: ContactWriteDispatch? = null,
-    ): ContactWriteAdmissionBlockReason? = when {
-        state.syncing -> ContactWriteAdmissionBlockReason.SYNC_IN_PROGRESS
-        state.epoch != null || preferences.bool(key(radioId)) ->
-            ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED
-        dispatch != null && state.writes.any {
-            it !== dispatch && it.outcome != ContactWriteDispatchOutcome.DEFINITELY_UNSENT &&
-                it.outcome != ContactWriteDispatchOutcome.REJECTED
-        } -> ContactWriteAdmissionBlockReason.PREVIOUS_WRITE_UNRESOLVED
-        else -> null
+    ): ContactWriteAdmissionBlockReason? {
+        loadEpoch(preferences, radioId, state)
+        return when {
+            state.syncing -> ContactWriteAdmissionBlockReason.SYNC_IN_PROGRESS
+            state.epoch != null -> ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED
+            dispatch != null && state.writes.any {
+                it !== dispatch && it.outcome != ContactWriteDispatchOutcome.DEFINITELY_UNSENT &&
+                    it.outcome != ContactWriteDispatchOutcome.REJECTED
+            } -> ContactWriteAdmissionBlockReason.PREVIOUS_WRITE_UNRESOLVED
+            else -> null
+        }
     }
 
     private fun loadEpoch(
@@ -233,11 +245,21 @@ internal object ContactWriteRecovery {
         radioId: RadioId,
         state: RadioState,
     ): Any? {
+        recordPendingMarker(preferences, radioId, state)
         if (state.epoch == null && preferences.bool(key(radioId))) {
             state.epoch = Any()
             state.epochLoadedWithoutProvenance = true
         }
         return state.epoch
+    }
+
+    private fun recordPendingMarker(preferences: ContactPreferenceFlags, radioId: RadioId, state: RadioState) {
+        if (!state.markerRecordingPending) return
+        // A failed commit may already be visible to bool(); only a successful set records durability.
+        preferences.set(key(radioId), true)
+        state.markerRecordingPending = false
+        state.reportedUncertainties.addAll(state.pendingUncertainties)
+        state.pendingUncertainties.clear()
     }
 
     private fun hasUnresolvedWrite(state: RadioState): Boolean =
@@ -259,6 +281,7 @@ internal object ContactWriteRecovery {
         state.invalidatedWrites.remove(dispatch)
         state.locallyCompletedWrites.remove(dispatch)
         state.reportedUncertainties.remove(dispatch)
+        state.pendingUncertainties.remove(dispatch)
     }
 
     private fun state(preferences: ContactPreferenceFlags, radioId: RadioId): RadioState =

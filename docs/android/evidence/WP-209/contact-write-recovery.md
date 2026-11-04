@@ -558,3 +558,72 @@ snapshot/Room-marker contract, durable pre-dispatch removal intent, strict
 production cleanup completion or recovery acceptance is implemented here.
 Those cross-owner prerequisites and all execution/publication/claim holds remain
 unchanged; this candidate is local source-only for independent review.
+
+### Next-guarded-access marker recording
+
+This bounded successor to `acc54faff78c39617438fd13159614747e45e3a3`
+adds per-preference-role/per-radio `markerRecordingPending` and pending dispatch
+reports. `require` sets the epoch and pending state before attempting a true
+marker. Only a successful true `set` ends pending recording and deduplicates
+those reports. Epoch loading, write registration/dispatch and sync/mutation
+admission retry pending recording while retaining the existing epoch. Successful
+retry does not authorize mutation or snapshot work: the recovery epoch still
+blocks them. Sync now refuses a marked epoch before invalidating queued writes.
+Protected V-contact no-ops still return before mutation admission and perform no
+marker retry or unrelated invalidation.
+
+No retry consults `bool()` to infer durable recording. In particular, a failed
+Android SharedPreferences commit may already have updated its in-memory map;
+the recording exception must leave pending state intact. This is consistent
+with the coordinator's source observation of AOSP `SharedPreferencesImpl`:
+`commitToMemory()` precedes the disk result, whereas `getBoolean` reads `mMap`.
+The candidate does not change or execute the Android preference adapter.
+
+Repeated retry failures propagate the original preference exception. This
+explicitly changes `needsContactWriteReconciliation` during pending recording:
+it can throw on another failed commit instead of returning true. Successful
+recording returns true, never false; the in-process epoch continues blocking
+all unsafe work after an exception. Source search found no production call site
+for this query beyond its declaration; the existing failure controls now assert
+the identical exception and precise retry counts. Original service warning and
+suppressed initial recording failure remain intact. No hidden success/default,
+timer, unowned task, new public API or retry loop is added.
+
+The existing internal matching-epoch `reconciled` helper first completes any
+pending true recording, then attempts its false write, and clears pending state
+only after success. Stale epochs and unresolved exchanges still cannot clear.
+The service still has no caller of this helper: the internal CAS control is not
+a service reconciliation permit or a substitute for WP-107/WP-202 authority.
+
+Three additional authored methods bring recovery source to 53 methods, not
+discovery or execution. A real-session uncertain removal, with no dispatch
+callback, first fails marker recording while the fake memory map becomes true
+and its separate durable backing remains false. Each next-access variant
+(snapshot query, full sync, Add registration, remote/local removal and serialized
+dispatch admission) retries once when storage recovers, leaves the epoch marked,
+and produces no additional radio command, local mutation, cleanup, notification
+or event. The continued-failure family makes two passes over all six accesses,
+checks identical exceptions/13 true attempts, then proves other-radio local
+removal does not retry that marker before a successful fourteenth recording.
+The pending-report control preserves stale-epoch rejection, deduplicates later
+reports after access success, and checks no new true write after an internal
+matching clear and clean snapshot/sync/write admission. Existing late-callback
+and uncertain-removal controls now distinguish these explicit retries from
+false clears rather than expecting no guarded-access retry.
+
+The fake's independent memory/durable maps and fresh read-only durable view are
+host test-role modeling only, not Android disk or process-death evidence. No
+durability is promised if the process dies before a successful set, storage never
+recovers, no later guarded access occurs, or a distinct role loses the pending
+in-process state. Retrying records uncertainty; it does not reconcile contacts,
+prove radio drain or complete recovery.
+
+Trusted policy `cb4a79ab906db851800bcf93f7c2ebfb5aa34571` admits WP-209
+`modify` for `ContactWriteRecovery.kt`, `ContactWriteRecoveryTests.kt`, and this
+document. The assigned recovery hunks are disjoint from the retained manual
+refresh/comment/lineage drafts, which remain excluded. Python 3.12.4 ran
+`controller\validate.py --repo <this absolute worktree>` from a complete trusted
+Git-archive export of `tools/android-port`; result `valid`. `git diff --check`
+passed. These are source checks, not Kotlin compilation, test discovery or
+execution. No Gradle/CI/device work, publication, schema/Room/graph edit,
+claim change or hold release occurred.

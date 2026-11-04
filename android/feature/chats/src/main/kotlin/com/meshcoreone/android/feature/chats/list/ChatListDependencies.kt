@@ -156,7 +156,7 @@ class ContactLinkCancellation private constructor() {
 
     companion object {
         @OptIn(InternalCoroutinesApi::class)
-        internal fun observe(job: Job): Pair<ContactLinkCancellation, DisposableHandle> {
+        fun observe(job: Job): Pair<ContactLinkCancellation, DisposableHandle> {
             val cancellation = ContactLinkCancellation()
             val handle = job.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
                 if (cause != null) {

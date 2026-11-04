@@ -1614,6 +1614,71 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun exactChatTerminalReceiptWaitsForEveryPublicationGateAndSurvivesConflatedNavigation() = runTest {
+        for (acceptFirst in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Published proof") }
+            val feature = h.container.chatsFeature
+            val origin = ChatContactMount()
+            val offered = CompletableDeferred<ContactLinkHandoffReceipt>()
+            val held = ContactLinkPublications()
+            val underlying = feature.linksForMount(origin)
+            val environment = object : ChatLinkEnvironment by underlying {
+                override fun completeResolvedContactLookup(
+                    context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                    existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                    context, target, link, existing, publications, cancellation,
+                ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
+            }
+            try {
+                connect(h)
+                val navigation = h.container.navigation
+                feature.registerContactMount(origin)
+                h.container.captureContactLinkContext(key(31), held)
+                val before = navigation.state.value
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri("Published proof", key(20), ContactType.CHAT)
+                assertTrue(ChatLinkRouter(environment, backgroundScope).route(uri))
+                h.eventually("delivery is offered behind the unrelated predecessor gate") { offered.isCompleted }
+                val receipt = offered.await()
+                val terminal = backgroundScope.async { receipt.awaitOutcome() }
+                if (acceptFirst) {
+                    mount(h)
+                    h.eventually("mounted consumer accepts the raw exact proposal") {
+                        navigation.currentState.pendingContactDetail?.publicKey == key(20)
+                    }
+                } else {
+                    feature.sealContactMount(origin)
+                }
+                // Even another handoff release cannot make an unpublished terminal a receipt.
+                feature.registerContactMount(ChatContactMount())
+                navigation.navigateToMap(51.5, -0.1)
+                val latest = navigation.currentState
+                h.settle()
+                assertEquals(before, navigation.state.value)
+                assertFalse(terminal.isCompleted, "Raw terminal proof cannot settle before the predecessor publishes")
+                held.release()
+                h.eventually("any predecessor release wakes the process-owned terminal drain") { terminal.isCompleted }
+                assertEquals(
+                    if (acceptFirst) ContactLinkHandoffOutcome.Accepted(ContactLinkCompletion.Navigated)
+                    else ContactLinkHandoffOutcome.Superseded,
+                    terminal.await(),
+                )
+                assertEquals(AppTab.MAP, navigation.currentState.selectedTab)
+                assertEquals(AppTab.MAP, navigation.state.value.selectedTab)
+                assertEquals(latest.stacks, navigation.currentState.stacks)
+                feature.sealContactMount(origin)
+                h.settle()
+                assertEquals(terminal.await(), receipt.awaitOutcome())
+            } finally {
+                held.release()
+                feature.sealContactMount(origin)
+                unmount()
+                h.container.close()
+            }
+        }
+    }
+
     @Test fun queuedTapRetriesWhenNavigationReadinessIsRestoredAfterTheReadyEdge() = runTest {
         val context = ApplicationProvider.getApplicationContext<android.app.Application>()
         if (Build.VERSION.SDK_INT >= 33) shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)

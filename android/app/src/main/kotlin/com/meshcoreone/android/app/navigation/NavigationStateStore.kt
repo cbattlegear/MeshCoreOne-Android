@@ -64,6 +64,7 @@ internal class NavigationStateStore(initial: NavigationState) {
     val value: NavigationState get() = current.get().value
 
     fun snapshot(): Snapshot = current.get()
+    fun publishedHandoffs(): ChatContactHandoffs = published.value.handoffs
 
     fun compareAndSet(
         expected: Snapshot,

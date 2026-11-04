@@ -208,6 +208,9 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     val navigation = NavigationCoordinator().also { coordinator ->
         coordinator.installCommitBoundary { action -> withNavigationCommitBoundary(action) }
     }
+    private val contactHandoffSettlement = processScope.launch(Dispatchers.Default) {
+        navigation.contactHandoffUpdates.collect { navigation.settlePublishedChatContactReceipts() }
+    }
     internal val currentTransport: com.meshcoreone.android.core.model.TransportType?
         get() = if (connectionManager.isSimulatorConnection) com.meshcoreone.android.core.model.TransportType.SIMULATOR
         else connectionManager.snapshot.value.token?.let {
@@ -781,6 +784,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             statePlatform.close()
             connectionManager.close()
             processJob.cancelAndJoin()
+            navigation.settlePublishedChatContactReceipts()
             dependencies.onClose()
         }
     }

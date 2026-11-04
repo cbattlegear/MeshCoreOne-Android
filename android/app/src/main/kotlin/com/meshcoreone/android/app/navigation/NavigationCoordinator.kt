@@ -378,10 +378,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     private fun handoffPublication(publication: NavigationStateStore.Publication) = object : ContactLinkPublication {
-        override fun release() {
-            mutableState.release(publication)
-            settleChatContactReceipts()
-        }
+        override fun release() = mutableState.release(publication)
     }
 
     internal fun pendingChatContactOffers(): List<ChatContactOffer> =
@@ -447,9 +444,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         }
     }
 
-    private fun settleChatContactReceipts() {
-        // Completing a deferred can run arbitrary continuations. Only process-owned publication calls this.
-        val terminals = mutableState.snapshot().handoffs.offers.values.filter { it.terminal != null }
+    internal fun settlePublishedChatContactReceipts() {
+        // A release may leave an older gate pending. Only exact published proof authorizes settlement.
+        val terminals = mutableState.publishedHandoffs().offers.values.filter { it.terminal != null }
         terminals.forEach { it.receipt.settle(checkNotNull(it.terminal)) }
         while (true) {
             val snapshot = mutableState.snapshot()

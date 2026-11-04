@@ -126,6 +126,70 @@ class ChannelAttemptRecoveryTest {
             assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
             assertTrue(h.store.pending.isEmpty())
         },
+        *listOf(false, true).map { acceptedResponse ->
+            native("settlement-and-readback-return-loss-accepted-$acceptedResponse-replacement-restart-keeps-exact-evidence") {
+                val first = Harness(this); first.start()
+                val message = first.message(MessageStatus.PENDING, 0u)
+                val row = first.pending(message)
+                if (!acceptedResponse) first.transport.channelError = 2u
+                val settlementFailure = storageFailure()
+                val readFailure = storageFailure()
+                first.store.after = {
+                    if (it == "settleQueuedChannelAttempt") {
+                        first.store.faults["fetchQueuedChannelAttempt"] = readFailure
+                        throw settlementFailure
+                    }
+                }
+                val retained = assertFailsWith<QueuedChannelRetainedException> {
+                    first.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
+                }
+                assertSame(settlementFailure, retained.cause)
+                assertTrue(settlementFailure.suppressed.any { it === readFailure })
+                val attempt = first.store.channelAttempts.values.single()
+                val phase = if (acceptedResponse) QueuedChannelAttemptPhase.ACCEPTED else QueuedChannelAttemptPhase.UNCERTAIN
+                assertEquals(phase, attempt.phase)
+                assertEquals(row.id, attempt.key.pendingID)
+                assertEquals(message.id, attempt.key.messageID)
+                assertEquals(message.channelOccupantID, attempt.channelOccupantID)
+                assertEquals(attempt.key.attemptID, first.store.pending.getValue(EntityKey(RADIO, row.id)).channelAttemptID)
+                assertEquals(1, first.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+                first.store.after = null
+                first.store.faults.clear()
+                first.close()
+
+                val replacementOccupant = UUID.randomUUID()
+                first.store.channelOccupants[RADIO to 0u.toUByte()] = replacementOccupant
+                val next = Harness(this, store = first.store, generation = 2); next.start()
+                val events = next.service.statusEvents()
+                val queue = next.queue(query = MessagingChannelQuery { fail("Settlement evidence must not trigger a channel query") })
+                queue.hydrate(); runCurrent(); queue.awaitDrainCompletion()
+                queue.hydrate(); runCurrent(); queue.awaitDrainCompletion()
+                assertTrue(next.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+                assertFalse(next.store.calls.any { it == "incrementReadyQueuedChannelAttemptCount" })
+                assertEquals(1, next.store.channelAttempts.size)
+                val savedAttempt = next.store.channelAttempts.getValue(attempt.key)
+                assertEquals(phase, savedAttempt.phase)
+                assertEquals(message.channelOccupantID, savedAttempt.channelOccupantID)
+                assertEquals(replacementOccupant, next.store.channelOccupants[RADIO to 0u.toUByte()])
+                assertEquals(message.channelOccupantID, next.stored(message.id).channelOccupantID)
+                assertEquals(message.text, next.stored(message.id).text)
+                if (acceptedResponse) {
+                    assertTrue(savedAttempt.isCompleted)
+                    assertTrue(next.store.pending.isEmpty())
+                    assertEquals(MessageStatus.SENT, next.stored(message.id).status)
+                } else {
+                    assertEquals(attempt, savedAttempt)
+                    assertEquals(message, next.stored(message.id))
+                    val pending = next.store.pending.getValue(EntityKey(RADIO, row.id))
+                    assertEquals(QueuedChannelDispatchState.UNCERTAIN, pending.channelDispatchState)
+                    assertEquals(0L, pending.attemptCount)
+                    assertEquals(row.channelOccupantID, pending.channelOccupantID)
+                    assertTrue(statuses(next.service, events).isEmpty())
+                }
+                queue.shutdown()
+                assertEquals(savedAttempt, next.store.channelAttempts.getValue(attempt.key))
+            }
+        }.toTypedArray(),
         native("ok-before-settlement-rollback-retains-unknown-without-second-wire") {
             val h = Harness(this); h.start()
             val row = h.pending(h.message(MessageStatus.PENDING, 0u))

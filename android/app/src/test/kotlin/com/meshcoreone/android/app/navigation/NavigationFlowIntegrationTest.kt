@@ -4,6 +4,8 @@ package com.meshcoreone.android.app.container
 
 import android.Manifest
 import android.app.NotificationManager
+import android.content.ComponentName
+import android.content.Intent
 import android.os.Build
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -58,6 +60,8 @@ import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.runtime.*
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
+import com.meshcoreone.android.core.services.contacts.ContactServiceError
+import com.meshcoreone.android.core.services.contacts.ContactWriteRecoveryState
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ChatLinkEnvironment
@@ -79,6 +83,7 @@ import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesSession
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationOpenActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -380,6 +385,23 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     }
 
     private fun unmount() = compose.runOnUiThread { host.get().setContent {} }
+
+    private fun tapNotification(manager: NotificationManager) {
+        val context = ApplicationProvider.getApplicationContext<android.app.Application>()
+        manager.activeNotifications.single().notification.contentIntent.send()
+        val intent = assertNotNull(shadowOf(context).nextStartedActivity)
+        assertEquals(ComponentName(context, NotificationOpenActivity::class.java), intent.component)
+        val activity = Robolectric.buildActivity(NotificationOpenActivity::class.java, intent).create()
+        try {
+            assertTrue(activity.get().isFinishing)
+            shadowOf(activity.get()).nextStartedActivity?.let { launcher ->
+                assertEquals(Intent.ACTION_MAIN, launcher.action)
+            }
+        } finally {
+            activity.destroy()
+        }
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+    }
 
     private suspend fun connect(h: ContainerHarness, target: ConnectionTarget = h.target()) {
         h.manager.connect(target)
@@ -1131,8 +1153,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 NotificationId("wp302-committed-tap"), NotificationCategory.DIRECT_MESSAGE, contact.name, "Committed tap",
                 false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), UUID.randomUUID()),
             ))
-            manager.activeNotifications.single().notification.contentIntent.send()
-            shadowOf(android.os.Looper.getMainLooper()).idle()
+            tapNotification(manager)
             h.eventually("the real tap commits before the observer exits") {
                 if (observerCancels) cancellation.isCompleted else acknowledgement.isCompleted
             }
@@ -1394,8 +1415,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 NotificationId("wp302-cold"), NotificationCategory.DIRECT_MESSAGE, contact.name, "Cold tap",
                 false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), messageId),
             ))
-            manager.activeNotifications.single().notification.contentIntent.send()
-            shadowOf(android.os.Looper.getMainLooper()).idle()
+            tapNotification(manager)
             testScheduler.runCurrent()
             assertNull(h.sessions.current)
             assertEquals(1, h.container.navigation.state.value.activeStack.size, "No destination before real readiness")
@@ -1708,7 +1728,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 if (acceptFirst) {
                     compose.runOnIdle { consumerEnabled.value = true }
                     compose.waitForIdle()
-                    h.eventually("the real shell accepts and actual source disposes") {
+                    await(h) {
                         terminal.isCompleted && offer.mount.registrationSealed.get()
                     }
                     assertEquals(
@@ -2191,8 +2211,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 contact.name, "Queued tap", false, null, null,
                 NotificationPayload.DirectMessage(EntityKey(radio, contact.id), messageId),
             ))
-            manager.activeNotifications.single().notification.contentIntent.send()
-            shadowOf(android.os.Looper.getMainLooper()).idle()
+            tapNotification(manager)
             testScheduler.runCurrent()
             val connecting = async { h.manager.connect(h.target()) }
             h.eventually("navigation callbacks are installed while sync is held") {
@@ -2390,8 +2409,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 NotificationId("wp302-final-delay"), NotificationCategory.DIRECT_MESSAGE, contact.name, "Queued tap",
                 false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), UUID.randomUUID()),
             ))
-            manager.activeNotifications.single().notification.contentIntent.send()
-            shadowOf(android.os.Looper.getMainLooper()).idle()
+            tapNotification(manager)
             testScheduler.runCurrent()
             val firstAttempt = routeAttempts.single()
             val connecting = async { h.manager.connect(h.target()) }
@@ -4048,6 +4066,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 feature.registerContactMount(origin)
                 mount(h)
                 val navigation = h.container.navigation
+                await(h) {
+                    navigation.currentState.widthDp == width.value.value &&
+                        navigation.currentState.pendingChatContact == null
+                }
                 val underlying = feature.linksForMount(origin)
                 val environment = object : ChatLinkEnvironment by underlying {
                     override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
@@ -5235,9 +5257,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
             compose.onNodeWithTag("contact-link-cancel").performClick()
             assertNull(navigation.state.value.pendingContactLink)
-            val sync = backgroundScope.async { service.syncContactsForRefresh(radioId) }
-            h.eventually("complete radio contact sync finishes") { sync.isCompleted }
-            sync.await()
+            val producer = assertNotNull(h.sessions.current).contactService
+            h.eventually("the canceled write retains its recovery obligation after the late ACK") {
+                producer.contactWriteRecoveryState(radioId) is ContactWriteRecoveryState.Required
+            }
+            val recovery = assertIs<ContactWriteRecoveryState.Required>(producer.contactWriteRecoveryState(radioId))
+            val syncRequests = firmware.sent.count { it[0].toInt() == 0x04 }
+            assertFailsWith<ContactServiceError.SyncInterrupted> { service.syncContactsForRefresh(radioId) }
+            assertEquals(syncRequests, firmware.sent.count { it[0].toInt() == 0x04 })
+            assertEquals(recovery, producer.contactWriteRecoveryState(radioId))
             val reloaded = assertNotNull(store.fetchContact(radioId, publicKey))
             assertEquals(added.id, reloaded.id)
             assertEquals(DeepLinkRouteOutcome.Navigated, external.routeExternal(uri))
@@ -5406,8 +5434,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     NotificationId(id), NotificationCategory.DIRECT_MESSAGE, contact.name, "Queued tap",
                     false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), message),
                 ))
-                manager.activeNotifications.single().notification.contentIntent.send()
-                shadowOf(android.os.Looper.getMainLooper()).idle()
+                tapNotification(manager)
             }
             enqueue("wp302-retired-tap", first)
             assertTrue(entered.await(10, TimeUnit.SECONDS), "Tap must pause after its pre-commit validity check")

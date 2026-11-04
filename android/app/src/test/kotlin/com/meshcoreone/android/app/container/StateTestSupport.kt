@@ -103,6 +103,7 @@ internal class FakeConnectionPort : AppConnectionPort {
         return true
     }
     override fun updateDevice(device: DeviceDTO) { calls += "updateDevice" }
+    override fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken) { calls += "updateDevice" }
     override fun updateAutoAddConfig(config: AutoAddConfig) { calls += "autoAdd" }
     override fun updateClientRepeat(enabled: Boolean) { calls += "clientRepeat:$enabled" }
     override fun updatePathHashMode(mode: UByte) { calls += "pathHash:$mode" }

@@ -202,17 +202,28 @@ internal suspend fun TestScope.reply(fixture: SettingsFixture, count: Int, expec
 
 internal fun okPacket() = packet(ResponseCode.OK)
 
-internal class DeviceRows : DevicePersisting {
+internal class DeviceRows : DevicePersisting, DeviceEditPersisting {
     val rows = mutableMapOf<UUID, DeviceDTO>()
     var fetchFailure: PersistenceStoreException? = null
     var saveFailure: PersistenceStoreException? = null
     var beforeSave: suspend () -> Unit = {}
+    private var revision = 0L
+    override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
+        fetchDevice(id)?.let { DeviceWriteSnapshot(it, revision) }
+    override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        beforeSave()
+        saveFailure?.let { throw it }
+        if (revision != expected.revision || rows[dto.id] != expected.device) return false
+        rows[dto.id] = dto
+        revision++
+        return true
+    }
     override suspend fun fetchDevice(id: UUID): DeviceDTO? { fetchFailure?.let { throw it }; return rows[id] }
     override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? = rows.values.firstOrNull { it.radioId == radioId }
     override suspend fun fetchDevice(publicKey: Bytes): DeviceDTO? = rows.values.firstOrNull { it.publicKey == publicKey }
     override suspend fun fetchDevices(): SnapshotList<DeviceDTO> = rows.values.snapshot()
     override suspend fun fetchActiveDevice(): DeviceDTO? = rows.values.firstOrNull { it.isActive }
-    override suspend fun saveDevice(dto: DeviceDTO) { beforeSave(); saveFailure?.let { throw it }; rows[dto.id] = dto }
+    override suspend fun saveDevice(dto: DeviceDTO) { beforeSave(); saveFailure?.let { throw it }; rows[dto.id] = dto; revision++ }
     override suspend fun setActiveDevice(id: UUID): Unit = unsupported()
     override suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt): Unit = unsupported()
     override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String): Unit = unsupported()

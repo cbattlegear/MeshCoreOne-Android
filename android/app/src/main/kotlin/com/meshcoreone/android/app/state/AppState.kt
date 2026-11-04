@@ -580,7 +580,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     private fun wireDeviceUpdateCallbacks(session: AppSession) {
-        session.deviceService.setDeviceUpdateCallback { event -> connection.updateDevice(event.event) }
+        session.deviceService.setDeviceUpdateCallback { event -> connection.updateOCVSettings(event.event, event.token) }
 
         // ConnectionManager nils the session before teardown yields contactDeletedCleanup; capture the notification service.
         val notifications = session.notificationService

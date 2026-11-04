@@ -63,18 +63,30 @@ internal class TestPreferences : ProcessConnectionPreferences {
     }
 }
 
-internal class TestDevices : DevicePersisting {
+internal class TestDevices : DevicePersisting, DeviceEditPersisting {
     val rows = linkedMapOf<UUID, DeviceDTO>()
     val calls = mutableListOf<String>()
     var failure: Exception? = null
     var ghostResult: RadioId? = null
+    private var revision = 0L
+    private var authorityRevision = 0L
+    override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
+        fetchDevice(id)?.let { DeviceWriteSnapshot(it, revision, authorityRevision) }
+    override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        failure?.let { throw it }
+        if (revision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) return false
+        calls += "save"
+        rows[dto.id] = dto
+        revision++
+        return true
+    }
     override suspend fun fetchDevice(id: UUID): DeviceDTO? { failure?.let { throw it }; calls += "id"; return rows[id] }
     override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? = rows.values.firstOrNull { it.radioId == radioId }
     override suspend fun fetchDevice(publicKey: Bytes): DeviceDTO? { failure?.let { throw it }; calls += "key"; return rows.values.firstOrNull { it.publicKey == publicKey } }
     override suspend fun fetchDevices(): SnapshotList<DeviceDTO> = rows.values.snapshot()
     override suspend fun fetchActiveDevice(): DeviceDTO? = rows.values.firstOrNull { it.isActive }
-    override suspend fun saveDevice(dto: DeviceDTO) { failure?.let { throw it }; calls += "save"; rows[dto.id] = dto }
-    override suspend fun setActiveDevice(id: UUID) { rows.replaceAll { key, row -> row.copy(isActive = key == id) } }
+    override suspend fun saveDevice(dto: DeviceDTO) { failure?.let { throw it }; calls += "save"; rows[dto.id] = dto; revision++; authorityRevision++ }
+    override suspend fun setActiveDevice(id: UUID) { rows.replaceAll { key, row -> row.copy(isActive = key == id) }; revision++; authorityRevision++ }
     override suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt) {
         val row = checkNotNull(fetchDevice(radioId)); rows[row.id] = row.copy(lastContactSync = timestamp)
     }

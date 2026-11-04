@@ -430,7 +430,7 @@ internal class AdvertCapRoundInjector(private val service: AdvertisementService,
     private var count = 0
     val calls: Int get() = synchronized(lock) { count }
 
-    fun handle(): AdvertContactSyncOutcome {
+    suspend fun handle(): AdvertContactSyncOutcome {
         val call = synchronized(lock) { ++count }
         if (call == cap) service.recordPendingAdvertKey(freshKey)
         return if (call > cap) AdvertContactSyncOutcome.SYNCED else AdvertContactSyncOutcome.FAILED

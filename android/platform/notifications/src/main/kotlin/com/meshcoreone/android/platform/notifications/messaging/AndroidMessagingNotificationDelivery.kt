@@ -333,19 +333,6 @@ class AndroidMessagingNotificationDelivery(
         }
         internal const val EXTRA_POST_ID = "mc1.notification.post-id"
 
-        internal fun retireContentNotification(context: Context, notificationId: String, postId: String) {
-            val manager = context.getSystemService(NotificationManager::class.java)
-            val tag = TAG_PREFIX + notificationId
-            // notify() returns before Android necessarily exposes the replacement as active.
-            // Unknown process history retains the notification rather than cancelling a newer post.
-            synchronized(postingLock) {
-                if (submittedPosts[tag] == postId) {
-                    manager.cancel(tag, NOTIFICATION_ID)
-                    submittedPosts.remove(tag)
-                }
-            }
-        }
-
         internal const val CHANNEL_MESSAGES = "mesh_messages"
         internal const val CHANNEL_MESSAGES_SILENT = "mesh_messages_silent"
         internal const val CHANNEL_ACTIVITY = "mesh_activity"

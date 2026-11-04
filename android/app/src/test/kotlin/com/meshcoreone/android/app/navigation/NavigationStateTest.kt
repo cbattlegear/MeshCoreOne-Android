@@ -107,6 +107,114 @@ class NavigationStateTest {
         assertFalse(store.compareAndSet(original, initial.copy(selectedTab = AppTab.TOOLS)))
     }
 
+    @Test fun backLeavesThePresentedChatInsteadOfAnUnpublishedNotificationDescendant() = runTest {
+        val n = NavigationCoordinator()
+        n.replaceRadio(radio)
+        n.setNavigationReady(true)
+        n.navigateToSetting(SettingsDetail.LANGUAGE)
+        val settings = n.currentState.stacks.getValue(AppTab.SETTINGS)
+        n.navigateToChat(contact)
+        val presented = n.publishedNavigation.value
+        val gate = n.registerChatContactMount(ChatContactMount(presented.value.activeStack.last().id))
+        try {
+            assertEquals(NavigationOutcome.Navigated, n.handleNotification(
+                NotificationPayload.ChannelMessage(radio, channel.index, message), lookup(),
+            ))
+            assertEquals(presented, n.publishedNavigation.value)
+            assertEquals(ChatSelection.Channel(channel), n.currentState.chatsSelectedRoute)
+            assertTrue(n.back())
+            assertEquals(1, n.currentState.activeStack.size)
+            assertNull(n.currentState.chatsSelectedRoute)
+            assertNull(n.currentState.pendingChannel)
+            assertNull(n.currentState.pendingMessageScroll)
+            assertEquals(settings, n.currentState.stacks.getValue(AppTab.SETTINGS))
+            assertFalse("The same presented entry cannot be popped twice", n.back())
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertEquals(1, n.state.value.activeStack.size)
+        assertNull(n.state.value.chatsSelectedRoute)
+        assertEquals(settings, n.state.value.stacks.getValue(AppTab.SETTINGS))
+    }
+
+    @Test fun backKeepsItsPresentedEntryWhenANewerPublicationReachesTheFlowBeforeTheUi() = runTest {
+        val n = NavigationCoordinator()
+        n.replaceRadio(radio)
+        n.setNavigationReady(true)
+        n.navigateToChat(contact)
+        val presented = n.publishedNavigation.value
+        assertEquals(NavigationOutcome.Navigated, n.handleNotification(
+            NotificationPayload.ChannelMessage(radio, channel.index, message), lookup(),
+        ))
+        assertTrue(n.publishedNavigation.value.revision > presented.revision)
+        assertEquals(ChatSelection.Channel(channel), n.state.value.chatsSelectedRoute)
+        assertTrue(n.back(presented))
+        assertEquals(AppTab.CHATS, n.state.value.selectedTab)
+        assertEquals(1, n.state.value.activeStack.size)
+        assertNull(n.state.value.chatsSelectedRoute)
+    }
+
+    @Test fun backFromThePresentedChatsRootCannotPopAnUnpublishedNotification() = runTest {
+        val n = NavigationCoordinator()
+        n.replaceRadio(radio)
+        n.setNavigationReady(true)
+        val presented = n.publishedNavigation.value
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        try {
+            assertEquals(NavigationOutcome.Navigated, n.handleNotification(payload, lookup()))
+            val committed = n.currentState
+            assertFalse(n.back())
+            assertEquals(committed, n.currentState)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertEquals(ChatSelection.Direct(contact), n.state.value.chatsSelectedRoute)
+    }
+
+    @Test fun backFromAPresentedTabRootRetainsThatTabsUnseenDetail() {
+        val n = NavigationCoordinator()
+        n.selectTab(AppTab.NODES)
+        val presented = n.publishedNavigation.value
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        try {
+            n.navigateToContactDetail(contact)
+            val nodes = n.currentState.stacks.getValue(AppTab.NODES)
+            assertTrue(n.back(presented))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(nodes, n.currentState.stacks.getValue(AppTab.NODES))
+            assertEquals(contact, n.currentState.selectedContact)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertEquals(AppTab.CHATS, n.state.value.selectedTab)
+        assertEquals(NavigationDestination.ContactDetail(contact), n.state.value.stacks.getValue(AppTab.NODES).last().destination)
+    }
+
+    @Test fun backDoesNotReinterpretAnAlreadyRemovedPresentedEntry() {
+        val n = NavigationCoordinator()
+        n.navigateToChat(contact)
+        val presented = n.publishedNavigation.value
+        assertTrue(n.back(presented))
+        n.navigateToChannel(channel)
+        val replacement = n.state.value
+        assertFalse(n.back(presented))
+        assertEquals(replacement, n.state.value)
+    }
+
+    @Test fun backCannotRebaseAPresentedEntryOntoARetiredGeneration() {
+        val n = NavigationCoordinator()
+        n.navigateToChat(contact)
+        val presented = n.publishedNavigation.value
+        n.manuallyDisconnect()
+        n.navigateToChannel(channel)
+        val replacement = n.state.value
+        assertFalse(n.back(presented))
+        assertEquals(replacement, n.state.value)
+    }
+
     @Test fun finiteSnapshotWriterContentionCannotReopenASealedChatMountOrReleaseItsPredecessor() = runTest {
         val coordinator = NavigationCoordinator()
         coordinator.navigateToChat(contact)

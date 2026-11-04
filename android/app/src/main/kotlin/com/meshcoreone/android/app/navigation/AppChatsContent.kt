@@ -67,6 +67,7 @@ internal fun AppChatsContent(
     coordinator: NavigationCoordinator,
 ) {
     val state by coordinator.state.collectAsState()
+    val presented = LocalPresentedNavigation.current ?: coordinator.publishedNavigation.value
     val entryId = LocalNavigationEntryId.current
     AppPendingChannel(feature, coordinator)
     var newChannel by remember { mutableStateOf(false) }
@@ -93,7 +94,7 @@ internal fun AppChatsContent(
             FeatureRoute(FeatureId.CHATS), coordinator::navigate, list,
             selectedRoute = state.chatsSelectedRoute?.route(),
             onOpenChat = coordinator::openChat,
-            onClearSelection = { coordinator.back() },
+            onClearSelection = { coordinator.back(presented) },
             onNewChannel = { newChannel = true },
             onRoomAuthenticationRequested = coordinator::requestRoomAuthentication,
             failureText = { UiErrorMapper().message(it) },

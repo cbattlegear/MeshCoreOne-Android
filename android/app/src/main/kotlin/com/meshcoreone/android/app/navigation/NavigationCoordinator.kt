@@ -49,6 +49,7 @@ internal data class NavigationCleanupOwner(
 class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private val mutableState = NavigationStateStore(initial)
     val state: StateFlow<NavigationState> = mutableState.state
+    internal val publishedNavigation get() = mutableState.publishedSnapshots
     internal val currentState: NavigationState get() = mutableState.value
     internal val contactHandoffUpdates get() = mutableState.publishedSnapshots
     private val notificationMutex = Mutex()
@@ -874,34 +875,46 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         )
     }
 
-    fun back(): Boolean {
+    fun back(): Boolean = back(publishedNavigation.value)
+
+    internal fun back(presented: NavigationStateStore.PublishedSnapshot): Boolean {
+        val source = presented.value
+        if (!source.canGoBack) return false
+        val tab = source.selectedTab
+        val presentedStack = source.activeStack
         while (true) {
             val snapshot = mutableState.snapshot()
             val current = snapshot.value
-            if (!current.canGoBack) return false
-            val next = if (current.activeStack.size == 1) current.select(AppTab.CHATS)
+            if (snapshot.revision < presented.revision || current.generation != source.generation ||
+                current.radioId != source.radioId || current.boundSessionToken != source.boundSessionToken
+            ) return false
+            val currentStack = current.stacks.getValue(tab)
+            if (currentStack.take(presentedStack.size).map { it.id } != presentedStack.map { it.id }) return false
+            // Leave the presented entry rather than an unseen descendant.
+            val next = if (presentedStack.size == 1) current.select(AppTab.CHATS)
                 else {
-                    val stack = current.activeStack.dropLast(1).snapshot()
+                    val stack = currentStack.take(presentedStack.size - 1).snapshot()
                     val destination = stack.last().destination
                     current.copy(
-                        stacks = (current.stacks + (current.selectedTab to stack)).snapshotMap(),
+                        selectedTab = tab,
+                        stacks = (current.stacks + (tab to stack)).snapshotMap(),
                         tabBarVisible = stack.size == 1,
-                        chatsSelectedRoute = if (current.selectedTab == AppTab.CHATS)
+                        chatsSelectedRoute = if (tab == AppTab.CHATS)
                             (destination as? NavigationDestination.Chat)?.selection else current.chatsSelectedRoute,
-                        selectedContact = if (current.selectedTab == AppTab.NODES)
+                        selectedContact = if (tab == AppTab.NODES)
                             (destination as? NavigationDestination.ContactDetail)?.contact else current.selectedContact,
-                        nodesShowingDiscovery = if (current.selectedTab == AppTab.NODES)
+                        nodesShowingDiscovery = if (tab == AppTab.NODES)
                             destination == NavigationDestination.Discovery else current.nodesShowingDiscovery,
-                        selectedTool = if (current.selectedTab == AppTab.TOOLS)
+                        selectedTool = if (tab == AppTab.TOOLS)
                             (destination as? NavigationDestination.Tool)?.selection else current.selectedTool,
-                        selectedSetting = if (current.selectedTab == AppTab.SETTINGS)
+                        selectedSetting = if (tab == AppTab.SETTINGS)
                             (destination as? NavigationDestination.Setting)?.selection else current.selectedSetting,
-                        pendingChatContact = if (current.selectedTab == AppTab.CHATS) null else current.pendingChatContact,
-                        pendingChannel = if (current.selectedTab == AppTab.CHATS) null else current.pendingChannel,
-                        pendingRoomSession = if (current.selectedTab == AppTab.CHATS) null else current.pendingRoomSession,
-                        pendingMessageScroll = if (current.selectedTab == AppTab.CHATS) null else current.pendingMessageScroll,
-                        pendingContactDetail = if (current.selectedTab == AppTab.NODES) null else current.pendingContactDetail,
-                        pendingDiscoveryNavigation = if (current.selectedTab == AppTab.NODES) false else current.pendingDiscoveryNavigation,
+                        pendingChatContact = if (tab == AppTab.CHATS) null else current.pendingChatContact,
+                        pendingChannel = if (tab == AppTab.CHATS) null else current.pendingChannel,
+                        pendingRoomSession = if (tab == AppTab.CHATS) null else current.pendingRoomSession,
+                        pendingMessageScroll = if (tab == AppTab.CHATS) null else current.pendingMessageScroll,
+                        pendingContactDetail = if (tab == AppTab.NODES) null else current.pendingContactDetail,
+                        pendingDiscoveryNavigation = if (tab == AppTab.NODES) false else current.pendingDiscoveryNavigation,
                     )
                 }
             if (mutableState.compareAndSet(snapshot, next)) return true

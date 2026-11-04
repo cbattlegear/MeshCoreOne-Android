@@ -115,6 +115,7 @@ import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as Tools
 import com.meshcoreone.android.core.l10n.R as Strings
 
 internal val LocalNavigationEntryId = staticCompositionLocalOf<Long?> { null }
+internal val LocalPresentedNavigation = staticCompositionLocalOf<NavigationStateStore.PublishedSnapshot?> { null }
 
 internal fun AppTab.titleResource(): Int = when (this) {
     AppTab.CHATS -> Strings.string.tab_chats
@@ -153,7 +154,9 @@ fun NativeNavigationShell(
     },
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
-    val state by coordinator.state.collectAsStateWithLifecycle()
+    val publication by coordinator.publishedNavigation.collectAsStateWithLifecycle()
+    val presented = publication
+    val state = presented.value
     LaunchedEffect(coordinator, chats) {
         if (chats != null) coordinator.contactHandoffUpdates.collect { chats.acceptContactOffers() }
     }
@@ -284,7 +287,7 @@ fun NativeNavigationShell(
                             navigationIcon = {
                                 if (state.canGoBack) {
                                     IconButton(
-                                        onClick = { coordinator.back() },
+                                        onClick = { coordinator.back(presented) },
                                         modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("navigation-back"),
                                     ) {
                                         Icon(painterResource(R.drawable.ic_back), stringResource(Strings.string.scaffold_back))
@@ -326,7 +329,7 @@ fun NativeNavigationShell(
                     modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                     entryDecorators = listOf(decorator),
                     sceneStrategies = listOf(strategy),
-                    onBack = { coordinator.back() },
+                    onBack = { coordinator.back(presented) },
                     transitionSpec = {
                         androidx.compose.animation.fadeIn(
                             androidx.compose.animation.core.tween(if (motionScale == 0f) 0 else 180),
@@ -341,7 +344,10 @@ fun NativeNavigationShell(
                             metadata = mapOf("destination" to entry.destination, "ownerTab" to entry.ownerTab) +
                                 predictiveTransition,
                         ) {
-                            CompositionLocalProvider(LocalNavigationEntryId provides entry.id) {
+                            CompositionLocalProvider(
+                                LocalNavigationEntryId provides entry.id,
+                                LocalPresentedNavigation provides presented,
+                            ) {
                                 Box(Modifier.fillMaxSize().focusRestorer().focusGroup().testTag("entry:${entry.id}")) {
                                     content(entry.destination, coordinator::navigate)
                                 }
@@ -443,7 +449,8 @@ private fun ExistingFeatureContent(
     settings: com.meshcoreone.android.app.container.AppSettingsFeature?,
     coordinator: NavigationCoordinator,
 ) {
-    val navigationState by coordinator.state.collectAsStateWithLifecycle()
+    val presented = LocalPresentedNavigation.current ?: coordinator.publishedNavigation.value
+    val navigationState = presented.value
     val feature = when (destination) {
         is NavigationDestination.Root -> FeatureId.forTab(destination.tab)
         is NavigationDestination.Chat -> FeatureId.CHATS
@@ -484,7 +491,7 @@ private fun ExistingFeatureContent(
                 ) = coordinator.navigateToRemoteNode(contact, action)
 
                 override fun back() {
-                    coordinator.back()
+                    coordinator.back(presented)
                 }
             },
         )
@@ -517,7 +524,7 @@ private fun ExistingFeatureContent(
         FeatureId.ONBOARDING -> OnboardingEntry(
             route,
             // Leaving the auxiliary setup route pops it before moving on (completion targets the Chats root).
-            { target -> coordinator.back(); navigate(target) },
+            { target -> coordinator.back(presented); navigate(target) },
             onboarding,
         )
         FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate, remoteNodes, cliContent = { session, send, enabled ->
@@ -532,8 +539,8 @@ private fun ExistingFeatureContent(
                     RemoteNodeAction.JOIN_ROOM -> RemoteNodeLaunchAction.JOIN_ROOM
                 },
             )
-        }, onDismiss = { coordinator.back() }, onJoinRoom = {
-            coordinator.back()
+        }, onDismiss = { coordinator.back(presented) }, onJoinRoom = {
+            coordinator.back(presented)
             coordinator.navigateToRoom(it)
         })
     }

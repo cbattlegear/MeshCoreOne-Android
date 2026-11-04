@@ -4064,12 +4064,16 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 connect(h)
                 val origin = contactMount(h).also { mountedOrigin = it }
                 feature.registerContactMount(origin)
-                mount(h)
                 val navigation = h.container.navigation
-                await(h) {
-                    navigation.currentState.widthDp == width.value.value &&
-                        navigation.currentState.pendingChatContact == null
-                }
+                assertTrue(navigation.acknowledgePendingChatRoute(
+                    assertIs<ChatSelection.Direct>(navigation.currentState.chatsSelectedRoute).route(),
+                ))
+                mount(h)
+                compose.waitForIdle()
+                h.settle()
+                compose.waitForIdle()
+                assertEquals(width.value.value, navigation.currentState.widthDp)
+                assertNull(navigation.currentState.pendingChatContact)
                 val underlying = feature.linksForMount(origin)
                 val environment = object : ChatLinkEnvironment by underlying {
                     override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {

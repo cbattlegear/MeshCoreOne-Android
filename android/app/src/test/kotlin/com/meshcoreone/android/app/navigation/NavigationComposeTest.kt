@@ -29,6 +29,9 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.navigationevent.DirectNavigationEventInput
 import androidx.navigationevent.NavigationEvent
+import androidx.navigationevent.NavigationEventDispatcher
+import androidx.navigationevent.NavigationEventTransitionState
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.designsystem.*
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -217,6 +220,49 @@ class NavigationComposeTest {
         capture("native-back-root")
     }
 
+    @Test fun mountedBackLeavesThePresentedEntryInsteadOfAConcurrentUnseenRoute() {
+        val radio = RadioId(UUID(0, 60))
+        val contact = ContactDTO(
+            radioId = radio, publicKey = Bytes(ByteArray(32) { 2 }), name = "Presented chat",
+            lastHeardTimestamp = null,
+        )
+        val channel = ChannelDTO(radioId = radio, index = 2u, name = "Unseen channel")
+        for (windowWidth in listOf(390, 834)) for (deferPublication in listOf(false, true)) {
+            compose.runOnIdle {
+                width.value = windowWidth.dp
+                navigation.navigateToSetting(SettingsDetail.LANGUAGE)
+                navigation.navigateToChat(contact)
+            }
+            compose.onNodeWithTag("fixture:private-detail").assertIsDisplayed()
+            val settings = navigation.state.value.stacks.getValue(AppTab.SETTINGS)
+            val presented = navigation.publishedNavigation.value
+            val gate = if (deferPublication) {
+                navigation.registerChatContactMount(ChatContactMount(presented.value.activeStack.last().id))
+            } else null
+            try {
+                compose.onNodeWithTag("navigation-back").performSemanticsAction(SemanticsActions.OnClick) { click ->
+                    navigation.navigateToChannel(channel)
+                    assertEquals(ChatSelection.Channel(channel), navigation.currentState.chatsSelectedRoute)
+                    if (deferPublication) assertEquals(presented, navigation.publishedNavigation.value)
+                    else assertEquals(ChatSelection.Channel(channel), navigation.state.value.chatsSelectedRoute)
+                    assertTrue(requireNotNull(click)())
+                }
+                assertEquals(1, navigation.currentState.activeStack.size)
+                assertNull(navigation.currentState.chatsSelectedRoute)
+                assertEquals(settings, navigation.currentState.stacks.getValue(AppTab.SETTINGS))
+                if (deferPublication) {
+                    assertEquals(presented, navigation.publishedNavigation.value)
+                    compose.onNodeWithTag("fixture:private-detail").assertIsDisplayed()
+                }
+            } finally {
+                compose.runOnUiThread { gate?.release() }
+            }
+            compose.onNodeWithTag("fixture:root-CHATS").assertIsDisplayed()
+            assertNull(navigation.state.value.chatsSelectedRoute)
+            assertEquals(settings, navigation.state.value.stacks.getValue(AppTab.SETTINGS))
+        }
+    }
+
     @Test fun predictiveBackPreviewCannotConsumeTheCurrentChatMessageScroll() {
         for (windowWidth in listOf(390, 834)) {
             val n = NavigationCoordinator()
@@ -234,10 +280,13 @@ class NavigationComposeTest {
             val requestOwners = CopyOnWriteArrayList<Long>()
             val consumed = CopyOnWriteArrayList<Long>()
             val release = CompletableDeferred<Unit>()
+            var mountedDispatcher: NavigationEventDispatcher? = null
             try {
                 compose.runOnUiThread {
                     width.value = windowWidth.dp
                     host.get().setContent {
+                        mountedDispatcher = requireNotNull(LocalNavigationEventDispatcherOwner.current)
+                            .navigationEventDispatcher
                         Box(Modifier.width(width.value).height(900.dp)) {
                             MeshCoreTheme(motionScale = 1f) {
                                 NativeNavigationShell(n) { destination, _ ->
@@ -261,16 +310,26 @@ class NavigationComposeTest {
                     }
                 }
                 compose.waitForIdle()
+                val dispatcher = requireNotNull(mountedDispatcher)
+                assertSame("The input must target the mounted NavDisplay owner", host.get().navigationEventDispatcher, dispatcher)
+                assertTrue("The mounted dispatcher must expose Back history", dispatcher.history.value.currentIndex > 0)
                 compose.waitUntil(5_000) { requestOwners.contains(incoming.entryId) }
                 compose.waitForIdle()
                 assertFalse("The previous entry must not be mounted before the preview", renderedEntries.contains(previousEntry))
                 val before = n.state.value
                 compose.runOnUiThread {
                     backInput.backStarted(NavigationEvent(swipeEdge = NavigationEvent.EDGE_LEFT, touchY = 100f))
+                }
+                compose.waitForIdle()
+                compose.runOnUiThread {
                     backInput.backProgressed(NavigationEvent(
                         swipeEdge = NavigationEvent.EDGE_LEFT, touchX = 120f, touchY = 100f, progress = 0.6f,
                     ))
                 }
+                val progress = dispatcher.transitionState.value
+                assertTrue("The mounted dispatcher must receive the predictive gesture: $progress",
+                    progress is NavigationEventTransitionState.InProgress)
+                assertEquals(0.6f, (progress as NavigationEventTransitionState.InProgress).latestEvent.progress, 0f)
                 compose.waitUntil(5_000) { renderedEntries.contains(previousEntry) }
                 assertEquals(before, n.state.value)
                 assertFalse(requestOwners.contains(previousEntry))

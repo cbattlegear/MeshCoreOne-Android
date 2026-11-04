@@ -79,7 +79,7 @@ class ReaderTest(unittest.TestCase):
             self.assertEqual(method, mapped[case]["method"])
             for sdk in ("31", "37"):
                 self.assertIn((mapped[case]["class"], method, sdk), expected)
-        self.assertEqual(341, len(expected))
+        self.assertEqual(349, len(expected))
         flow = {node for node in expected if node[0] == FLOW_CLASS}
         self.assertEqual(162, len(flow))
         self.assertEqual({"31", "37"}, {node[2] for node in flow})

@@ -60,7 +60,7 @@ interface NodesContactService {
     suspend fun setPath(radioId: RadioId, publicKey: Bytes, path: Bytes, pathLength: UByte)
     suspend fun shareContact(publicKey: Bytes)
     suspend fun updateContactPreferences(contact: EntityKey, nickname: String? = null, isBlocked: Boolean? = null)
-    suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?)
+    suspend fun updateContactAvatar(contact: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?)
     suspend fun setContactFavorite(contact: EntityKey, isFavorite: Boolean)
 }
 

@@ -338,8 +338,9 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             val storedForeign = assertNotNull(store.fetchContact(foreignKey))
             val production = harness.container.nodesFeature
             val service = assertNotNull(production.session.contactService())
+            var capturedAvatarIdentity: Pair<EntityKey, Bytes>? = null
             val heldService = object : NodesContactService by service {
-                override suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) {
+                override suspend fun updateContactAvatar(contact: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?) {
                     attempts += contact to imageData
                     val operation = currentCoroutineContext()[AvatarSaveOperationContext]
                     operation?.observe(AvatarSaveStage.SERVICE_ENTERED)
@@ -347,7 +348,8 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                     try {
                         release.await()
                         forwarded.incrementAndGet()
-                        service.updateContactAvatar(contact, imageData)
+                        assertEquals(capturedAvatarIdentity, contact to expectedPublicKey)
+                        service.updateContactAvatar(contact, expectedPublicKey, imageData)
                         operation?.observe(AvatarSaveStage.SERVICE_RETURNED)
                         completed.complete(Unit)
                     } catch (error: CancellationException) {
@@ -365,6 +367,8 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                     val intent = contract.createIntent(host.get(), input)
                     assertEquals(Intent.ACTION_OPEN_DOCUMENT, intent.action)
                     assertEquals(listOf("image/*"), intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES)?.toList())
+                    capturedAvatarIdentity = assertNotNull(avatarLifetimeIdentity(host.get(), targetKey))
+                    assertEquals(targetKey to target.publicKey, capturedAvatarIdentity)
                     requestCode = code
                 }
             }
@@ -516,15 +520,17 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             val production = harness.container.nodesFeature
             val service = assertNotNull(production.session.contactService())
             val writes = java.util.concurrent.CopyOnWriteArrayList<Pair<EntityKey, Bytes?>>()
+            var capturedAvatarIdentity: Pair<EntityKey, Bytes>? = null
             val returned = java.util.concurrent.atomic.AtomicInteger()
             val serviceFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
             val dependencies = production.withContactService(object : NodesContactService by service {
-                override suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) {
+                override suspend fun updateContactAvatar(contact: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?) {
                     writes += contact to imageData
                     val operation = currentCoroutineContext()[AvatarSaveOperationContext]
                     operation?.observe(AvatarSaveStage.SERVICE_ENTERED)
                     try {
-                        service.updateContactAvatar(contact, imageData)
+                        assertEquals(capturedAvatarIdentity, contact to expectedPublicKey)
+                        service.updateContactAvatar(contact, expectedPublicKey, imageData)
                         operation?.observe(AvatarSaveStage.SERVICE_RETURNED)
                         returned.incrementAndGet()
                     } catch (error: Exception) {
@@ -545,6 +551,8 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                     assertEquals(Intent.ACTION_OPEN_DOCUMENT, intent.action)
                     assertEquals("*/*", intent.type)
                     assertEquals(listOf("image/*"), intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES)?.toList())
+                    capturedAvatarIdentity = assertNotNull(avatarLifetimeIdentity(host.get(), targetKey))
+                    assertEquals(targetKey to target.publicKey, capturedAvatarIdentity)
                     requestCode = code
                 }
             }
@@ -794,6 +802,21 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                 "saving=${state.isSavingAvatar}, errorPresent=${state.errorMessage != null}, " +
                 "imagePresent=${lifetime.javaClass.getMethod("getImage").invoke(lifetime) != null}"
         }
+    }
+
+    private fun avatarLifetimeIdentity(
+        activity: ComponentActivity,
+        key: EntityKey,
+    ): Pair<EntityKey, Bytes>? {
+        val type = Class.forName("com.meshcoreone.android.feature.nodes.ui.ContactDetailRetainedState")
+            .asSubclass(ViewModel::class.java)
+        val retained = ViewModelProvider(activity)[type]
+        val lifetimes = type.getMethod("getLifetimes").invoke(retained) as List<*>
+        val lifetime = lifetimes.single { value ->
+            val holder = requireNotNull(value).javaClass.getMethod("getHolder").invoke(value) as ContactDetailStateHolder
+            holder.state.value.contact.key == key
+        } ?: return null
+        return lifetime.javaClass.getMethod("getAvatarIdentity").invoke(lifetime) as? Pair<EntityKey, Bytes>
     }
 
     private fun NodesFeatureDependencies.withContactService(

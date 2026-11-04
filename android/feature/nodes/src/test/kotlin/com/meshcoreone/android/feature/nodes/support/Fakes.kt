@@ -18,6 +18,7 @@ import com.meshcoreone.android.feature.nodes.deps.FirmwareTimeouts
 import com.meshcoreone.android.feature.nodes.deps.NodesAdvertEvent
 import com.meshcoreone.android.feature.nodes.deps.NodesAdvertisementService
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
+import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
@@ -130,6 +131,7 @@ internal class FakeContactService(private val store: FakeDataStore? = null) : No
     var shareBehavior: suspend () -> Unit = { }
     var clearMessagesBehavior: suspend () -> Unit = { }
     val avatars = mutableListOf<Pair<EntityKey, Bytes?>>()
+    val avatarIdentities = mutableListOf<Pair<EntityKey, Bytes>>()
     var avatarBehavior: suspend (EntityKey, Bytes?) -> Unit = { key, bytes ->
         store?.let { data ->
             val index = data.contacts.indexOfFirst { it.id == key.id && it.radioId == key.radioId }
@@ -158,9 +160,12 @@ internal class FakeContactService(private val store: FakeDataStore? = null) : No
         calls += "prefs:nickname=$nickname,isBlocked=$isBlocked"
         preferencesBehavior(contact, nickname, isBlocked)
     }
-    override suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) {
+    override suspend fun updateContactAvatar(contact: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?) {
         calls += "avatar:${imageData?.size}"
         avatars += contact to imageData
+        val stored = store?.contacts?.firstOrNull { it.id == contact.id && it.radioId == contact.radioId }
+        if (stored == null || stored.publicKey != expectedPublicKey) throw NodesContactFailure.ContactNotFound()
+        avatarIdentities += contact to expectedPublicKey
         avatarBehavior(contact, imageData)
     }
     override suspend fun setContactFavorite(contact: EntityKey, isFavorite: Boolean) { calls += "favorite:$isFavorite"; favoriteBehavior(contact, isFavorite) }

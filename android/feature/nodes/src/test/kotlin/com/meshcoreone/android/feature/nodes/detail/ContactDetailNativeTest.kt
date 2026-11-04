@@ -578,6 +578,7 @@ class ContactDetailNativeTest {
         detail.removeAvatar()
         assertNull(detail.state.value.contact.avatarImageData)
         assertEquals(listOf("avatar:3", "avatar:null"), harness.contactService.calls)
+        assertEquals(listOf(alice.publicKey, alice.publicKey), harness.contactService.avatarIdentities.map { it.second })
         assertFalse(detail.state.value.isSavingAvatar)
         assertEquals(512 to 256, AvatarProcessing.targetSize(2048.0, 1024.0))
         assertEquals(300 to 200, AvatarProcessing.targetSize(300.0, 200.0))
@@ -695,6 +696,7 @@ class ContactDetailNativeTest {
     fun `radio changing during encoding rejects the result before persistence`() = scenario {
         val harness = Harness(clock).connect()
         val alice = contact(radioId = checkNotNull(harness.session.radioId))
+        harness.store.contacts += alice
         val detail = ContactDetailStateHolder(alice, harness.dependencies, scope)
         assertFalse(detail.saveAvatar {
             harness.session.radioId = Fixtures.radio()

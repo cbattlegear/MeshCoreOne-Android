@@ -1,6 +1,7 @@
 // PortedFrom: MC1/Views/Contacts/ContactDetailView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.nodes.detail
 
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.VContactIdentity
@@ -360,18 +361,35 @@ class ContactDetailStateHolder(
         mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_avatar_invalidimage)) }
     }
 
+    fun captureAvatarIdentity(): Pair<EntityKey, Bytes>? {
+        val contact = current
+        val service = session.contactService()
+        if (service == null || session.currentRadioId() != contact.radioId) {
+            mutableState.update {
+                it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable))
+            }
+            return null
+        }
+        return contact.key to contact.publicKey
+    }
+
     /** Encoding is part of the saving operation, before any store mutation. */
-    suspend fun saveAvatar(encode: suspend () -> Bytes?): Boolean = updateAvatar {
+    suspend fun saveAvatar(encode: suspend () -> Bytes?): Boolean = updateAvatar(null) {
         encode() ?: throw InvalidAvatar()
     }
 
     suspend fun saveAvatar(jpeg: Bytes?): Boolean = saveAvatar { jpeg }
 
-    fun launchAvatarSave(encode: suspend () -> Bytes?): Job {
+    fun launchAvatarSave(encode: suspend () -> Bytes?): Job = launchAvatarSaveInternal(null, encode)
+
+    fun launchAvatarSave(identity: Pair<EntityKey, Bytes>, encode: suspend () -> Bytes?): Job =
+        launchAvatarSaveInternal(identity, encode)
+
+    private fun launchAvatarSaveInternal(identity: Pair<EntityKey, Bytes>?, encode: suspend () -> Bytes?): Job {
         val operation = AvatarSaveOperationContext(UUID.randomUUID(), avatarSaveObserver)
         operation.observe(AvatarSaveStage.LAUNCHED)
         var result: Boolean? = null
-        val job = scope.launch(operation) { result = updateAvatar { encode() ?: throw InvalidAvatar() } }
+        val job = scope.launch(operation) { result = updateAvatar(identity) { encode() ?: throw InvalidAvatar() } }
         job.invokeOnCompletion { failure ->
             val outcome = when {
                 failure is CancellationException -> AvatarSaveOutcome.CANCELLED
@@ -383,9 +401,11 @@ class ContactDetailStateHolder(
         return job
     }
 
-    suspend fun removeAvatar(): Boolean = updateAvatar { null }
+    suspend fun removeAvatar(): Boolean = updateAvatar(null) { null }
 
-    private suspend fun updateAvatar(encode: suspend () -> Bytes?): Boolean {
+    suspend fun removeAvatar(identity: Pair<EntityKey, Bytes>): Boolean = updateAvatar(identity) { null }
+
+    private suspend fun updateAvatar(capturedIdentity: Pair<EntityKey, Bytes>?, encode: suspend () -> Bytes?): Boolean {
         val operation = currentCoroutineContext()[AvatarSaveOperationContext]
             ?: AvatarSaveOperationContext(UUID.randomUUID(), avatarSaveObserver).also {
                 it.observe(AvatarSaveStage.LAUNCHED)
@@ -395,10 +415,14 @@ class ContactDetailStateHolder(
             operation.observe(AvatarSaveStage.REJECTED_BUSY, AvatarSaveOutcome.REJECTED)
             return false
         }
-        val target = current
+        val contact = current
         mutableState.update { it.copy(isSavingAvatar = true, errorMessage = null) }
         return try {
             currentCoroutineContext().ensureActive()
+            val identity = capturedIdentity ?: (contact.key to contact.publicKey)
+            if (identity.first != contact.key || identity.second != contact.publicKey) {
+                throw NodesContactFailure.ContactNotFound()
+            }
             val imageData = observeAvatarStep(
                 operation,
                 AvatarSaveStage.ENCODE_STARTED,
@@ -431,9 +455,9 @@ class ContactDetailStateHolder(
                 AvatarSaveStage.RADIO_LOOKUP_RETURNED,
                 AvatarSaveStage.RADIO_LOOKUP_FAILED,
                 AvatarSaveStage.RADIO_LOOKUP_CANCELLED,
-                { if (it == target.radioId) AvatarSaveOutcome.MATCHED else AvatarSaveOutcome.MISMATCHED },
+                { if (it == contact.radioId) AvatarSaveOutcome.MATCHED else AvatarSaveOutcome.MISMATCHED },
             ) { session.currentRadioId() }
-            if (radioId != target.radioId || service == null || store == null) {
+            if (radioId != contact.radioId || service == null || store == null) {
                 mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable)) }
                 operation.observe(AvatarSaveStage.SAVE_FAILED, AvatarSaveOutcome.FAILED)
                 false
@@ -447,12 +471,12 @@ class ContactDetailStateHolder(
                     {
                         when {
                             it == null -> AvatarSaveOutcome.ABSENT
-                            it.key == target.key && it.publicKey == target.publicKey -> AvatarSaveOutcome.MATCHED
+                            it.key == contact.key && it.publicKey == contact.publicKey -> AvatarSaveOutcome.MATCHED
                             else -> AvatarSaveOutcome.MISMATCHED
                         }
                     },
-                ) { store.fetchContact(target.key) }
-                if (stored == null || stored.key != target.key || stored.publicKey != target.publicKey) {
+                ) { store.fetchContact(contact.key) }
+                if (stored == null || stored.key != contact.key || stored.publicKey != contact.publicKey) {
                     throw NodesContactFailure.ContactNotFound()
                 }
                 val currentRadioId = observeAvatarStep(
@@ -461,9 +485,9 @@ class ContactDetailStateHolder(
                     AvatarSaveStage.RADIO_LOOKUP_RETURNED,
                     AvatarSaveStage.RADIO_LOOKUP_FAILED,
                     AvatarSaveStage.RADIO_LOOKUP_CANCELLED,
-                    { if (it == target.radioId) AvatarSaveOutcome.MATCHED else AvatarSaveOutcome.MISMATCHED },
+                    { if (it == contact.radioId) AvatarSaveOutcome.MATCHED else AvatarSaveOutcome.MISMATCHED },
                 ) { session.currentRadioId() }
-                if (currentRadioId != target.radioId) {
+                if (currentRadioId != contact.radioId) {
                     mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable)) }
                     operation.observe(AvatarSaveStage.SAVE_FAILED, AvatarSaveOutcome.FAILED)
                     return false
@@ -476,7 +500,7 @@ class ContactDetailStateHolder(
                     AvatarSaveStage.SERVICE_CALL_FAILED,
                     AvatarSaveStage.SERVICE_CALL_CANCELLED,
                     { AvatarSaveOutcome.COMPLETED },
-                ) { service.updateContactAvatar(target.key, imageData) }
+                ) { service.updateContactAvatar(identity.first, identity.second, imageData) }
                 val refresh = beginContactRefresh()
                 val updated = observeAvatarStep(
                     operation,
@@ -487,12 +511,12 @@ class ContactDetailStateHolder(
                     {
                         when {
                             it == null -> AvatarSaveOutcome.ABSENT
-                            it.key == target.key && it.publicKey == target.publicKey -> AvatarSaveOutcome.MATCHED
+                            it.key == contact.key && it.publicKey == contact.publicKey -> AvatarSaveOutcome.MATCHED
                             else -> AvatarSaveOutcome.MISMATCHED
                         }
                     },
-                ) { store.fetchContact(target.key) } ?: throw NodesContactFailure.ContactNotFound()
-                check(updated.key == target.key && updated.publicKey == target.publicKey)
+                ) { store.fetchContact(contact.key) } ?: throw NodesContactFailure.ContactNotFound()
+                check(updated.key == contact.key && updated.publicKey == contact.publicKey)
                 applyRefreshedContact(updated, refresh)
                 operation.observe(AvatarSaveStage.SAVE_SUCCEEDED)
                 true

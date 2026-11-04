@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -115,6 +116,7 @@ internal class ContactDetailLifetime(
     var loading by mutableStateOf(false)
     var image by mutableStateOf<ImageBitmap?>(null)
     var geometry by mutableStateOf(AvatarCropGeometry(300.0, CropSize.ZERO))
+    var avatarIdentity by mutableStateOf<Pair<EntityKey, Bytes>?>(null)
 
     fun close() {
         active = false
@@ -124,6 +126,7 @@ internal class ContactDetailLifetime(
         choosing = false
         picking = false
         loading = false
+        avatarIdentity = null
     }
 }
 
@@ -211,13 +214,17 @@ internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Compos
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: IOException) {
+                        avatarIdentity = null
                         holder.invalidAvatar()
                     } catch (error: SecurityException) {
+                        avatarIdentity = null
                         holder.avatarFailure(error)
                     } finally {
                         loading = false
                     }
                 }
+            } else {
+                avatarIdentity = null
             }
         }
     }
@@ -226,7 +233,7 @@ internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Compos
     val busy = picking || loading || state.isSavingAvatar
     if (choosing) {
         AlertDialog(
-            onDismissRequest = { choosing = false },
+            onDismissRequest = { choosing = false; avatarIdentity = null },
             title = { Text(stringResource(C.contactsDetailAvatarChooseSource)) },
             text = {
                 Column {
@@ -237,9 +244,11 @@ internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Compos
                             photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         } catch (error: android.content.ActivityNotFoundException) {
                             picking = false
+                            avatarIdentity = null
                             holder.avatarFailure(error)
                         } catch (error: SecurityException) {
                             picking = false
+                            avatarIdentity = null
                             holder.avatarFailure(error)
                         }
                     }) { Text(stringResource(C.contactsDetailAvatarChoosePhoto)) }
@@ -250,32 +259,40 @@ internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Compos
                             file.launch(arrayOf("image/*"))
                         } catch (error: android.content.ActivityNotFoundException) {
                             picking = false
+                            avatarIdentity = null
                             holder.avatarFailure(error)
                         } catch (error: SecurityException) {
                             picking = false
+                            avatarIdentity = null
                             holder.avatarFailure(error)
                         }
                     }) { Text(stringResource(C.contactsDetailAvatarChooseFile)) }
                     if (state.contact.avatarImageData != null) {
                         TextButton(onClick = {
                             choosing = false
-                            scope.launch { holder.removeAvatar() }
+                            val identity = avatarIdentity
+                            avatarIdentity = null
+                            if (identity != null) scope.launch { holder.removeAvatar(identity) }
                         }) { Text(stringResource(C.contactsDetailAvatarRemovePhoto)) }
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { choosing = false }) { Text(stringResource(C.contactsCommonCancel)) }
+                TextButton(onClick = { choosing = false; avatarIdentity = null }) { Text(stringResource(C.contactsCommonCancel)) }
             },
         )
     }
     image?.let { selected ->
         AvatarCropView(
             selected, geometry, onGeometryChange = { geometry = it },
-            onCancel = { image = null },
+            onCancel = { image = null; avatarIdentity = null },
             onConfirm = { chosen ->
                 image = null
-                holder.launchAvatarSave { ContactAvatarMedia.encode(selected, chosen) }
+                val identity = avatarIdentity
+                avatarIdentity = null
+                if (identity != null) {
+                    holder.launchAvatarSave(identity) { ContactAvatarMedia.encode(selected, chosen) }
+                }
             },
         )
     }
@@ -283,7 +300,19 @@ internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Compos
     return {
         Column {
             ContactAvatar(state.contact, 96.dp, avatar)
-            TextButton(onClick = { choosing = true }, enabled = !busy) {
+            TextButton(onClick = {
+                loading = true
+                avatarIdentity = null
+                try {
+                    val identity = holder.captureAvatarIdentity()
+                    if (detail.active && identity != null) {
+                        avatarIdentity = identity
+                        choosing = true
+                    }
+                } finally {
+                    loading = false
+                }
+            }, enabled = !busy) {
                 Text(stringResource(C.contactsDetailAvatarChooseSource))
             }
             if (loading || state.isSavingAvatar) {

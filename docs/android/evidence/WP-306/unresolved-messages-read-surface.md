@@ -125,6 +125,30 @@ locale, matching `%1$s` placeholders and explicit localized titles; **PASS**.
 
 ## Remaining gates
 
+### Ordinary-contact consumer overlap
+
+WP-214 reported that its assembled `12e689` candidate can expose a
+`LOCAL_CANDIDATE` row through ordinary contact history and unread selection.
+This checkout independently confirms that `newestForContact`, `observeContact`,
+`countForContact`, `countContactAtOrAfter`, `newestUnreadIncoming`, and
+`directCandidates` do not exclude the reserved provenance markers. The assembled
+candidate itself was not inspected here. An honest label in the separate
+unresolved view does not make ordinary contact rendering safe.
+
+Producer session `174c2a9d-d3fa-489c-8caa-80b200272b20` confirmed single-owner
+custody for that repair: consistent ordinary-contact list/observe/count/window/
+unread/candidates/mentions exclusion, preserving the typed unproved reader,
+backup retention and atomic contact-removal inspection. Its immutable fix and
+execution controls are pending; this consumer has not edited those shared hunks.
+
+A further supported check of documentation head
+`749d0e618bc75fcfd97fa097d5134ed7eb349002`, with the same affected base above,
+again passed native Windows preflight and stopped before Gradle with
+`Installed execution runtime is old or mismatched: controller/authority.py`.
+There is still no executed product-test evidence. Runtime deployment was routed
+to the coordinator for its separately authorized, quiescent owner, not attempted
+as an incidental feature repair.
+
 1. Recover/deploy the reviewed execution runtime through its separately authorized
    owner; run real affected Android checks and resolve their actual findings.
 2. Assemble on the clean, stabilized producer/main candidate rather than publishing

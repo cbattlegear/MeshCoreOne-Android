@@ -18,7 +18,6 @@ import java.nio.ByteBuffer
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 import kotlin.math.roundToInt
 
@@ -28,7 +27,7 @@ class GifDecodedImageHandle internal constructor(
     override val width: Int,
     override val height: Int,
 ) : DecodedImageHandle {
-    override val costBytes: Int = Math.toIntExact(frames.sumOf { it.rowBytes.toLong() * it.height })
+    override val costBytes: Int = Math.toIntExact(frames.sumOf { it.allocationByteCount.toLong() })
     val isAnimated: Boolean get() = frames.size > 1
     val drawable: Drawable get() = newDrawable()
 
@@ -39,21 +38,20 @@ class GifDecodedImageHandle internal constructor(
 }
 
 class AnimatedGifImageDecoder(private val dispatcher: CoroutineDispatcher = Dispatchers.Default) {
-    suspend fun decode(data: ByteArray): ImageDecodeOutcome = withContext(dispatcher) {
+    suspend fun decode(data: ByteArray): ImageDecodeOutcome = decodeWithBitmapOwnership(dispatcher) {
         val encoded = data.copyOf()
         val metadata = GifImageMetadata.parse(encoded)
-            ?: return@withContext ImageDecodeOutcome.Failed("Invalid GIF container")
+            ?: return@decodeWithBitmapOwnership ImageDecodeOutcome.Failed("Invalid GIF container")
         val scale = (900.0 / maxOf(metadata.width, metadata.height)).coerceAtMost(1.0)
         val width = (metadata.width * scale).roundToInt().coerceAtLeast(1)
         val height = (metadata.height * scale).roundToInt().coerceAtLeast(1)
         // Retained frames plus compositor, disposal-3 restore and native frame decode.
         if (width.toLong() * height * (metadata.frameDelaysMillis.size.toLong() + 3) >
             100L * 1024 * 1024 / 4) {
-            return@withContext ImageDecodeOutcome.Failed("GIF frame working set exceeds the decoded byte bound")
+            return@decodeWithBitmapOwnership ImageDecodeOutcome.Failed("GIF frame working set exceeds the decoded byte bound")
         }
         val frames = mutableListOf<Bitmap>()
         var working: Bitmap? = null
-        var delivered = false
         try {
             val context = coroutineContext
             val container = GifFrameSource(encoded, metadata)
@@ -90,7 +88,7 @@ class AnimatedGifImageDecoder(private val dispatcher: CoroutineDispatcher = Disp
                     } finally {
                         decoded.recycle()
                     }
-                    frames.add(bitmap.copy(Bitmap.Config.ARGB_8888, false))
+                    frames.add(own(bitmap.copy(Bitmap.Config.ARGB_8888, false)))
                     when (frame.disposal) {
                         2 -> {
                             clearPaint.color = frame.background
@@ -107,7 +105,6 @@ class AnimatedGifImageDecoder(private val dispatcher: CoroutineDispatcher = Disp
             }
             check(frames.size == metadata.frameDelaysMillis.size)
             coroutineContext.ensureActive()
-            delivered = true
             ImageDecodeOutcome.Decoded(GifDecodedImageHandle(frames.toList(), metadata, width, height))
         } catch (error: IOException) {
             ImageDecodeOutcome.Failed("GIF platform decode failed: ${error.javaClass.simpleName}")
@@ -117,7 +114,6 @@ class AnimatedGifImageDecoder(private val dispatcher: CoroutineDispatcher = Disp
             ImageDecodeOutcome.Failed("GIF decode exceeded available memory")
         } finally {
             working?.recycle()
-            if (!delivered) frames.forEach { it.recycle() }
         }
     }
 }

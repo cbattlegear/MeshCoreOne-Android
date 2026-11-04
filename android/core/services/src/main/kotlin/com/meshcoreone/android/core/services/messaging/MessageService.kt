@@ -865,17 +865,11 @@ class MessageService(
                             } else QueuedChannelAttemptOutcome.UNCERTAIN)
                         throw cancelled
                     } catch (failure: Exception) {
-                        // Only a correlated device rejection proves the command was not accepted.
-                        val rejected = failure is MeshCoreException.DeviceError
-                        try {
-                            settleQueuedChannel(attemptKey, if (rejected) {
-                                QueuedChannelAttemptOutcome.DEFINITELY_UNSENT
-                            } else QueuedChannelAttemptOutcome.UNCERTAIN)
-                        } catch (settlement: QueuedChannelRetainedException) {
+                        try { settleQueuedChannel(attemptKey, QueuedChannelAttemptOutcome.UNCERTAIN) }
+                        catch (settlement: QueuedChannelRetainedException) {
                             if (settlement.cause !== failure) settlement.addSuppressed(failure)
                             throw settlement
                         }
-                        if (rejected) throw failure
                         throw retainedChannel(pendingID, failure)
                     }
                     // Inside the admitted operation: cancellation on dispatch return cannot erase acceptance.

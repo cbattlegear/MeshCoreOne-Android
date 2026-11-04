@@ -40,7 +40,8 @@ class NotificationOpenHandoffStoreTest {
     @Before
     fun initializeFreshTestStore() = runTest {
         clearDatabaseFiles()
-        assertTrue(store.initializeNew() is NotificationOpenHandoffStore.InventoryResult.Snapshot)
+        val initialized = store.initializeNew()
+        assertTrue(initialized.toString(), initialized is NotificationOpenHandoffStore.InventoryResult.Snapshot)
     }
 
     @Test

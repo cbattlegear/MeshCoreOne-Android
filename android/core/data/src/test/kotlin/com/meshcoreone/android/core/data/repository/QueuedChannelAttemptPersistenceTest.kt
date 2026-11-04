@@ -678,8 +678,10 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         val inconsistentRows = listOf(
             originalEntity.copy(sequence = originalEntity.sequence + 1),
             originalEntity.copy(
-                enqueuedSeconds = originalEntity.enqueuedSeconds + 1,
-                enqueuedNanos = originalEntity.enqueuedNanos,
+                enqueuedAt = originalEntity.enqueuedAt.copy(seconds = originalEntity.enqueuedAt.seconds + 1),
+            ),
+            originalEntity.copy(
+                enqueuedAt = originalEntity.enqueuedAt.copy(nanos = originalEntity.enqueuedAt.nanos + 1),
             ),
         )
         for (inconsistent in inconsistentRows) {

@@ -232,6 +232,40 @@ class CommitRecoveryTest {
 
     @TestFactory fun inlineAcceptanceBoundaries() = Destination.entries.flatMap { destination ->
         listOf(
+            native("${destination}_overlappingTopLevelCallsCannotShareOneNotificationReceipt") {
+                val h = Harness(this); h.start()
+                val firstSaveEntered = CompletableDeferred<Unit>()
+                val releaseFirstSave = CompletableDeferred<Unit>()
+                var saveCount = 0
+                h.store.before = {
+                    if (it == "saveMessage" && ++saveCount == 1) {
+                        firstSaveEntered.complete(Unit)
+                        releaseFirstSave.await()
+                    }
+                }
+                val receipt = NotificationActionReceipt()
+                val first = backgroundScope.async(receipt) { destination.send(h.service) }
+                firstSaveEntered.await()
+                advanceTimeBy(1_000)
+                runCurrent()
+                val second = backgroundScope.async(receipt) { destination.send(h.service) }
+                runCurrent()
+
+                if (destination == Destination.DIRECT) {
+                    assertFailsWith<MessageServiceException> { second.await() }
+                    assertTrue(h.store.messages.isEmpty())
+                    releaseFirstSave.complete(Unit)
+                    first.await()
+                } else {
+                    releaseFirstSave.complete(Unit)
+                    first.await()
+                    assertFailsWith<MessageServiceException> { second.await() }
+                }
+
+                assertEquals(1, h.store.messages.size)
+                assertEquals(1, h.sends(destination.wire).size)
+                assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
+            },
             native("${destination}_cancelBehindActualSerializerProvesUnsentAndAllowsOneRetry") {
                 val h = Harness(this); h.start()
                 val holding = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()

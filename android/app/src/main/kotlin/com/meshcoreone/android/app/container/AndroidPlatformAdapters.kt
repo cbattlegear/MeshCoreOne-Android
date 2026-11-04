@@ -36,11 +36,13 @@ object UnavailableNotificationDelivery : NotificationDeliveryPort {
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) = Unit
 }
 
-/** Boolean flags (the favorites migration marker) in a private preference file; reads and writes are synchronous. */
+/** Private migration/reconciliation flags; a failed durable write is never reported as recorded. */
 class SharedPreferencesContactFlags(context: Context) : ContactPreferenceFlags {
     private val preferences = context.applicationContext.getSharedPreferences("mc1.contact-flags", Context.MODE_PRIVATE)
     override fun bool(key: String): Boolean = preferences.getBoolean(key, false)
-    override fun set(key: String, value: Boolean) { preferences.edit { putBoolean(key, value) } }
+    override fun set(key: String, value: Boolean) {
+        check(preferences.edit().putBoolean(key, value).commit()) { "Contact preference persistence failed" }
+    }
 }
 
 /** The composer-draft dictionary as one JSON object under one key (Swift `UserDefaults` `[String: String]`). */

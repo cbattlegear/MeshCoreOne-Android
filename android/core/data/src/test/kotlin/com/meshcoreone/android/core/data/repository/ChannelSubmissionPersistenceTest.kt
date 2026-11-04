@@ -134,6 +134,7 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
         )) {
             store.saveMessage(changed)
             reject(ChannelSubmissionConflict.MESSAGE_MISMATCH) { store.admitChannelSubmission(input, AT) }
+            store.deleteMessage(EntityKey(RADIO_A, message.id))
         }
         store.saveMessage(message)
         store.upsertPendingSend(PendingSendDTO.fromEnvelope(input.envelope, RADIO_A, id = input.pendingID, enqueuedAt = AT))

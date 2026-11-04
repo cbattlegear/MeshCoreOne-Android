@@ -1,5 +1,31 @@
 # WP-405 evidence
 
+## Resumed candidate integration
+
+The coordinator relayed explicit user resumption on 2026-11-04: current issues
+must be repaired and merged before a separate device-acceptance run. The old
+administrative pause/local-before-publication disposition is no longer the
+publication route. The retained local execution lock has not been cleared or
+bypassed; final product validation uses the exact candidate's hosted CI.
+
+Published #508 was still `9782d78c8580f10da71784396e019e3150c5bea7`.
+Actual failed run `41463646130`, Android job `125338919312`, reported mounted
+channel fixture `Superseded connection generation` cancellations and region
+joins returning null. Retained unpublished repairs include actual retirement
+fixture correction and indexed empty-slot CHANNEL_INFO responses needed for
+authoritative allocation. These are source diagnoses, not a passing rerun.
+
+Retained clean head `646beaacbe7b5e80b63622cca3fc15a56fc31a4c` was reconciled
+with current main `cb4a79ab906db851800bcf93f7c2ebfb5aa34571` by normal merge
+`3b9de4798054c67603e656002fe4eef5209fd0ca`. No force/rebase or discarded source.
+WP-302 is sole writer of shared navigation/runtime mounts; its producer APIs
+are not assumed to be on main. External-specific source pin `43738343fa003c3514184116fca098cdb1662492`
+adds the actual published-StateFlow cancellation control below without copying
+shared mounts. Independent source review found a missing `assertNotEquals`
+import in the router test; the import is corrected. No new behavior finding
+was reported by that bounded external-consumer review. Kotlin compilation and
+product acceptance remain pending actual producer integration/hosted results.
+
 ## Issue #544: first-graph process-store contact lookup
 
 ### Origin-bound resolution and completion (source only)

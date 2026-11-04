@@ -80,6 +80,9 @@ internal suspend fun RepositoryTransaction.deleteChannelMessages(
                 MessageStatus.RETRYING.rawValue, MessageStatus.FAILED.rawValue,
             ) || database.pendingSends().forMessage(radioId.value, message.id).isNotEmpty())
         if (unresolved) {
+            database.pendingSends().forMessage(radioId.value, message.id)
+                .filter { it.kindRawValue == PendingSendKind.DM.rawValue }
+                .forEach { requireDirectPendingIdentityAvailable(it) }
             database.messages().setStatusUnlessDelivered(radioId.value, message.id, MessageStatus.FAILED.rawValue)
         } else {
             deleteMessageDependents(radioId, listOf(message), reactionsByMessage = true)

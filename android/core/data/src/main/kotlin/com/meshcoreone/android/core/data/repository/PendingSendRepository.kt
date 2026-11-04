@@ -14,10 +14,12 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         val existing = database.pendingSends().byId(dto.radioId.value, dto.id)
         val candidate = dto.toEntity()
         val receipt = database.channelSubmissions().byId(dto.id)
-        if (receipt != null &&
-            (existing == null || !existing.isChannel || !candidate.isChannel || receipt.radioId != dto.radioId.value)
-        ) {
-            rejectSubmission(EntityKey(dto.radioId, dto.id), ChannelSubmissionConflict.IDENTITY_CONFLICT)
+        if (receipt != null) {
+            if (existing == null || !existing.isChannel || !candidate.isChannel) {
+                rejectSubmission(EntityKey(dto.radioId, dto.id), ChannelSubmissionConflict.IDENTITY_CONFLICT)
+            }
+            requireAdmittedChannelReceipt(receipt, existing)
+            requireAdmittedChannelReceipt(receipt, candidate)
         }
         if (existing != null && existing.messageID != candidate.messageID) {
             reject(candidate, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
@@ -203,6 +205,27 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
     private fun rejectSubmission(identity: EntityKey, reason: ChannelSubmissionConflict): Nothing =
         throw PersistenceStoreException(PersistenceStoreError.InvalidData, ChannelSubmissionRejected(identity, reason))
 
+    private fun RepositoryTransaction.requireAdmittedChannelReceipt(
+        receipt: ChannelSubmissionEntity, row: PendingSendEntity,
+    ) {
+        val identity = EntityKey(RadioId(row.radioId), row.id)
+        if (receipt.phaseRawValue == 3L) {
+            rejectSubmission(identity, ChannelSubmissionConflict.REDACTED_SUBMISSION)
+        }
+        if (receipt.phaseRawValue != ChannelSubmissionPhase.ADMITTED.rawValue ||
+            receipt.pendingID != row.id || receipt.radioId != row.radioId ||
+            receipt.messageID != row.messageID || receipt.channelIndex != row.channelIndex ||
+            receipt.channelOccupantID != row.channelOccupantID ||
+            receipt.messageText != row.messageText || receipt.messageTimestamp != row.messageTimestamp ||
+            receipt.localNodeName != row.localNodeName || receipt.isResend != row.isResend ||
+            receipt.sequence != row.sequence || receipt.enqueuedAt() != row.enqueuedAt.toInstant()
+        ) rejectSubmission(identity, ChannelSubmissionConflict.IDENTITY_CONFLICT)
+    }
+
+    private suspend fun RepositoryTransaction.requireAdmittedChannelReceiptIfPresent(row: PendingSendEntity) {
+        database.channelSubmissions().byId(row.id)?.let { requireAdmittedChannelReceipt(it, row) }
+    }
+
     private suspend fun RepositoryTransaction.finishSubmission(key: QueuedChannelAttemptKey, phase: ChannelSubmissionPhase) {
         if (database.channelSubmissions().byId(key.pendingID) == null) return
         if (database.channelSubmissions().finish(key.pendingID, key.radioId.value, key.messageID, phase.rawValue) != 1) {
@@ -257,6 +280,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             message.channelIndex != row.channelIndex || message.channelOccupantID != row.channelOccupantID ||
             message.text != row.messageText
         ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        requireAdmittedChannelReceiptIfPresent(row)
         rejectConflictingSibling(row)
     }
 
@@ -328,6 +352,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             message.contactID != null ||
             message.channelIndex != index || message.channelOccupantID != expectedOccupantID || message.text != pending.messageText
         ) reject(pending, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        requireAdmittedChannelReceiptIfPresent(pending)
         if (database.queuedChannelAttempts().byId(key.radioId.value, key.attemptID) != null) {
             reject(pending, QueuedChannelAttemptConflict.ATTEMPT_ID_REUSED)
         }

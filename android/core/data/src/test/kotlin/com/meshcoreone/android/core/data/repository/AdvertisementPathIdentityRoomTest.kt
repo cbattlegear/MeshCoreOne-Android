@@ -258,6 +258,42 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
         }
     }
 
+    @Test fun anIndependentTypedMaterializationCommitsExactKeyHeardAndDiscoverTogether() = runTest(scheduler) {
+        withFixture {
+            advert(1)
+            source.contact = meshContact(1)
+            val result = assertIs<LocalDirectContactResolution.Unique>(
+                service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A),
+            )
+            runCurrent()
+            assertEquals(publicKey(1), result.contact.publicKey)
+            assertEquals("Radio 1", result.contact.name)
+            assertEquals(101u, result.contact.lastModified)
+            assertEquals(AT.epochSecond.toUInt(), result.contact.lastHeardTimestamp)
+            assertEquals(result.contact, saved(result.contact))
+            val discovered = store.fetchDiscoveredNodes(RADIO_A).single()
+            assertEquals(publicKey(1), discovered.publicKey)
+            assertEquals(AT, discovered.lastHeard)
+            assertEquals(listOf(publicKey(1)), source.requestedContacts)
+            assertEquals(listOf(AdvertisementEvent.ContactUpdated), events)
+            assertEquals(1, intercepted.materializeCalls)
+        }
+    }
+
+    @Test fun typedMaterializationWithNoPendingKeyReturnsGenuineAbsenceWithoutRadioWork() = runTest(scheduler) {
+        withFixture {
+            assertEquals(
+                LocalDirectContactResolution.NotFound,
+                service.materializeLocalDirectContactForPendingAdvert(prefix, RADIO_A),
+            )
+            assertTrue(source.requestedContacts.isEmpty())
+            assertTrue(store.fetchContacts(RADIO_A).isEmpty())
+            assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
+            assertTrue(events.isEmpty())
+            assertEquals(0, intercepted.materializeCalls)
+        }
+    }
+
     @Test fun aSecondCollidingAdvertDuringGetContactPreventsMaterializationEntirely() = runTest(scheduler) {
         withFixture {
             advert(1)

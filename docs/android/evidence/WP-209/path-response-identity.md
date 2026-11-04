@@ -76,7 +76,7 @@ trusted exact-candidate review and positive hosted discovery required.
 
 ## Authored controls, not execution evidence
 
-`AdvertisementPathIdentityRoomTest` contains 26 actual service/event-monitor and
+`AdvertisementPathIdentityRoomTest` contains 28 actual service/event-monitor and
 in-memory Room controls. Its controlled session role is not a physical radio:
 
 - Reversed collision insertion orders, foreign-radio isolation, encoded hash-size
@@ -94,6 +94,8 @@ in-memory Room controls. Its controlled session role is not a physical radio:
   and cancellation releasing a pending-fenced consumer operation.
 - Old-radio admission after replacement and admission after monitor stop both
   remain `Stale`, including when the old radio has a unique persisted row.
+- Independent typed success asserts exact key, radio watermark, heard/Discover
+  transaction and ContactUpdated; true absence performs no radio fetch or insert.
 
 Existing advertisement service/background tests and
 `AdvertisementCoordinatorRoomTest` retain their original legacy materialization

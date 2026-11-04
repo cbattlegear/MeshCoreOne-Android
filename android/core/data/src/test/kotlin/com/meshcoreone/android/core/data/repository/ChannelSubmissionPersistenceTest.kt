@@ -333,7 +333,8 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
         verifyContendedAdmission(conflicting = true, changedFirst = true)
     }
 
-    private suspend fun verifyContendedAdmission(conflicting: Boolean, changedFirst: Boolean) {
+    // These waits bound real Room workers, not runTest's virtual clock.
+    private suspend fun verifyContendedAdmission(conflicting: Boolean, changedFirst: Boolean) = withContext(Dispatchers.IO) {
         val name = "submission-contention-${UUID.randomUUID()}.db"
         val firstRead = CountDownLatch(1)
         val secondBegin = CountDownLatch(1)

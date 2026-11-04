@@ -320,7 +320,7 @@ class MessageWriteDispatchTest {
                 val caller = checkedRequest { send(f.session, kind, dispatch) }; runCurrent()
                 f.transport.error(42); runCurrent()
                 assertEquals(42u.toUByte(), assertFailsWith<MeshCoreException.DeviceError> { caller.await() }.code)
-                assertEquals(ChannelWriteCancellationDisposition.UNKNOWN, dispatch.cancellationDisposition)
+                assertEquals(ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN, dispatch.cancellationDisposition)
             }
             f.session.stop()
         },

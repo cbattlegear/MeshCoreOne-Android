@@ -58,7 +58,10 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
         SupportSQLiteDatabase::class.java.classLoader,
         arrayOf(SupportSQLiteDatabase::class.java),
     ) { _, method, args ->
-        if (method.name.startsWith("beginTransaction")) onBeginAttempt()
+        val sql = args?.firstOrNull() as? String
+        if (method.name.startsWith("beginTransaction") ||
+            (method.name == "execSQL" && sql?.trimStart()?.startsWith("BEGIN", ignoreCase = true) == true)
+        ) onBeginAttempt()
         invokeDelegate(method, database, args)
     } as SupportSQLiteDatabase
 
@@ -404,7 +407,7 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
             }
             assertTrue(reachedTransactionExecutor, "Second Room transaction command must start while the first writer is held")
             val reachedBegin = withContext(Dispatchers.IO) { secondBegin.await(10, TimeUnit.SECONDS) }
-            assertTrue(reachedBegin, "Second Room handle must reach beginTransaction while the first writer is held")
+            assertTrue(reachedBegin, "Second Room handle must reach a transaction begin attempt while the first writer is held")
             assertFalse(first.isCompleted)
             assertFalse(second.isCompleted, "Contender must not finish while the first write transaction is open")
             releaseFirst.countDown()

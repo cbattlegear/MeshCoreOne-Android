@@ -92,7 +92,7 @@ ContactService/service-test overlap; its UI stays with its existing owner.
 
 ## Behavioral evidence to execute
 
-`ContactWriteRecoveryTests` currently contains 40 authored deterministic methods using an actual
+`ContactWriteRecoveryTests` currently contains 42 authored deterministic methods using an actual
 `MeshCoreSession` and controlled raw frames, not a fake contact session:
 queued-before-send cancellation; retired caller plus late successful ACK;
 identical/different replacement delivery correlation; active and late rejection;
@@ -328,8 +328,9 @@ tail, or persisted recovery without dispatch provenance cannot admit deletion.
 The check runs under the existing per-radio state lock while holding `syncMutex`,
 after the protected-contact recheck and before changing queued-write state.
 No additional mutex, protocol callback, Room operation or unrelated sync phase
-is introduced. A terminal accepted exchange whose local completion failed can
-still permit deletion; deletion does not clear the full-radio recovery marker.
+is introduced. At this preceding candidate, a terminal accepted exchange whose
+local completion failed could still permit deletion. The marker-only mutation
+successor below closes that admission; deletion never clears full-radio recovery.
 
 Four additional real-session service controls are authored (36 methods in this
 file in total, none discovered or executed for this successor):
@@ -340,8 +341,9 @@ file in total, none discovered or executed for this successor):
   remain unchanged. This exercises the test radio queue, not physical firmware.
 - Protected V-contact remote/local deletion remains a no-op despite retired
   unknown-write provenance.
-- An ACK followed by failed local persistence admits a later confirmed device
-  removal, emits `NodeDeleted`, and retains full-radio recovery.
+- The original ACK/local-save-failure control admitted later deletion; the
+  marker-only successor below changes it to explicit refusal with no deletion
+  command or event while full-radio recovery remains marked.
 - A canceled caller's late ACK is held in local persistence; both delete paths
   and replacement sync are refused. An intervening newer local frame survives
   the existing `saveContactPreservingNewer` check, and no stale navigation occurs.
@@ -449,3 +451,42 @@ and result `valid`; Kotlin controls remain uncompiled/unexecuted. Existing
 Gradle, CI, publication, claim and acceptance holds remain unchanged. The
 no-unproved-recovery service gate is preserved; WP-107/WP-202 guarded destructive
 transaction and matching marker authority remain unavailable.
+
+### Blocking mutation with marker-only recovery
+
+The bounded successor to `5a7d582bf8d0588714f0c982d10dd3633f24c2c6`
+also checks `state.epoch != null` in the mutation fence after `loadEpoch`.
+This rejects a marker created by a dispatch-null uncertain removal, even when
+there are no tracked Add exchanges. A successfully loaded durable marker is
+also rejected. Protected V-contact early/rechecked no-ops still occur before
+this check; clean-state removals and other-radio local mutations remain allowed.
+The existing `SyncInterrupted` is surfaced before commands, local deletion,
+cleanup, events or queued-write invalidation.
+
+Two additional authored methods bring the source count to 42 (not execution).
+The uncertain-removal family injects transport failure, then attempts repeated
+remote/local deletion after either successful or failed true-marker recording.
+Only the first remove command is observed; local rows, cleanup and notifications
+remain untouched, no false-marker write occurs, and writes/sync stay blocked.
+Successful backing-store recording is observed through a fresh preference-role
+view, which also refuses both deletion paths. Protected no-ops and another
+radio's local deletion are checked with the same marked role. The clean-state
+control checks protected no-ops followed by a normal successful device/local
+removal. The earlier accepted-Add/local-save-failure deletion control now expects
+refusal rather than allowing a mutation while its recovery epoch is present.
+
+Fresh flag views use the in-memory test store, not actual disk durability or
+process-death evidence. Failed recording provides same-process recovery only.
+The optional blocked-call recording retry is not introduced: blocked admission
+remains an explicit refusal, without hidden preference writes or replacement
+errors. Retrying a known failed true marker on a future call would need separate
+recording-pending state and an explicit failure-notification policy; no eventual
+recording before such a call is claimed. The previous same-dispatch report retry
+remains intact, and a lone failed dispatch-null removal report still lacks an
+automatic retry trigger.
+
+WP-209 source/test/evidence modify admissions passed. `git diff --check` and
+`python .\tools\android-port\controller\validate.py` passed (Python 3.12.4,
+result `valid`). Kotlin controls remain uncompiled/unexecuted. No protocol,
+persistence/schema/graph changes or genuine reconciliation authority are added;
+all existing execution, publication, claim and acceptance holds remain.

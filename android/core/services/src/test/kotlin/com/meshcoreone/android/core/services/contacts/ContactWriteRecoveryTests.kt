@@ -1160,7 +1160,7 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
-    fun acknowledgedFinishedWriteWithLocalFailureAllowsConfirmedRemovalWithoutClearingRecovery() = runTest {
+    fun acknowledgedFinishedWriteWithLocalFailureCannotAuthorizeRemovalWhileRecoveryIsMarked() = runTest {
         withFixture {
             val original = ContactDTO.fromFrame(radioA, frame(1, "Local"))
             store.seed(original)
@@ -1188,15 +1188,125 @@ class ContactWriteRecoveryTests {
             assertTrue(producer.needsContactWriteReconciliation(radioA))
             val events = producer.events()
             val collectedEvents = async { events.events.toList() }
-            producer.removeContact(radioA, original.publicKey)
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                producer.removeContact(radioA, original.publicKey)
+            }
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                producer.removeLocalContact(EntityKey(radioA, original.id), original.publicKey)
+            }
 
-            assertEquals(1, radio.completedRemovals)
-            assertNull(radio.contact(original.publicKey))
-            assertNull(store.fetchContact(radioA, original.publicKey))
-            assertEquals(listOf("contactsChanged"), coordinator.notifications)
+            assertEquals(0, radio.completedRemovals)
+            assertTrue(radio.removeRequests.isEmpty())
+            assertNotNull(radio.contact(original.publicKey))
+            assertEquals(original, store.fetchContact(radioA, original.publicKey))
+            assertTrue(coordinator.notifications.isEmpty())
             assertTrue(producer.needsContactWriteReconciliation(radioA), "Deletion is not full-radio recovery")
             producer.finishEvents()
-            assertEquals(listOf<ContactServiceEvent>(ContactServiceEvent.NodeDeleted), collectedEvents.await())
+            assertEquals(emptyList(), collectedEvents.await())
+        }
+    }
+
+    @Test
+    fun uncertainRemovalBlocksFurtherMutationsWithSuccessfulOrFailedMarkerRecording() = runTest {
+        for (failMarker in listOf(false, true)) {
+            withFixture {
+                val original = ContactDTO.fromFrame(radioA, frame(1, "Keep local"))
+                store.seed(original)
+                val markerAttempts = mutableListOf<Boolean>()
+                val flags = object : ContactPreferenceFlags by preferences {
+                    override fun set(key: String, value: Boolean) {
+                        markerAttempts += value
+                        if (failMarker) throw IOException("remove recovery marker commit failed")
+                        preferences.set(key, value)
+                    }
+                }
+                val cleanup = ContactsRecordingCleanup()
+                val coordinator = ContactsFakeSyncCoordinator()
+                val producer = service(flags = flags, cleanup = cleanup, coordinator = coordinator)
+                val events = producer.events()
+                val collectedEvents = async { events.events.toList() }
+                radio.removeFailure = IOException("uncertain removal transport failure")
+                assertNotNull(runCatching { producer.removeContact(radioA, original.publicKey) }.exceptionOrNull())
+                assertEquals(1, radio.removeRequests.size)
+                assertEquals(listOf(true), markerAttempts)
+                assertEquals(!failMarker, preferences.bool("contactWriteReconciliation.${radioA.value}"))
+                assertTrue(producer.needsContactWriteReconciliation(radioA))
+
+                radio.removeFailure = null
+                repeat(2) {
+                    assertFailsWith<ContactServiceError.SyncInterrupted> {
+                        producer.removeContact(radioA, original.publicKey)
+                    }
+                    assertFailsWith<ContactServiceError.SyncInterrupted> {
+                        producer.removeLocalContact(EntityKey(radioA, original.id), original.publicKey)
+                    }
+                }
+                assertRecoveryRemainsBlocked(producer)
+                assertEquals(1, radio.removeRequests.size, "No second command after marker-only uncertainty")
+                assertEquals(original, store.fetchContact(radioA, original.publicKey))
+                assertTrue(cleanup.invocations.isEmpty())
+                assertTrue(coordinator.notifications.isEmpty())
+                assertEquals(listOf(true), markerAttempts, "Blocked mutation does not clear or silently retry")
+
+                if (!failMarker) {
+                    val freshFlags = object : ContactPreferenceFlags by preferences {}
+                    val fresh = service(flags = freshFlags, cleanup = cleanup, coordinator = coordinator)
+                    assertTrue(freshFlags.bool("contactWriteReconciliation.${radioA.value}"))
+                    assertFailsWith<ContactServiceError.SyncInterrupted> {
+                        fresh.removeContact(radioA, original.publicKey)
+                    }
+                    assertFailsWith<ContactServiceError.SyncInterrupted> {
+                        fresh.removeLocalContact(EntityKey(radioA, original.id), original.publicKey)
+                    }
+                }
+
+                val vKey = assertNotNull(VContactIdentity.publicKey(contactsKey(0x01)))
+                val protected = ContactDTO(radioId = radioA, publicKey = vKey, name = "V-contact", lastHeardTimestamp = null)
+                store.seed(protected)
+                producer.removeContact(radioA, vKey)
+                producer.removeLocalContact(EntityKey(radioA, protected.id), vKey)
+                assertEquals(protected, store.fetchContact(radioA, vKey))
+                assertEquals(1, radio.removeRequests.size)
+                assertTrue(cleanup.invocations.isEmpty())
+                producer.finishEvents()
+                assertEquals(emptyList(), collectedEvents.await())
+
+                val other = ContactDTO.fromFrame(radioB, frame(3, "Other radio"))
+                store.seed(other)
+                producer.removeLocalContact(EntityKey(radioB, other.id), other.publicKey)
+                assertNull(store.fetchContact(radioB, other.publicKey))
+                assertEquals(1, cleanup.invocations.size)
+                assertFalse(producer.needsContactWriteReconciliation(radioB))
+                assertTrue(producer.needsContactWriteReconciliation(radioA))
+                assertEquals(original, store.fetchContact(radioA, original.publicKey))
+            }
+        }
+    }
+
+    @Test
+    fun cleanMarkerStatePermitsNormalRemovalAfterProtectedNoOps() = runTest {
+        withFixture {
+            val vKey = assertNotNull(VContactIdentity.publicKey(contactsKey(0x01)))
+            val protected = ContactDTO(radioId = radioA, publicKey = vKey, name = "V-contact", lastHeardTimestamp = null)
+            store.seed(protected)
+            val cleanup = ContactsRecordingCleanup()
+            val producer = service(cleanup = cleanup)
+            producer.removeContact(radioA, vKey)
+            producer.removeLocalContact(EntityKey(radioA, protected.id), vKey)
+            assertTrue(radio.removeRequests.isEmpty())
+            assertTrue(cleanup.invocations.isEmpty())
+            assertEquals(protected, store.fetchContact(radioA, vKey))
+            val add = async { producer.addOrUpdateContact(radioA, frame(1, "Remove normally")) }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+            add.await()
+            producer.removeContact(radioA, contactsKey(1))
+            assertEquals(1, radio.completedRemovals)
+            assertNull(radio.contact(contactsKey(1)))
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
+            assertEquals(1, cleanup.invocations.size)
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
         }
     }
 

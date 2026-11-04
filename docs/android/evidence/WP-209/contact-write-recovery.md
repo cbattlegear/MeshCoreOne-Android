@@ -769,3 +769,25 @@ ambiguity remain unchanged. Both raw and battery timeout families exercise Add
 and Remove, assert the real dispatch receipt and original public error mapping,
 then verify ordinary work is possible on a safely replaced session without a
 false persistent contact recovery lock.
+
+### Queued ordering and completed callback ownership
+
+PR review identified that a later undispatched `UNKNOWN` handle could block an
+earlier queued Add at admission. The prior-write check now considers only
+dispatching or finished handles; later queued work retains serializer order.
+The actual-session two-queued-Adds control holds a raw exchange, releases it,
+and observes both Adds dispatch, acknowledge and persist in order without a marker.
+Existing unresolved-dispatched, epoch and on-wire refusal controls remain intact.
+
+A retained uncertain dispatch now detaches its service-capturing admission and
+completion callbacks at exchange completion. Atomic callback slots are emptied
+before invoking the completion callback; outcome, failure and cancellation
+provenance remain retained. A protocol control verifies both callbacks are
+one-shot while uncertainty remains unchanged. This releases retired connection
+graph references without discarding recovery evidence.
+
+The sent channel/direct/channel-message `DeviceError` tests now expect the
+shared serializer's `MAY_HAVE_WRITTEN` send receipt, retaining typed error and
+pre-validation assertions. The removal-marker transport identity fixture uses
+the non-copyable injected IOException rather than relying on coroutine exception
+copy behavior. These are source-reviewed corrections, pending exact-head execution.

@@ -10,8 +10,10 @@ Implementation prerequisite:
 definitely-unsent Add/Remove accounting series, integrated without rewriting.
 Its ordinary pre-send refusal successors `d0c544b9a2e9e2bb0d392fa49df4b3e3d2e9a9b8`
 and `15f8eace6b22652b72af47de4f7f865528f031b2` are also integrated, at merge
-`df75dad`. They preserve genuinely possibly-written outcomes and do not add a
-radio-execution barrier.
+`df75dad`. The owner's final ordering, completion-callback ownership and typed
+test-fixture correction, `5bb53b017204424621d27ad3aedb2f7d16cdd089`, is integrated
+forward too. These preserve genuinely possibly-written outcomes and do not add
+a radio-execution barrier.
 This investigation does not change that series's production behavior or the
 older recovery session's retained drafts.
 
@@ -186,6 +188,10 @@ the reason general recovery is unsupported.
 The first hosted diagnostic,
 [41863587941](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41863587941),
 was requested for exact source candidate
-`dbd7c3601adf5f170b37d3f3b3e8b744b6ff9c58`. Its last inspected status was
-queued, not a passing test result. The subsequent prerequisite integration
-requires validation of its own exact candidate.
+`dbd7c3601adf5f170b37d3f3b3e8b744b6ff9c58`.
+[41865873570](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41865873570)
+was requested for `6e473d56ab798ca9bba1243b1c549158b64f3375`.
+Both diagnostics were superseded and cancellation was requested when the
+producer published further corrections. Neither is claimed as a passing test
+result. The final prerequisite integration requires validation of its own
+exact candidate.

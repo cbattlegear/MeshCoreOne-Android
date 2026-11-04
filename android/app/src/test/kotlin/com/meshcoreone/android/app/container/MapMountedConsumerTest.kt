@@ -32,9 +32,13 @@ import com.meshcoreone.android.core.maps.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.map.*
+import java.io.IOException
 import java.time.Instant
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -297,6 +301,65 @@ class MapMountedConsumerTest {
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
         }
+    }
+
+    @Test fun successfulPreferenceWriteRestartsFailedObservationUntilNewValueArrives() {
+        val real = AppMapPreferences(
+            MeshCoreStorage.get(host.get()).preferences,
+            host.get().getSharedPreferences("shared-map", 0),
+        )
+        val writeStarted = CompletableDeferred<Unit>()
+        val releaseWrite = CompletableDeferred<Unit>()
+        val writeFinished = CompletableDeferred<Unit>()
+        val retryObservationStarted = CompletableDeferred<Unit>()
+        val releaseRetryObservation = CompletableDeferred<Unit>()
+        var observationCount = 0
+        val store = object : MapPreferenceStore by real {
+            override fun observe(host: MapFilterHost) = kotlinx.coroutines.flow.flow {
+                if (host != MapFilterHost.MAIN_MAP) {
+                    real.observe(host).collect { emit(it) }
+                    return@flow
+                }
+                when (observationCount++) {
+                    0 -> {
+                        emit(real.observe(host).first())
+                        writeStarted.await()
+                        throw IOException("Fixture observation failure after initial value")
+                    }
+                    1 -> {
+                        retryObservationStarted.complete(Unit)
+                        releaseRetryObservation.await()
+                        emit(real.observe(host).first())
+                        real.observe(host).collect { emit(it) }
+                    }
+                    else -> real.observe(host).collect { emit(it) }
+                }
+            }
+
+            override suspend fun setLabels(enabled: Boolean) {
+                writeStarted.complete(Unit)
+                releaseWrite.await()
+                real.setLabels(enabled)
+                writeFinished.complete(Unit)
+            }
+        }
+        mount(
+            MapFeatureDependencies(source { content() }, offline(), preferences = store),
+        )
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_showlabels)).performClick()
+        compose.waitUntil(5_000) {
+            writeStarted.isCompleted &&
+                compose.onAllNodesWithTag("map:preference-retry").fetchSemanticsNodes().isNotEmpty()
+        }
+        releaseWrite.complete(Unit)
+        compose.waitUntil(5_000) { writeFinished.isCompleted }
+        compose.waitUntil(5_000) { retryObservationStarted.isCompleted }
+        compose.onNodeWithTag("map:preference-retry").assertExists()
+        releaseRetryObservation.complete(Unit)
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("map:preference-retry").fetchSemanticsNodes().isEmpty()
+        }
+        assertFalse(runBlocking { real.observe(MapFilterHost.MAIN_MAP).first().labels })
     }
 
     @Test fun systemMapAppearanceFollowsEffectiveAppThemeAndKeepsExplicitMapOverrides() {

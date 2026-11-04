@@ -50,19 +50,24 @@ internal fun RemoteMapPreferencesContent(
     val store = LocalRemoteMapPreferences.current
     val scope = rememberCoroutineScope()
     var preferences by remember(store, host) { mutableStateOf<MapPreferences?>(null) }
-    var error by remember(store, host) { mutableStateOf<RemoteNodesText?>(null) }
+    var observationError by remember(store, host) { mutableStateOf<RemoteNodesText?>(null) }
+    var writeError by remember(store, host) { mutableStateOf<RemoteNodesText?>(null) }
     var refresh by remember(store, host) { mutableIntStateOf(0) }
     LaunchedEffect(store, host, refresh) {
         preferences = null
-        error = null
+        observationError = null
+        writeError = null
         if (store != null) {
             try {
-                store.observe(host).collect { preferences = it }
+                store.observe(host).collect {
+                    preferences = it
+                    observationError = null
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 preferences = null
-                error = RemoteNodesText.Failure(failure)
+                observationError = RemoteNodesText.Failure(failure)
             }
         }
     }
@@ -72,6 +77,7 @@ internal fun RemoteMapPreferencesContent(
         ))
         return
     }
+    val error = observationError ?: writeError
     RemoteFailure(error)
     if (error != null) TextButton({ refresh++ }, Modifier.testTag("remote-map:retry")) {
         Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesStatusRefresh))
@@ -85,11 +91,11 @@ internal fun RemoteMapPreferencesContent(
         scope.launch {
             try {
                 action(store)
-                error = null
+                writeError = null
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                error = RemoteNodesText.Failure(failure)
+                writeError = RemoteNodesText.Failure(failure)
             }
         }
     }

@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -156,7 +157,8 @@ private fun MapContent(
     val preferences = remember(context) { context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE) }
     val preferenceStore = checkNotNull(dependencies.preferences) { "Process map preferences were not installed" }
     var settings by remember(dependencies) { mutableStateOf<MapPreferences?>(null) }
-    var preferenceError by remember { mutableStateOf<Exception?>(null) }
+    var preferenceObservationError by remember { mutableStateOf<Exception?>(null) }
+    var preferenceWriteError by remember { mutableStateOf<Exception?>(null) }
     var preferenceRetry by remember { mutableStateOf(0) }
     val filter = settings?.filter ?: MapFilterState.seed(MapFilterHost.MAIN_MAP)
     val clustering = settings?.clustering ?: true
@@ -186,26 +188,29 @@ private fun MapContent(
                     selectedFocus = null
                 }
                 settings = next
-                preferenceError = null
+                preferenceObservationError = null
+                preferenceWriteError = null
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            preferenceError = failure
+            preferenceObservationError = failure
         }
     }
     fun writePreference(write: suspend () -> Unit) {
         scope.launch {
             try {
                 write()
-                preferenceError = null
+                preferenceWriteError = null
+                if (preferenceObservationError != null) preferenceRetry++
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                preferenceError = failure
+                preferenceWriteError = failure
             }
         }
     }
+    val preferenceError = preferenceObservationError ?: preferenceWriteError
 
     LaunchedEffect(feature.visibleMarkers, feature.loading, settings) {
         if (settings != null && settings?.filter == feature.filter && camera == null && focusedPoint == null) {
@@ -292,7 +297,7 @@ private fun MapContent(
                     Text(uiString(presented.content.message))
                     Button(onClick = {
                         if (preferenceError != null) preferenceRetry++ else holder.refresh()
-                    }) {
+                    }, modifier = Modifier.testTag("map:preference-retry")) {
                         Text(stringResource(R.string.l10n_app_map_map_controls_refresh))
                     }
                 }

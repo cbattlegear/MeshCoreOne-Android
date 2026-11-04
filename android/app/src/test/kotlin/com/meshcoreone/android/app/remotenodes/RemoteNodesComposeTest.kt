@@ -26,6 +26,7 @@ import com.meshcoreone.android.core.maps.GeoPoint
 import com.meshcoreone.android.core.maps.MapPresentationState
 import com.meshcoreone.android.core.maps.MapFilterHost
 import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapPreferenceStore
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.app.container.AppMapPreferences
@@ -60,6 +61,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.IOException
 import java.io.File
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
@@ -191,7 +193,7 @@ class RemoteNodesComposeTest {
     @Test fun remoteMapSurfacesRealStoreObservationFailureAndRetryRestoresTheSameConsumer() {
         val real = requireNotNull(fixture.mapPreferences)
         var failed = false
-        fixture.mapPreferences = object : com.meshcoreone.android.core.maps.MapPreferenceStore by real {
+        fixture.mapPreferences = object : MapPreferenceStore by real {
             override fun observe(host: MapFilterHost) = kotlinx.coroutines.flow.flow {
                 if (!failed) {
                     failed = true
@@ -204,6 +206,47 @@ class RemoteNodesComposeTest {
         compose.waitUntil(5_000) { failed }
         compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
         compose.onNodeWithTag("remote-error").performScrollTo().assertExists()
+        compose.onNodeWithTag("remote-map:retry").performScrollTo().performClick()
+        compose.onNodeWithTag("synthetic-map").performScrollTo().assertExists()
+        compose.onNodeWithTag("remote-map:retry").assertDoesNotExist()
+    }
+
+    @Test fun successfulMapWriteDoesNotClearTerminalObservationFailureBeforeRetry() {
+        val real = requireNotNull(fixture.mapPreferences)
+        val writeStarted = CompletableDeferred<Unit>()
+        val releaseWrite = CompletableDeferred<Unit>()
+        val writeFinished = CompletableDeferred<Unit>()
+        var failFirstObservation = true
+        fixture.mapPreferences = object : MapPreferenceStore by real {
+            override fun observe(host: MapFilterHost) = kotlinx.coroutines.flow.flow {
+                if (host == MapFilterHost.MAIN_MAP && failFirstObservation) {
+                    failFirstObservation = false
+                    emit(real.observe(host).first())
+                    writeStarted.await()
+                    throw IOException("Fixture observation failure after initial value")
+                }
+                real.observe(host).collect { emit(it) }
+            }
+
+            override suspend fun setLabels(enabled: Boolean) {
+                writeStarted.complete(Unit)
+                releaseWrite.await()
+                real.setLabels(enabled)
+                writeFinished.complete(Unit)
+            }
+        }
+        show(RemoteNodeLaunch(fixture.contact, RemoteNodeLaunchAction.SAVED_HISTORY))
+        val labels = text(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapControlsShowLabels)
+        compose.onNodeWithText(labels).performScrollTo().performClick()
+        compose.waitUntil(5_000) {
+            writeStarted.isCompleted &&
+                compose.onAllNodesWithTag("remote-map:retry").fetchSemanticsNodes().isNotEmpty()
+        }
+        releaseWrite.complete(Unit)
+        compose.waitUntil(5_000) { writeFinished.isCompleted }
+        compose.waitForIdle()
+        compose.onNodeWithTag("remote-map:retry").assertExists()
+        compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
         compose.onNodeWithTag("remote-map:retry").performScrollTo().performClick()
         compose.onNodeWithTag("synthetic-map").performScrollTo().assertExists()
         compose.onNodeWithTag("remote-map:retry").assertDoesNotExist()

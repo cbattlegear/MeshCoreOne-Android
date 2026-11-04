@@ -21,6 +21,8 @@ import com.meshcoreone.android.core.protocol.model.ContactFlags
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.protocol.model.ErrorCode
 import com.meshcoreone.android.core.protocol.model.MeshContact
+import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
+import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
 import com.meshcoreone.android.core.protocol.session.ContactSessionOps
 import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import com.meshcoreone.android.core.protocol.session.ContactWriteDispatchOutcome
@@ -271,7 +273,9 @@ class ContactService(
             ContactWriteRecovery.abandonWrite(preferences, radioId, dispatch)
             throw blocked
         } catch (error: MeshCoreException) {
-            if (error !is MeshCoreException.DeviceError && error !is MeshCoreException.InvalidInput) {
+            if (dispatch.definitelyUnsent) {
+                ContactWriteRecovery.abandonDefinitelyUnsent(preferences, radioId, dispatch)
+            } else if (error !is MeshCoreException.DeviceError && error !is MeshCoreException.InvalidInput) {
                 requireContactReconciliation(radioId, error, dispatch)
             } else {
                 ContactWriteRecovery.abandonWrite(preferences, radioId, dispatch)
@@ -303,9 +307,14 @@ class ContactService(
         dispatch: ContactWriteDispatch? = null,
     ) {
         try {
-            ContactWriteRecovery.require(preferences, radioId, dispatch)
+            if (dispatch?.definitelyUnsent == true) {
+                ContactWriteRecovery.abandonDefinitelyUnsent(preferences, radioId, dispatch)
+                if (!ContactWriteRecovery.retryExistingRecovery(preferences, radioId)) return
+            } else {
+                ContactWriteRecovery.require(preferences, radioId, dispatch)
+            }
         } catch (recordingFailure: Exception) {
-            failure.addSuppressed(recordingFailure)
+            if (recordingFailure !== failure) failure.addSuppressed(recordingFailure)
             logger.log(ContactLogLevel.WARNING, "Contact recovery marker could not be persisted")
         }
         logger.log(ContactLogLevel.WARNING, "Contact state requires a complete radio contact sync")
@@ -338,19 +347,25 @@ class ContactService(
                 } else true
             },
         ) {
+            val dispatch = ChannelWriteDispatch()
             try {
-                session.removeContact(publicKey)
+                session.removeContact(publicKey, dispatch)
             } catch (cancelled: CancellationException) {
-                requireContactReconciliation(radioId, cancelled)
+                if (dispatch.cancellationDisposition != ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                    requireContactReconciliation(radioId, cancelled)
+                }
                 throw cancelled
             } catch (error: MeshCoreException) {
-                if (error !is MeshCoreException.DeviceError && error !is MeshCoreException.InvalidInput) {
+                if (dispatch.cancellationDisposition != ChannelWriteCancellationDisposition.DEFINITELY_UNSENT &&
+                    error !is MeshCoreException.DeviceError && error !is MeshCoreException.InvalidInput) {
                     requireContactReconciliation(radioId, error)
                 }
                 if (error.isDeviceError(ErrorCode.NOT_FOUND)) throw ContactServiceError.ContactNotFound()
                 throw ContactServiceError.SessionError(error)
             } catch (error: Exception) {
-                requireContactReconciliation(radioId, error)
+                if (dispatch.cancellationDisposition != ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                    requireContactReconciliation(radioId, error)
+                }
                 throw error
             }
 

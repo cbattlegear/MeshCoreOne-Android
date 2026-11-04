@@ -236,7 +236,13 @@ class MeshCoreSession private constructor(
             withContext(NonCancellable) { onCommitted() }
         }
     }
-    override suspend fun removeContact(publicKey: Bytes) { requireFullPublicKey(publicKey, "removeContact"); simple(PacketBuilder.removeContact(publicKey)) }
+    override suspend fun removeContact(publicKey: Bytes) = removeContact(publicKey, ChannelWriteDispatch())
+
+    override suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        requireFullPublicKey(publicKey, "removeContact")
+        core.exchange(dispatch) { simple(PacketBuilder.removeContact(publicKey)) }
+    }
     override suspend fun resetPath(publicKey: Bytes) { requireFullPublicKey(publicKey, "resetPath"); simple(PacketBuilder.resetPath(publicKey)) }
     override suspend fun shareContact(publicKey: Bytes) { requireFullPublicKey(publicKey, "shareContact"); simple(PacketBuilder.shareContact(publicKey)) }
     override suspend fun exportContact(publicKey: Bytes?): String {

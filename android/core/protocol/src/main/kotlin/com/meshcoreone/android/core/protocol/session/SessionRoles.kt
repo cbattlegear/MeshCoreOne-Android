@@ -83,6 +83,11 @@ interface ContactSessionOps {
         }
     }
     suspend fun removeContact(publicKey: Bytes)
+    /** Legacy roles cannot prove a failed removal was unsent. */
+    suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        removeContact(publicKey)
+    }
     suspend fun resetPath(publicKey: Bytes)
     suspend fun sendPathDiscovery(destination: Bytes): MessageSentInfo
     suspend fun shareContact(publicKey: Bytes)
@@ -94,10 +99,15 @@ interface ContactSessionOps {
 
 /** Android-only cancellation fence for a contact write, using the existing serialized-write accounting. */
 class ContactWriteDispatch(
-    private val beforeDispatchAction: (ContactWriteDispatch) -> Unit = {},
-    private val onExchangeFinishedAction: (ContactWriteDispatch) -> Unit = {},
+    beforeDispatchAction: (ContactWriteDispatch) -> Unit = {},
+    onExchangeFinishedAction: (ContactWriteDispatch) -> Unit = {},
 ) {
-    internal val exchangeDispatch = ChannelWriteDispatch { onExchangeFinishedAction(this) }
+    private val beforeDispatchCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(beforeDispatchAction)
+    private val onExchangeFinishedCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(onExchangeFinishedAction)
+    internal val exchangeDispatch = ChannelWriteDispatch {
+        beforeDispatchCallback.set(null)
+        onExchangeFinishedCallback.getAndSet(null)?.invoke(this)
+    }
 
     private val terminalOutcome = java.util.concurrent.atomic.AtomicReference<ContactWriteDispatchOutcome?>(null)
     private val failure = java.util.concurrent.atomic.AtomicReference<Exception?>(null)
@@ -112,15 +122,23 @@ class ContactWriteDispatch(
     val terminalFailure: Exception? get() = failure.get()
 
     val outcome: ContactWriteDispatchOutcome
-        get() = terminalOutcome.get() ?: when (exchangeDispatch.cancellationDisposition) {
-            ChannelWriteCancellationDisposition.UNKNOWN -> ContactWriteDispatchOutcome.UNKNOWN
-            ChannelWriteCancellationDisposition.DEFINITELY_UNSENT -> ContactWriteDispatchOutcome.DEFINITELY_UNSENT
-            ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN -> ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN
+        get() {
+            val terminal = terminalOutcome.get()
+            val disposition = exchangeDispatch.cancellationDisposition
+            if (terminal == ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN &&
+                disposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                return ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+            }
+            return terminal ?: when (disposition) {
+                ChannelWriteCancellationDisposition.UNKNOWN -> ContactWriteDispatchOutcome.UNKNOWN
+                ChannelWriteCancellationDisposition.DEFINITELY_UNSENT -> ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+                ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN -> ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN
+            }
         }
 
     internal fun beforeDispatch() {
         try {
-            beforeDispatchAction(this)
+            beforeDispatchCallback.get()?.invoke(this)
         } catch (failure: Exception) {
             markDefinitelyUnsent(failure)
             throw failure

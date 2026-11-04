@@ -627,3 +627,179 @@ Git-archive export of `tools/android-port`; result `valid`. `git diff --check`
 passed. These are source checks, not Kotlin compilation, test discovery or
 execution. No Gradle/CI/device work, publication, schema/Room/graph edit,
 claim change or hold release occurred.
+
+### Queued marker retry error identity
+
+The bounded repair starts from reviewed candidate
+`30ef44447d143f0555aded3865412e823a78027f`. Marker recording failure is added
+as a suppressed exception only when it is a different instance from the primary
+failure. Reusing the primary exception no longer invokes forbidden
+`Throwable.addSuppressed(this)`, so the original error and both recovery warnings
+survive. Marker retry, pending state, epochs and dispatch fences are unchanged.
+
+Two real-session regressions queue a service Add behind another service Add,
+cancel the first caller while marker recording fails, then deliver its late ACK.
+The terminal callback retries recording before the queued dispatch retries it
+again. The queued service catch retries a fourth time, either throwing the same
+exception instance or a distinct recording exception. Assertions cover primary
+identity, empty versus distinct suppression, both warning counts, no second
+transport write or queued-row persistence, the first accepted local completion,
+memory-versus-durable marker state, and successful later marker recording without
+clearing recovery or admitting writes/sync.
+
+This is an injected stable-identity regression for a source-level defect, not
+a reproduced production-device failure. The current Android adapter creates
+fresh recording exceptions. Device acceptance is a separate later run, not a
+prerequisite for this repair. Other owners' worktrees and held drafts are unchanged.
+
+Verification on native Windows used Python 3.12.4 and the existing explicit
+`ANDROID_CI_STATE`:
+
+- `python .\tools\android-port\controller\ci.py preflight --local --state
+  $env:ANDROID_CI_STATE --output <fresh absolute temporary directory>` passed.
+- `python .\tools\android-port\controller\validate.py` and `git diff --check`
+  passed.
+- `python .\tools\android-port\local\check.py --commit HEAD --affected-base
+  cb4a79ab906db851800bcf93f7c2ebfb5aa34571`, at implementation commit
+  `9632ed16888ea6ae0551d4487bbd26dcbdb5c6f6`, was blocked before execution:
+  `Hard-lock collision for external resource gradle-execution: gradle-execution held`.
+- `python .\tools\android-port\controller\execution_recovery.py status` refused
+  candidate recovery code: `Recovery requires reviewed default-base source:
+  tools/android-port/controller/authority.py`.
+
+No Kotlin tests were discovered or executed for this repair. The two new
+regressions are authored, not passing evidence. The coordinator received the
+execution-lane blocker for trusted recovery/allocation; no interlock or retained
+execution owner was bypassed, and no new CI-result bundle was created.
+
+Independent source review identified that coroutine stacktrace recovery could
+copy an ordinary injected `IOException` across the serializer's `Deferred.await`,
+invalidating the stable-identity control. The forward-only test correction uses
+an `IOException` subclass implementing `CopyableThrowable` with `createCopy() =
+null`. Both controls retain strict `assertSame` and exact suppression assertions;
+the default test JVM assertions and stacktrace-recovery settings are unchanged.
+The production identity guard is unchanged. Exact-head hosted CI, rather than
+the superseded ordinary-exception controls, must establish execution results.
+
+### Pre-generation definitely-unsent accounting
+
+Independent full-series review of `2e722901ffe51f70547d07a25040575825ba2bbb`
+identified a distinct clean-unsent failure: Add can suspend while reading the
+previous contact frame, then resume after its old session stops. Registration
+still succeeds, but `SessionCore.generation()` fails before serializer admission.
+The previous service catch incorrectly recorded uncertainty for this attempt.
+
+The dispatch-aware core exchange now records `DEFINITELY_UNSENT` specifically
+when generation lookup throws `SessionNotStarted`, before any owned task exists.
+It rethrows the same failure. ContactService abandons only that proven-unsent
+dispatch while retaining its public `SessionError` wrapper and original cause.
+It neither clears nor overwrites another epoch. Other session failures without
+unsent proof retain fail-closed uncertainty; exception type alone is not proof.
+The queued marker-error identity guard and recording retry behavior are unchanged.
+
+New actual-caller controls hold the previous-frame lookup, stop the real session,
+then release the lookup. The clean case asserts the observed original session
+failure identity, public wrapper/cause, unsent dispatch status, no command/row/
+warning/marker, then a replacement session using the same preferences successfully
+syncs and completes an acknowledged Add. A second schedule creates real on-wire
+uncertainty while the other lookup is held; registration remains blocked after
+stop, the same earlier epoch/durable marker survives, and replacement sync/Add
+remain blocked without additional commands. A legacy-role typed-failure control
+has no unsent proof and still records reconciliation, preventing a broad
+`SessionNotStarted` exemption. A real protocol channel control also verifies
+the shared pre-generation dispatch accounting before serializer admission.
+
+`git diff --check` and `python .\tools\android-port\controller\validate.py`
+passed for the authored correction. These new assertions require fresh exact-head
+hosted execution and do not claim device acceptance or a production-device failure.
+
+### Queued removal definitely-unsent accounting
+
+The full-series review also found that removal cancellation always recorded
+uncertainty, including a removal queued behind an unrelated raw protocol exchange
+that never entered transport. An additive `removeContact` dispatch overload now
+uses the existing serialized dispatch fence. The real session supplies actual
+`DEFINITELY_UNSENT` versus `MAY_HAVE_WRITTEN` evidence; legacy roles retain unknown
+outcomes rather than claiming proof. The service skips recording only for
+proven-unsent failures. After transport entry or accepted local-tail failure it
+still records uncertainty. It never clears an existing epoch.
+
+The deterministic real-session regression first occupies the serializer with a
+raw Add, admits removal through the service mutation fence, cancels it while
+queued, then completes the raw exchange. No Remove command, local deletion,
+cleanup, event, notification or new marker occurs; replacement sync and a real
+acknowledged removal remain usable. A paired existing-epoch control injects a
+late uncertainty report while removal is queued and proves cancellation preserves
+that exact epoch/durable marker and replacement blocking. An entered-transport
+control observes `MAY_HAVE_WRITTEN` and retained recovery after cancellation.
+A legacy cancellation without dispatch proof still records uncertainty.
+
+The WP-209 deviation text now describes the actual fail-closed marked state:
+full/incremental sync refuses before fetch and there is no production
+`reconciled` caller. No count-based marker clearing was added. Fresh hosted
+execution and full-series independent review remain necessary.
+
+### Ordinary serializer pre-send refusal
+
+The serializer now accounts every ordinary exchange exception using the existing
+request-context send fence before invoking `exchangeFinished`. This covers
+unresolved arbitrary-response correlation and transport-ownership refusal before
+`ExchangeOwner` or any send, rather than identifying unsent work by exception
+type. An entered send remains `MAY_HAVE_WRITTEN`. Successful exchanges retain
+their normal outcome. A proven-unsent Add abandons its own tracking; it may retry
+an already-existing pending recovery marker, but never creates or rotates an
+epoch for the refused attempt. Existing marker-error identity diagnostics remain
+covered by their actual queued controls.
+
+Real-session controls time out an unrelated raw `sendAndWait`, then repeatedly
+attempt Add or Remove. They assert the unresolved-reply `ConnectionLost` mapping,
+no contact command/local mutation/new marker/warning, and successful contact
+operations after physical stop and a fresh session. The serializer control
+checks ordinary failures both before and after `beforeSend`, observing the
+disposition inside the completion callback itself. Earlier-epoch and on-wire
+cancellation controls remain unchanged. No unresolved-reply fence is relaxed.
+
+The inside-command refusal successor also tests a timed-out real `getBattery`
+request, whose unresolved error correlation rejects Add inside `simple` after
+`beforeDispatch`. Its tentative terminal `MAY_HAVE_WRITTEN` must not override
+the serializer's definitive no-send receipt. `ContactWriteDispatch.outcome`
+therefore refines only that tentative uncertainty when the actual serializer
+proves `DEFINITELY_UNSENT`; accepted/rejected outcomes and actual entered-send
+ambiguity remain unchanged. Both raw and battery timeout families exercise Add
+and Remove, assert the real dispatch receipt and original public error mapping,
+then verify ordinary work is possible on a safely replaced session without a
+false persistent contact recovery lock.
+
+### Queued ordering and completed callback ownership
+
+PR review identified that a later undispatched `UNKNOWN` handle could block an
+earlier queued Add at admission. The prior-write check now considers only
+dispatching or finished handles; later queued work retains serializer order.
+The actual-session two-queued-Adds control holds a raw exchange, releases it,
+and observes both Adds dispatch, acknowledge and persist in order without a marker.
+Existing unresolved-dispatched, epoch and on-wire refusal controls remain intact.
+
+A retained uncertain dispatch now detaches its service-capturing admission and
+completion callbacks at exchange completion. Atomic callback slots are emptied
+before invoking the completion callback; outcome, failure and cancellation
+provenance remain retained. A protocol control verifies both callbacks are
+one-shot while uncertainty remains unchanged. This releases retired connection
+graph references without discarding recovery evidence.
+
+The sent channel/direct/channel-message `DeviceError` tests now expect the
+shared serializer's `MAY_HAVE_WRITTEN` send receipt, retaining typed error and
+pre-validation assertions. The removal-marker transport identity fixture uses
+the non-copyable injected IOException rather than relying on coroutine exception
+copy behavior. These are source-reviewed corrections, pending exact-head execution.
+
+Hosted run `41866671178` at `5bb53b017204424621d27ad3aedb2f7d16cdd089`
+passed controller/workflow policy but failed `:core:protocol:test`: 4,926 tests
+completed, two failed. Both new direct serializer failure controls leaked their
+injected `IllegalStateException` through the test-owned background job, rather
+than failing a disposition assertion. The controls now use `supervisorScope`,
+matching the production generation's supervised async ownership. Every original
+failure/disposition/callback assertion is retained. The services test source
+compiled, but its runner did not execute after the protocol failure. This run
+does not establish the contact regression assertions or overall candidate pass;
+the corrected successor requires fresh hosted verification. No CI-result bundle
+is retained; the original hosted job/log is authoritative.

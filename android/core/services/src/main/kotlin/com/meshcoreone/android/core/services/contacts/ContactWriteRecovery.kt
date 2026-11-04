@@ -175,6 +175,14 @@ internal object ContactWriteRecovery {
         }
     }
 
+    @Synchronized
+    fun retryExistingRecovery(preferences: ContactPreferenceFlags, radioId: RadioId): Boolean {
+        val state = state(preferences, radioId)
+        if (state.epoch == null) return false
+        recordPendingMarker(preferences, radioId, state)
+        return true
+    }
+
     fun finishWrite(
         preferences: ContactPreferenceFlags,
         radioId: RadioId,
@@ -269,7 +277,8 @@ internal object ContactWriteRecovery {
             state.syncing -> ContactWriteAdmissionBlockReason.SYNC_IN_PROGRESS
             state.epoch != null -> ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED
             dispatch != null && state.writes.any {
-                it !== dispatch && it.outcome != ContactWriteDispatchOutcome.DEFINITELY_UNSENT &&
+                it !== dispatch && (it in state.dispatchingWrites || it in state.finishedWrites) &&
+                    it.outcome != ContactWriteDispatchOutcome.DEFINITELY_UNSENT &&
                     it.outcome != ContactWriteDispatchOutcome.REJECTED
             } -> ContactWriteAdmissionBlockReason.PREVIOUS_WRITE_UNRESOLVED
             else -> null

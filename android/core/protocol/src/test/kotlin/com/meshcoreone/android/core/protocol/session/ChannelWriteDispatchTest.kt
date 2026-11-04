@@ -23,6 +23,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import org.junit.jupiter.api.Test
@@ -32,6 +33,82 @@ import org.junit.jupiter.api.TestFactory
 class ChannelWriteDispatchTest {
     @TestFactory
     fun realSessionCases() = listOf(
+        nativeCase("finished contact dispatch detaches both connection callbacks while retaining provenance") {
+            var admissions = 0
+            var completions = 0
+            val dispatch = ContactWriteDispatch(
+                beforeDispatchAction = { admissions++ },
+                onExchangeFinishedAction = { completions++ },
+            )
+            dispatch.beforeDispatch()
+            val failure = IllegalStateException("Still uncertain")
+            dispatch.markUncertain(failure)
+            dispatch.exchangeDispatch.cancelled(ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN)
+            dispatch.exchangeDispatch.exchangeFinished()
+            dispatch.beforeDispatch()
+            dispatch.exchangeDispatch.exchangeFinished()
+            assertEquals(1, admissions)
+            assertEquals(1, completions)
+            assertEquals(ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN, dispatch.outcome)
+            assertSame(failure, dispatch.terminalFailure)
+        },
+        nativeCase("contact uncertainty yields only to definitive serializer no-send proof") {
+            for (sent in listOf(false, true)) {
+                var completionOutcome: ContactWriteDispatchOutcome? = null
+                val dispatch = ContactWriteDispatch(onExchangeFinishedAction = { completionOutcome = it.outcome })
+                val failure = IllegalStateException("Command refused or failed")
+                supervisorScope {
+                    val serializer = RequestResponseSerializer(this)
+                    assertFailsWith<IllegalStateException> {
+                        serializer.withOwnedSerialization(dispatch.exchangeDispatch) {
+                            if (sent) beforeSend()
+                            dispatch.markUncertain(failure)
+                            throw failure
+                        }
+                    }
+                }
+                assertEquals(
+                    if (sent) ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN
+                    else ContactWriteDispatchOutcome.DEFINITELY_UNSENT,
+                    completionOutcome,
+                )
+                assertEquals(completionOutcome, dispatch.outcome)
+                assertSame(failure, dispatch.terminalFailure)
+            }
+        },
+        nativeCase("ordinary serializer failure accounts dispatch before the completion callback") {
+            for (sent in listOf(false, true)) {
+                var completionDisposition: ChannelWriteCancellationDisposition? = null
+                lateinit var dispatch: ChannelWriteDispatch
+                dispatch = ChannelWriteDispatch { completionDisposition = dispatch.cancellationDisposition }
+                val failure = IllegalStateException("Injected exchange failure")
+                supervisorScope {
+                    val serializer = RequestResponseSerializer(this)
+                    assertFailsWith<IllegalStateException> {
+                        serializer.withOwnedSerialization(dispatch) {
+                            if (sent) beforeSend()
+                            throw failure
+                        }
+                    }
+                }
+                assertEquals(
+                    if (sent) ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN
+                    else ChannelWriteCancellationDisposition.DEFINITELY_UNSENT,
+                    completionDisposition,
+                )
+                assertEquals(completionDisposition, dispatch.cancellationDisposition)
+            }
+        },
+        nativeCase("missing generation proves dispatch unsent before serializer admission") {
+            val f = fixture(); start(f)
+            f.session.stop()
+            val dispatch = ChannelWriteDispatch()
+            assertFailsWith<MeshCoreException.SessionNotStarted> {
+                f.session.setChannel(3u, "unsent", filled(0x33, 16), dispatch)
+            }
+            assertEquals(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT, dispatch.cancellationDisposition)
+            assertEquals(listOf(1), f.transport.sent.map { it[0].toInt() })
+        },
         nativeCase("an already cancelled caller is definitely unsent before any serializer task exists") {
             val f = fixture(); start(f)
             val dispatch = ChannelWriteDispatch()
@@ -224,7 +301,7 @@ class ChannelWriteDispatchTest {
             val write = checkedRequest { f.session.setChannel(0u, "valid", filled(1, 16), dispatch) }; runCurrent()
             f.transport.error(42); runCurrent()
             assertEquals(42u.toUByte(), assertFailsWith<MeshCoreException.DeviceError> { write.await() }.code)
-            assertEquals(ChannelWriteCancellationDisposition.UNKNOWN, dispatch.cancellationDisposition)
+            assertEquals(ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN, dispatch.cancellationDisposition)
             f.session.stop()
         },
         nativeCase("an alternate implementation without dispatch accounting cannot claim definitely unsent") {

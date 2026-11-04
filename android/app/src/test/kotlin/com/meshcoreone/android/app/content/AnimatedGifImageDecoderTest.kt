@@ -2,11 +2,13 @@
 package com.meshcoreone.android.app.content
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.os.Build
 import com.meshcoreone.android.core.services.content.ImageDecodeOutcome
+import com.meshcoreone.android.core.services.content.CachedDecodedImage
 import java.io.ByteArrayOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -25,6 +27,28 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [31, 37])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class AnimatedGifImageDecoderTest {
+    @Test
+    fun `animation cache charges each retained native frame allocation plus share bytes`() {
+        val encoded = NativeImageFixtures.png(64, 32)
+        val frames = List(2) {
+            requireNotNull(BitmapFactory.decodeByteArray(
+                encoded, 0, encoded.size, BitmapFactory.Options().apply { inMutable = true },
+            ))
+        }
+        try {
+            val allocation = frames.sumOf { it.allocationByteCount }
+            frames.forEach { it.reconfigure(1, 1, Bitmap.Config.ARGB_8888) }
+            assertTrue(allocation > frames.sumOf { it.rowBytes * it.height })
+            val metadata = requireNotNull(com.meshcoreone.android.core.services.content.GifImageMetadata.parse(gif()))
+            val handle = GifDecodedImageHandle(frames, metadata, 1, 1)
+            assertEquals(allocation, handle.costBytes)
+            val bytes = gif()
+            assertEquals(allocation.toLong() + bytes.size, CachedDecodedImage(handle, true, bytes).cost)
+        } finally {
+            frames.forEach { it.recycle() }
+        }
+    }
+
     private fun gif(): ByteArray = "GIF89a".toByteArray(Charsets.US_ASCII) + byteArrayOf(
         1, 0, 1, 0, 0x80.toByte(), 0, 0, 0, 0, 0, 0xff.toByte(), 0, 0,
         0x21, 0xf9.toByte(), 4, 4, 1, 0, 0, 0,

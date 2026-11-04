@@ -433,6 +433,7 @@ private fun DetailActionButton(
     Button(
         onClick = onClick,
         enabled = (!needsRadio || radioEnabled) && !(action == DetailAction.PING && state.isPinging) &&
+            !(action == DetailAction.FAVORITE && state.isSavingFavorite) &&
             !(action == DetailAction.SHARE_VIA_ADVERT && state.isSharing),
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
     ) {

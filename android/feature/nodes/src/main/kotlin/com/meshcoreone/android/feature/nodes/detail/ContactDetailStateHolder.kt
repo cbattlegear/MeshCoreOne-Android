@@ -55,6 +55,7 @@ data class ContactDetailState(
     val isEditingNickname: Boolean = false,
     val isSaving: Boolean = false,
     val isFavorite: Boolean = contact.isFavorite,
+    val isSavingFavorite: Boolean = false,
     val pendingConfirmation: DetailConfirmation? = null,
     val isClearingMessages: Boolean = false,
     val errorMessage: NodesMessage? = null,
@@ -155,6 +156,7 @@ class ContactDetailStateHolder(
         holder.onContactNeedsRefresh = { scope.launch { refreshContact() } }
     }
     private var favoriteJob: Job? = null
+    private var favoriteRevision = 0L
     private val session get() = dependencies.session
     private val current get() = state.value.contact
 
@@ -168,8 +170,9 @@ class ContactDetailStateHolder(
      */
     suspend fun run() {
         path.loadContacts(current.radioId)
+        val revision = favoriteRevision
         val fresh = quietly { session.contactService()?.getContact(current.radioId, current.publicKey) }
-        if (fresh != null) mutableState.update { it.copy(contact = fresh) }
+        if (fresh != null) applyRefreshedContact(fresh, revision)
         val advertisements = session.advertisementService() ?: return
         advertisements.events().use { subscription ->
             // Only a response for this contact may resolve this screen's discovery.
@@ -195,10 +198,42 @@ class ContactDetailStateHolder(
 
     /** The favorite toggle; a newer toggle cancels the previous request. */
     fun setFavorite(isFavorite: Boolean) {
-        mutableState.update { it.copy(isFavorite = isFavorite) }
+        val target = current
+        val revision = ++favoriteRevision
         favoriteJob?.cancel()
+        mutableState.update { it.copy(isSavingFavorite = true, errorMessage = null) }
         favoriteJob = scope.launch {
-            reporting { session.contactService()?.setContactFavorite(current.key, isFavorite) }
+            try {
+                val service = session.contactService()
+                if (service == null || session.currentRadioId() != target.radioId) {
+                    if (favoriteRevision == revision) mutableState.update {
+                        it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable))
+                    }
+                    return@launch
+                }
+                service.setContactFavorite(target.key, isFavorite)
+                currentCoroutineContext().ensureActive()
+                if (favoriteRevision == revision) {
+                    if (session.currentRadioId() != target.radioId) {
+                        mutableState.update {
+                            it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable))
+                        }
+                    } else {
+                        mutableState.update {
+                            it.copy(isFavorite = isFavorite, contact = it.contact.copy(isFavorite = isFavorite))
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (favoriteRevision == revision) mutableState.update { it.copy(errorMessage = failure(error)) }
+            } finally {
+                if (favoriteRevision == revision) {
+                    ++favoriteRevision
+                    mutableState.update { it.copy(isSavingFavorite = false) }
+                }
+            }
         }
     }
 
@@ -283,8 +318,20 @@ class ContactDetailStateHolder(
     }
 
     suspend fun refreshContact() {
+        val revision = favoriteRevision
         val updated = quietly { session.servicesDataStore()?.fetchContact(current.key) } ?: return
-        mutableState.update { it.copy(contact = updated) }
+        applyRefreshedContact(updated, revision)
+    }
+
+    private fun applyRefreshedContact(updated: ContactDTO, revision: Long) {
+        mutableState.update {
+            if (updated.key != it.contact.key || updated.publicKey != it.contact.publicKey) it
+            else if (revision != favoriteRevision || it.isSavingFavorite) {
+                it.copy(contact = updated.copy(isFavorite = it.isFavorite))
+            } else {
+                it.copy(contact = updated, isFavorite = updated.isFavorite)
+            }
+        }
     }
 
     suspend fun saveNickname() {

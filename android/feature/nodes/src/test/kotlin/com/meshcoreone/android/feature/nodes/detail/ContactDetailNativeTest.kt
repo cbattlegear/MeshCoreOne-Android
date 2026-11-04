@@ -2,7 +2,9 @@
 package com.meshcoreone.android.feature.nodes.detail
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.l10n.R
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.VContactIdentity
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.PathInfo
@@ -10,6 +12,7 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.deps.NodesAdvertEvent
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
+import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.path.PathDiscoveryResult
 import com.meshcoreone.android.feature.nodes.support.FakeContactService
 import com.meshcoreone.android.feature.nodes.support.Fixtures
@@ -30,6 +33,210 @@ import kotlinx.coroutines.CompletableDeferred
 import org.junit.Test
 
 class ContactDetailNativeTest {
+    @Test
+    fun `initial service load and persisted refresh synchronize favorite in both directions`() = scenario {
+        for (initialFavorite in listOf(false, true)) {
+            val harness = Harness(clock).connect()
+            val initial = contact(radioId = checkNotNull(harness.session.radioId)).copy(isFavorite = initialFavorite)
+            val fresh = initial.copy(isFavorite = !initialFavorite)
+            harness.store.contacts += fresh
+            val loaded = ContactDetailStateHolder(initial, harness.dependencies, scope)
+            val screen = scope.launch { loaded.run() }
+            settle()
+            assertEquals(fresh, loaded.state.value.contact)
+            assertEquals(fresh.isFavorite, loaded.state.value.isFavorite)
+            screen.cancel()
+            val refreshed = ContactDetailStateHolder(initial, harness.dependencies, scope)
+            refreshed.refreshContact()
+            assertEquals(fresh, refreshed.state.value.contact)
+            assertEquals(fresh.isFavorite, refreshed.state.value.isFavorite)
+            refreshed.setFavorite(!refreshed.state.value.isFavorite)
+            settle()
+            assertEquals("favorite:$initialFavorite", harness.contactService.calls.last())
+            assertEquals(initialFavorite, refreshed.state.value.isFavorite)
+            assertFalse(refreshed.state.value.isSavingFavorite)
+        }
+    }
+
+    @Test
+    fun `delayed refresh cannot overwrite an in-flight or completed favorite toggle`() = scenario {
+        for (initialFavorite in listOf(false, true)) {
+            val harness = Harness(clock).connect()
+            val initial = contact(radioId = checkNotNull(harness.session.radioId)).copy(isFavorite = initialFavorite)
+            harness.store.contacts += initial
+            val read = CompletableDeferred<ContactDTO>()
+            harness.session.servicesStore = object : NodesDataStore by harness.store {
+                override suspend fun fetchContact(key: EntityKey): ContactDTO = read.await()
+            }
+            val write = CompletableDeferred<Unit>()
+            val persist = harness.contactService.favoriteBehavior
+            harness.contactService.favoriteBehavior = { key, favorite -> write.await(); persist(key, favorite) }
+            val detail = ContactDetailStateHolder(initial, harness.dependencies, scope)
+            val refresh = scope.launch { detail.refreshContact() }
+            settle()
+            detail.setFavorite(!initialFavorite)
+            settle()
+            assertTrue(detail.state.value.isSavingFavorite)
+            assertEquals(initialFavorite, detail.state.value.isFavorite, "An in-flight write is not confirmed")
+            val duringWriteRefresh = scope.launch { detail.refreshContact() }
+            settle()
+            write.complete(Unit)
+            settle()
+            assertFalse(detail.state.value.isSavingFavorite)
+            assertEquals(!initialFavorite, detail.state.value.isFavorite)
+            read.complete(initial.copy(name = "Fresh non-favorite fields"))
+            refresh.join()
+            duringWriteRefresh.join()
+            assertEquals(!initialFavorite, detail.state.value.isFavorite)
+            assertEquals(!initialFavorite, detail.state.value.contact.isFavorite)
+            assertEquals("Fresh non-favorite fields", detail.state.value.contact.name)
+            assertEquals(!initialFavorite, harness.store.contacts.single().isFavorite)
+        }
+    }
+
+    @Test
+    fun `delayed initial service load cannot overwrite a newer favorite toggle`() = scenario {
+        val harness = Harness(clock).connect()
+        val initial = contact(radioId = checkNotNull(harness.session.radioId))
+        harness.store.contacts += initial
+        val read = CompletableDeferred<ContactDTO>()
+        harness.contactService.getContactBehavior = { _, _ -> read.await() }
+        val detail = ContactDetailStateHolder(initial, harness.dependencies, scope)
+        val screen = scope.launch { detail.run() }
+        settle()
+        detail.setFavorite(true)
+        settle()
+        read.complete(initial)
+        settle()
+        assertTrue(detail.state.value.isFavorite)
+        assertTrue(detail.state.value.contact.isFavorite)
+        assertTrue(harness.store.contacts.single().isFavorite)
+        screen.cancel()
+    }
+
+    @Test
+    fun `missing service and changed radio do not confirm favorite or write`() = scenario {
+        val harness = Harness(clock).connect()
+        val initial = contact(radioId = checkNotNull(harness.session.radioId))
+        val detail = ContactDetailStateHolder(initial, harness.dependencies, scope)
+        harness.session.contacts = null
+        detail.setFavorite(true)
+        settle()
+        assertEquals(NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable), detail.state.value.errorMessage)
+        assertFalse(detail.state.value.isFavorite)
+        assertFalse(detail.state.value.isSavingFavorite)
+        harness.session.contacts = harness.contactService
+        harness.session.radioId = Fixtures.radio()
+        detail.setFavorite(true)
+        settle()
+        assertTrue(harness.contactService.calls.isEmpty())
+        assertFalse(detail.state.value.isFavorite)
+        assertFalse(detail.state.value.isSavingFavorite)
+        assertEquals(NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable), detail.state.value.errorMessage)
+    }
+
+    @Test
+    fun `favorite failure preserves last confirmation without asserting radio rollback`() = scenario {
+        val harness = Harness(clock).connect()
+        val initial = contact(radioId = checkNotNull(harness.session.radioId))
+        harness.store.contacts += initial
+        val detail = ContactDetailStateHolder(initial, harness.dependencies, scope)
+        harness.contactService.favoriteBehavior = { _, _ ->
+            harness.store.contacts[0] = initial.copy(isFavorite = true)
+            throw java.io.IOException("uncertain write")
+        }
+        detail.setFavorite(true)
+        settle()
+        assertFalse(detail.state.value.isFavorite)
+        assertFalse(detail.state.value.isSavingFavorite)
+        assertEquals(NodesMessage.Text("failed: uncertain write"), detail.state.value.errorMessage)
+        assertTrue(harness.store.contacts.single().isFavorite, "The holder must not fabricate rollback")
+        detail.refreshContact()
+        assertTrue(detail.state.value.isFavorite)
+        assertTrue(detail.state.value.contact.isFavorite)
+        assertNotNull(detail.state.value.errorMessage, "A persisted read does not prove a radio outcome")
+    }
+
+    @Test
+    fun `radio change during favorite write does not confirm the requested state`() = scenario {
+        val harness = Harness(clock).connect()
+        val initial = contact(radioId = checkNotNull(harness.session.radioId))
+        harness.store.contacts += initial
+        val gate = CompletableDeferred<Unit>()
+        harness.contactService.favoriteBehavior = { _, _ -> gate.await() }
+        val detail = ContactDetailStateHolder(initial, harness.dependencies, scope)
+        detail.setFavorite(true)
+        settle()
+        assertTrue(detail.state.value.isSavingFavorite)
+        harness.session.radioId = Fixtures.radio()
+        gate.complete(Unit)
+        settle()
+        assertFalse(detail.state.value.isFavorite)
+        assertFalse(detail.state.value.isSavingFavorite)
+        assertEquals(NodesMessage.res(R.string.l10n_app_contacts_contacts_detail_error_servicesunavailable), detail.state.value.errorMessage)
+    }
+
+    @Test
+    fun `superseded favorite failure cannot clear a newer pending write or publish its error`() = scenario {
+        val harness = Harness(clock).connect()
+        val initial = contact(radioId = checkNotNull(harness.session.radioId))
+        val oldWrite = CompletableDeferred<Unit>()
+        val newWrite = CompletableDeferred<Unit>()
+        harness.contactService.favoriteBehavior = { key, favorite ->
+            assertEquals(initial.key, key)
+            if (favorite) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    oldWrite.await()
+                    throw java.io.IOException("superseded write")
+                }
+            } else {
+                newWrite.await()
+            }
+        }
+        val detail = ContactDetailStateHolder(initial, harness.dependencies, scope)
+        detail.setFavorite(true)
+        settle()
+        detail.setFavorite(false)
+        settle()
+        oldWrite.complete(Unit)
+        settle()
+        assertTrue(detail.state.value.isSavingFavorite)
+        assertFalse(detail.state.value.isFavorite)
+        assertNull(detail.state.value.errorMessage)
+        newWrite.complete(Unit)
+        settle()
+        assertFalse(detail.state.value.isSavingFavorite)
+        assertFalse(detail.state.value.isFavorite)
+        assertNull(detail.state.value.errorMessage)
+        assertEquals(listOf("favorite:true", "favorite:false"), harness.contactService.calls)
+    }
+
+    @Test
+    fun `cancelled favorite write propagates cancellation without confirming or rolling back`() = scenario {
+        val harness = Harness(clock).connect()
+        val initial = contact(radioId = checkNotNull(harness.session.radioId))
+        harness.store.contacts += initial
+        val entered = CompletableDeferred<Unit>()
+        val lifetime = kotlinx.coroutines.Job(scope.coroutineContext[kotlinx.coroutines.Job])
+        val detailScope = kotlinx.coroutines.CoroutineScope(scope.coroutineContext + lifetime)
+        harness.contactService.favoriteBehavior = { _, _ ->
+            harness.store.contacts[0] = initial.copy(isFavorite = true)
+            entered.complete(Unit)
+            kotlinx.coroutines.awaitCancellation()
+        }
+        val detail = ContactDetailStateHolder(initial, harness.dependencies, detailScope)
+        detail.setFavorite(true)
+        settle()
+        assertTrue(entered.isCompleted)
+        assertTrue(detail.state.value.isSavingFavorite)
+        lifetime.cancel()
+        settle()
+        assertFalse(detail.state.value.isSavingFavorite)
+        assertFalse(detail.state.value.isFavorite)
+        assertNull(detail.state.value.errorMessage)
+        assertTrue(harness.store.contacts.single().isFavorite)
+    }
+
     @Test
     fun `blocking waits for explicit confirmation while unblocking runs at once`() = scenario {
         val harness = Harness(clock).connect()

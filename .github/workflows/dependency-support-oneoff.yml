@@ -102,8 +102,22 @@ jobs:
             --no-daemon --console=plain --no-build-cache --no-parallel --max-workers=2 \
             --stacktrace -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=512m
 
+      - id: diagnostic_core_data
+        name: Re-run core data tests for failure details
+        if: ${{ always() && steps.generate.outcome == 'failure' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          ./android/gradlew -p android :core:data:testDebugUnitTest \
+            --no-daemon --console=plain --no-build-cache --no-parallel --max-workers=2 \
+            --stacktrace -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=512m
+          result=$?
+          echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+          exit "$result"
+
       - id: diagnostics
-        name: Capture failed core data test reports
+        name: Capture failed Android test reports
         if: ${{ always() && steps.generate.outcome == 'failure' }}
         shell: bash
         run: |
@@ -125,33 +139,33 @@ jobs:
 
           root = Path(os.environ["RUNNER_TEMP"]) / "dependency-generation-diagnostics"
           root.mkdir(parents=True, exist_ok=False)
-          source_dirs = [
-              Path("android/core/data/build/test-results/testDebugUnitTest"),
-              Path("android/core/data/build/reports/tests/testDebugUnitTest"),
-          ]
           copied = []
-          for source in source_dirs:
-              if not source.exists():
+          android = Path("android")
+          for build in sorted(android.rglob("build")):
+              if not build.is_dir():
                   continue
-              for item in sorted(source.rglob("*")):
-                  if not item.is_file():
+              for report_dir in (build / "test-results", build / "reports" / "tests"):
+                  if not report_dir.is_dir():
                       continue
-                  if item.is_symlink():
-                      raise SystemExit(f"Refusing symlinked test report: {item}")
-                  relative = item.relative_to(Path("android/core/data/build"))
-                  target = root / relative
-                  target.parent.mkdir(parents=True, exist_ok=True)
-                  shutil.copy2(item, target)
-                  data = target.read_bytes()
-                  copied.append({
-                      "path": str(relative),
-                      "size": len(data),
-                      "sha256": hashlib.sha256(data).hexdigest(),
-                  })
+                  for item in sorted(report_dir.rglob("*")):
+                      if not item.is_file():
+                          continue
+                      if item.is_symlink():
+                          raise SystemExit(f"Refusing symlinked test report: {item}")
+                      relative = item.relative_to(android)
+                      target = root / relative
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(item, target)
+                      data = target.read_bytes()
+                      copied.append({
+                          "path": str(relative),
+                          "size": len(data),
+                          "sha256": hashlib.sha256(data).hexdigest(),
+                      })
 
           junit = [
               item for item in copied
-              if item["path"].startswith("test-results/") and item["path"].endswith(".xml")
+              if "/test-results/" in item["path"] and item["path"].endswith(".xml")
           ]
           provenance = {
               "repository": "cbattlegear/MeshCoreOne-Android",
@@ -163,6 +177,12 @@ jobs:
               "product_checkout_commit": head,
               "product_checkout_tree": tree,
               "generation_step_outcome": "failure",
+              "core_data_diagnostic_step_outcome": os.environ.get(
+                  "CORE_DATA_DIAGNOSTIC_OUTCOME", "unknown"
+              ),
+              "core_data_diagnostic_exit_code": os.environ.get(
+                  "CORE_DATA_DIAGNOSTIC_EXIT_CODE", "unavailable"
+              ),
               "generation_command": [
                   "./android/gradlew", "-p", "android",
                   "verifyScaffoldTests", "verifyRoomSchema", "validateModuleGraph",
@@ -183,12 +203,15 @@ jobs:
           if not junit:
               raise SystemExit("No JUnit XML reports were produced for the failed generation run")
           PY
+        env:
+          CORE_DATA_DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic_core_data.outcome }}
+          CORE_DATA_DIAGNOSTIC_EXIT_CODE: ${{ steps.diagnostic_core_data.outputs.exit_code }}
 
-      - name: Upload failed core data test reports
+      - name: Upload failed Android test reports
         if: ${{ always() && steps.generate.outcome == 'failure' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: diagnostic-core-data-test-reports-0ccefd18095902403f458afa02006896f1a44e0c
+          name: diagnostic-android-test-reports-0ccefd18095902403f458afa02006896f1a44e0c
           path: ${{ runner.temp }}/dependency-generation-diagnostics/
           if-no-files-found: warn
           retention-days: 3

@@ -3673,6 +3673,120 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun cancelledMountedChatLookupWaitingForLifecycleBoundaryCannotOfferOrNavigate() = runTest {
+        for (known in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Mounted cancellation peer") }
+            val feature = h.container.chatsFeature
+            val origin = ChatContactMount()
+            val fetchEntered = CompletableDeferred<Unit>()
+            val releaseFetch = CompletableDeferred<Unit>()
+            val boundaryHeld = CountDownLatch(1)
+            val releaseBoundary = CountDownLatch(1)
+            val holderThread = AtomicReference<Thread>()
+            val publisherThread = AtomicReference<Thread>()
+            val offered = AtomicInteger()
+            val diagnostics = CopyOnWriteArrayList<String>()
+            val failures = ConcurrentLinkedQueue<Throwable>()
+            val routingJob = SupervisorJob()
+            val controlJob = SupervisorJob()
+            val exceptionHandler = CoroutineExceptionHandler { _, failure -> failures.add(failure) }
+            val routingScope = CoroutineScope(routingJob + Dispatchers.IO + exceptionHandler)
+            val controlScope = CoroutineScope(controlJob + Dispatchers.IO + exceptionHandler)
+            var holder: Deferred<Unit>? = null
+            var failure: Throwable? = null
+            try {
+                connect(h)
+                feature.registerContactMount(origin)
+                mount(h)
+                val navigation = h.container.navigation
+                val underlying = feature.linksForMount(origin)
+                val environment = object : ChatLinkEnvironment by underlying {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        fetchEntered.complete(Unit)
+                        releaseFetch.await()
+                        return store.fetchContact(radioId, publicKey)
+                    }
+
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion {
+                        publisherThread.set(Thread.currentThread())
+                        return underlying.completeResolvedContactLookup(
+                            context, target, link, existing, publications, cancellation,
+                        ).also { if (it is ContactLinkTargetCompletion.Offered) offered.incrementAndGet() }
+                    }
+                }
+                val publicKey = if (known) key(20) else key(31)
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri(
+                    "Mounted cancellation claim", publicKey, ContactType.REPEATER,
+                )
+                val router = ChatLinkRouter(environment, routingScope,
+                    com.meshcoreone.android.feature.chats.list.ChatListDiagnostics { message, _ -> diagnostics += message },
+                )
+                assertTrue(router.route(uri))
+                fetchEntered.await()
+                val before = navigation.currentState
+                val holding = async(Dispatchers.IO) {
+                    h.manager.withNavigationCommitBoundary {
+                        holderThread.set(Thread.currentThread())
+                        boundaryHeld.countDown()
+                        check(releaseBoundary.await(30, TimeUnit.SECONDS)) { "Lifecycle boundary was not released" }
+                    }
+                }
+                holder = holding
+                assertTrue(boundaryHeld.await(10, TimeUnit.SECONDS))
+                releaseFetch.complete(Unit)
+                awaitBlockedOnLock(
+                    publisherThread, holderThread, ConnectionManager::class.java, "withNavigationCommitBoundary",
+                )
+                routingJob.cancel()
+                releaseBoundary.countDown()
+                holding.await()
+                routingJob.join()
+                h.settle()
+                compose.waitForIdle()
+                assertEquals(0, offered.get(), "Cancellation before the offer commit cannot transfer ownership")
+                assertTrue(navigation.pendingChatContactOffers().isEmpty())
+                assertEquals(before, navigation.currentState)
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(navigation.currentState.pendingContactDetail)
+                assertFalse(origin.registrationSealed.get(), "The source remains mounted throughout cancellation")
+                assertTrue(diagnostics.isEmpty())
+
+                assertTrue(ChatLinkRouter(environment, controlScope).route(uri))
+                await(h) {
+                    if (known) navigation.state.value.pendingContactDetail?.publicKey == publicKey
+                    else navigation.state.value.pendingContactLink?.publicKey == publicKey
+                }
+                assertEquals(1, offered.get(), "A fresh active delivery still reaches the mounted consumer")
+                if (known) {
+                    assertEquals(store.fetchContact(assertNotNull(h.appState.currentRadioId), publicKey),
+                        navigation.state.value.pendingContactDetail)
+                } else {
+                    val pending = assertNotNull(navigation.state.value.pendingContactLink)
+                    assertEquals("Mounted cancellation claim", pending.name)
+                    assertEquals(ContactType.REPEATER, pending.type)
+                    assertEquals(h.appState.currentRadioId, pending.targetRadioId)
+                }
+                assertTrue(h.links.radios.all { radio -> radio.sent.none { it[0].toInt() == 0x09 } })
+            } catch (caught: Throwable) {
+                failure = caught
+                throw caught
+            } finally {
+                releaseFetch.complete(Unit)
+                releaseBoundary.countDown()
+                unmount()
+                feature.sealContactMount(origin)
+                finishContactCancellationTest(failure, routingJob, failures, h.container, extraCleanup = {
+                    controlJob.cancelAndJoin()
+                    holder?.let { work -> withContext(Dispatchers.IO) { withTimeout(10_000) { work.await() } } }
+                })
+            }
+        }
+    }
+
     @Test fun cancelledChatContactLookupWaitingForTheCommitBoundaryCannotMutateNavigation() = runTest {
         val h = ContainerHarness(this, store)
         val fetchEntered = CompletableDeferred<Unit>()

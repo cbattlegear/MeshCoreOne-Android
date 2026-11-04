@@ -466,6 +466,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     internal fun offerChatContact(
         mount: ChatContactMount, context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
         link: ContactLinkRequest, contact: ContactDTO?, publications: ContactLinkPublications,
+        cancellation: ContactLinkCancellation,
     ): ContactLinkTargetCompletion {
         val offered = ContactLinkPublications()
         publications.defer(object : com.meshcoreone.android.feature.chats.list.ContactLinkPublication {
@@ -475,11 +476,12 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             })
         })
         return withNavigationCommitBoundary {
+            cancellation.ensureActive()
             val resolved = resolveContactLinkContext(context, link.publicKey)
             if (resolved is ContactLinkLookupResolution.Current &&
                 (resolved.radioId != target.radioId || resolved.selfPublicKey != target.selfPublicKey)
             ) return@withNavigationCommitBoundary ContactLinkTargetCompletion.TargetChanged
-            navigation.offerChatContact(mount, context, target, link, contact, offered) {
+            navigation.offerChatContact(mount, context, target, link, contact, offered, cancellation) {
                 val current = resolveContactLinkContext(context, link.publicKey)
                 current is ContactLinkLookupResolution.Current &&
                     current.radioId == target.radioId && current.selfPublicKey == target.selfPublicKey

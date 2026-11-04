@@ -89,7 +89,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 }
                 return container.offerChatContact(
                     mount, context, target, ContactLinkRequest(link.name, link.publicKey, link.contactType),
-                    existing, publications,
+                    existing, publications, cancellation,
                 )
             }
         }

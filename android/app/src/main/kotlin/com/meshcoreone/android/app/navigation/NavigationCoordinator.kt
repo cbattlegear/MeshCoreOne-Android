@@ -387,6 +387,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     internal fun offerChatContact(
         mount: ChatContactMount, context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
         link: ContactLinkRequest, contact: ContactDTO?, publications: ContactLinkPublications,
+        cancellation: ContactLinkCancellation,
         isCurrent: () -> Boolean,
     ): ContactLinkTargetCompletion {
         val offer = ChatContactOffer(UUID.randomUUID(), mount, context, target, link, contact, ChatContactReceipt())
@@ -397,10 +398,13 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             if (snapshot.handoffs.mounts[mount.id] != true || !isCurrent()) {
                 return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
             }
-            if (mutableState.compareAndSet(
+            val committed = cancellation.commitIfActive {
+                mutableState.compareAndSet(
                     snapshot, snapshot.value, publication,
                     handoffs = snapshot.handoffs.copy(offers = snapshot.handoffs.offers + (offer.id to offer)),
-                )) return ContactLinkTargetCompletion.Offered(offer.receipt)
+                )
+            }
+            if (committed) return ContactLinkTargetCompletion.Offered(offer.receipt)
         }
     }
 

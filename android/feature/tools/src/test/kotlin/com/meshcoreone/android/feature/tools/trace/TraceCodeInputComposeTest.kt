@@ -43,6 +43,11 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.meshcoreone.android.core.maps.MapColorPreference
+import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapPreferenceStore
+import com.meshcoreone.android.core.maps.MapPreferences
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
@@ -55,6 +60,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -101,7 +108,12 @@ class TraceCodeInputComposeTest {
         val recents = MapRecentsStorage()
         content.setContent {
             MaterialTheme {
-                TracePathScreen(TracePathScreen.Dependencies(dependencies, recents, RecordingDiagnostics(), RADIO, 1))
+                TracePathScreen(
+                    TracePathScreen.Dependencies(
+                        dependencies, recents, RecordingDiagnostics(), RADIO, 1,
+                        mapPreferences = host.get().mapPreferences,
+                    ),
+                )
             }
         }
         settle()
@@ -1099,6 +1111,7 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
     internal lateinit var focusManager: FocusManager
     internal val recents = MapRecentsStorage()
     internal val sender = FakeTraceSender()
+    internal val mapPreferences: MapPreferenceStore = TraceCodeInputMapPreferences()
     internal var observedHolder: TracePathStateHolder? = null
         private set
     private val contacts = listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")) +
@@ -1144,6 +1157,7 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
                 TracePathScreen(
                     TracePathScreen.Dependencies(
                         dependencies, recents, RecordingDiagnostics(), signaledRadioId(), connectionGeneration,
+                        mapPreferences = mapPreferences,
                     ),
                 )
             }
@@ -1249,5 +1263,34 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
         content.disposeComposition()
         frames.cancel()
         super.onDestroy()
+    }
+}
+
+private class TraceCodeInputMapPreferences : MapPreferenceStore {
+    private val state = MutableStateFlow(
+        MapPreferences(
+            MapFilterState.seed(MapFilterHost.TRACE_PATH),
+            clustering = true,
+            labels = true,
+            appearance = MapColorPreference.SYSTEM,
+        ),
+    )
+
+    override fun observe(host: MapFilterHost) = state
+
+    override suspend fun setFilter(host: MapFilterHost, filter: MapFilterState) {
+        state.update { it.copy(filter = filter.sanitized(host)) }
+    }
+
+    override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+        state.update { it.copy(filter = transform(it.filter).sanitized(host)) }
+    }
+
+    override suspend fun setClustering(enabled: Boolean) {
+        state.update { it.copy(clustering = enabled) }
+    }
+
+    override suspend fun setLabels(enabled: Boolean) {
+        state.update { it.copy(labels = enabled) }
     }
 }

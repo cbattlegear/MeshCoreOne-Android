@@ -499,6 +499,7 @@ class CommitRecoveryTest {
                 runCurrent()
                 assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
                 assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
 
                 advanceTimeBy(20)
                 runCurrent()
@@ -507,7 +508,9 @@ class CommitRecoveryTest {
                 assertEquals(2, dispatches.size)
                 assertNotSame(dispatches[0], dispatches[1])
                 assertTrue(receipt.isAccepted)
-                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                assertEquals(MessageStatus.RETRYING, h.stored(message.id).status)
+                assertEquals(0L, h.stored(message.id).retryAttempt)
+                assertEquals(service.config.maxAttempts - 1, h.stored(message.id).maxRetryAttempts)
                 assertFailsWith<MessageServiceException> {
                     withContext(receipt) { service.sendPendingDirectMessage(message.id, h.contact) }
                 }

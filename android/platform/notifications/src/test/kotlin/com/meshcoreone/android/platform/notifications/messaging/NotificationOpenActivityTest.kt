@@ -579,8 +579,8 @@ class NotificationOpenActivityTest {
         val manager = context.getSystemService(NotificationManager::class.java)
         var received = mutableListOf<NotificationResponse>()
         var ready = false
-        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) {
-            if (!ready) false else true.also { received += it }
+        val delivery = AndroidMessagingNotificationDelivery(context, backgroundScope) { response ->
+            if (!ready) false else true.also { received += response }
         }
         delivery.post(request("restart-retry").copy(threadIdentifier = null))
         val posted = manager.activeNotifications.single().notification

@@ -12,6 +12,7 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelMessage
@@ -165,10 +166,14 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     val deduplicationKey = if (localCandidate == null) {
         codecs.deduplicationKey.contentBased(wire.contactID, wire.channelIndex, wire.senderNodeName, timestamp, wire.text)
     } else null
-    val rxResult = lookupRxLogEntry(
-        dependencies, radioId, wire.channelIndex, timestamp, wire.senderKeyPrefix, wire.reportedPathLength,
-        if (wire.channelIndex != null) deduplicationKey else null,
-    )
+    val rxResult = if (localCandidate == null) {
+        lookupRxLogEntry(
+            dependencies, radioId, wire.channelIndex, timestamp, wire.senderKeyPrefix, wire.reportedPathLength,
+            if (wire.channelIndex != null) deduplicationKey else null,
+        )
+    } else {
+        RxLogLookupResult(null, wire.reportedPathLength, null, null, null, SnapshotList.empty())
+    }
 
     val hasSelfMention = selfNodeName.isNotEmpty() &&
         (resolvedKind is IncomingMessageKind.Direct || !SyncSwiftText.equal(wire.senderNodeName, selfNodeName)) &&

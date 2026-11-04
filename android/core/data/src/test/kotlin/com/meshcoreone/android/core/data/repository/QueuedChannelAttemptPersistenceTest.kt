@@ -2,6 +2,10 @@
 package com.meshcoreone.android.core.data.repository
 
 import androidx.room.Room
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmission
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmissionConflict
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmissionRejected
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.QueuedChannelAttemptRejected
@@ -48,6 +52,13 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
     ) {
         val failure = assertFailsWith<PersistenceStoreException> { action() }
         assertEquals(reason, assertIs<QueuedChannelAttemptRejected>(failure.cause).reason)
+    }
+
+    private suspend fun submissionRejection(
+        reason: ChannelSubmissionConflict, action: suspend () -> Unit,
+    ) {
+        val failure = assertFailsWith<PersistenceStoreException> { action() }
+        assertEquals(reason, assertIs<ChannelSubmissionRejected>(failure.cause).reason)
     }
 
     private suspend fun insertReadySibling(pending: PendingSendDTO) {
@@ -361,6 +372,159 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         assertEquals(MessageStatus.PENDING, assertNotNull(
             store.fetchMessage(EntityKey(RADIO_A, directMessage.id)),
         ).status)
+    }
+
+    @Test fun retainedAttemptIdentityBlocksMutationAndDeletionOfExistingDirectRow() = runTest {
+        val channelMessage = channelMessage()
+        val channelPending = queued(channelMessage)
+        seed(channelMessage, channelPending)
+        val key = attempt(channelPending)
+        store.beginQueuedChannelAttempt(key, assertNotNull(channelMessage.channelOccupantID), 20u)
+        store.settleQueuedChannelAttempt(key, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
+        store.retireDefinitelyUnsentQueuedChannelAttempt(key)
+        val retained = store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id))
+        assertEquals(listOf(key), retained.map { it.key })
+
+        val directMessage = message(text = "retained direct row", status = MessageStatus.FAILED)
+        store.saveMessage(directMessage)
+        val direct = pending(messageID = directMessage.id).copy(id = channelPending.id)
+        val directEntity = direct.toEntity()
+        db.pendingSends().insert(directEntity)
+        val status = assertNotNull(store.fetchMessage(EntityKey(RADIO_A, directMessage.id))).status
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.upsertPendingSend(direct.copy(messageText = "attempted overwrite"))
+        }
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.incrementPendingSendAttemptCount(EntityKey(RADIO_A, direct.messageID))
+        }
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.deletePendingSend(EntityKey(RADIO_A, direct.id))
+        }
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.deletePendingSendsForMessage(EntityKey(RADIO_A, direct.messageID))
+        }
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.replacePendingSendForRetry(direct.messageID, pending(messageID = direct.messageID))
+        }
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.deleteMessage(EntityKey(RADIO_A, direct.messageID))
+        }
+
+        assertEquals(directEntity, db.pendingSends().byId(RADIO_A.value, direct.id))
+        assertEquals(status, store.fetchMessage(EntityKey(RADIO_A, directMessage.id))?.status)
+        assertEquals(retained, store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id)))
+    }
+
+    @Test fun retainedAttemptIdentityKeepsDirectRowsOutOfOrphanAndLegacyPurges() = runTest {
+        val channelMessage = channelMessage()
+        val channelPending = queued(channelMessage)
+        seed(channelMessage, channelPending)
+        val key = attempt(channelPending)
+        store.beginQueuedChannelAttempt(key, assertNotNull(channelMessage.channelOccupantID), 21u)
+        store.settleQueuedChannelAttempt(key, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
+        store.retireDefinitelyUnsentQueuedChannelAttempt(key)
+
+        val directMessage = message(text = "orphan legacy direct row", status = MessageStatus.FAILED)
+        store.saveMessage(directMessage)
+        val direct = pending(messageID = directMessage.id, attempt = null).copy(id = channelPending.id)
+        val directEntity = direct.toEntity()
+        db.pendingSends().insert(directEntity)
+        val issueCount = issues.size
+
+        assertEquals(0L, store.purgeOrphanPendingSends())
+        assertEquals(0L, store.purgeLegacyAttemptCountRows())
+
+        assertEquals(directEntity, db.pendingSends().byId(RADIO_A.value, direct.id))
+        assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(RADIO_A, directMessage.id))?.status)
+        assertEquals(listOf(key), store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id)).map { it.key })
+        assertEquals(2, issues.size - issueCount)
+        assertTrue(issues.drop(issueCount).all {
+            assertIs<QueuedChannelAttemptRejected>(it.cause).reason ==
+                QueuedChannelAttemptConflict.RETAINED_SUBMISSION
+        })
+    }
+
+    @Test fun attemptHistoryIsRadioScopedForExistingDirectUpdateCountAndDelete() = runTest {
+        val channelMessage = channelMessage()
+        val channelPending = queued(channelMessage)
+        seed(channelMessage, channelPending)
+        val key = attempt(channelPending)
+        store.beginQueuedChannelAttempt(key, assertNotNull(channelMessage.channelOccupantID), 22u)
+        store.settleQueuedChannelAttempt(key, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
+        store.retireDefinitelyUnsentQueuedChannelAttempt(key)
+        val retained = store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id))
+
+        val directMessage = message(radio = RADIO_B, text = "other radio direct", status = MessageStatus.FAILED)
+        store.saveMessage(directMessage)
+        val direct = pending(RADIO_B, messageID = directMessage.id).copy(id = channelPending.id)
+        store.insertPendingSendAssigningSequence(direct)
+        val updated = direct.copy(messageText = "updated direct payload", sequence = 1)
+
+        store.upsertPendingSend(updated)
+        assertEquals(1L, store.incrementPendingSendAttemptCount(EntityKey(RADIO_B, direct.messageID)))
+        assertEquals(updated.copy(attemptCount = 1),
+            store.fetchPendingSendsForMessage(EntityKey(RADIO_B, direct.messageID)).single())
+        store.deletePendingSend(EntityKey(RADIO_B, direct.id))
+
+        assertTrue(store.fetchPendingSendsForMessage(EntityKey(RADIO_B, direct.messageID)).isEmpty())
+        assertEquals(retained, store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id)))
+    }
+
+    @Test fun globallyKeyedSubmissionReceiptBlocksCollidingDirectRowsAcrossRadios() = runTest {
+        val channelMessage = channelMessage()
+        val channelPending = queued(channelMessage)
+        store.saveMessage(channelMessage)
+        val envelope = ChannelMessageEnvelope(
+            channelMessage.id, 5u, false, channelMessage.text, channelMessage.timestamp,
+            "retained node", channelMessage.channelOccupantID,
+        )
+        val submission = ChannelSubmission(
+            channelPending.id,
+            ChannelHistoryScope(RADIO_A, 5u, assertNotNull(channelMessage.channelOccupantID)),
+            envelope,
+        )
+        val evidence = store.admitChannelSubmission(submission, AT)
+        store.upsertPendingSend(assertNotNull(evidence.pending))
+
+        val directMessage = message(radio = RADIO_B, text = "cross-radio direct", status = MessageStatus.FAILED)
+        store.saveMessage(directMessage)
+        val direct = pending(RADIO_B, messageID = directMessage.id, attempt = null).copy(id = channelPending.id)
+        val directEntity = direct.toEntity()
+        db.pendingSends().insert(directEntity)
+
+        submissionRejection(ChannelSubmissionConflict.IDENTITY_CONFLICT) {
+            store.upsertPendingSend(direct.copy(messageText = "attempted overwrite"))
+        }
+        submissionRejection(ChannelSubmissionConflict.IDENTITY_CONFLICT) {
+            store.incrementPendingSendAttemptCount(EntityKey(RADIO_B, direct.messageID))
+        }
+        submissionRejection(ChannelSubmissionConflict.IDENTITY_CONFLICT) {
+            store.deletePendingSend(EntityKey(RADIO_B, direct.id))
+        }
+        submissionRejection(ChannelSubmissionConflict.IDENTITY_CONFLICT) {
+            store.deletePendingSendsForMessage(EntityKey(RADIO_B, direct.messageID))
+        }
+        submissionRejection(ChannelSubmissionConflict.IDENTITY_CONFLICT) {
+            store.replacePendingSendForRetry(direct.messageID, pending(RADIO_B, messageID = direct.messageID))
+        }
+        submissionRejection(ChannelSubmissionConflict.IDENTITY_CONFLICT) {
+            store.deleteMessage(EntityKey(RADIO_B, direct.messageID))
+        }
+        val issueCount = issues.size
+        assertEquals(0L, store.purgeOrphanPendingSends())
+        assertEquals(0L, store.purgeLegacyAttemptCountRows())
+
+        assertEquals(directEntity, db.pendingSends().byId(RADIO_B.value, direct.id))
+        assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(RADIO_B, direct.messageID))?.status)
+        assertEquals(evidence, store.reconcileChannelSubmission(submission).let {
+            assertIs<ChannelSubmissionReconciliation.Known>(it).evidence
+        })
+        assertEquals(2, issues.size - issueCount)
+        assertTrue(issues.takeLast(2).all {
+            assertEquals(ChannelSubmissionConflict.IDENTITY_CONFLICT,
+                assertIs<ChannelSubmissionRejected>(it.cause).reason)
+        })
     }
 
     @Test fun directRetryCannotDeleteOrReclassifyUnknownSiblingRows() = runTest {

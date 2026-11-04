@@ -12,10 +12,13 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
     PendingSendPersisting, QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting, ChannelSubmissionPersisting {
     override suspend fun upsertPendingSend(dto: PendingSendDTO) = context.write("upsertPendingSend") {
         val existing = database.pendingSends().byId(dto.radioId.value, dto.id)
-        if (database.channelSubmissions().byId(dto.id) != null && existing == null) {
+        val candidate = dto.toEntity()
+        val receipt = database.channelSubmissions().byId(dto.id)
+        if (receipt != null &&
+            (existing == null || !existing.isChannel || !candidate.isChannel || receipt.radioId != dto.radioId.value)
+        ) {
             rejectSubmission(EntityKey(dto.radioId, dto.id), ChannelSubmissionConflict.IDENTITY_CONFLICT)
         }
-        val candidate = dto.toEntity()
         if (existing != null && existing.messageID != candidate.messageID) {
             reject(candidate, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
         }
@@ -25,6 +28,8 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         if (existing != null && PendingSendKind.fromRawValue(existing.kindRawValue) == null) {
             reject(existing, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
         }
+        if (candidate.isDirect) requireDirectPendingIdentityAvailable(candidate)
+        else if (existing?.isDirect == true) requireDirectPendingIdentityAvailable(existing)
         rejectConflictingSibling(candidate)
         if (existing != null && (existing.isChannel || candidate.isChannel)) {
             if (candidate.copy(
@@ -70,6 +75,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             if (previous.any { it.id == dto.id && it.isChannel }) {
                 reject(dto.toEntity(), QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
             }
+            previous.filter { it.isDirect }.forEach { requireDirectPendingIdentityAvailable(it) }
             val replacement = newSubmission(dto, replacing = previous.map { it.id }.toSet())
             database.pendingSends().deleteForMessage(dto.radioId.value, messageID)
             database.messages().setStatusUnlessDelivered(dto.radioId.value, messageID, MessageStatus.PENDING.rawValue)
@@ -102,13 +108,19 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         }.snapshot()
 
     override suspend fun deletePendingSend(key: EntityKey) = context.write("deletePendingSend") {
-        database.pendingSends().byId(key.radioId.value, key.id)?.let(::requireRemovable)
+        database.pendingSends().byId(key.radioId.value, key.id)?.let { row ->
+            requireRemovable(row)
+            if (row.isDirect) requireDirectPendingIdentityAvailable(row)
+        }
         if (database.pendingSends().delete(key.radioId.value, key.id) > 0) save()
     }
 
     override suspend fun deletePendingSendsForMessage(key: EntityKey) =
         context.write("deletePendingSendsForMessage") {
-            database.pendingSends().forMessage(key.radioId.value, key.id).forEach(::requireRemovable)
+            database.pendingSends().forMessage(key.radioId.value, key.id).forEach { row ->
+                requireRemovable(row)
+                if (row.isDirect) requireDirectPendingIdentityAvailable(row)
+            }
             if (database.pendingSends().deleteForMessage(key.radioId.value, key.id) > 0) save()
         }
 
@@ -205,6 +217,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             if (row.isChannel) {
                 requireReadyQueuedChannelSubmission(row, key.id)
             } else if (row.isDirect) {
+                requireDirectPendingIdentityAvailable(row)
                 rejectConflictingSibling(row)
             } else {
                 reject(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
@@ -256,7 +269,10 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
                 )
                 continue
             }
-            if (findConflictingSibling(row) != null) {
+            val identityFailure = directPendingIdentityFailure(row)
+            if (identityFailure != null) {
+                context.reporter.report("purgeOrphanPendingSends", identityFailure)
+            } else if (findConflictingSibling(row) != null) {
                 context.reporter.report(
                     "purgeOrphanPendingSends", rejection(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION),
                 )
@@ -279,7 +295,10 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
                 )
                 continue
             }
-            if (findConflictingSibling(row) != null) {
+            val identityFailure = directPendingIdentityFailure(row)
+            if (identityFailure != null) {
+                context.reporter.report("purgeLegacyAttemptCountRows", identityFailure)
+            } else if (findConflictingSibling(row) != null) {
                 context.reporter.report(
                     "purgeLegacyAttemptCountRows", rejection(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION),
                 )

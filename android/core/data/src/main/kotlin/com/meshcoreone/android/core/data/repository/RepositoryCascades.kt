@@ -5,17 +5,51 @@
 package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmissionConflict
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmissionRejected
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.QueuedChannelAttemptConflict
+import com.meshcoreone.android.core.contracts.domain.QueuedChannelAttemptRejected
 import com.meshcoreone.android.core.database.MessageEntity
+import com.meshcoreone.android.core.database.PendingSendEntity
+import com.meshcoreone.android.core.model.PendingSendKind
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
+
+internal suspend fun RepositoryTransaction.directPendingIdentityFailure(
+    row: PendingSendEntity,
+): PersistenceStoreException? {
+    if (row.kindRawValue != PendingSendKind.DM.rawValue) return null
+    val identity = EntityKey(RadioId(row.radioId), row.id)
+    if (database.queuedChannelAttempts().forPending(row.radioId, row.id).isNotEmpty()) {
+        return PersistenceStoreException(PersistenceStoreError.InvalidData,
+            QueuedChannelAttemptRejected(identity, QueuedChannelAttemptConflict.RETAINED_SUBMISSION))
+    }
+    if (database.channelSubmissions().byId(row.id) != null) {
+        return PersistenceStoreException(PersistenceStoreError.InvalidData,
+            ChannelSubmissionRejected(identity, ChannelSubmissionConflict.IDENTITY_CONFLICT))
+    }
+    return null
+}
+
+internal suspend fun RepositoryTransaction.requireDirectPendingIdentityAvailable(row: PendingSendEntity) {
+    directPendingIdentityFailure(row)?.let { throw it }
+}
 
 internal suspend fun RepositoryTransaction.deleteMessageDependents(
     radioId: RadioId,
     messages: List<MessageEntity>,
     reactionsByMessage: Boolean,
+    preserveConflictingPending: Boolean = true,
 ) {
     for (message in messages) {
+        if (preserveConflictingPending) {
+            database.pendingSends().forMessage(radioId.value, message.id)
+                .filter { it.kindRawValue == PendingSendKind.DM.rawValue }
+                .forEach { requireDirectPendingIdentityAvailable(it) }
+        }
         database.channelSubmissions().redactMessage(radioId.value, message.id)
         database.pendingSends().deleteForMessage(radioId.value, message.id)
         database.repeats().deleteForMessage(radioId.value, message.id)

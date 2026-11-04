@@ -312,6 +312,9 @@ internal class MessageRepository(
     }
 
     override suspend fun deleteMessage(key: EntityKey) = context.write("deleteMessage") {
+        database.pendingSends().forMessage(key.radioId.value, key.id)
+            .filter { it.kindRawValue == PendingSendKind.DM.rawValue }
+            .forEach { requireDirectPendingIdentityAvailable(it) }
         database.channelSubmissions().redactMessage(key.radioId.value, key.id)
         database.pendingSends().deleteForMessage(key.radioId.value, key.id)
         if (database.messages().byId(key.radioId.value, key.id) != null) {

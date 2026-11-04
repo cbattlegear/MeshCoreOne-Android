@@ -227,18 +227,19 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
         val mainLooper = Shadows.shadowOf(Looper.getMainLooper())
         val handler = Handler(Looper.getMainLooper())
         val ran = java.util.concurrent.atomic.AtomicBoolean(false)
+        val earlierRan = java.util.concurrent.atomic.AtomicBoolean(false)
         val callerIsMainLooperThread = Looper.myLooper() === Looper.getMainLooper()
         val futureTask = Runnable { ran.set(true) }
+        val earlierFutureTask = Runnable { earlierRan.set(true) }
         val deadline = System.nanoTime() + 5_000_000_000L
         try {
             compose.runOnUiThread {
                 assertTrue(handler.postDelayed(futureTask, 60_000L))
+                assertTrue(handler.postDelayed(earlierFutureTask, 30_000L))
             }
             val uptimeAfterPost = SystemClock.uptimeMillis()
-            assertTrue(
-                mainLooper.nextScheduledTaskTime.toMillis() >= uptimeAfterPost + 59_000L,
-                "The next Main message must remain future-dated; callerIsMainLooperThread=$callerIsMainLooperThread",
-            )
+            assertTrue(handler.hasCallbacks(futureTask), "The target task must be queued before pumping")
+            assertTrue(handler.hasCallbacks(earlierFutureTask), "The independent earlier task must also be queued")
             assertTrue(mainLooper.isIdle, "A future-dated message is not currently executable")
             pumpAvatarMainTasks("future Main task control", deadline, { "future task control" })
             assertEquals(
@@ -246,13 +247,15 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                 SystemClock.uptimeMillis(),
                 "Checking queue idleness must not advance virtual uptime; callerIsMainLooperThread=$callerIsMainLooperThread",
             )
+            assertTrue(handler.hasCallbacks(futureTask), "The specific target task must remain queued after pumping")
+            assertTrue(handler.hasCallbacks(earlierFutureTask), "Neither future task may be removed by pumping")
             assertFalse(ran.get(), "The avatar pump must not dispatch a future-dated task")
-            assertTrue(
-                mainLooper.nextScheduledTaskTime.toMillis() >= uptimeAfterPost + 59_000L,
-                "The future message must remain queued after pumping",
-            )
+            assertFalse(earlierRan.get(), "An unrelated earlier future-dated task must remain undispatched")
         } finally {
-            compose.runOnUiThread { handler.removeCallbacks(futureTask) }
+            compose.runOnUiThread {
+                handler.removeCallbacks(futureTask)
+                handler.removeCallbacks(earlierFutureTask)
+            }
         }
     }
 

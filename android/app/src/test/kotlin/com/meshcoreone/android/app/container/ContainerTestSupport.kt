@@ -275,7 +275,7 @@ internal object NoScanGateway : BleScanGateway {
 }
 
 /** Notification delivery that records posts and reports a denied permission (the WP-401 adapter is unmerged). */
-internal class RecordingDelivery : NotificationDeliveryPort {
+internal open class RecordingDelivery : NotificationDeliveryPort {
     val posted = mutableListOf<NotificationRequest>()
     var badge: Long = 0
     override suspend fun authorizationStatus(): NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED

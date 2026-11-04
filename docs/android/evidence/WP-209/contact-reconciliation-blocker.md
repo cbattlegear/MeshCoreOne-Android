@@ -165,10 +165,10 @@ open work; #553's safety improvement can be evaluated independently.
 
 ## Verification
 
-The new method is authored source evidence until its exact-candidate hosted
-test run completes. It is not a passing recovery control, Room recovery test
-or mounted-Compose test. No successful recovery, device or hardware result is
-claimed.
+The new method is an executed contract-level counterexample at the exact
+candidate identified below. It is not a successful recovery control, Room
+recovery test or mounted-Compose test. No successful recovery, device or
+hardware result is claimed.
 
 The supported local attempt
 `python tools/android-port/local/check.py --worktree --stages preflight`
@@ -208,3 +208,23 @@ counterexample. The producer's `522f9a2` supervises the test-owned serializer
 children while retaining the identity, disposition and completion assertions;
 the correction is integrated rather than duplicated here. This source
 correction still needs its own exact-candidate hosted result.
+
+### Executed counterexample
+
+Exact source candidate `5960ce2ee8728bcfcbbf3439eb4ef46410a025eb`,
+[run 41868989694, Android job 126711775868](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41868989694/job/126711775868),
+passed the Linux Android build. The original hosted log records
+`core/services`: 2,890 discovered, 2,890 run, 2,890 passed, zero failures,
+errors or skips, and explicitly lists
+`completeIdentifiedReplacementSnapshotsDoNotProveAnOldRadioWriteCannotStillApply()`
+among the executed methods. Thus the counterexample, including manual-refresh
+refusal and the later old-command mutation, actually executed successfully.
+The hosted controller/policy job also passed.
+
+At the last inspection the broader workflow was not complete: the Swift codec
+oracle was cancelled and the SwiftData oracle was queued. Neither is claimed
+as passing, and no full-workflow or merge verification is claimed. Those
+unrelated oracle outcomes do not replace or negate the completed Android
+job's actual method-discovery evidence. This final evidence update changes
+documentation only; the verified Kotlin bytes remain those of `5960ce2`.
+No second CI-result bundle was retained or revalidated.

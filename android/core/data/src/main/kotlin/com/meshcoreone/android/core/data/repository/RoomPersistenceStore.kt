@@ -28,6 +28,7 @@ class RoomPersistenceStore private constructor(
     private val messages: MessageRepository = MessageRepository(context, pending),
     private val diagnostics: DiagnosticRepository = DiagnosticRepository(context),
     private val metadata: MetadataRepository = MetadataRepository(context),
+    private val localDirect: LocalDirectContactRepository = LocalDirectContactRepository(context, discovered),
 ) : PersistenceStoreProtocol,
     DevicePersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     MessagePersisting by messages, ChannelHistoryPersisting by messages,
@@ -36,7 +37,7 @@ class RoomPersistenceStore private constructor(
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
     RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
     QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending,
-    ChannelSubmissionPersisting by pending {
+    ChannelSubmissionPersisting by pending, LocalDirectContactPersisting by localDirect {
     constructor(
         database: MeshCoreDatabase,
         scope: CoroutineScope,

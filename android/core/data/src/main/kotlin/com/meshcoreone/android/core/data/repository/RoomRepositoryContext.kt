@@ -131,6 +131,19 @@ internal class RoomRepositoryContext(
         identityScope.withChannelIdentityMutation { write(operation, flushBeforeRollback, block) }
     }
 
+    suspend fun <T> rosterWrite(
+        operation: String,
+        flushBeforeRollback: Boolean = false,
+        block: suspend RepositoryTransaction.() -> T,
+    ): T = LocalDirectRoster.mutate { write(operation, flushBeforeRollback, block) }
+
+    suspend fun <T> rosterChannelWrite(
+        operation: String,
+        block: suspend RepositoryTransaction.() -> T,
+    ): T = channelIdentityMutation.withChannelIdentityRestore {
+        LocalDirectRoster.mutate { write(operation, block = block) }
+    }
+
     suspend fun <T> channelOperation(block: suspend (ChannelIdentityWriteScope) -> T): T =
         channelIdentityMutation.withChannelOperationScope(block)
 
@@ -164,13 +177,13 @@ internal class RoomRepositoryContext(
         afterCommit: () -> Unit,
         block: suspend RepositoryTransaction.() -> T,
     ): T = channelIdentityMutation.withChannelIdentityRestore {
-        access("importBackupDatabase", writing = true) {
+        LocalDirectRoster.mutate { access("importBackupDatabase", writing = true) {
             mutex.withLock {
                 ensureOpen()
                 flushRxLocked()
                 val transaction = RepositoryTransaction(database, clock, pendingRx)
                 committedTransaction({}, returnCommittedOnCancellation = true) { transaction.block() }
-            }
+            } }
         }
     }.also { afterCommit() }
 

@@ -803,3 +803,43 @@ compiled, but its runner did not execute after the protocol failure. This run
 does not establish the contact regression assertions or overall candidate pass;
 the corrected successor requires fresh hosted verification. No CI-result bundle
 is retained; the original hosted job/log is authoritative.
+
+### Exact-dispatch settlement and reactive observation follow-up
+
+The safety follow-up is based on current main `e9b924752f085533a349eda07de4527eba40dc56`
+(the #556 merge), integrated without rewriting in merge commit `4f10a4daa`.
+It preserves #556's synchronous getter and adds the radio-scoped
+`observeContactWriteRecoveryState` flow. The getter and flow remain observations,
+not reconciliation authority; state is held by the process preference role and
+radio across service-graph replacement.
+
+Exact terminal acceptance plus successful local persistence/completion settles
+only that dispatch's recorded cancellation uncertainty. Rejection similarly
+settles only its exact receipt. The false marker is committed only after any
+pending true-marker recording succeeds, and in-memory provenance is cleared
+only after the false commit succeeds. Unanswered possibly-written exchanges,
+failed persistence, retained newer frames, concurrent or unattributed owners,
+and loaded markers without provenance remain fail-closed.
+
+Discriminating real-session controls cover late ACK through a held local tail,
+flow updates across graph replacement and independent collectors, exact successful
+settlement, failed local persistence, concurrent newer/unowned obligations,
+failed marker clear/retry, persisted markers and preference-read failure.
+Late rejection after cancellation emits a rejection-pending state then clears
+only after exact terminal settlement. The #556 control's final late-ACK assertion
+now expects `Clear` only after successful local completion and exact marker clear;
+its uncertainty-before-ACK assertion remains intact.
+
+A cancellation marker followed by a later `DEFINITELY_UNSENT` result for the
+same real serializer dispatch is unreachable: `RequestContext.cancelDispatch`
+records a one-use disposition, and `ChannelWriteDispatch.cancelled` only accepts
+the first value. If `beforeSend` ran, cancellation is permanently
+`MAY_HAVE_WRITTEN`; if it did not, the cancellation is immediately
+`DEFINITELY_UNSENT` and does not record that uncertainty. Existing real-session
+pre-send and serializer controls cover the latter case. No synthetic late-unsent
+transition is asserted.
+
+At this evidence revision the integrated source candidate is authored but has
+not been executed. Exact-head hosted CI and independent source review remain
+required; no local Gradle result or older-head check is a pass, and no duplicate
+CI-result bundle is retained.

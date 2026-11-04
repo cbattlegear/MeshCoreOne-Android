@@ -71,14 +71,14 @@ internal class ContactRepository(
     private suspend fun saveContactFrame(
         radioId: RadioId, frame: ContactFrame, preserveNewer: Boolean, expectedFrame: ContactFrame? = null,
     ): ContactSaveResult? =
-        context.write("saveContactFrame") {
+        context.rosterWrite("saveContactFrame") {
             val existing = database.contacts().forPublicKey(radioId.value, frame.publicKey).firstOrNull()
             val stored = existing?.toDTO()
             if (preserveNewer && stored != null &&
                 (stored.lastModified > frame.lastModified ||
                     (stored.lastModified == frame.lastModified && stored.toContactFrame() != expectedFrame &&
                         stored.toContactFrame() != frame))) {
-                return@write null
+                return@rosterWrite null
             }
             val dto = stored?.updating(frame) ?: ContactDTO.fromFrame(radioId, frame)
             database.contacts().upsert(dto.toEntity())
@@ -86,7 +86,7 @@ internal class ContactRepository(
             ContactSaveResult(dto.id, existing == null)
         }
 
-    override suspend fun saveContact(dto: ContactDTO) = context.write("saveContact") {
+    override suspend fun saveContact(dto: ContactDTO) = context.rosterWrite("saveContact") {
         val existing = database.contacts().byId(dto.radioId.value, dto.id)
         database.contacts().upsert(existing?.applying(dto) ?: dto.toEntity())
         save()
@@ -94,7 +94,7 @@ internal class ContactRepository(
 
     override suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long {
         if (frames.isEmpty()) return 0
-        return context.write("batchSaveContacts") {
+        return context.rosterWrite("batchSaveContacts") {
             val byKey = LinkedHashMap<Bytes, ContactEntity>()
             for (row in database.contacts().forRadio(radioId.value)) byKey.putIfAbsent(row.publicKey, row)
             for (frame in frames) {
@@ -109,7 +109,7 @@ internal class ContactRepository(
     }
 
     override suspend fun deleteContact(key: EntityKey) =
-        context.write("deleteContact", flushBeforeRollback = true) {
+        context.rosterWrite("deleteContact", flushBeforeRollback = true) {
             deleteContactMessages(key)
             database.contacts().delete(key.radioId.value, key.id)
             save()
@@ -121,7 +121,7 @@ internal class ContactRepository(
         skippingPublicKeys: () -> SnapshotSet<Bytes>,
     ): SnapshotList<UUID> {
         if (publicKeys.isEmpty()) return SnapshotList.empty()
-        return context.write("deleteContacts", flushBeforeRollback = true) {
+        return context.rosterWrite("deleteContacts", flushBeforeRollback = true) {
             val candidates = mutableListOf<Pair<ContactEntity, Bytes>>()
             for (publicKey in publicKeys) {
                 if (publicKey in skippingPublicKeys()) continue
@@ -140,14 +140,14 @@ internal class ContactRepository(
         }
     }
 
-    override suspend fun deleteContactIfUnreferenced(key: EntityKey) = context.guardedWrite(
+    override suspend fun deleteContactIfUnreferenced(key: EntityKey) = LocalDirectRoster.mutate { context.guardedWrite(
         "deleteContactIfUnreferenced", Unit,
         guard = { database.messages().countForContact(key.radioId.value, key.id) == 0L },
     ) {
         deleteContactMessages(key)
         database.contacts().delete(key.radioId.value, key.id)
         save()
-    }
+    } }
 
     override suspend fun adoptOrphanedDirectMessages(
         radioId: RadioId,
@@ -169,6 +169,7 @@ internal class ContactRepository(
             val unread = LinkedHashMap<UUID, Long>()
             val mentions = LinkedHashMap<UUID, Long>()
             for (message in database.messages().orphanedDirectMessages(radioId.value)) {
+                if (message.deduplicationKey?.startsWith(LOCAL_DIRECT_UNRESOLVED) == true) continue
                 if (message.directionRawValue != MessageDirection.INCOMING.rawValue) continue
                 val prefix = message.senderKeyPrefix ?: continue
                 if (prefix.isEmpty || RepositoryReactionPolicy.isDirectReaction(message.text)) continue

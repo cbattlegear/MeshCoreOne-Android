@@ -16,6 +16,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
@@ -1614,6 +1615,128 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun actualAppChatsContentOwnerRegistersAndSealsRealMessageLinkDeliveriesAcrossMountedAcceptance() = runTest {
+        for (windowWidth in listOf(390, 834)) for (acceptFirst in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = {
+                it.knownContacts += contactFrame(key(20), "Actual source conversation")
+                it.knownContacts += contactFrame(key(21), "Actual linked destination")
+            }
+            val consumerEnabled = mutableStateOf(false)
+            try {
+                connect(h)
+                val navigation = h.container.navigation
+                val feature = h.container.chatsFeature
+                val nodes = h.container.nodesFeature
+                val radio = assertNotNull(h.sessions.current).token.radioId
+                val source = assertNotNull(store.fetchContact(radio, key(20)))
+                val target = if (acceptFirst) key(21) else key(30)
+                val uri = nodes.uriCodec.exportContactUri("Actual body claim", target, ContactType.REPEATER)
+                val message = MessageDTO(
+                    radioId = radio, contactID = source.id, text = uri,
+                    timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.INCOMING,
+                )
+                store.saveMessage(message)
+                navigation.navigateToChat(source)
+                compose.runOnUiThread {
+                    width.value = windowWidth.dp
+                    host.get().setContent {
+                        Box(Modifier.width(width.value).height(1000.dp)) {
+                            MeshCoreTheme(motionScale = 0f) {
+                                NativeNavigationShell(
+                                    navigation, chats = if (consumerEnabled.value) feature else null, nodes = nodes,
+                                    content = { destination, navigate ->
+                                        if (destination is NavigationDestination.Chat ||
+                                            destination == NavigationDestination.Root(AppTab.CHATS)
+                                        ) {
+                                            AppChatsContent(feature, destination, navigation)
+                                        } else {
+                                            com.meshcoreone.android.feature.nodes.NodesEntry(
+                                                com.meshcoreone.android.core.contracts.FeatureRoute(
+                                                    com.meshcoreone.android.core.contracts.FeatureId.NODES,
+                                                ),
+                                                navigate, nodes,
+                                                (destination as? NavigationDestination.ContactDetail)?.let {
+                                                    com.meshcoreone.android.feature.nodes.NodesDestination.Detail(it.contact)
+                                                } ?: com.meshcoreone.android.feature.nodes.NodesDestination.List,
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                await(h) {
+                    compose.onAllNodesWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                val body = compose.onNode(
+                    hasAnyAncestor(hasTestTag("timeline-bubble:${message.id}")) and
+                        SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions),
+                    useUnmergedTree = true,
+                )
+                val action = body.fetchSemanticsNode().config[SemanticsActions.CustomActions].single()
+                compose.runOnIdle { assertTrue(action.action()) }
+                h.eventually("actual AppChatsContent router offers its body link") {
+                    navigation.pendingChatContactOffers().size == 1
+                }
+                val offer = navigation.pendingChatContactOffers().single()
+                assertEquals(target, offer.link.publicKey)
+                assertEquals(ContactType.REPEATER, offer.link.type)
+                assertEquals(radio, offer.target.radioId)
+                assertFalse(offer.mount.registrationSealed.get())
+                val terminal = backgroundScope.async { offer.receipt.awaitOutcome() }
+                h.settle()
+                assertFalse(terminal.isCompleted, "The actual source must offer, not navigate before shell acceptance")
+                assertEquals(ChatSelection.Direct(source), navigation.currentState.chatsSelectedRoute)
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(navigation.currentState.pendingContactDetail)
+
+                if (acceptFirst) {
+                    compose.runOnIdle { consumerEnabled.value = true }
+                    compose.waitForIdle()
+                    h.eventually("the real shell accepts and actual source disposes") {
+                        terminal.isCompleted && offer.mount.registrationSealed.get()
+                    }
+                    assertEquals(
+                        ContactLinkHandoffOutcome.Accepted(ContactLinkCompletion.Navigated), terminal.await(),
+                    )
+                    val saved = assertNotNull(store.fetchContact(radio, target))
+                    assertEquals(saved.id, navigation.state.value.selectedContact?.id)
+                    assertEquals(AppTab.NODES, navigation.state.value.selectedTab)
+                    compose.onAllNodesWithText(saved.displayName).onFirst().assertIsDisplayed()
+                    compose.onNodeWithTag("navigation-back").performClick()
+                    compose.waitForIdle()
+                    assertEquals(1, navigation.state.value.activeStack.size)
+                    assertEquals(
+                        ContactLinkHandoffOutcome.Accepted(ContactLinkCompletion.Navigated),
+                        offer.receipt.awaitOutcome(),
+                    )
+                } else {
+                    compose.onNodeWithTag("navigation-back").performClick()
+                    compose.waitForIdle()
+                    h.eventually("actual source disposal seals its unaccepted exact offer") {
+                        terminal.isCompleted && offer.mount.registrationSealed.get()
+                    }
+                    assertEquals(ContactLinkHandoffOutcome.Superseded, terminal.await())
+                    val afterDisposal = navigation.currentState
+                    compose.runOnIdle { consumerEnabled.value = true }
+                    compose.waitForIdle()
+                    h.settle()
+                    assertEquals(afterDisposal, navigation.currentState)
+                    assertNull(navigation.state.value.pendingContactLink)
+                    assertNull(navigation.state.value.pendingContactDetail)
+                    assertNull(store.fetchContact(radio, target))
+                }
+                assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+            } finally {
+                unmount()
+                h.container.close()
+            }
+        }
+    }
+
     @Test fun exactChatTerminalReceiptWaitsForEveryPublicationGateAndSurvivesConflatedNavigation() = runTest {
         for (acceptFirst in listOf(false, true)) {
             val h = ContainerHarness(this, store)
@@ -2090,8 +2213,14 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
             val externalEnvironment = ContainerDeepLinkEnvironment(h.container, navigation)
             val chatEnvironment = h.container.chatsFeature.list.links
-            assertEquals(currentGeneration, externalEnvironment.contactLinkGeneration)
-            assertEquals(currentGeneration, chatEnvironment.contactLinkGeneration)
+            val externalCapture = ContactLinkPublications().use {
+                externalEnvironment.captureContactLinkContext(key(20), it)
+            }
+            assertEquals(currentGeneration, assertIs<CapturedContactLinkContext>(externalCapture).lookup.generation)
+            val chatCapture = ContactLinkPublications().use {
+                chatEnvironment.captureContactLinkContext(key(20), it)
+            }
+            assertEquals(currentGeneration, assertIs<CapturedContactLinkContext>(chatCapture).lookup.generation)
             val savedUri = h.container.nodesFeature.uriCodec.exportContactUri("Saved claim", key(20), ContactType.ROOM)
             val external = async(Dispatchers.IO) { AppDeepLinkRouter(externalEnvironment).routeExternal(savedUri) }
             assertEquals(DeepLinkRouteOutcome.Navigated, external.await())

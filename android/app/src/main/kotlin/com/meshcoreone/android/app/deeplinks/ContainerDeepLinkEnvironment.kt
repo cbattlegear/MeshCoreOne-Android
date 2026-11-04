@@ -4,6 +4,8 @@ package com.meshcoreone.android.app.deeplinks
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
+import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
+import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.core.contracts.AppTab
@@ -11,8 +13,8 @@ import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
-import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 
 class ContainerDeepLinkEnvironment(
@@ -24,8 +26,6 @@ class ContainerDeepLinkEnvironment(
         set(value) = navigation.selectTab(value)
 
     override val currentRadioId: RadioId? get() = container.appState.currentRadioId
-    override val contactLinkGeneration get() = navigation.currentState.generation
-    override fun captureContactLinkSession(generation: Long) = container.captureContactLinkSession(generation)
     override val connectedDevicePublicKey: Bytes? get() = container.appState.connectedDevice?.publicKey
 
     override fun navigateToMap(latitude: Double, longitude: Double) = navigation.navigateToMap(latitude, longitude)
@@ -34,26 +34,24 @@ class ContainerDeepLinkEnvironment(
 
     override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact, selectChats: Boolean) =
         navigation.stageContactLink(
-            ContactLinkRequest(link.name, link.publicKey, link.contactType), currentRadioId, selectChats,
+            ContactLinkRequest(link.name, link.publicKey, link.contactType),
+            targetRadioId = currentRadioId, selectChats = selectChats,
         )
 
     override fun captureContactLinkContext(
         publicKey: Bytes, publications: ContactLinkPublications,
     ): ContactLinkContext = container.captureContactLinkContext(publicKey, publications)
 
-    override fun completeContactLookup(
-        context: ContactLinkContext, link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
-        selectChats: Boolean, publications: ContactLinkPublications,
-    ): ContactLinkCompletion = container.completeContactLookup(
-        context, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing, selectChats, publications,
-    )
+    override fun resolveContactLinkContext(context: ContactLinkContext, publicKey: Bytes): ContactLinkLookupResolution =
+        container.resolveContactLinkContext(context, publicKey)
 
-    override fun completeContactLookup(
-        link: MeshCoreDeepLink.Contact, existing: ContactDTO?, radioId: RadioId?, generation: Long,
-        isCurrentSession: () -> Boolean,
-    ) = navigation.completeContactLookup(
-        ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
-        radioId, generation, currentRadioId, isCurrentSession,
+    override fun completeResolvedContactLookup(
+        context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
+        link: MeshCoreDeepLink.Contact, existing: ContactDTO?,
+        selectChats: Boolean, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+    ): ContactLinkResolvedCompletion = container.completeResolvedContactLookup(
+        context, target, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing, selectChats, publications,
+        cancellation,
     )
 
     override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel, selectChats: Boolean) =

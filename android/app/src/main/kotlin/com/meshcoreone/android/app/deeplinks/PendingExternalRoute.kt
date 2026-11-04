@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.deeplinks
 
 import com.meshcoreone.android.core.model.SnapshotSet
 import com.meshcoreone.android.core.model.snapshotSet
+import com.meshcoreone.android.feature.chats.list.ContactLinkContext
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
@@ -42,6 +43,7 @@ class PendingExternalRoute(
     private var pending: Delivery? = null
     private var inFlight: Routing? = null
     private var attemptSequence = 0L
+    private var contactContext: ContactLinkContext? = null
     private val mutableLookupFailure = MutableStateFlow<LookupFailure?>(null)
     val lookupFailure: StateFlow<LookupFailure?> = mutableLookupFailure.asStateFlow()
 
@@ -56,6 +58,7 @@ class PendingExternalRoute(
         currentCoroutineContext().ensureActive()
         if (!matchesFailure(expectedDeliveryId, expectedAttempt)) return@withLock SubmitOutcome.Superseded
         pending = null
+        contactContext = null
         mutableLookupFailure.value = null
         rememberConsumed(expectedDeliveryId)
         SubmitOutcome.Cancelled
@@ -91,13 +94,14 @@ class PendingExternalRoute(
                     inFlight = null
                 }
                 pending = delivery
+                contactContext = null
                 mutableLookupFailure.value = null
             }
             if (becomeReady) ready = true
             val next = pending ?: return@coroutineScope SubmitOutcome.Staged
             if (!ready || inFlight != null) return@coroutineScope SubmitOutcome.Staged
             mutableLookupFailure.value = null
-            val guard = CommitGuard()
+            val guard = CommitGuard(contactContext)
             attemptSequence = Math.incrementExact(attemptSequence)
             val lookupFailure = AtomicReference<DeepLinkRouteOutcome.ContactLookupFailed?>(null)
             Routing(next, attemptSequence, guard, lookupFailure, async(guard, start = CoroutineStart.LAZY) {
@@ -118,6 +122,7 @@ class PendingExternalRoute(
                     SubmitOutcome.RetryableFailure(outcome)
                 } else {
                     pending = null
+                    contactContext = null
                     rememberConsumed(routing.delivery.id)
                     SubmitOutcome.Routed(outcome)
                 }
@@ -132,8 +137,13 @@ class PendingExternalRoute(
                 mutex.withLock {
                     if (inFlight === routing) {
                         if (routing.guard.wasCommitted()) {
-                            if (pending?.id == routing.delivery.id) pending = null
+                            if (pending?.id == routing.delivery.id) {
+                                pending = null
+                                contactContext = null
+                            }
                             rememberConsumed(routing.delivery.id)
+                        } else if (pending?.id == routing.delivery.id) {
+                            contactContext = routing.guard.contactLinkContext()
                         }
                         inFlight = null
                         routing.lookupFailure.get()?.let {
@@ -159,7 +169,9 @@ class PendingExternalRoute(
     }
 
     // The guard covers synchronous commits only, never a suspended lookup or the staging mutex.
-    internal class CommitGuard : AbstractCoroutineContextElement(Key) {
+    internal class CommitGuard(
+        private var contactContext: ContactLinkContext? = null,
+    ) : AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<CommitGuard>
         private var current = true
         private var committed = false
@@ -167,9 +179,15 @@ class PendingExternalRoute(
         fun invalidate() = synchronized(this) { current = false }
         fun recordCompletion() = synchronized(this) { committed = true }
         fun wasCommitted(): Boolean = synchronized(this) { committed }
+        fun contactLinkContext(): ContactLinkContext? = synchronized(this) { contactContext }
+        fun retainContactLinkContext(context: ContactLinkContext) = synchronized(this) {
+            if (!current) throw CancellationException("External link delivery superseded")
+            check(contactContext == null || contactContext === context) { "Contact lookup context cannot be replaced" }
+            contactContext = context
+        }
 
         fun commitOutcome(block: () -> DeepLinkRouteOutcome): DeepLinkRouteOutcome = commit {
-            block().also { committed = true }
+            block().also { if (it !is DeepLinkRouteOutcome.ContactLookupFailed) committed = true }
         }
 
         fun <T> commit(block: () -> T): T = synchronized(this) {

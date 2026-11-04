@@ -13,6 +13,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -90,6 +91,13 @@ internal fun rememberTraceCodeInputState(
 ): TraceCodeInputState {
     val saver = remember(holder) { traceCodeInputSaver(holder) }
     val entry = rememberSaveable(saver = saver) { TraceCodeInputState() }
+    DisposableEffect(entry, holder) {
+        val stopObserving = holder.observeHashModeActions {
+            entry.restoredHashMode = null
+            entry.restoringDraft = false
+        }
+        onDispose { stopObserving() }
+    }
     LaunchedEffect(entry, holder, connectionGeneration, radioId) {
         entry.connection = TraceCodeInputConnection(connectionGeneration, radioId)
         // Restore only saved screen state, never a lazy-item remount.
@@ -97,9 +105,11 @@ internal fun rememberTraceCodeInputState(
         if (entry.restoringDraft &&
             (entry.restoredHashMode == null || device != null && device.radioId == radioId)
         ) {
-            entry.restoredHashMode?.let(holder::restoreTraceHashMode)
-            entry.restoredHashMode = null
-            entry.restoringDraft = false
+            val restored = entry.restoredHashMode?.let { holder.restoreTraceHashMode(it, radioId) } ?: true
+            if (restored) {
+                entry.restoredHashMode = null
+                entry.restoringDraft = false
+            }
         }
     }
     return entry

@@ -13,10 +13,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableIntState
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -40,7 +43,9 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SavedTracePathDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Duration
 import java.util.UUID
@@ -60,6 +65,7 @@ import org.robolectric.Shadows
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowDialog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "en-rUS-w360dp-h900dp-mdpi")
@@ -493,6 +499,35 @@ class TraceCodeInputComposeTest {
         assertTrue(host.get().sender.sent.isEmpty())
     }
 
+    @Test fun disconnectBetweenSignalCheckAndRestorationRetainsTheSavedWidth() {
+        val fixture = changeDeviceAfterRestoreCheck(null)
+        val pendingMode = fixture.entry.restoredHashMode.takeIf { fixture.entry.restoringDraft }
+        assertEquals(1u.toUByte(), fixture.harness.state.traceHashMode ?: pendingMode)
+
+        host.get().runOnUiThread {
+            fixture.dependencies.device = device()
+            fixture.generation.intValue += 1
+        }
+        settle()
+        assertEquals(1u.toUByte(), fixture.harness.state.traceHashMode)
+    }
+
+    @Test fun switchingRadioBetweenSignalCheckAndRestorationWaitsForTheMatchingSignal() {
+        val next = device(radioId = RadioId(UUID.fromString("00000000-0000-0000-0000-0000000000b2")))
+        val fixture = changeDeviceAfterRestoreCheck(next)
+        assertTrue(fixture.entry.restoringDraft)
+        assertEquals(1u.toUByte(), fixture.entry.restoredHashMode)
+        assertNull(fixture.harness.state.traceHashMode)
+
+        host.get().runOnUiThread {
+            fixture.radioSignal.value = next.radioId
+            fixture.generation.intValue += 1
+        }
+        settle()
+        assertEquals(1u.toUByte(), fixture.harness.state.traceHashMode)
+        assertFalse(fixture.entry.restoringDraft)
+    }
+
     @Test fun reconnectReclassifiesAnUnchangedDraftWhenTheRadioDefaultWidthChanges() {
         host.get().mountTraceScreen()
         settle()
@@ -697,6 +732,35 @@ class TraceCodeInputComposeTest {
         assertTrue(restored.state.value.outboundPath.isEmpty())
     }
 
+    @Test fun choosingASavedPathFromTheMountedDialogSupersedesAPendingRestore() {
+        val radio = RadioId(UUID.fromString("00000000-0000-0000-0000-0000000000b2"))
+        val saved = savedPath(Bytes.of(0xAA, 0x00, 0x00, 0x00), hashSize = 4, radioId = radio)
+        selectSavedPathWhileSignalIsStale(saved)
+
+        host.get().runOnUiThread { host.get().publishActiveRadioSignal() }
+        settle()
+        assertEquals("AA00,BB00", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().contains("AA000000"))
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        scrollToIndex(47)
+        assertTrue(button("4 B").config[SemanticsProperties.Selected])
+        assertTrue(host.get().sender.sent.isEmpty())
+    }
+
+    @Test fun choosingAnEmptySavedPathFromTheMountedDialogSupersedesAPendingRestore() {
+        val radio = RadioId(UUID.fromString("00000000-0000-0000-0000-0000000000b2"))
+        selectSavedPathWhileSignalIsStale(savedPath(Bytes.EMPTY, radioId = radio))
+
+        host.get().runOnUiThread { host.get().publishActiveRadioSignal() }
+        settle()
+        assertEquals("AA00,BB00", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(texts().containsAll(listOf("Invalid format: AA00", "Invalid format: BB00")))
+        assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
+        scrollToIndex(47)
+        assertTrue(button("1 B").config[SemanticsProperties.Selected])
+        assertTrue(host.get().sender.sent.isEmpty())
+    }
+
     @Test fun disposingTheDisconnectedEntryCancelsItsPendingRestoration() {
         host.get().mountObservedEntry()
         settle()
@@ -717,6 +781,27 @@ class TraceCodeInputComposeTest {
         settle()
         assertNull(holder.state.value.traceHashMode)
         assertTrue(holder.state.value.outboundPath.isEmpty())
+    }
+
+    @Test fun disposingTheEntryUnregistersItsHashModeActionObserver() {
+        val harness = configured()
+        var mountedEntry: TraceCodeInputState? = null
+        content.setContent {
+            val entry = rememberTraceCodeInputState(harness.holder)
+            SideEffect { mountedEntry = entry }
+        }
+        settle()
+        val entry = assertNotNull(mountedEntry)
+        host.get().runOnUiThread { content.setContent { MaterialTheme {} } }
+        settle()
+        host.get().runOnUiThread {
+            entry.restoredHashMode = 1u
+            entry.restoringDraft = true
+            harness.holder.clearPath()
+        }
+        settle()
+        assertTrue(entry.restoringDraft)
+        assertEquals(1u.toUByte(), entry.restoredHashMode)
     }
 
     @Test fun recreatedAndDestroyedActivityDoesNotStarveTheNextMountedScreen() {
@@ -775,6 +860,70 @@ class TraceCodeInputComposeTest {
         assertTrue(host.get().sender.sent.isEmpty())
         scrollToIndex(48)
         assertTrue(button(mode).config[SemanticsProperties.Selected])
+    }
+
+    private data class RestoreRaceFixture(
+        val harness: TraceHarness,
+        val dependencies: FakeTraceDependencies,
+        val generation: MutableIntState,
+        val radioSignal: MutableState<RadioId?>,
+        val entry: TraceCodeInputState,
+    )
+
+    private fun changeDeviceAfterRestoreCheck(replacement: DeviceDTO?): RestoreRaceFixture {
+        val harness = TraceHarness()
+        val dependencies = FakeTraceDependencies().apply { device = device() }
+        val changingDependencies = object : TracePathFeatureDependencies by dependencies {
+            var changeAfterRead = false
+            override fun connectedDevice(): DeviceDTO? {
+                val observed = dependencies.device
+                if (changeAfterRead) {
+                    changeAfterRead = false
+                    dependencies.device = replacement
+                }
+                return observed
+            }
+        }
+        harness.holder.configure(changingDependencies)
+        val generation = mutableIntStateOf(1)
+        val radioSignal = mutableStateOf<RadioId?>(RADIO)
+        var savedEntry: TraceCodeInputState? = null
+        content.setContent {
+            val entry = rememberTraceCodeInputState(harness.holder, generation.intValue, radioSignal.value)
+            SideEffect { savedEntry = entry }
+        }
+        settle()
+        val entry = assertNotNull(savedEntry)
+        host.get().runOnUiThread {
+            entry.restoredHashMode = 1u
+            entry.restoringDraft = true
+            changingDependencies.changeAfterRead = true
+            generation.intValue += 1
+        }
+        settle()
+        assertFalse(changingDependencies.changeAfterRead)
+        assertEquals(replacement, dependencies.device)
+        return RestoreRaceFixture(harness, dependencies, generation, radioSignal, entry)
+    }
+
+    private fun selectSavedPathWhileSignalIsStale(saved: SavedTracePathDTO) {
+        host.get().mountTraceScreen()
+        settle()
+        click("Add Hop")
+        paste("AA00,BB00")
+        host.get().startDisconnectedOnRecreation()
+        host.recreate().visible()
+        host.windowFocusChanged(true)
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        host.get().runOnUiThread {
+            host.get().installSavedPath(saved)
+            host.get().reconnectWithStaleRadioSignal(saved.radioId, RADIO)
+        }
+        settle()
+        assertWaitingForConnection("AA00,BB00")
+        click("Saved")
+        click(saved.name)
     }
 
     private fun assertWaitingForConnection(draft: String) {
@@ -887,7 +1036,8 @@ class TraceCodeInputComposeTest {
             if (view is ViewGroup) repeat(view.childCount) { index -> find(view.getChildAt(index))?.let { return it } }
             return null
         }
-        return checkNotNull(find(content)) { "Production code-entry UI must be attached" }
+        val root = ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: content
+        return checkNotNull(find(root)) { "Production trace UI must be attached" }
     }
 }
 
@@ -988,6 +1138,10 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
 
     internal fun useEmptyDirectory() {
         dependencies.directory = FakeNodeDirectory()
+    }
+
+    internal fun installSavedPath(path: SavedTracePathDTO) {
+        dependencies.store = InMemoryTracePathStore { T0 }.apply { insert(path) }
     }
 
     private fun signaledRadioId(): RadioId? = signaledRadioOverride ?: dependencies.device?.radioId

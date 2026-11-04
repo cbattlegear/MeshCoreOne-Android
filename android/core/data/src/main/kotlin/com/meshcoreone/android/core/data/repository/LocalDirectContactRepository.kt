@@ -133,6 +133,9 @@ internal class LocalDirectContactRepository(
                 invalidData("Materialized contact key does not match the requested prefix")
             }
             val current = classify(radioId, prefix)
+            if (current is LocalDirectContactResolution.Unique && current.contact.publicKey != frame.publicKey) {
+                return@write LocalDirectContactResolution.Ambiguous
+            }
             if (current != LocalDirectContactResolution.NotFound) return@write current
             LocalDirectRoster.invalidate()
             val row = ContactDTO.fromFrame(radioId, frame).toEntity()

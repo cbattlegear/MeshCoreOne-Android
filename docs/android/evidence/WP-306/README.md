@@ -198,3 +198,37 @@ before the capital sharp-S test addition and is not attributed to WP-306
 behavior. Its Swift codec oracle was skipped. The new source candidate's
 exact-head hosted checks are required before claiming that vector's test
 execution. No Android API31/37 runtime evidence is established by host CI.
+
+### Instrumented production search fixture (source only)
+
+The local follow-up integrates main
+`c06e9950323ab09ca386fe730f783c6ebc8c3983` without changing the existing search
+implementation, JVM cases or oracle outputs. It adds
+`android/app/src/androidTest/kotlin/com/meshcoreone/android/app/chats/ConversationSearchParityTest.kt`
+using the existing App AndroidJUnitRunner and dependencies. Trusted admission
+for WP-306, operation `add-or-update-related-test`, returned
+`reviewed-support-test`; this is not a WP-306 primary-owned App path.
+The Kotlin-root guard restricts it to related test source and requires actual
+native-method evidence for instrumentation acceptance.
+
+`productionStandardContainsMatchesCapturedFoundationVectors` directly calls
+the production helper for 21 captured vectors plus the empty-query negative.
+`productionConversationFilteredMatchesCapturedVectorsAcrossEveryFilter`
+passes the same 21 nonempty-query vectors through the production consumer for
+all five filters. Its real ContactDTO, ChannelDTO and RemoteNodeSessionDTO rows
+are muted with zero unread counts; positive search must still return all three
+row types in their original order, including under UNREAD and category filters.
+Negative vectors must return no rows. The test does not copy comparator logic
+or mock the filtering consumer.
+
+The expected values retain the original WP-306 oracle and WP-311 `std` outputs,
+including partial/full expansion, capital sharp-S, Hangul, fullwidth digits and
+letters, dotless-i and ZWJ distinctions. No locale is inferred for `wp311_more`;
+the separately captured width/dotless-i vectors are stamped `en_US`.
+
+These are intended assertions, not test discovery or passing runtime results.
+No compilation, hosted dispatch, local Gradle or instrumented execution occurred
+for this local fixture. WP-503 still needs a trusted exact-source App-test
+runner/family binding and actual API31/37 execution of both methods. No
+WP-503 runner/selector or build configuration was changed, and no device or
+whole-WP acceptance is claimed.

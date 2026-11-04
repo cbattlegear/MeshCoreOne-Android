@@ -12,8 +12,9 @@ Its ordinary pre-send refusal successors `d0c544b9a2e9e2bb0d392fa49df4b3e3d2e9a9
 and `15f8eace6b22652b72af47de4f7f865528f031b2` are also integrated, at merge
 `df75dad`. The owner's final ordering, completion-callback ownership and typed
 test-fixture correction, `5bb53b017204424621d27ad3aedb2f7d16cdd089`, is integrated
-forward too. These preserve genuinely possibly-written outcomes and do not add
-a radio-execution barrier.
+forward too, followed by its test-owner supervision correction
+`522f9a28c1ed9c7a0cca7511059bbaaa7b342eb8`. These preserve genuinely
+possibly-written outcomes and do not add a radio-execution barrier.
 This investigation does not change that series's production behavior or the
 older recovery session's retained drafts.
 
@@ -195,3 +196,15 @@ Both diagnostics were superseded and cancellation was requested when the
 producer published further corrections. Neither is claimed as a passing test
 result. The final prerequisite integration requires validation of its own
 exact candidate.
+
+Candidate `8b7213637e1ae8946d85c9f468011f58156cc7c6`,
+[41866872988](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41866872988),
+executed controller/policy checks successfully. Its Android job
+`126703448994` discovered 4,926 protocol tests and failed two inherited
+`ChannelWriteDispatchTest` dynamic cases with their injected
+`IllegalStateException`s. `:core:services:compileTestKotlin` completed, but
+`:core:services:test` did not execute, so this run does not verify the new
+counterexample. The producer's `522f9a2` supervises the test-owned serializer
+children while retaining the identity, disposition and completion assertions;
+the correction is integrated rather than duplicated here. This source
+correction still needs its own exact-candidate hosted result.

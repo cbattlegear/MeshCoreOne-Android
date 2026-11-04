@@ -791,3 +791,15 @@ shared serializer's `MAY_HAVE_WRITTEN` send receipt, retaining typed error and
 pre-validation assertions. The removal-marker transport identity fixture uses
 the non-copyable injected IOException rather than relying on coroutine exception
 copy behavior. These are source-reviewed corrections, pending exact-head execution.
+
+Hosted run `41866671178` at `5bb53b017204424621d27ad3aedb2f7d16cdd089`
+passed controller/workflow policy but failed `:core:protocol:test`: 4,926 tests
+completed, two failed. Both new direct serializer failure controls leaked their
+injected `IllegalStateException` through the test-owned background job, rather
+than failing a disposition assertion. The controls now use `supervisorScope`,
+matching the production generation's supervised async ownership. Every original
+failure/disposition/callback assertion is retained. The services test source
+compiled, but its runner did not execute after the protocol failure. This run
+does not establish the contact regression assertions or overall candidate pass;
+the corrected successor requires fresh hosted verification. No CI-result bundle
+is retained; the original hosted job/log is authoritative.

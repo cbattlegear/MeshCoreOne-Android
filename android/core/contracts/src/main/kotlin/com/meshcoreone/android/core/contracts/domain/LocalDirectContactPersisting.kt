@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.ContactFrame
 import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
@@ -38,7 +39,7 @@ data class LocalDirectMessageSaveResult(
     val inserted: Boolean,
 )
 
-/** Durable local bookkeeping in the existing backup-compatible deduplication field, never RF proof. */
+/** Android-local bookkeeping; pinned iOS adoption can overwrite it. Never RF or dispatch proof. */
 enum class LocalDirectMessageProvenance {
     UNRESOLVED,
     LOCAL_CANDIDATE;

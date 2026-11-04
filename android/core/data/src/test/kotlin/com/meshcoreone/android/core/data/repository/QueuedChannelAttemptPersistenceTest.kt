@@ -1079,8 +1079,8 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
                 store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, original.id), row.id)
             }
             assertEquals(0L, store.fetchPendingSends(RADIO_A).single().attemptCount)
-            val unknown = queued(row)
-            other.upsertPendingSend(unknown)
+            val unknown = queued(row).copy(sequence = 2)
+            db.pendingSends().insert(unknown.toEntity())
             val before = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id))
             rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
                 store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, replacement.id), row.id)
@@ -1276,8 +1276,8 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         store.settleQueuedChannelAttempt(key, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
         val otherContext = RoomPersistenceStore(db, owner, clock)
         try {
-            val newer = queued(row)
-            otherContext.insertPendingSendAssigningSequence(newer)
+            val newer = queued(row).copy(sequence = 2)
+            db.pendingSends().insert(newer.toEntity())
             rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
                 store.retireDefinitelyUnsentQueuedChannelAttempt(key)
             }

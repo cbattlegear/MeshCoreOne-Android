@@ -712,3 +712,29 @@ the shared pre-generation dispatch accounting before serializer admission.
 `git diff --check` and `python .\tools\android-port\controller\validate.py`
 passed for the authored correction. These new assertions require fresh exact-head
 hosted execution and do not claim device acceptance or a production-device failure.
+
+### Queued removal definitely-unsent accounting
+
+The full-series review also found that removal cancellation always recorded
+uncertainty, including a removal queued behind an unrelated raw protocol exchange
+that never entered transport. An additive `removeContact` dispatch overload now
+uses the existing serialized dispatch fence. The real session supplies actual
+`DEFINITELY_UNSENT` versus `MAY_HAVE_WRITTEN` evidence; legacy roles retain unknown
+outcomes rather than claiming proof. The service skips recording only for
+proven-unsent failures. After transport entry or accepted local-tail failure it
+still records uncertainty. It never clears an existing epoch.
+
+The deterministic real-session regression first occupies the serializer with a
+raw Add, admits removal through the service mutation fence, cancels it while
+queued, then completes the raw exchange. No Remove command, local deletion,
+cleanup, event, notification or new marker occurs; replacement sync and a real
+acknowledged removal remain usable. A paired existing-epoch control injects a
+late uncertainty report while removal is queued and proves cancellation preserves
+that exact epoch/durable marker and replacement blocking. An entered-transport
+control observes `MAY_HAVE_WRITTEN` and retained recovery after cancellation.
+A legacy cancellation without dispatch proof still records uncertainty.
+
+The WP-209 deviation text now describes the actual fail-closed marked state:
+full/incremental sync refuses before fetch and there is no production
+`reconciled` caller. No count-based marker clearing was added. Fresh hosted
+execution and full-series independent review remain necessary.

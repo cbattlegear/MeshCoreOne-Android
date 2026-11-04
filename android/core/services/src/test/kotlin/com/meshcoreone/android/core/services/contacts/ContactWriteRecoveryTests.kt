@@ -16,6 +16,8 @@ import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.protocol.model.MeshContact
 import com.meshcoreone.android.core.protocol.parser.Parsers
+import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
+import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
 import com.meshcoreone.android.core.protocol.session.ContactSessionOps
 import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
@@ -185,6 +187,135 @@ class ContactWriteRecoveryTests {
             assertTrue(producer.needsContactWriteReconciliation(radioA))
             assertRecoveryRemainsBlocked(service(flags = flags))
             assertTrue(radio.writes.isEmpty())
+        }
+    }
+
+    @Test
+    fun queuedRemovalCancellationIsUnsentAndPreservesAnyEarlierEpoch() = runTest {
+        for (priorUncertainty in listOf(false, true)) {
+            withFixture {
+                val row = ContactDTO.fromFrame(radioA, frame(2, "Retained"))
+                store.seed(row)
+                val flags = PendingMarkerFlags()
+                val cleanup = ContactsRecordingCleanup()
+                val coordinator = ContactsFakeSyncCoordinator()
+                var observedDispatch: ChannelWriteDispatch? = null
+                val observedSession = object : ContactSessionOps by session {
+                    override suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+                        observedDispatch = dispatch
+                        session.removeContact(publicKey, dispatch)
+                    }
+                }
+                val producer = service(
+                    connection = observedSession, flags = flags, cleanup = cleanup, coordinator = coordinator,
+                )
+                val subscription = producer.events()
+                val events = async { subscription.events.toList() }
+                val blocking = async { session.addContact(frame(2, "Retained").toMeshContact()) }
+                runCurrent()
+                val removal = async { producer.removeContact(radioA, row.publicKey) }
+                runCurrent()
+                val dispatch = assertNotNull(observedDispatch, "Removal has entered the service mutation fence")
+                assertEquals(ChannelWriteCancellationDisposition.UNKNOWN, dispatch.cancellationDisposition)
+                assertTrue(radio.removeRequests.isEmpty())
+                // A late uncertainty report may arrive after removal admission; it must survive.
+                if (priorUncertainty) ContactWriteRecovery.require(flags, radioA)
+                val epoch = ContactWriteRecovery.snapshot(flags, radioA)
+                removal.cancelAndJoin()
+                assertTrue(removal.isCancelled)
+                assertEquals(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT, dispatch.cancellationDisposition)
+                radio.accept()
+                runCurrent()
+                blocking.await()
+                assertTrue(radio.removeRequests.isEmpty(), "Cancellation fences the queued removal permanently")
+                assertEquals(row, store.fetchContact(EntityKey(radioA, row.id)))
+                assertTrue(store.deletedContactIDs.isEmpty())
+                assertTrue(cleanup.invocations.isEmpty())
+                assertTrue(coordinator.notifications.isEmpty())
+                assertSame(epoch, ContactWriteRecovery.snapshot(flags, radioA))
+                val marker = "contactWriteReconciliation.${radioA.value}"
+                assertEquals(if (priorUncertainty) listOf(marker to true) else emptyList(), flags.attempts)
+                assertEquals(priorUncertainty, flags.durableView().bool(marker))
+                producer.finishEvents()
+                assertEquals(emptyList(), events.await())
+
+                session.stop()
+                val replacementRadio = radio.replacementView()
+                val replacement = service(newSession(replacementRadio), flags = flags)
+                if (priorUncertainty) {
+                    assertRecoveryRemainsBlocked(replacement)
+                    assertTrue(replacementRadio.contactRequests.isEmpty())
+                    assertSame(epoch, ContactWriteRecovery.snapshot(flags, radioA))
+                } else {
+                    assertEquals(1L, replacement.syncContacts(radioA).contactsReceived)
+                    replacement.removeContact(radioA, row.publicKey)
+                    assertEquals(1, replacementRadio.removeRequests.size)
+                    assertNull(store.fetchContact(radioA, row.publicKey))
+                    assertFalse(replacement.needsContactWriteReconciliation(radioA))
+                    assertTrue(flags.attempts.isEmpty())
+                }
+            }
+        }
+    }
+
+    @Test
+    fun removalCancellationAfterTransportEntryStillBlocksReplacement() = runTest {
+        withFixture {
+            val row = ContactDTO.fromFrame(radioA, frame(2, "Retained"))
+            store.seed(row)
+            val flags = PendingMarkerFlags()
+            val gate = HeldRadio.RemoveHold(CompletableDeferred(), CompletableDeferred())
+            radio.removeHold = gate
+            var observedDispatch: ChannelWriteDispatch? = null
+            val observedSession = object : ContactSessionOps by session {
+                override suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+                    observedDispatch = dispatch
+                    session.removeContact(publicKey, dispatch)
+                }
+            }
+            val producer = service(connection = observedSession, flags = flags)
+            val removal = async { producer.removeContact(radioA, row.publicKey) }
+            runCurrent()
+            assertTrue(gate.entered.isCompleted)
+            assertEquals(1, radio.removeRequests.size)
+            removal.cancelAndJoin()
+            runCurrent()
+            assertEquals(
+                ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN,
+                assertNotNull(observedDispatch).cancellationDisposition,
+            )
+            assertEquals(row, store.fetchContact(EntityKey(radioA, row.id)))
+            assertTrue(store.deletedContactIDs.isEmpty())
+            assertEquals(listOf("contactWriteReconciliation.${radioA.value}" to true), flags.attempts)
+            assertTrue(flags.durableView().bool("contactWriteReconciliation.${radioA.value}"))
+            session.stop()
+            val replacementRadio = radio.replacementView()
+            val replacement = service(newSession(replacementRadio), flags = flags)
+            assertRecoveryRemainsBlocked(replacement)
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                replacement.removeContact(radioA, row.publicKey)
+            }
+            assertTrue(replacementRadio.removeRequests.isEmpty())
+            assertTrue(replacementRadio.contactRequests.isEmpty())
+        }
+    }
+
+    @Test
+    fun legacyRemovalCancellationWithoutDispatchProofStillMarksRecovery() = runTest {
+        withFixture {
+            val row = ContactDTO.fromFrame(radioA, frame(2, "Retained"))
+            store.seed(row)
+            val failure = CancellationException("Legacy removal outcome unknown")
+            val legacy = ContactsFakeSession().apply { removeContactFailure = failure }
+            val flags = PendingMarkerFlags()
+            val producer = service(connection = legacy, flags = flags)
+            assertSame(failure, assertFailsWith<CancellationException> {
+                producer.removeContact(radioA, row.publicKey)
+            })
+            assertEquals(listOf(row.publicKey), legacy.removeContactPublicKeys)
+            assertEquals(row, store.fetchContact(EntityKey(radioA, row.id)))
+            assertEquals(listOf("contactWriteReconciliation.${radioA.value}" to true), flags.attempts)
+            assertRecoveryRemainsBlocked(service(flags = flags))
         }
     }
 

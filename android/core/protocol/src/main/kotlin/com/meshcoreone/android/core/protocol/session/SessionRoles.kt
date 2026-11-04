@@ -83,6 +83,11 @@ interface ContactSessionOps {
         }
     }
     suspend fun removeContact(publicKey: Bytes)
+    /** Legacy roles cannot prove a failed removal was unsent. */
+    suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        removeContact(publicKey)
+    }
     suspend fun resetPath(publicKey: Bytes)
     suspend fun sendPathDiscovery(destination: Bytes): MessageSentInfo
     suspend fun shareContact(publicKey: Bytes)

@@ -7,6 +7,7 @@ package com.meshcoreone.android.core.services.messaging
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.contracts.domain.errors.*
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
@@ -16,12 +17,15 @@ import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.protocol.model.MeshContact
+import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
 import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
+import com.meshcoreone.android.core.protocol.session.MessageWriteDispatch
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.math.pow
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -93,10 +97,13 @@ class MessageService(
     }
 
     private suspend fun <T> owned(operation: String, mutex: Mutex? = null, block: suspend () -> T): T {
+        val caller = currentCoroutineContext()
+        val receipts = (caller[NotificationActionReceipt] ?: EmptyCoroutineContext) +
+            (caller[PendingMessageCreation] ?: EmptyCoroutineContext)
         ownership.check(operation)
         val task = synchronized(lock) {
             if (ownership.closing) throw MessageServiceException(MessageServiceError.NotConnected)
-            ownership.scope.async(start = CoroutineStart.LAZY) {
+            ownership.scope.async(context = receipts, start = CoroutineStart.LAZY) {
                 suspend fun runOperation(): T {
                     ownership.check(operation)
                     return block()
@@ -351,17 +358,22 @@ class MessageService(
 
     internal suspend fun failMessageAndRethrow(failure: Exception, messageID: UUID, notify: Boolean = false): Nothing {
         // Complete only the already-persisted send's failure before teardown returns, never a successor's work.
+        val notificationReceipt = currentCoroutineContext()[NotificationActionReceipt]
         withContext(NonCancellable) {
             try {
-                mutation(messageID).withLock {
-                    if (pendingAck(messageID)?.acknowledgement == null) {
-                        ownership.checkPersistenceCompletion("failMessage")
-                        synchronized(lock) { pendingAcks.remove(messageID) }
-                        val changed = dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
-                        ownership.checkPersistenceCompletion("failMessage.saved")
-                        if (notify && changed) broadcastFailed(messageID)
-                        recovered("failPending.$messageID")
+                if (notificationReceipt == null) {
+                    mutation(messageID).withLock {
+                        if (pendingAck(messageID)?.acknowledgement == null) {
+                            ownership.checkPersistenceCompletion("failMessage")
+                            synchronized(lock) { pendingAcks.remove(messageID) }
+                            val changed = dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
+                            ownership.checkPersistenceCompletion("failMessage.saved")
+                            if (notify && changed) broadcastFailed(messageID)
+                            recovered("failPending.$messageID")
+                        }
                     }
+                } else if (notificationReceipt.state == NotificationActionReceipt.State.READY) {
+                    synchronized(lock) { pendingAcks.remove(messageID) }
                 }
             } catch (storage: PersistenceStoreException) {
                 remember("failMessage.$messageID", storage)
@@ -397,22 +409,98 @@ class MessageService(
         id = newID(), radioId = token.radioId, contactID = contact.id, text = text, timestamp = timestamp(),
         createdAt = clock.wallClock.instant(), textType = type, replyToID = replyToID,
     )
-    override suspend fun createPendingMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO {
-        ownership.check("createPendingMessage")
-        validate(text, contact)
-        val message = outgoing(text, contact, textType, replyToID)
-        dataStore.saveMessage(message)
-        ownership.check("createPendingMessage.saved")
-        dataStore.updateContactLastMessage(key(contact.id), message.date)
-        ownership.check("createPendingMessage.contact")
-        return message
+    private suspend fun savePendingCreation(message: MessageDTO) {
+        val receipt = currentCoroutineContext()[PendingMessageCreation]
+        receipt?.writing(message)
+        try {
+            dataStore.saveMessage(message)
+        } catch (failure: Exception) {
+            // The write has settled, but a thrown return does not prove rollback. Only read this
+            // operation's exact process-store key; no wire work or successor-generation mutation.
+            if (receipt != null) withContext(NonCancellable) {
+                try {
+                    val stored = dataStore.fetchMessage(key(message.id))
+                    when {
+                        stored == null -> receipt.settled(PendingMessageCreation.State.UNKNOWN)
+                        stored == message -> receipt.committed(stored)
+                        else -> {
+                            receipt.settled(PendingMessageCreation.State.UNKNOWN)
+                            remember("pendingCreation.${message.id}.identity",
+                                PersistenceStoreException(PersistenceStoreError.InvalidData))
+                        }
+                    }
+                } catch (readFailure: Exception) {
+                    receipt.settled(PendingMessageCreation.State.UNKNOWN)
+                    remember("pendingCreation.${message.id}.read", readFailure)
+                    if (failure !== readFailure) failure.addSuppressed(readFailure)
+                }
+            }
+            throw failure
+        }
+        if (receipt?.committed(message) == false) {
+            val failure = PersistenceStoreException(PersistenceStoreError.InvalidData)
+            remember("pendingCreation.${message.id}.identity", failure)
+            throw failure
+        }
     }
+
+    private suspend fun requireFreshNotificationAction(operation: String) {
+        val receipt = currentCoroutineContext()[NotificationActionReceipt] ?: return
+        if (receipt.state != NotificationActionReceipt.State.READY) {
+            throw MessageServiceException(
+                MessageServiceError.SendFailed("$operation cannot replay a consumed notification action"),
+            )
+        }
+    }
+
+    override suspend fun createPendingMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO =
+        owned("createPendingMessage", pendingOperations) {
+            validate(text, contact)
+            val message = outgoing(text, contact, textType, replyToID)
+            savePendingCreation(message)
+            ownership.check("createPendingMessage.saved")
+            dataStore.updateContactLastMessage(key(contact.id), message.date)
+            ownership.check("createPendingMessage.contact")
+            message
+        }
+
+    private suspend fun <T> notificationWire(block: suspend (MessageWriteDispatch?) -> T): T {
+        val receipt = currentCoroutineContext()[NotificationActionReceipt]
+        if (receipt == null) return block(null)
+        val dispatch = MessageWriteDispatch()
+        val ownsOutcome = receipt.state == NotificationActionReceipt.State.READY
+        if (ownsOutcome) receipt.wireStarted()
+        try {
+            val result = block(dispatch)
+            if (ownsOutcome) receipt.accepted()
+            return result
+        } catch (cancelled: CancellationException) {
+            if (ownsOutcome) {
+                if (dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                    receipt.wireNotDispatched()
+                } else {
+                    receipt.uncertain()
+                }
+            }
+            throw cancelled
+        } catch (rejected: MeshCoreException.DeviceError) {
+            if (ownsOutcome) receipt.wireRejected()
+            throw rejected
+        } catch (failure: Exception) {
+            if (ownsOutcome) receipt.uncertain()
+            throw failure
+        }
+    }
+
+    private suspend fun <T> inlineWire(block: suspend (MessageWriteDispatch?) -> T): T =
+        notificationWire(block)
 
     override suspend fun sendDirectMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO =
         owned("sendDirectMessage") {
+            requireFreshNotificationAction("sendDirectMessage")
             validate(text, contact)
             val message = outgoing(text, contact, textType, replyToID)
-            val info = sendBoundary(message.id, true) {
+            val (info, tracking, predicted) = sendBoundary(message.id, true) {
                 dataStore.saveMessage(message)
                 ownership.check("sendDirectMessage.saved")
                 checkIdentity("sendDirectMessage")
@@ -421,13 +509,17 @@ class MessageService(
                 val info = withPoolBackoff(3u) {
                     dmOperations.withLock {
                         checkIdentity("sendDirectMessage.wire")
-                        session.sendMessage(contact.publicKey, text, Instant.ofEpochSecond(message.timestamp.toLong()))
+                        inlineWire { dispatch ->
+                            val timestamp = Instant.ofEpochSecond(message.timestamp.toLong())
+                            if (dispatch == null) session.sendMessage(contact.publicKey, text, timestamp)
+                            else session.sendMessage(contact.publicKey, text, timestamp, dispatch = dispatch)
+                        }
                     }
                 }
-                ownership.check("sendDirectMessage.accepted")
-                if (pendingAck(message.id)?.receipt === tracking.receipt) mergeSentInfo(message.id, contact.id, predicted, info, 0u, null)
-                info
+                Triple(info, tracking, predicted)
             }
+            ownership.check("sendDirectMessage.accepted")
+            if (pendingAck(message.id)?.receipt === tracking.receipt) mergeSentInfo(message.id, contact.id, predicted, info, 0u, null)
             postDMSent(message.id, contact.id, info)
             fetchSaved(message.id)
         }
@@ -500,6 +592,7 @@ class MessageService(
         }
         try {
             return owned("queuedDirectMessage") {
+                requireFreshNotificationAction("queuedDirectMessage")
                 val row = fetchSaved(id)
                 if (row.contactID != contact.id || contact.radioId != token.radioId) throw MessageServiceException(MessageServiceError.ContactNotFound)
                 validate(row.text, contact)
@@ -598,7 +691,14 @@ class MessageService(
                     dmOperations.withLock {
                         checkIdentity("retryDirectMessage.wire")
                         if (unacknowledgedRetirement(claim)) null
-                        else completedDirect(claim) ?: session.sendMessage(contact.publicKey.prefix(6), text, Instant.ofEpochSecond(stamp.toLong()), attempt)
+                        else completedDirect(claim) ?: notificationWire { dispatch ->
+                            val timestamp = Instant.ofEpochSecond(stamp.toLong())
+                            if (dispatch == null) {
+                                session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt)
+                            } else {
+                                session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt, dispatch)
+                            }
+                        }
                     }
                 } ?: return null
                 synchronized(lock) { claim.lastSentInfo = info }
@@ -735,12 +835,13 @@ class MessageService(
             createdAt = clock.wallClock.instant(), textType = textType)
     }
 
-    override suspend fun createPendingChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO {
-        val dto = outgoingChannel(text, channelIndex, radioId, textType)
-        dataStore.saveMessage(dto)
-        ownership.check("createPendingChannel.saved")
-        return dto
-    }
+    override suspend fun createPendingChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO =
+        owned("createPendingChannel", pendingOperations) {
+            val dto = outgoingChannel(text, channelIndex, radioId, textType)
+            savePendingCreation(dto)
+            ownership.check("createPendingChannel.saved")
+            dto
+        }
 
     override suspend fun sendChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): ChannelSendReceipt =
         owned("sendChannelMessage", channelOperations) {
@@ -750,7 +851,11 @@ class MessageService(
                 ownership.check("sendChannelMessage.persisted")
                 withPoolBackoff(2u) {
                     checkIdentity("sendChannelMessage.wire")
-                    session.sendChannelMessage(channelIndex, text, Instant.ofEpochSecond(dto.timestamp.toLong()))
+                    inlineWire { dispatch ->
+                        val timestamp = Instant.ofEpochSecond(dto.timestamp.toLong())
+                        if (dispatch == null) session.sendChannelMessage(channelIndex, text, timestamp)
+                        else session.sendChannelMessage(channelIndex, text, timestamp, dispatch = dispatch)
+                    }
                 }
             }
             ownership.check("sendChannelMessage.accepted")

@@ -31,13 +31,14 @@ class MessagePollingService(
     scope: CoroutineScope,
     private val clock: SessionClock = SystemSessionClock(),
     reporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
-) : MessagePollingServiceProtocol, ChannelReceiveEnvelopePolling {
+) : MessagePollingServiceProtocol, ChannelReceiveEnvelopePolling, LocalDirectMessagePolling {
     private data class Delivery(
         val event: MeshEvent,
         val context: DeliveryContext,
         val channelEnvelope: ChannelReceiveEnvelope?,
         val matchesChannelOccurrence: Boolean,
         var failure: Exception? = null,
+        val occurrenceID: UUID = UUID.randomUUID(),
     ) {
         fun inContext(context: DeliveryContext): Delivery =
             copy(context = context, channelEnvelope = channelEnvelope?.copy(context = context))
@@ -52,6 +53,7 @@ class MessagePollingService(
     private val expectedEchoes = mutableMapOf<MeshEvent, Long>()
     private val expectedChannelEchoes = mutableMapOf<ChannelMessage, ArrayDeque<Delivery>>()
     private var contactHandler: (suspend (ContactMessage, ContactDTO?, DeliveryContext) -> Unit)? = null
+    private var localDirectHandler: (suspend (LocalDirectMessageEnvelope) -> Unit)? = null
     private var channelHandler: (suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit)? = null
     private var channelEnvelopeHandler: (suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit)? = null
     private var signedHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
@@ -75,7 +77,7 @@ class MessagePollingService(
     val pendingHandlerCount: Long get() = synchronized(lock) { handlerCount }
     val undeliveredCount: Int get() = synchronized(lock) { pending.size + parked.size }
     val hasMessageHandlersWired: Boolean get() = synchronized(lock) {
-        contactHandler != null || channelHandler != null || channelEnvelopeHandler != null ||
+        contactHandler != null || localDirectHandler != null || channelHandler != null || channelEnvelopeHandler != null ||
             signedHandler != null || cliHandler != null
     }
 
@@ -93,7 +95,12 @@ class MessagePollingService(
 
     override suspend fun setContactMessageHandler(handler: suspend (ContactMessage, ContactDTO?, DeliveryContext) -> Unit) {
         ownership.checkLifetime("setContactMessageHandler")
-        synchronized(lock) { contactHandler = handler }
+        synchronized(lock) { contactHandler = handler; localDirectHandler = null }
+    }
+    override suspend fun setLocalDirectMessageHandler(handler: suspend (LocalDirectMessageEnvelope) -> Unit) {
+        ownership.checkLifetime("setLocalDirectMessageHandler")
+        check(dataStore is LocalDirectContactPersisting) { "Local direct polling requires a typed persistence producer" }
+        synchronized(lock) { localDirectHandler = handler; contactHandler = null }
     }
     override suspend fun setChannelMessageHandler(handler: suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit) {
         ownership.checkLifetime("setChannelMessageHandler")
@@ -115,7 +122,7 @@ class MessagePollingService(
     }
     override suspend fun clearMessageHandlers() {
         synchronized(lock) {
-            contactHandler = null; channelHandler = null; channelEnvelopeHandler = null
+            contactHandler = null; localDirectHandler = null; channelHandler = null; channelEnvelopeHandler = null
             signedHandler = null; cliHandler = null
         }
     }
@@ -420,6 +427,19 @@ class MessagePollingService(
             try {
                 when (val event = delivery.event) {
                     is MeshEvent.ContactMessageReceived -> {
+                        val localHandler = synchronized(lock) {
+                            if (event.message.textType.toInt() !in 1..2) localDirectHandler else null
+                        }
+                        if (localHandler != null) {
+                            val producer = checkNotNull(dataStore as? LocalDirectContactPersisting)
+                            val resolution = producer.classifyLocalDirectContact(token.radioId, event.message.senderPublicKeyPrefix)
+                            checkPolling("dispatchLocalDirect.lookup")
+                            invokeConsumer {
+                                localHandler(LocalDirectMessageEnvelope(
+                                    delivery.occurrenceID, token, event.message, delivery.context, resolution,
+                                ))
+                            }
+                        } else {
                         val contact = dataStore.fetchContactByPrefix(token.radioId, event.message.senderPublicKeyPrefix)
                         checkPolling("dispatchContact.lookup")
                         val handler = synchronized(lock) {
@@ -431,6 +451,7 @@ class MessagePollingService(
                         } ?: throw MessagePollingException(MessagePollingError.PollingFailed,
                             IllegalStateException("Contact handler is not installed"))
                         invokeConsumer(handler)
+                        }
                     }
                     is MeshEvent.ChannelMessageReceived -> {
                         val channel = dataStore.fetchChannel(token.radioId, event.message.channelIndex)

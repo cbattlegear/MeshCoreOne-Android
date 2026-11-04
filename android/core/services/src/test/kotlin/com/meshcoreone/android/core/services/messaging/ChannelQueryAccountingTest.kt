@@ -768,7 +768,7 @@ class ChannelQueryAccountingTest {
             }
             if (channel) {
                 queue.enqueueChannel(ChannelMessageEnvelope(message.id, 0u, false,
-                    message.text, message.timestamp, "Test"))
+                    message.text, message.timestamp, "Test", requireNotNull(message.channelOccupantID)))
             } else {
                 queue.enqueueDM(DirectMessageEnvelope(message.id, CONTACT, false))
             }
@@ -885,7 +885,7 @@ class ChannelQueryAccountingTest {
             val channelIndex = message.channelIndex
             if (channelIndex != null) {
                 queue.enqueueChannel(ChannelMessageEnvelope(message.id, channelIndex, false,
-                    message.text, message.timestamp, "Test"))
+                    message.text, message.timestamp, "Test", requireNotNull(message.channelOccupantID)))
             } else {
                 queue.enqueueDM(DirectMessageEnvelope(message.id, CONTACT, false))
             }

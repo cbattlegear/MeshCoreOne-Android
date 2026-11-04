@@ -160,11 +160,15 @@ class TraceMapMountedConsumerTest {
         assertEquals(initialRevision, latest!!.cameraCommandRevision)
 
         compose.onNodeWithTag("trace-map:center-all").performClick()
+        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        compose.waitForIdle()
         compose.waitUntil(5_000) {
             latest?.camera != panned && latest!!.cameraCommandRevision > initialRevision
         }
         val firstFitRevision = latest!!.cameraCommandRevision
         compose.onNodeWithTag("trace-map:center-all").performClick()
+        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        compose.waitForIdle()
         compose.waitUntil(5_000) { latest!!.cameraCommandRevision > firstFitRevision }
     }
 

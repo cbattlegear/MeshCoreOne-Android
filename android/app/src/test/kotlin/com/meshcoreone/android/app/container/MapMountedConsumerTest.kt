@@ -291,6 +291,8 @@ class MapMountedConsumerTest {
         compose.runOnIdle {
             dependencies.value = initial.copy(dataSource = source { loads++; content() })
         }
+        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        compose.waitForIdle()
         compose.waitUntil(5_000) {
             loads == 2 && compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
         }

@@ -434,6 +434,104 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun noDeviceCompletionDoesNotFollowAFirstGraphThatAppearedAfterCapture() = runTest {
+        for (mounted in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            try {
+                val n = h.container.navigation
+                n.selectTab(AppTab.SETTINGS)
+                if (mounted) n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                val presented = n.publishedNavigation.value
+                val firstRun = if (mounted) null else n.captureFirstRunOnboarding(presented)
+                val mountedCompletion = if (mounted) {
+                    n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+                } else null
+                connect(h)
+                val graph = assertNotNull(h.sessions.current)
+                val before = n.currentState
+                val rejected = if (mounted) {
+                    n.completeMountedOnboarding(mountedCompletion, MountedOnboardingProducer.NoDevice)
+                } else {
+                    n.completeFirstRunOnboarding(firstRun, MountedOnboardingProducer.NoDevice)
+                }
+                assertFalse(rejected)
+                assertEquals(before, n.currentState)
+                val accepted = if (mounted) {
+                    n.completeMountedOnboarding(mountedCompletion, MountedOnboardingProducer.Preset(graph.token))
+                } else {
+                    n.completeFirstRunOnboarding(firstRun, MountedOnboardingProducer.Preset(graph.token))
+                }
+                assertTrue(accepted)
+                assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            } finally {
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun explicitNoDeviceCompletionAcceptsTheUnchangedCapturedGraph() = runTest {
+        for (mounted in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            try {
+                connect(h)
+                val n = h.container.navigation
+                n.selectTab(AppTab.SETTINGS)
+                if (mounted) n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                val presented = n.publishedNavigation.value
+                val accepted = if (mounted) {
+                    val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+                    n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice)
+                } else {
+                    val completion = n.captureFirstRunOnboarding(presented)
+                    n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice)
+                }
+                assertTrue(accepted)
+                assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            } finally {
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun firstRunDelayedProducerCannotNavigateAReplacementGraphAndFreshAttemptCanRecover() = runTest {
+        val deviceA = UUID(0, 1021)
+        val deviceB = UUID(0, 1022)
+        val h = ContainerHarness(
+            this, store,
+            identity = { target ->
+                if ((target as? ConnectionTarget.Bluetooth)?.deviceId == deviceA) key(7) else key(8)
+            },
+        )
+        try {
+            connect(h, h.target(deviceA))
+            val n = h.container.navigation
+            n.navigateToSetting(SettingsDetail.LANGUAGE)
+            val first = assertNotNull(h.sessions.current)
+            val original = assertNotNull(n.captureFirstRunOnboarding(n.publishedNavigation.value))
+            h.manager.disconnect()
+            h.settle()
+            connect(h, h.target(deviceB))
+            val replacement = assertNotNull(h.sessions.current)
+            assertNotSame(first, replacement)
+            assertNotEquals(first.token.radioId, replacement.token.radioId)
+            val current = n.currentState
+            val settings = current.stacks.getValue(AppTab.SETTINGS)
+            assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.Preset(first.token)))
+            assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.NoDevice))
+            assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.Preset(replacement.token)))
+            assertEquals(current, n.currentState)
+            n.retireFirstRunOnboarding(original)
+
+            val retry = assertNotNull(n.captureFirstRunOnboarding(n.publishedNavigation.value))
+            assertTrue(n.completeFirstRunOnboarding(retry, MountedOnboardingProducer.Preset(replacement.token)))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(settings, n.currentState.stacks.getValue(AppTab.SETTINGS))
+            assertEquals(replacement.token, n.currentState.boundSessionToken)
+        } finally {
+            h.container.close()
+        }
+    }
+
     @Test fun onboardingCompletionAcceptsActualFirstBindingBehindHeldPublication() = runTest {
         val h = ContainerHarness(this, store)
         val n = h.container.navigation
@@ -522,8 +620,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     val before = n.currentState
                     assertFalse(n.completeMountedOnboarding(offlineCompletion, MountedOnboardingProducer.Preset(first.token)))
                     assertEquals(before, n.currentState)
-                    val completion = if (afterBinding) offlineCompletion else n.captureMountedOnboarding(presented, entryId)
-                    assertNotNull(completion)
+                    val completion = assertNotNull(offlineCompletion)
                     if (afterBinding) {
                         h.eventually("the successor navigation binds") {
                             uiScheduler.runCurrent()

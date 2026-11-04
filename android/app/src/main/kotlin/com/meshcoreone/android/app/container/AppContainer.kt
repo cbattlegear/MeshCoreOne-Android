@@ -372,6 +372,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                 when {
                     !aligned -> false
                     producer is MountedOnboardingProducer.Preset && graph?.token != producer.token -> false
+                    producer == MountedOnboardingProducer.NoDevice && graph !== initiating -> false
                     graph == null -> initiating == null && token == null &&
                         (connectionManager.isNavigationLifecycleCurrent(lifecycle) ||
                             connectionManager.isOfflineNavigationLifecycleCurrent(lifecycle))

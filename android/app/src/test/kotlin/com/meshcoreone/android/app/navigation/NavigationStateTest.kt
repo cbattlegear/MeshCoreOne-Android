@@ -244,6 +244,128 @@ class NavigationStateTest {
         assertFalse(n.completeOnboardingForTest(presented, entry.id))
     }
 
+    @Test fun firstRunCompletionSelectsChatsWithoutPoppingTheHiddenStackAndRetiresEvenWhenUnchanged() {
+        for (alreadyChats in listOf(false, true)) {
+            val n = NavigationCoordinator()
+            n.installOnboardingSessionCapture { { true } }
+            if (alreadyChats) n.navigateToChat(contact) else n.navigateToSetting(SettingsDetail.LANGUAGE)
+            val presented = n.publishedNavigation.value
+            val hiddenStack = presented.value.activeStack
+            val completion = n.captureFirstRunOnboarding(presented)
+            assertNotNull(completion)
+
+            assertTrue(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(hiddenStack, n.currentState.stacks.getValue(presented.value.selectedTab))
+            assertEquals(presented.revision + (if (alreadyChats) 0L else 1L), n.publishedNavigation.value.revision)
+            val committed = n.currentState
+            assertFalse(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            assertEquals(committed, n.currentState)
+        }
+    }
+
+    @Test fun firstRunCompletionRejectsForeignAndReactivatedNavigationOwners() {
+        for (reactivate in listOf(false, true)) {
+            val n = NavigationCoordinator()
+            val foreign = NavigationCoordinator()
+            n.installOnboardingSessionCapture { { true } }
+            foreign.installOnboardingSessionCapture { { true } }
+            n.navigateToSetting(SettingsDetail.LANGUAGE)
+            foreign.navigateToSetting(SettingsDetail.LANGUAGE)
+            val presented = n.publishedNavigation.value
+            val completion = n.captureFirstRunOnboarding(presented)
+            assertNotNull(completion)
+            assertFalse(n.completeFirstRunOnboarding(null, MountedOnboardingProducer.NoDevice))
+            assertNull(foreign.captureFirstRunOnboarding(presented))
+            assertFalse(foreign.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            n.selectTab(AppTab.MAP)
+            if (reactivate) n.selectTab(AppTab.SETTINGS)
+            val current = n.currentState
+            assertFalse(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            assertFalse(n.reportFirstRunOnboardingFailure(completion))
+            assertEquals(current, n.currentState)
+        }
+    }
+
+    @Test fun firstRunCompletionChecksTheOriginalProducerInsideTheCommitBoundary() {
+        val first = SessionToken(ProcessEpoch(UUID(0, 86)), Generation(1), radio)
+        val second = first.copy(generation = Generation(2))
+        val n = NavigationCoordinator()
+        assertTrue(n.bindNotificationSession(radio, null, first))
+        n.selectTab(AppTab.SETTINGS)
+        var authority = first
+        n.installOnboardingSessionCapture { { it == MountedOnboardingProducer.Preset(authority) } }
+        val completion = n.captureFirstRunOnboarding(n.publishedNavigation.value)
+        assertNotNull(completion)
+        val before = n.currentState
+        n.installCommitBoundary { action -> authority = second; action() }
+
+        assertFalse(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.Preset(first)))
+        assertEquals(before, n.currentState)
+        n.installCommitBoundary { action -> authority = first; action() }
+        assertTrue(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.Preset(first)))
+        assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+    }
+
+    @Test fun firstRunRejectionRetainsAnOccupiedFailureAndRequiresANewAttemptAfterReporting() {
+        val n = NavigationCoordinator()
+        var valid = false
+        n.installOnboardingSessionCapture { { valid } }
+        n.selectTab(AppTab.SETTINGS)
+        val completion = n.captureFirstRunOnboarding(n.publishedNavigation.value)
+        assertNotNull(completion)
+        n.requestRoomAuthentication(room.copy(role = RemoteNodeRole.REPEATER))
+        val occupied = n.currentState
+        assertEquals(NavigationFailure.WrongTarget(NavigationTarget.ROOM), occupied.failure)
+        assertFalse(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+        assertFalse(n.reportFirstRunOnboardingFailure(completion))
+        assertEquals(occupied, n.currentState)
+
+        n.clearFailure()
+        assertTrue(n.reportFirstRunOnboardingFailure(completion))
+        assertTrue(n.currentState.failure is NavigationFailure.StaleOnboarding)
+        valid = true
+        assertFalse(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+        n.clearFailure()
+        val retry = n.captureFirstRunOnboarding(n.publishedNavigation.value)
+        assertNotNull(retry)
+        assertTrue(n.completeFirstRunOnboarding(retry, MountedOnboardingProducer.NoDevice))
+        assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+    }
+
+    @Test fun firstRunRetirementAndPublicationCannotReplayAnOldAttempt() {
+        val n = NavigationCoordinator()
+        n.installOnboardingSessionCapture { { true } }
+        n.selectTab(AppTab.SETTINGS)
+        val presented = n.publishedNavigation.value
+        val retired = n.captureFirstRunOnboarding(presented)
+        assertNotNull(retired)
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        var lateCompletion: Boolean? = null
+        n.installCommitBoundary { action ->
+            action()
+            if (lateCompletion == null) {
+                lateCompletion = false
+                lateCompletion = n.completeFirstRunOnboarding(retired, MountedOnboardingProducer.NoDevice)
+            }
+        }
+        try {
+            assertTrue(n.reportFirstRunOnboardingFailure(retired))
+            assertEquals(false, lateCompletion)
+            assertTrue(n.currentState.failure is NavigationFailure.StaleOnboarding)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertTrue(n.state.value.failure is NavigationFailure.StaleOnboarding)
+        n.clearFailure()
+        val cancelled = n.captureFirstRunOnboarding(n.publishedNavigation.value)
+        assertNotNull(cancelled)
+        n.retireFirstRunOnboarding(cancelled)
+        assertFalse(n.completeFirstRunOnboarding(cancelled, MountedOnboardingProducer.NoDevice))
+        assertFalse(n.reportFirstRunOnboardingFailure(cancelled))
+    }
+
     @Test fun onboardingCompletionKeepsBackCleanupAndExpandedToolsSelectionSemantics() {
         val chats = NavigationCoordinator()
         chats.navigateToChat(contact, message)

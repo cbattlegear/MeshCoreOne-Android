@@ -69,6 +69,10 @@ internal class MountedOnboardingCompletion internal constructor(
     }
 }
 
+internal class FirstRunOnboardingCompletion internal constructor(
+    internal val authority: MountedOnboardingCompletion,
+)
+
 class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private val mutableState = NavigationStateStore(initial)
     val state: StateFlow<NavigationState> = mutableState.state
@@ -106,10 +110,23 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         )
     }
 
+    internal fun captureFirstRunOnboarding(
+        presented: NavigationStateStore.PublishedSnapshot,
+    ): FirstRunOnboardingCompletion? {
+        if (!mutableState.owns(presented)) return null
+        val entry = presented.value.activeStack.last()
+        return FirstRunOnboardingCompletion(
+            MountedOnboardingCompletion(onboardingIdentity, presented, entry.id, onboardingSessionCapture(presented.value)),
+        )
+    }
+
     internal fun retireMountedOnboarding(completion: MountedOnboardingCompletion?) {
         if (completion == null || !completion.belongsTo(onboardingIdentity)) return
         commitBoundary { completion.retire(onboardingIdentity) }
     }
+
+    internal fun retireFirstRunOnboarding(completion: FirstRunOnboardingCompletion?) =
+        retireMountedOnboarding(completion?.authority)
 
     internal fun retireBinding(action: () -> Unit) = commitBoundary(action)
 
@@ -933,12 +950,22 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     internal fun completeMountedOnboarding(
         completion: MountedOnboardingCompletion?, producer: MountedOnboardingProducer,
+    ): Boolean = completeOnboarding(completion, producer, mounted = true)
+
+    internal fun completeFirstRunOnboarding(
+        completion: FirstRunOnboardingCompletion?, producer: MountedOnboardingProducer,
+    ): Boolean = completeOnboarding(completion?.authority, producer, mounted = false)
+
+    private fun completeOnboarding(
+        completion: MountedOnboardingCompletion?, producer: MountedOnboardingProducer, mounted: Boolean,
     ): Boolean {
         if (completion == null || !completion.belongsTo(onboardingIdentity)) return false
         val presented = completion.presented
         val source = presented.value
         val entry = source.activeStack.last()
-        if (entry.id != completion.entryId || entry.destination != NavigationDestination.Auxiliary(FeatureId.ONBOARDING)) {
+        if (entry.id != completion.entryId ||
+            mounted && entry.destination != NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+        ) {
             return false
         }
         fun sameSession(state: NavigationState): Boolean {
@@ -957,8 +984,11 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 !sameSession(current) ||
                 current.selectedTab != source.selectedTab || current.activeStack.last() != entry
             ) return false
-            val next = current.withRetainedStack(current.selectedTab, current.activeStack.dropLast(1))
-                .select(AppTab.CHATS)
+            val next = if (mounted) {
+                current.withRetainedStack(current.selectedTab, current.activeStack.dropLast(1)).select(AppTab.CHATS)
+            } else {
+                current.select(AppTab.CHATS)
+            }
             when (commitIfCurrent(
                 snapshot, next,
                 isCurrent = { sameSession(mutableState.value) && completion.isCurrent(onboardingIdentity, producer) },
@@ -971,7 +1001,13 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         }
     }
 
-    internal fun reportMountedOnboardingFailure(completion: MountedOnboardingCompletion?): Boolean {
+    internal fun reportMountedOnboardingFailure(completion: MountedOnboardingCompletion?): Boolean =
+        reportOnboardingFailure(completion)
+
+    internal fun reportFirstRunOnboardingFailure(completion: FirstRunOnboardingCompletion?): Boolean =
+        reportOnboardingFailure(completion?.authority)
+
+    private fun reportOnboardingFailure(completion: MountedOnboardingCompletion?): Boolean {
         if (completion == null || !completion.belongsTo(onboardingIdentity)) return false
         val source = completion.presented
         while (true) {

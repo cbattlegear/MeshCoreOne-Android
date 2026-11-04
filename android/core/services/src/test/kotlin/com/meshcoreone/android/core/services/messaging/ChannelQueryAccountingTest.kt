@@ -1007,7 +1007,8 @@ class ChannelQueryAccountingTest {
             runCurrent()
             val message = h.message(MessageStatus.PENDING, if (channel) 0u else null)
             if (channel) {
-                queue.enqueueChannel(ChannelMessageEnvelope(message.id, 0u, false, message.text, message.timestamp, "Test"))
+                queue.enqueueChannel(ChannelMessageEnvelope(message.id, 0u, false, message.text, message.timestamp,
+                    "Test", requireNotNull(message.channelOccupantID)))
             } else {
                 queue.enqueueDM(DirectMessageEnvelope(message.id, CONTACT, false))
             }

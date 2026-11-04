@@ -45,6 +45,27 @@ fun RemoteNodesEntry(
     onDismiss: () -> Unit = {},
     onJoinRoom: (RemoteNodeSessionDTO) -> Unit = {},
 ) {
+    CompositionLocalProvider(
+        LocalRemoteMapPreferences provides dependencies?.mapPreferences,
+        LocalRemoteMapUserLocation provides dependencies?.bestAvailableLocation,
+    ) {
+        RemoteNodesEntryContent(
+            route, onNavigate, dependencies, cliContent, mapSurface, launch, onDismiss, onJoinRoom,
+        )
+    }
+}
+
+@Composable
+private fun RemoteNodesEntryContent(
+    route: FeatureRoute,
+    onNavigate: (FeatureRoute) -> Unit,
+    dependencies: RemoteNodesUiDependencies? = null,
+    cliContent: RemoteNodeCliContent? = null,
+    mapSurface: RemoteNodesMapSurface = NativeRemoteNodesMapSurface,
+    launch: RemoteNodeLaunch? = null,
+    onDismiss: () -> Unit = {},
+    onJoinRoom: (RemoteNodeSessionDTO) -> Unit = {},
+) {
     if (dependencies == null) {
         ScaffoldFeatureContent(
             FeatureId.REMOTE_NODES, route,

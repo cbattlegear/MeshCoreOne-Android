@@ -37,7 +37,7 @@ fun AppContainer.createToolsFeatureDependencies(
     }
     val trace = object : TracePathFeatureDependencies {
         override fun connectedDevice() = appState.connectedDevice
-        override fun bestAvailableLocation(): com.meshcoreone.android.core.model.Coordinate? = null
+        override fun bestAvailableLocation() = this@createToolsFeatureDependencies.bestAvailableLocation
         override fun nodeDirectory() = directory
         override fun savedPaths() = sessions.current?.dataStore
         override fun traceSender(): TraceSender? = (sessions.current as? RadioSessionContainer)?.let { graph ->
@@ -73,5 +73,7 @@ fun AppContainer.createToolsFeatureDependencies(
         { appState.connectedDevice?.radioId },
         appState.servicesVersion,
         toolsDiagnostics,
+        mapPreferences,
+        appState.contactsVersion,
     )
 }

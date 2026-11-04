@@ -123,6 +123,7 @@ internal class ContainerHarness(
     regionStore: com.meshcoreone.android.app.state.RegionSelectionStore? = null,
     preferencesOverride: ProcessConnectionPreferences? = null,
     simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
+    phoneLocation: () -> com.meshcoreone.android.core.model.Coordinate? = { null },
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -184,6 +185,7 @@ internal class ContainerHarness(
             chatContent = chatContent,
             offlineMaps = offlineMaps,
             advertLocation = advertLocation,
+            phoneLocation = phoneLocation,
             themeService = themeService,
             regionStore = regionStore,
         ),

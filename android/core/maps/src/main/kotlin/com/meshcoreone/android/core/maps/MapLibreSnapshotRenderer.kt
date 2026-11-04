@@ -42,6 +42,17 @@ class MapLibreSnapshotRenderer(
                 .withLogo(false)
                 .withAttribution(true)
             val snapshotter = MapSnapshotter(appContext, options)
+            val appearance = MapLibreStyleAppearance(snapshotter::getLayer)
+            snapshotter.setObserver(object : MapSnapshotter.Observer {
+                override fun onDidFinishLoadingStyle() {
+                    appearance.apply(request.isDark)
+                }
+
+                override fun onStyleImageMissing(imageName: String) {
+                    Logger.getLogger("com.meshcoreone.android.MapSnapshot")
+                        .warning("MapLibre snapshot style image missing: $imageName")
+                }
+            })
             val finished = AtomicBoolean(false)
             continuation.invokeOnCancellation {
                 finished.set(true)

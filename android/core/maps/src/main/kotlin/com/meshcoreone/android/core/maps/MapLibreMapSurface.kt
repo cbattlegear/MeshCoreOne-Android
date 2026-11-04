@@ -18,7 +18,6 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.google.gson.JsonObject
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.camera.CameraPosition
@@ -29,15 +28,10 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression.get
 import org.maplibre.android.style.layers.CircleLayer
-import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.PropertyFactory.circleColor
 import org.maplibre.android.style.layers.PropertyFactory.circleRadius
 import org.maplibre.android.style.layers.PropertyFactory.circleStrokeColor
 import org.maplibre.android.style.layers.PropertyFactory.circleStrokeWidth
-import org.maplibre.android.style.layers.PropertyFactory.lineColor
-import org.maplibre.android.style.layers.PropertyFactory.lineOpacity
-import org.maplibre.android.style.layers.PropertyFactory.lineWidth
-import org.maplibre.android.style.layers.PropertyFactory.lineDasharray
 import org.maplibre.android.style.layers.PropertyFactory.textColor
 import org.maplibre.android.style.layers.PropertyFactory.textField
 import org.maplibre.android.style.layers.PropertyFactory.textHaloColor
@@ -51,8 +45,6 @@ import org.maplibre.android.style.sources.GeoJsonOptions
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
-import org.maplibre.geojson.LineString
-import org.maplibre.geojson.Point
 
 @Composable
 fun MapLibreMapSurface(
@@ -134,10 +126,12 @@ private class MapLibreSurfaceController(
     var callbacks = MapLibreSurfaceCallbacks(camera, marker)
     private var map: MapLibreMap? = null
     private var loadedStyle: Style? = null
+    private var styleAppearance: MapLibreStyleAppearance? = null
     private var pending: Triple<MapPresentationState, Boolean, Boolean>? = null
     private var pointsById = emptyMap<String, MapMarker>()
     private var lastReportedCamera: MapCamera? = null
     private var lastAppliedCamera: MapCamera? = null
+    private var lastAppliedCameraCommandRevision = Long.MIN_VALUE
     private var initialized = false
     private var destroyed = false
     private var projectionHandle: MapProjectionHandle? = null
@@ -179,6 +173,7 @@ private class MapLibreSurfaceController(
         projectionHandle = null
         map = null
         loadedStyle = null
+        styleAppearance = null
         mapView.onDestroy()
     }
 
@@ -271,18 +266,9 @@ private class MapLibreSurfaceController(
         )
         style.addLayer(
             CircleLayer(FIXED_LAYER, FIXED_SOURCE)
-                .withProperties(circleColor(get("color")), circleRadius(9f), circleStrokeColor(Color.WHITE), circleStrokeWidth(2f)),
+                .withProperties(circleColor(get("color")), circleRadius(get("radius")), circleStrokeColor(get("casing")), circleStrokeWidth(2f)),
         )
-        style.addLayer(
-            LineLayer(LINES_LAYER, LINES_SOURCE)
-                .withFilter(org.maplibre.android.style.expressions.Expression.neq(get("lineStyle"), org.maplibre.android.style.expressions.Expression.literal(MapLineStyle.TRACE_UNTRACED.name)))
-                .withProperties(lineColor(get("color")), lineWidth(3f), lineOpacity(get("opacity"))),
-        )
-        style.addLayer(
-            LineLayer(UNTRACED_LAYER, LINES_SOURCE)
-                .withFilter(org.maplibre.android.style.expressions.Expression.eq(get("lineStyle"), org.maplibre.android.style.expressions.Expression.literal(MapLineStyle.TRACE_UNTRACED.name)))
-                .withProperties(lineColor(get("color")), lineWidth(2f), lineDasharray(arrayOf(1.75f, 3.25f)), lineOpacity(get("opacity"))),
-        )
+        MapLineLayerSpecs.ordered.forEach { style.addLayer(mapLineLayer(it, LINES_SOURCE)) }
         style.addLayer(
             SymbolLayer(LABELS_LAYER, FIXED_SOURCE)
                 .withProperties(
@@ -320,6 +306,8 @@ private class MapLibreSurfaceController(
 
     private fun applyState(state: MapPresentationState, clusters: Boolean, labels: Boolean) {
         val style = loadedStyle ?: return
+        if (styleAppearance == null) styleAppearance = MapLibreStyleAppearance(style::getLayer)
+        styleAppearance?.apply(state.isDark)
         map?.uiSettings?.let {
             it.isScrollGesturesEnabled = state.isInteractive
             it.isZoomGesturesEnabled = state.isInteractive
@@ -330,13 +318,19 @@ private class MapLibreSurfaceController(
         val clustered = if (clusters) partition.clusterable else emptyList()
         val fixed = if (clusters) partition.fixed else state.points
         pointsById = state.points.associateBy { it.id.toString() }
-        style.getSourceAs<GeoJsonSource>(CLUSTERED_SOURCE)?.setGeoJson(FeatureCollection.fromFeatures(clustered.map(::pointFeature)))
-        style.getSourceAs<GeoJsonSource>(FIXED_SOURCE)?.setGeoJson(FeatureCollection.fromFeatures(fixed.map(::pointFeature)))
+        style.getSourceAs<GeoJsonSource>(CLUSTERED_SOURCE)?.setGeoJson(FeatureCollection.fromFeatures(clustered.map { mapMarkerFeature(it, state.isDark) }))
+        style.getSourceAs<GeoJsonSource>(FIXED_SOURCE)?.setGeoJson(FeatureCollection.fromFeatures(fixed.map { mapMarkerFeature(it, state.isDark) }))
         style.getSourceAs<GeoJsonSource>(LINES_SOURCE)?.setGeoJson(FeatureCollection.fromFeatures(state.lines.map(::lineFeature)))
         style.getLayerAs<SymbolLayer>(LABELS_LAYER)?.setProperties(textSize(if (labels) 12f else 0f))
         style.getLayerAs<SymbolLayer>(CLUSTER_LABELS_LAYER)?.setProperties(textSize(if (labels) 12f else 0f))
-        state.camera?.takeIf { it != lastReportedCamera && it != lastAppliedCamera }?.let { camera ->
+        state.camera?.takeIf {
+            shouldApplyMapCamera(
+                it, lastReportedCamera, lastAppliedCamera,
+                state.cameraCommandRevision, lastAppliedCameraCommandRevision,
+            )
+        }?.let { camera ->
                 lastAppliedCamera = camera
+                lastAppliedCameraCommandRevision = state.cameraCommandRevision
                 val pose = camera.pose
                 if (pose != null) {
                     map?.moveCamera(
@@ -363,47 +357,7 @@ private class MapLibreSurfaceController(
         }
     }
 
-    private fun pointFeature(marker: MapMarker): Feature {
-        val properties = JsonObject().apply {
-            addProperty("label", marker.label.orEmpty())
-            addProperty("color", marker.style.color)
-            addProperty("symbol", marker.symbolText)
-            addProperty("badgeText", marker.badgeText.orEmpty())
-            marker.hopIndex?.let { addProperty("hopIndex", it) }
-        }
-        return Feature.fromGeometry(
-            Point.fromLngLat(marker.position.longitude, marker.position.latitude),
-            properties,
-            marker.id.toString(),
-        )
-    }
-
-    private fun lineFeature(line: MapLine): Feature {
-        val properties = JsonObject().apply {
-            addProperty("color", line.style.color)
-            addProperty("opacity", line.opacity)
-            addProperty("lineStyle", line.style.name)
-        }
-        return Feature.fromGeometry(
-            LineString.fromLngLats(line.points.map { Point.fromLngLat(it.longitude, it.latitude) }),
-            properties,
-            line.id,
-        )
-    }
-
-    private val MapPinStyle.color: String
-        get() = when (this) {
-            MapPinStyle.CONTACT_CHAT -> "#1677FF"
-            MapPinStyle.CONTACT_REPEATER, MapPinStyle.REPEATER, MapPinStyle.REPEATER_HOP -> "#1B8A5A"
-            MapPinStyle.CONTACT_ROOM -> "#8A3FFC"
-            MapPinStyle.REPEATER_RING_BLUE -> "#2255A4"
-            MapPinStyle.REPEATER_RING_GREEN -> "#1B8A5A"
-            MapPinStyle.REPEATER_RING_WHITE -> "#6B7280"
-            MapPinStyle.POINT_A, MapPinStyle.POINT_B, MapPinStyle.CROSSHAIR -> "#D97706"
-            MapPinStyle.OBSTRUCTION -> "#B91C1C"
-            MapPinStyle.BADGE, MapPinStyle.DROPPED_PIN -> "#C2410C"
-            MapPinStyle.LOCATION_FIX, MapPinStyle.LOCATION_FIX_LATEST -> "#374151"
-        }
+    private fun lineFeature(line: MapLine): Feature = mapLineFeature(line, line.style.color)
 
     private val MapLineStyle.color: String
         get() = when (this) {
@@ -424,8 +378,6 @@ private class MapLibreSurfaceController(
         private const val POINTS_LAYER = "mesh-points"
         private const val CLUSTER_LABELS_LAYER = "mesh-cluster-labels"
         private const val FIXED_LAYER = "mesh-fixed-points"
-        private const val LINES_LAYER = "mesh-lines-layer"
-        private const val UNTRACED_LAYER = "mesh-untraced-lines"
         private const val LABELS_LAYER = "mesh-labels"
         private const val SYMBOLS_LAYER = "mesh-symbols"
         private const val FIXED_SYMBOLS_LAYER = "mesh-fixed-symbols"

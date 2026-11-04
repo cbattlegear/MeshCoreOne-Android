@@ -56,24 +56,61 @@ internal fun RemoteNodeStatusContent(
         if (map != null) {
             TextButton({ map = null }) { Text(stringResource(L.remoteNodesDone)) }
             if (map == "neighbors" && repeaterState != null) {
-                var filter by remember { mutableStateOf(MapFilterState()) }
-                val plotted = remember(repeaterState.neighbors, catalog, filter) {
-                    NeighborSNRMapBuilder.build(
-                        session, repeaterState.neighbors, catalog.contacts, catalog.discoveredNodes, null,
-                        filter, repeaterState.neighborKeyDisplayByteCount, locale,
+                RemoteMapPreferencesContent(com.meshcoreone.android.core.maps.MapFilterHost.NEIGHBOR_SNR) { preferences, save ->
+                    val storedFilter = preferences.filter
+                    val userLocation = LocalRemoteMapUserLocation.current
+                    val filter = MapFilterState(
+                        storedFilter.favoritesOnly, storedFilter.showDiscovered, storedFilter.showChat,
+                        storedFilter.showRepeater, storedFilter.showRoom,
                     )
-                }
-                RemoteToggle(
-                    com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.trustedContactsFavoritesOnly,
-                    filter.favoritesOnly, { filter = filter.copy(favoritesOnly = it) },
-                )
-                RemoteToggle(
-                    com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapCalloutDiscovered,
-                    filter.showDiscovered, { filter = filter.withShowDiscovered(it) }, !filter.favoritesOnly,
-                )
-                RemoteNodeMapContent(stringResource(L.remoteNodesStatusNeighborsMapTitle), plotted.points, plotted.lines, plotted.region, surface = mapSurface)
-                plotted.unplottable.forEach { item ->
-                    RemoteValue(item.displayName, remoteText(NeighborRows.snrText(item.neighbor.snr, locale)))
+                    val holder = remember(session, repeaterState.neighbors, catalog, repeaterState.neighborKeyDisplayByteCount, locale, userLocation) {
+                        NeighborSNRMapStateHolder(
+                            NeighborSNRMapInputs(
+                                session, repeaterState.neighbors, catalog.contacts, catalog.discoveredNodes,
+                                userLocation, repeaterState.neighborKeyDisplayByteCount,
+                            ), filter, locale,
+                        )
+                    }
+                    val neighborMap by holder.state.collectAsStateWithLifecycle()
+                    LaunchedEffect(holder) { holder.onAppear() }
+                    LaunchedEffect(holder, filter) { holder.onFilterChange(filter) }
+                    RemoteToggle(
+                        com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.trustedContactsFavoritesOnly,
+                        filter.favoritesOnly, { enabled ->
+                            save {
+                                updateFilter(com.meshcoreone.android.core.maps.MapFilterHost.NEIGHBOR_SNR) {
+                                    it.setFavoritesOnly(enabled)
+                                }
+                            }
+                        },
+                    )
+                    RemoteToggle(
+                        com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapCalloutDiscovered,
+                        filter.showDiscovered, { enabled ->
+                            save {
+                                updateFilter(com.meshcoreone.android.core.maps.MapFilterHost.NEIGHBOR_SNR) {
+                                    it.setShowDiscovered(enabled)
+                                }
+                            }
+                        }, !filter.favoritesOnly,
+                    )
+                    neighborMap.plotted?.let { plotted ->
+                        RemoteNodeMapContent(
+                            stringResource(L.remoteNodesStatusNeighborsMapTitle), plotted.points, plotted.lines,
+                            neighborMap.cameraRegion, surface = mapSurface,
+                            preferenceHost = com.meshcoreone.android.core.maps.MapFilterHost.NEIGHBOR_SNR,
+                            preserveCameraOnContentChange = true,
+                            onCameraChanged = { camera ->
+                                holder.onCameraRegionChange(CoordinateRegion(
+                                    com.meshcoreone.android.core.model.Coordinate(camera.center.latitude, camera.center.longitude),
+                                    camera.latitudeSpan, camera.longitudeSpan,
+                                ))
+                            },
+                        )
+                        plotted.unplottable.forEach { item ->
+                            RemoteValue(item.displayName, remoteText(NeighborRows.snrText(item.neighbor.snr, locale)))
+                        }
+                    }
                 }
             } else {
                 val fix = state.currentLocationFix

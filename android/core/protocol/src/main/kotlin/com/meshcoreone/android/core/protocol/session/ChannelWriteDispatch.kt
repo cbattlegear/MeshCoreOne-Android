@@ -16,7 +16,9 @@ enum class ChannelWriteCancellationDisposition {
  * DEFINITELY_UNSENT proves this attempt cannot dispatch later. No value proves an ACK,
  * rollback, persistence commit, or that a channel slot is free.
  */
-class ChannelWriteDispatch {
+class ChannelWriteDispatch(
+    private val onExchangeFinished: () -> Unit = {},
+) {
     private val claimed = AtomicBoolean(false)
     private val disposition = AtomicReference(ChannelWriteCancellationDisposition.UNKNOWN)
 
@@ -29,4 +31,6 @@ class ChannelWriteDispatch {
     internal fun cancelled(value: ChannelWriteCancellationDisposition) {
         disposition.compareAndSet(ChannelWriteCancellationDisposition.UNKNOWN, value)
     }
+
+    internal fun exchangeFinished() = onExchangeFinished()
 }

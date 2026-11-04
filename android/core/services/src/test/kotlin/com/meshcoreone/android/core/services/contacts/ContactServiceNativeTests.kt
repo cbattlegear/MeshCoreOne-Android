@@ -320,7 +320,7 @@ class ContactServiceNativeTests {
             assertEquals(emptyList(), events.events.toList())
         },
         contactsNative("removeContact deletes, cleans up, emits nodeDeleted and notifies; device NOT_FOUND maps to contactNotFound") {
-            val store = ContactsFakeStore()
+            val store = ContactsFakeStore(listOf(contactsDevice(radioId)))
             val contact = stored(0x22, "Bob").also(store::seed)
             val cleanup = ContactsRecordingCleanup()
             val coordinator = ContactsFakeSyncCoordinator()
@@ -339,21 +339,34 @@ class ContactServiceNativeTests {
             service.finishEvents()
             assertEquals(listOf<ContactServiceEvent>(ContactServiceEvent.NodeDeleted), events.events.toList())
         },
-        contactsNative("removeLocalContact runs delete, cleanup, nodeDeleted and contactsChanged even when the lookup fails") {
+        contactsNative("removeLocalContact propagates lookup failure without deletion, cleanup or success events; a verified retry succeeds") {
             val store = ContactsFakeStore(listOf(contactsDevice(radioId)))
             val contact = stored(0x33, "Carol").also(store::seed)
-            store.fetchContactByKeyFailure = IllegalStateException("lookup failed")
+            val lookupFailure = IllegalStateException("lookup failed")
+            store.fetchContactByKeyFailure = lookupFailure
             val cleanup = ContactsRecordingCleanup()
             val coordinator = ContactsFakeSyncCoordinator()
             val service = contactsService(store = store, syncCoordinator = coordinator, cleanupCoordinator = cleanup)
             val events = service.events()
 
-            service.removeLocalContact(EntityKey(radioId, contact.id), contact.publicKey)
+            assertSame(lookupFailure, assertFailsWith<IllegalStateException> {
+                service.removeLocalContact(EntityKey(radioId, contact.id), contact.publicKey)
+            })
             service.finishEvents()
+            assertEquals(contact, store.fetchContact(radioId, contact.publicKey))
+            assertTrue(store.deletedContactIDs.isEmpty())
+            assertTrue(cleanup.invocations.isEmpty())
+            assertTrue(coordinator.notifications.isEmpty())
+            assertEquals(emptyList(), events.events.toList())
 
+            store.fetchContactByKeyFailure = null
+            val retry = contactsService(store = store, syncCoordinator = coordinator, cleanupCoordinator = cleanup)
+            val retryEvents = retry.events()
+            retry.removeLocalContact(EntityKey(radioId, contact.id), contact.publicKey)
+            retry.finishEvents()
             assertEquals(listOf(contact.id), store.deletedContactIDs)
             assertEquals(listOf(ContactCleanupReason.DELETED), cleanup.invocations.map { it.reason })
-            assertEquals(listOf<ContactServiceEvent>(ContactServiceEvent.NodeDeleted), events.events.toList())
+            assertEquals(listOf<ContactServiceEvent>(ContactServiceEvent.NodeDeleted), retryEvents.events.toList())
             assertEquals(listOf("contactsChanged"), coordinator.notifications)
         },
         contactsNative("device error codes map to the Swift ContactServiceError cases per operation") {

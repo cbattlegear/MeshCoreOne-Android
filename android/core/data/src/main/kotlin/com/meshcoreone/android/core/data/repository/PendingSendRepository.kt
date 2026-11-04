@@ -16,6 +16,9 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             rejectSubmission(EntityKey(dto.radioId, dto.id), ChannelSubmissionConflict.IDENTITY_CONFLICT)
         }
         val candidate = dto.toEntity()
+        if (existing == null &&
+            database.queuedChannelAttempts().forPending(candidate.radioId, candidate.id).isNotEmpty()
+        ) reject(candidate, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
         if (existing != null && PendingSendKind.fromRawValue(existing.kindRawValue) == null) {
             reject(existing, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
         }

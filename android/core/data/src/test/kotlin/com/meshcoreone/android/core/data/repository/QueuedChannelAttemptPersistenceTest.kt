@@ -197,6 +197,46 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         assertEquals(listOf(updated), store.fetchPendingSends(RADIO_A))
     }
 
+    @Test fun explicitChannelUpsertPreservesUnknownDispatchStateAndCannotBeginOrBump() = runTest {
+        val row = channelMessage()
+        val explicit = queued(row).copy(sequence = 9)
+        store.saveMessage(row)
+
+        store.upsertPendingSend(explicit)
+
+        val stored = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single()
+        assertEquals(explicit, stored)
+        assertNull(stored.channelDispatchState)
+        rejection(QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION) {
+            store.incrementPendingSendAttemptCount(EntityKey(RADIO_A, row.id))
+        }
+        rejection(QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION) {
+            store.beginQueuedChannelAttempt(attempt(explicit), assertNotNull(row.channelOccupantID), 15u)
+        }
+        assertEquals(stored, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single())
+        assertTrue(store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, explicit.id)).isEmpty())
+    }
+
+    @Test fun explicitUpsertCannotReusePendingIdentityWithRetainedChannelAttempt() = runTest {
+        val row = channelMessage()
+        val original = queued(row)
+        seed(row, original)
+        val key = attempt(original)
+        store.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 16u)
+        store.settleQueuedChannelAttempt(key, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
+        store.retireDefinitelyUnsentQueuedChannelAttempt(key)
+        assertTrue(store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).isEmpty())
+        val retained = store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, original.id))
+        assertEquals(listOf(key), retained.map { it.key })
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.upsertPendingSend(original)
+        }
+
+        assertTrue(store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).isEmpty())
+        assertEquals(retained, store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, original.id)))
+    }
+
     @Test fun directRetryCannotDeleteOrReclassifyUnknownSiblingRows() = runTest {
         val row = channelMessage()
         val unknownDTO = pending(messageID = row.id, sequence = 1)

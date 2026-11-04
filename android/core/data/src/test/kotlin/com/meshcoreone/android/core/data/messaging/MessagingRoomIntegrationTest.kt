@@ -2380,6 +2380,71 @@ class MessagingRoomIntegrationTest {
         }
     }
 
+    @Test fun cancellingAPollObserverDoesNotCancelItsGenerationOwnedOccurrenceCommit() = runTest(scheduler) {
+        seed()
+        val before = assertNotNull(store.fetchContact(EntityKey(radio, contact.id)))
+        val g = RadioGeneration(124)
+        g.start()
+        g.signals.set(DeviceConnectionState.READY)
+        val adverts = candidateAdverts(g)
+        adverts.startEventMonitoring(radio)
+        runCurrent()
+        val p = g.poller()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val observed = mutableListOf<LocalDirectMessageEnvelope>()
+        val monitored = object : MessagePollingServiceProtocol by p, LocalDirectMessagePolling {
+            override suspend fun setLocalDirectMessageHandler(handler: suspend (LocalDirectMessageEnvelope) -> Unit) {
+                p.setLocalDirectMessageHandler { envelope ->
+                    observed += envelope
+                    handler(envelope)
+                }
+            }
+        }
+        val dependencies = candidateDependencies(p, adverts, beforeScope = {
+            entered.complete(Unit)
+            release.await()
+        }).copy(messagePollingService = monitored)
+        candidateCoordinator(g).wireLocalDirectCandidateForTest(dependencies, g.token)
+        p.startMessageEventMonitoring()
+        g.firmware.incomingMessages += incomingContactPacket("Original \uD83D\uDE80 observer cancellation")
+        val observer = async { p.pollAllMessages() }
+        try {
+            entered.await()
+            val original = observed.single()
+            observer.cancelAndJoin()
+            runCurrent()
+            assertTrue(observer.isCancelled)
+            assertEquals(1, p.undeliveredCount)
+            assertNull(store.fetchMessage(EntityKey(radio, original.occurrenceID)))
+            assertTrue(store.fetchUnprovedDirectMessages(radio).isEmpty())
+            assertTrue(g.firmware.incomingMessages.isEmpty())
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(0, p.undeliveredCount)
+            val saved = store.fetchUnprovedDirectMessages(radio).single()
+            assertEquals(original.occurrenceID, saved.occurrenceID)
+            assertEquals(original.message.text, saved.text)
+            assertEquals(42u, saved.wireTimestamp)
+            assertEquals(0L, p.pollAllMessages())
+            assertEquals(1, observed.size)
+            assertEquals(listOf(saved), store.fetchUnprovedDirectMessages(radio).toList())
+            withTimeout(1_000) {
+                val current = store.classifyLocalDirectContact(radio, target.prefix(6))
+                adverts.withPendingAdvertContactOperation(radio, target.prefix(6), current) {
+                    assertIs<LocalDirectContactResolution.Unique>(it.resolution)
+                }
+            }
+            assertEquals(before, store.fetchContact(EntityKey(radio, contact.id)))
+        } finally {
+            release.complete(Unit)
+            observer.cancelAndJoin()
+            adverts.stopEventMonitoring()
+            p.close()
+            g.stop()
+        }
+    }
+
     @Test fun realRoomDiscoveryEventNeverPostsTentativeOccurrenceAsAnAdoptedContactNotification() = runTest(scheduler) {
         seed()
         val marked = store.saveIncomingDirectMessage(

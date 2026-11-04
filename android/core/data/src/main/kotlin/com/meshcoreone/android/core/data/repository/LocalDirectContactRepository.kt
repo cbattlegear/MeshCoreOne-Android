@@ -91,6 +91,9 @@ internal class LocalDirectContactRepository(
                 val existing = database.messages().byId(radioId.value, dto.id)
                 if (existing != null) {
                     val old = existing.toDTO()
+                    if (LocalDirectMessageProvenance.of(old) == null) {
+                        invalidData("Incoming direct occurrence ID belongs to an unmarked message")
+                    }
                     if (old.direction != MessageDirection.INCOMING || old.channelIndex != null ||
                         old.text != dto.text || old.senderKeyPrefix != prefix ||
                         (old.senderTimestamp ?: old.timestamp) != (dto.senderTimestamp ?: dto.timestamp)

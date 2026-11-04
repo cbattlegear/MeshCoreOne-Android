@@ -110,7 +110,7 @@ internal class ContactRepository(
 
     override suspend fun deleteContact(key: EntityKey) =
         context.rosterWrite("deleteContact", flushBeforeRollback = true) {
-            deleteContactMessages(key)
+            deleteContactMessages(key, preserveLocalOccurrences = true)
             database.contacts().delete(key.radioId.value, key.id)
             save()
         }
@@ -131,7 +131,7 @@ internal class ContactRepository(
             val deleted = mutableListOf<UUID>()
             for ((row, publicKey) in candidates) {
                 if (publicKey in skippingPublicKeys()) continue
-                deleteContactMessages(EntityKey(radioId, row.id))
+                deleteContactMessages(EntityKey(radioId, row.id), preserveLocalOccurrences = true)
                 database.contacts().delete(radioId.value, row.id)
                 deleted += row.id
             }
@@ -144,7 +144,7 @@ internal class ContactRepository(
         "deleteContactIfUnreferenced", Unit,
         guard = { database.messages().countForContact(key.radioId.value, key.id) == 0L },
     ) {
-        deleteContactMessages(key)
+        deleteContactMessages(key, preserveLocalOccurrences = true)
         database.contacts().delete(key.radioId.value, key.id)
         save()
     } }

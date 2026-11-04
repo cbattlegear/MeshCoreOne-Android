@@ -150,9 +150,10 @@ class MessagingRoomIntegrationTest {
         sessionTimeout: Double = 2.0,
         channelQuery: MessagingChannelQuery = MessagingChannelQuery { null },
         queueConfig: ChatSendQueueConfig = ChatSendQueueConfig(),
+        radioId: RadioId = radio,
     ) {
         val scope = CoroutineScope(SupervisorJob(process.coroutineContext[Job]) + StandardTestDispatcher(scheduler))
-        val token = SessionToken(ProcessEpoch(UUID.fromString("CCCCCCCC-1111-2222-3333-444444444444")), Generation(number), radio)
+        val token = SessionToken(ProcessEpoch(UUID.fromString("CCCCCCCC-1111-2222-3333-444444444444")), Generation(number), radioId)
         val signals = RoomSignals(token)
         val firmware = RoomFirmware()
         val diagnostics = mutableListOf<MessagingDiagnostic>()
@@ -2141,6 +2142,7 @@ class MessagingRoomIntegrationTest {
     private suspend fun candidateDependencies(
         p: MessagePollingService,
         adverts: AdvertisementService,
+        observeSave: (MessageDTO) -> Unit = {},
         beforeScope: suspend () -> Unit = {},
     ): SyncDependencies {
         val port = object : SyncAdvertisementServicing by forbiddenCandidateCollaborator<SyncAdvertisementServicing>(),
@@ -2150,7 +2152,14 @@ class MessagingRoomIntegrationTest {
                 block: suspend (LocalDirectContactAdmission) -> T,
             ): T {
                 beforeScope()
-                return adverts.withPendingAdvertContactOperation(radioId, prefix, observed, block)
+                return adverts.withPendingAdvertContactOperation(radioId, prefix, observed) { admission ->
+                    block(object : LocalDirectContactAdmission by admission {
+                        override suspend fun saveIncomingDirectMessage(dto: MessageDTO): LocalDirectMessageSaveResult {
+                            observeSave(dto)
+                            return admission.saveIncomingDirectMessage(dto)
+                        }
+                    })
+                }
             }
         }
         return SyncDependencies(
@@ -2175,6 +2184,19 @@ class MessagingRoomIntegrationTest {
         )
     }
 
+    private fun candidateAdverts(g: RadioGeneration) =
+        AdvertisementService(g.session, g.session, store, g.scope, clock = object : AdvertisementClock {
+            override fun now() = clock.now
+            override suspend fun sleepUntil(deadline: Duration) { delay(deadline - now()) }
+            override fun wallNow() = clock.wallClock.instant()
+        })
+
+    private fun candidateCoordinator(g: RadioGeneration) = SyncCoordinator(g.scope, object : SyncClock {
+        override fun now() = clock.wallClock.instant()
+        override fun elapsed() = clock.now
+        override suspend fun sleep(duration: Duration) { delay(duration) }
+    })
+
     @Test fun realRoomPollerSyncRetainsCollisionsPendingAdvertsAndRosterInterleavings() = runTest(scheduler) {
         val collision = contact.copy(id = UUID.randomUUID(), publicKey = target.prefix(6) + Bytes(ByteArray(26) { 0x33 }))
         val scenarios = listOf("collision", "reversed", "shrink", "deleted", "added", "materialized", "pending", "two-pending", "unique")
@@ -2182,11 +2204,7 @@ class MessagingRoomIntegrationTest {
             val g = RadioGeneration(100L + index)
             g.start()
             g.signals.set(DeviceConnectionState.READY)
-            val adverts = AdvertisementService(g.session, g.session, store, g.scope, clock = object : AdvertisementClock {
-                override fun now() = clock.now
-                override suspend fun sleepUntil(deadline: Duration) { delay(deadline - now()) }
-                override fun wallNow() = clock.wallClock.instant()
-            })
+            val adverts = candidateAdverts(g)
             adverts.startEventMonitoring(radio)
             runCurrent()
             val p = g.poller()
@@ -2217,11 +2235,7 @@ class MessagingRoomIntegrationTest {
                     }
                 }
             }
-            val coordinator = SyncCoordinator(g.scope, object : SyncClock {
-                override fun now() = clock.wallClock.instant()
-                override fun elapsed() = clock.now
-                override suspend fun sleep(duration: Duration) { delay(duration) }
-            })
+            val coordinator = candidateCoordinator(g)
             coordinator.wireLocalDirectCandidateForTest(dependencies, g.token)
             p.startMessageEventMonitoring()
             val body = "Original \uD83D\uDE80 $scenario"
@@ -2254,6 +2268,114 @@ class MessagingRoomIntegrationTest {
                 g.stop()
                 store.deleteContact(EntityKey(radio, contact.id))
                 store.deleteContact(EntityKey(radio, collision.id))
+            }
+        }
+    }
+
+    @Test fun realRoomPollerSyncRollsBackFailedInsertAndRetriesTheOriginalOccurrenceOnce() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(120)
+        g.start()
+        g.signals.set(DeviceConnectionState.READY)
+        val adverts = candidateAdverts(g)
+        adverts.startEventMonitoring(radio)
+        runCurrent()
+        val p = g.poller()
+        val attempts = mutableListOf<MessageDTO>()
+        candidateCoordinator(g).wireLocalDirectCandidateForTest(
+            candidateDependencies(p, adverts, observeSave = { attempts += it }), g.token,
+        )
+        p.startMessageEventMonitoring()
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_local_occurrence AFTER INSERT ON messages " +
+                "BEGIN SELECT RAISE(FAIL, 'controlled local occurrence failure'); END",
+        )
+        try {
+            g.firmware.incomingMessages += incomingContactPacket("Original \uD83D\uDE80 retry")
+            assertFailsWith<PersistenceStoreException> { p.pollAllMessages() }
+            runCurrent()
+            val attempted = attempts.single()
+            assertEquals(1, p.undeliveredCount)
+            withTimeout(1_000) {
+                assertNull(store.fetchMessage(EntityKey(radio, attempted.id)))
+                assertTrue(store.fetchUnprovedDirectMessages(radio).isEmpty())
+                val current = store.classifyLocalDirectContact(radio, target.prefix(6))
+                adverts.withPendingAdvertContactOperation(radio, target.prefix(6), current) {
+                    assertIs<LocalDirectContactResolution.Unique>(it.resolution)
+                }
+            }
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_local_occurrence")
+        }
+        try {
+            assertEquals(0L, p.pollAllMessages(), "Retry drains the parked occurrence, not a second radio packet")
+            runCurrent()
+            assertEquals(2, attempts.size)
+            assertEquals(attempts.first().id, attempts.last().id)
+            val saved = store.fetchUnprovedDirectMessages(radio).single()
+            assertEquals(attempts.first().id, saved.occurrenceID)
+            assertEquals("Original \uD83D\uDE80 retry", saved.text)
+            assertEquals(42u, saved.wireTimestamp)
+            assertEquals(contact.id, assertNotNull(store.fetchMessage(EntityKey(radio, saved.occurrenceID))).contactID)
+            assertEquals(0, p.undeliveredCount)
+            assertEquals(0L, p.pollAllMessages())
+            assertEquals(2, attempts.size)
+            assertEquals(listOf(saved), store.fetchUnprovedDirectMessages(radio).toList())
+        } finally {
+            adverts.stopEventMonitoring()
+            p.close()
+            g.stop()
+        }
+    }
+
+    @Test fun realRoomPollerSyncIsolatesSamePrefixAndTimestampAcrossTwoRadios() = runTest(scheduler) {
+        seed()
+        val foreign = contact.copy(radioId = other)
+        store.saveContact(foreign)
+        store.saveContact(foreign.copy(id = UUID.randomUUID(),
+            publicKey = target.prefix(6) + Bytes(ByteArray(26) { 0x33 })))
+        val primary = RadioGeneration(121)
+        val secondary = RadioGeneration(122, radioId = other)
+        val body = "Original \uD83D\uDE80 same prefix and second"
+        var first: UnprovedDirectMessage? = null
+        for (g in listOf(primary, secondary)) {
+            g.start()
+            g.signals.set(DeviceConnectionState.READY)
+            val adverts = candidateAdverts(g)
+            adverts.startEventMonitoring(g.token.radioId)
+            runCurrent()
+            val p = g.poller()
+            candidateCoordinator(g).wireLocalDirectCandidateForTest(candidateDependencies(p, adverts), g.token)
+            p.startMessageEventMonitoring()
+            try {
+                g.firmware.incomingMessages += incomingContactPacket(body)
+                assertEquals(1L, p.pollAllMessages())
+                runCurrent()
+                val saved = store.fetchUnprovedDirectMessages(g.token.radioId).single()
+                val row = assertNotNull(store.fetchMessage(EntityKey(g.token.radioId, saved.occurrenceID)))
+                assertEquals(body, saved.text)
+                assertEquals(42u, saved.wireTimestamp)
+                assertEquals(g.token.radioId, saved.radioId)
+                assertEquals(target.prefix(6), row.senderKeyPrefix)
+                if (g === primary) {
+                    assertEquals(UnprovedDirectMessageProvenance.LOCAL_CANDIDATE, saved.provenance)
+                    assertEquals(contact.id, row.contactID)
+                    first = saved
+                    assertTrue(store.fetchUnprovedDirectMessages(other).isEmpty())
+                } else {
+                    assertEquals(UnprovedDirectMessageProvenance.UNRESOLVED, saved.provenance)
+                    assertNull(row.contactID)
+                    val original = assertNotNull(first)
+                    assertNotEquals(original.occurrenceID, saved.occurrenceID)
+                    assertEquals(listOf(original), store.fetchUnprovedDirectMessages(radio).toList())
+                    assertNull(store.fetchMessage(EntityKey(radio, saved.occurrenceID)))
+                    assertNull(store.fetchMessage(EntityKey(other, original.occurrenceID)))
+                }
+                assertEquals(0, p.undeliveredCount)
+            } finally {
+                adverts.stopEventMonitoring()
+                p.close()
+                g.stop()
             }
         }
     }

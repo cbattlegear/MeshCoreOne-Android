@@ -43,6 +43,7 @@ class ContactAvatarMediaTest {
         val entered = CompletableDeferred<Unit>()
         val released = CountDownLatch(1)
         val closes = AtomicInteger()
+        val cancellations = AtomicInteger()
         val stream = object : InputStream() {
             override fun read(): Int {
                 entered.complete(Unit)
@@ -62,12 +63,15 @@ class ContactAvatarMediaTest {
                 released.countDown()
             }
         }
-        val pending = launch { ContactAvatarMedia.readSelection { stream } }
+        val pending = launch {
+            ContactAvatarMedia.readSelection(cancelOpen = { cancellations.incrementAndGet() }) { stream }
+        }
         try {
             withTimeout(2_000) { entered.await() }
             withTimeout(2_000) { pending.cancelAndJoin() }
             assertTrue(pending.isCancelled)
             assertEquals(1, closes.get())
+            assertEquals(1, cancellations.get())
         } finally {
             released.countDown()
             pending.cancelAndJoin()
@@ -76,14 +80,16 @@ class ContactAvatarMediaTest {
 
     @Test fun successfulReadPreservesBytesAndClosesExactlyOnce() = runBlocking {
         val closes = AtomicInteger()
+        val cancellations = AtomicInteger()
         val bytes = byteArrayOf(1, 2, 3)
-        val result = ContactAvatarMedia.readSelection {
+        val result = ContactAvatarMedia.readSelection(cancelOpen = { cancellations.incrementAndGet() }) {
             object : ByteArrayInputStream(bytes) {
                 override fun close() { closes.incrementAndGet(); super.close() }
             }
         }
         assertContentEquals(bytes, result)
         assertEquals(1, closes.get())
+        assertEquals(0, cancellations.get())
     }
 
     @Test fun cancelledOpenClosesALateStreamBeforeReadingIt() = runBlocking {

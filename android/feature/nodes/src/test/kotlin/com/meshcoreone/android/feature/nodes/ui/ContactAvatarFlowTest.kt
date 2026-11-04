@@ -5,12 +5,19 @@ import android.app.Activity
 import android.app.Dialog
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.ContentProvider
+import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.ProviderInfo
 import android.content.res.Configuration
+import android.content.res.AssetFileDescriptor
+import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.ParcelFileDescriptor
 import android.view.Display
 import android.view.View
 import android.view.ViewGroup
@@ -40,7 +47,6 @@ import com.meshcoreone.android.feature.nodes.contacts.key
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.lang.reflect.InvocationTargetException
 import kotlin.coroutines.cancellation.CancellationException
@@ -52,14 +58,16 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Robolectric
-import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowDialog
 import org.robolectric.shadows.ShadowDisplayManager
+import org.robolectric.shadows.ShadowContentResolver
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
@@ -72,6 +80,7 @@ class ContactAvatarApi31FlowTest : ContactAvatarFlowTestBase()
 class ContactAvatarApi37FlowTest : ContactAvatarFlowTestBase()
 
 abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
+    @get:Rule val mediaFiles = TemporaryFolder()
     private val harness = Harness().connect()
     private val contact = Fixtures.contact(radioId = checkNotNull(harness.session.radioId), name = "Avatar target")
     private val selected = mutableStateOf(contact)
@@ -161,20 +170,24 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         advanceFrames()
     }
 
-    private fun revealCropNode(verticalInset: Float = 0f, find: () -> SemanticsNode?): SemanticsNode {
+    private fun revealDialogNode(
+        verticalInset: Float = 0f,
+        scrollTag: String = "avatar-crop-scroll",
+        find: () -> SemanticsNode?,
+    ): SemanticsNode {
         repeat(20) {
             advanceFrames()
             val node = assertNotNull(find())
             val scroll = allSemanticsNodes().single {
-                it.config.getOrElseNullable(SemanticsProperties.TestTag) { null } == "avatar-crop-scroll"
+                it.config.getOrElseNullable(SemanticsProperties.TestTag) { null } == scrollTag
             }
             val viewport = scroll.boundsInRoot
             val top = node.positionInRoot.y + verticalInset
             val bottom = node.positionInRoot.y + node.size.height - verticalInset
             if (top >= viewport.top - 1f && bottom <= viewport.bottom + 1f) {
                 assertTrue(node.boundsInRoot.height >= node.size.height - verticalInset * 2 - 1f,
-                    "The crop guide/control must not be clipped")
-                assertTrue(node.boundsInRoot.width >= node.size.width - 1f, "Crop control must not be clipped")
+                    "The dialog guide/control must not be clipped")
+                assertTrue(node.boundsInRoot.width >= node.size.width - 1f, "Dialog control must not be clipped")
                 return node
             }
             val distance = if (top < viewport.top) top - viewport.top else bottom - viewport.bottom
@@ -182,7 +195,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
                 assertTrue(assertNotNull(scroll.config[SemanticsActions.ScrollBy].action).invoke(0f, distance))
             }
         }
-        error("Crop element did not become fully visible: ${find()?.boundsInRoot}")
+        error("Dialog element did not become fully visible: ${find()?.boundsInRoot}")
     }
 
     private fun awaitAvatarState(
@@ -350,8 +363,31 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         }
     }
 
+    private fun registerMediaProvider(open: (CancellationSignal?) -> AssetFileDescriptor?) {
+        val provider = object : ContentProvider() {
+            override fun onCreate() = true
+            override fun getType(uri: Uri) = "image/png"
+            override fun openAssetFile(uri: Uri, mode: String, signal: CancellationSignal?) = open(signal)
+            override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
+                selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = error("No query expected")
+            override fun insert(uri: Uri, values: ContentValues?): Uri? = error("No insert expected")
+            override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?) = error("No delete expected")
+            override fun update(uri: Uri, values: ContentValues?, selection: String?,
+                selectionArgs: Array<out String>?) = error("No update expected")
+        }
+        provider.attachInfo(controller.get(), ProviderInfo().apply { authority = uri.authority })
+        ShadowContentResolver.registerProviderInternal(checkNotNull(uri.authority), provider)
+    }
+
+    private fun registerMedia(data: ByteArray) {
+        val file = mediaFiles.newFile().apply { writeBytes(data) }
+        registerMediaProvider {
+            AssetFileDescriptor(ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY), 0, file.length())
+        }
+    }
+
     private fun result(data: ByteArray? = png(), cancelled: Boolean = false) {
-        data?.let { Shadows.shadowOf(controller.get().contentResolver).registerInputStream(uri, ByteArrayInputStream(it)) }
+        data?.let(::registerMedia)
         controller.get().runOnUiThread {
             assertTrue(registry.dispatchResult(
                 assertNotNull(requestCode),
@@ -431,17 +467,12 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     }
 
     @Test
-    fun uncheckedProviderReadFailureIsVisibleAndDoesNotMutateTheContact() {
+    fun uncheckedProviderOpenFailureIsVisibleAndDoesNotMutateTheContact() {
         start()
         pick(file = true)
-        val closed = java.util.concurrent.atomic.AtomicBoolean()
-        Shadows.shadowOf(controller.get().contentResolver).registerInputStream(uri, object : java.io.InputStream() {
-            override fun read(): Int = throw IllegalArgumentException("Provider unavailable")
-            override fun close() { closed.set(true) }
-        })
+        registerMediaProvider { throw IllegalArgumentException("Provider unavailable") }
         result(data = null)
         awaitText(controller.get().getString(C.contactsDetailAvatarInvalidImage))
-        assertTrue(closed.get())
         assertTrue(harness.contactService.avatars.isEmpty())
         assertNull(harness.store.contacts.single().avatarImageData)
         action(C.contactsCommonOk)
@@ -450,40 +481,95 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     }
 
     @Test
-    fun leavingContactDuringAStalledProviderReadClosesTheStreamWithoutMutation() {
+    fun shortLargeFontSourceChooserKeepsPhotoFileRemoveAndCancelReachable() {
+        val original = com.meshcoreone.android.core.protocol.bytes.Bytes(png())
+        start(contact.withAvatar(original))
+        for (resource in listOf(C.contactsDetailAvatarChoosePhoto, C.contactsDetailAvatarChooseFile,
+            C.contactsCommonCancel, C.contactsDetailAvatarRemovePhoto)) {
+            action(C.contactsDetailAvatarChooseSource)
+            controller.get().runOnUiThread { testFontScale.value = 2f }
+            resizeHost(360, 220)
+            for (choice in listOf(C.contactsDetailAvatarChoosePhoto, C.contactsDetailAvatarChooseFile,
+                C.contactsDetailAvatarRemovePhoto, C.contactsCommonCancel)) {
+                val control = revealDialogNode(scrollTag = "contact-avatar-sources") {
+                    actionNode(controller.get().getString(choice))
+                }
+                assertTrue(control.size.width >= 48 && control.size.height >= 48)
+            }
+            click(revealDialogNode(scrollTag = "contact-avatar-sources") {
+                actionNode(controller.get().getString(resource))
+            })
+            if (resource == C.contactsDetailAvatarChoosePhoto || resource == C.contactsDetailAvatarChooseFile) {
+                assertNotNull(launched)
+                result(cancelled = true)
+            }
+            if (resource == C.contactsDetailAvatarRemovePhoto) {
+                awaitAvatarState("the short-window Remove action to clear the existing photo") {
+                    harness.contactService.avatars.size == 1 && harness.store.contacts.single().avatarImageData == null
+                }
+                assertEquals(contact.key to null, harness.contactService.avatars.single())
+            } else {
+                assertTrue(harness.contactService.avatars.isEmpty())
+                assertEquals(original, harness.store.contacts.single().avatarImageData)
+                controller.get().runOnUiThread { testFontScale.value = 1f }
+                resizeHost(360, 900)
+            }
+        }
+    }
+
+    @Test
+    fun leavingContactCancelsTheProviderOpenWithoutMutation() = assertLeavingDuringHeldOpen(lateReturn = false)
+
+    @Test
+    fun leavingContactClosesADescriptorReturnedAfterProviderOpenCancellation() = assertLeavingDuringHeldOpen(lateReturn = true)
+
+    private fun assertLeavingDuringHeldOpen(lateReturn: Boolean) {
         start()
         pick(file = true)
+        val detail = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].lifetimes.single()
         val entered = java.util.concurrent.CountDownLatch(1)
         val released = java.util.concurrent.CountDownLatch(1)
-        val closed = java.util.concurrent.atomic.AtomicBoolean()
-        Shadows.shadowOf(controller.get().contentResolver).registerInputStream(uri, object : java.io.InputStream() {
-            override fun read(): Int {
-                entered.countDown()
-                val deadline = System.nanoTime() + 5_000_000_000L
-                while (released.count != 0L && System.nanoTime() < deadline) {
-                    try {
-                        released.await(20, java.util.concurrent.TimeUnit.MILLISECONDS)
-                    } catch (_: InterruptedException) {
-                        // Closing, rather than interruption, releases this provider fixture.
-                    }
-                }
-                check(released.count == 0L) { "Contact exit did not close the provider stream" }
-                return -1
-            }
-            override fun close() {
-                closed.set(true)
+        val cancelled = java.util.concurrent.atomic.AtomicBoolean()
+        val opened = java.util.concurrent.atomic.AtomicReference<ParcelFileDescriptor?>()
+        val descriptor = java.util.concurrent.atomic.AtomicReference<java.io.FileDescriptor?>()
+        val file = mediaFiles.newFile().apply { writeBytes(png()) }
+        registerMediaProvider { signal ->
+            val cancellation = assertNotNull(signal, "Resolver must supply a real provider cancellation signal")
+            cancellation.setOnCancelListener {
+                cancelled.set(true)
                 released.countDown()
             }
-        })
+            entered.countDown()
+            val deadline = System.nanoTime() + 10_000_000_000L
+            while (released.count != 0L && System.nanoTime() < deadline) {
+                try {
+                    released.await(20, java.util.concurrent.TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    // This open responds to Android cancellation, not thread interruption.
+                }
+            }
+            check(released.count == 0L) { "Contact exit did not cancel the provider open" }
+            if (!lateReturn) cancellation.throwIfCanceled()
+            val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            opened.set(fd)
+            descriptor.set(fd.fileDescriptor)
+            AssetFileDescriptor(fd, 0, file.length())
+        }
         try {
             result(data = null)
-            awaitAvatarState("the provider read to start") { entered.count == 0L }
+            awaitAvatarState("the provider open to start") { entered.count == 0L }
             controller.get().runOnUiThread { showSelected.value = false }
-            awaitAvatarState("contact exit to release its provider stream") { closed.get() }
+            awaitAvatarState("contact exit to cancel the provider open and close any late descriptor") {
+                cancelled.get() && !detail.loading &&
+                    (!lateReturn || descriptor.get()?.valid() == false)
+            }
             assertTrue(harness.contactService.avatars.isEmpty())
             assertNull(harness.store.contacts.single().avatarImageData)
+            assertNull(detail.image)
+            assertNull(detail.holder.state.value.errorMessage)
         } finally {
             released.countDown()
+            opened.get()?.close()
         }
     }
 
@@ -534,7 +620,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         val originalRegistry = registry
         recreateHost {
             if (file) {
-                Shadows.shadowOf(controller.get().contentResolver).registerInputStream(uri, ByteArrayInputStream(png()))
+                registerMedia(png())
                 assertTrue(registry.dispatchResult(assertNotNull(originalCode), Activity.RESULT_OK, Intent().setData(uri)))
             }
         }
@@ -906,7 +992,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             awaitAction(controller.get().getString(C.contactsDetailAvatarCropChoose))
             controller.get().runOnUiThread { testFontScale.value = 2f }
             resizeHost(width, 220)
-            val canvas = revealCropNode(verticalInset = 32f) {
+            val canvas = revealDialogNode(verticalInset = 32f) {
                 allSemanticsNodes().singleOrNull {
                     it.config.getOrElseNullable(SemanticsProperties.TestTag) { null } == "avatar-crop-canvas"
                 }
@@ -915,7 +1001,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             assertTrue(canvas.boundsInRoot.height >= 128)
             val detail = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].lifetimes.single()
             assertTrue(detail.geometry.cropSize >= 128.0, "The selected source must retain a usable preview")
-            val zoom = revealCropNode {
+            val zoom = revealDialogNode {
                 allSemanticsNodes().singleOrNull {
                     it.config.getOrElseNullable(SemanticsProperties.TestTag) { null } == "avatar-crop-zoom"
                 }
@@ -926,13 +1012,13 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             for (resource in listOf(C.contactsDetailAvatarCropMoveUp, C.contactsDetailAvatarCropMoveDown,
                 C.contactsDetailAvatarCropMoveLeft, C.contactsDetailAvatarCropMoveRight,
                 C.contactsCommonCancel, C.contactsDetailAvatarCropChoose)) {
-                val control = revealCropNode { actionNode(controller.get().getString(resource)) }
+                val control = revealDialogNode { actionNode(controller.get().getString(resource)) }
                 assertTrue(control.size.height >= 48 && control.size.width >= 48)
                 if (resource != C.contactsCommonCancel && resource != C.contactsDetailAvatarCropChoose) click(control)
             }
             assertEquals(2.0, detail.geometry.scale)
             val resource = if (width == 360) C.contactsCommonCancel else C.contactsDetailAvatarCropChoose
-            click(revealCropNode { actionNode(controller.get().getString(resource)) })
+            click(revealDialogNode { actionNode(controller.get().getString(resource)) })
             if (width == 360) {
                 assertTrue(harness.contactService.avatars.isEmpty())
                 assertNull(harness.store.contacts.single().avatarImageData)

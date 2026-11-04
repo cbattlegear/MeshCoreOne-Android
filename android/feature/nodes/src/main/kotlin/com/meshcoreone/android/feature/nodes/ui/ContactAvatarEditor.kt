@@ -5,12 +5,16 @@ package com.meshcoreone.android.feature.nodes.ui
 import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.CancellationSignal
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -20,12 +24,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -43,6 +50,7 @@ import com.meshcoreone.android.core.ui.AvatarImageState
 import com.meshcoreone.android.core.ui.ContactAvatar
 import com.meshcoreone.android.core.ui.CropSize
 import com.meshcoreone.android.core.ui.cropAvatarImage
+import com.meshcoreone.android.core.ui.sharedTouchTarget
 import com.meshcoreone.android.feature.nodes.detail.AvatarSaveObserver
 import com.meshcoreone.android.feature.nodes.detail.AvatarProcessing
 import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
@@ -64,6 +72,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
@@ -144,7 +153,17 @@ internal object ContactAvatarMedia {
 
     suspend fun decode(resolver: ContentResolver, uri: Uri): ImageBitmap = withContext(Dispatchers.IO) {
         if (uri.scheme != ContentResolver.SCHEME_CONTENT) throw IOException("Expected a granted content URI")
-        val bytes = readSelection { resolver.openInputStream(uri) }
+        val signal = CancellationSignal()
+        val bytes = readSelection(cancelOpen = { signal.cancel() }) {
+            val asset = resolver.openAssetFileDescriptor(uri, "r", signal)
+                ?: throw IOException("Unable to open the selected image")
+            var transferred = false
+            try {
+                asset.createInputStream().also { transferred = true }
+            } finally {
+                if (!transferred) asset.close()
+            }
+        }
         val cache = AvatarImageCache()
         try {
             val decoded = try {
@@ -162,18 +181,25 @@ internal object ContactAvatarMedia {
         }
     }
 
-    internal suspend fun readSelection(open: () -> InputStream?): ByteArray = coroutineScope {
+    internal suspend fun readSelection(
+        cancelOpen: () -> Unit = {},
+        open: () -> InputStream?,
+    ): ByteArray = coroutineScope {
         val owned = AtomicReference<InputStream?>()
+        val context = currentCoroutineContext()
         val closer = launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 awaitCancellation()
             } finally {
                 withContext(NonCancellable + Dispatchers.IO) {
-                    owned.getAndSet(null)?.let { input -> providerCall { input.close() } }
+                    try {
+                        if (!context.isActive) providerCall(cancelOpen)
+                    } finally {
+                        owned.getAndSet(null)?.let { input -> providerCall { input.close() } }
+                    }
                 }
             }
         }
-        val context = currentCoroutineContext()
         try {
             runInterruptible(Dispatchers.IO) {
                 val input = providerCall(open) ?: throw IOException("Unable to open the selected image")
@@ -184,6 +210,12 @@ internal object ContactAvatarMedia {
                     if (owned.compareAndSet(input, null)) providerCall { input.close() }
                 }
             }
+        } catch (failure: IOException) {
+            context.ensureActive()
+            throw failure
+        } catch (failure: SecurityException) {
+            context.ensureActive()
+            throw failure
         } finally {
             withContext(NonCancellable) { closer.cancelAndJoin() }
         }
@@ -289,9 +321,10 @@ internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Compos
     if (choosing) {
         AlertDialog(
             onDismissRequest = { choosing = false; avatarIdentity = null },
-            title = { Text(stringResource(C.contactsDetailAvatarChooseSource)) },
             text = {
-                Column {
+                Column(Modifier.testTag("contact-avatar-sources").verticalScroll(rememberScrollState())) {
+                    Text(stringResource(C.contactsDetailAvatarChooseSource),
+                        Modifier.semantics { heading() }, style = MaterialTheme.typography.headlineSmall)
                     TextButton(onClick = {
                         choosing = false
                         picking = true
@@ -306,7 +339,7 @@ internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Compos
                             avatarIdentity = null
                             holder.avatarFailure(error)
                         }
-                    }) { Text(stringResource(C.contactsDetailAvatarChoosePhoto)) }
+                    }, modifier = Modifier.sharedTouchTarget()) { Text(stringResource(C.contactsDetailAvatarChoosePhoto)) }
                     TextButton(onClick = {
                         choosing = false
                         picking = true
@@ -321,20 +354,22 @@ internal fun rememberContactAvatarEditor(detail: ContactDetailLifetime): @Compos
                             avatarIdentity = null
                             holder.avatarFailure(error)
                         }
-                    }) { Text(stringResource(C.contactsDetailAvatarChooseFile)) }
+                    }, modifier = Modifier.sharedTouchTarget()) { Text(stringResource(C.contactsDetailAvatarChooseFile)) }
                     if (state.contact.avatarImageData != null) {
                         TextButton(onClick = {
                             choosing = false
                             val identity = avatarIdentity
                             avatarIdentity = null
                             if (identity != null) scope.launch { holder.removeAvatar(identity) }
-                        }) { Text(stringResource(C.contactsDetailAvatarRemovePhoto)) }
+                        }, modifier = Modifier.sharedTouchTarget()) { Text(stringResource(C.contactsDetailAvatarRemovePhoto)) }
+                    }
+                    TextButton(onClick = { choosing = false; avatarIdentity = null },
+                        modifier = Modifier.align(Alignment.End).sharedTouchTarget()) {
+                        Text(stringResource(C.contactsCommonCancel))
                     }
                 }
             },
-            confirmButton = {
-                TextButton(onClick = { choosing = false; avatarIdentity = null }) { Text(stringResource(C.contactsCommonCancel)) }
-            },
+            confirmButton = {},
         )
     }
     image?.let { selected ->

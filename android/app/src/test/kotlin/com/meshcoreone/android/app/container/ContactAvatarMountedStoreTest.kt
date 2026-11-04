@@ -2,7 +2,12 @@
 package com.meshcoreone.android.app.container
 
 import android.app.Activity
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ProviderInfo
+import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -10,6 +15,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivityResultRegistryOwner
@@ -57,7 +63,6 @@ import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesSession
 import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.lang.reflect.InvocationTargetException
 import java.util.UUID
@@ -82,15 +87,36 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.robolectric.Robolectric
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowContentResolver
 
 @Config(sdk = [31], qualifiers = "en-rUS-w360dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactAvatarMountedStoreTest : RoomProcessTest() {
     @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule val mediaFiles = TemporaryFolder()
+
+    private fun registerMedia(context: Context, uri: Uri, bytes: ByteArray) {
+        val file = mediaFiles.newFile().apply { writeBytes(bytes) }
+        val provider = object : ContentProvider() {
+            override fun onCreate() = true
+            override fun getType(uri: Uri) = "image/png"
+            override fun openFile(uri: Uri, mode: String) =
+                ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
+                selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = error("No query expected")
+            override fun insert(uri: Uri, values: ContentValues?): Uri? = error("No insert expected")
+            override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?) = error("No delete expected")
+            override fun update(uri: Uri, values: ContentValues?, selection: String?,
+                selectionArgs: Array<out String>?) = error("No update expected")
+        }
+        provider.attachInfo(context, ProviderInfo().apply { authority = uri.authority })
+        ShadowContentResolver.registerProviderInternal(checkNotNull(uri.authority), provider)
+    }
 
     @Test
     fun timeoutDiagnosticsPreserveTheStageCauseAndCollectorFailure() {
@@ -404,7 +430,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
             }
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseSource)).performScrollTo().performClick()
             compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseFile)).performClick()
-            Shadows.shadowOf(host.get().contentResolver).registerInputStream(uri, ByteArrayInputStream(png))
+            registerMedia(host.get(), uri, png)
             compose.runOnUiThread {
                 assertTrue(registry.dispatchResult(assertNotNull(requestCode), Activity.RESULT_OK, Intent().setData(uri)))
             }
@@ -597,7 +623,7 @@ class ContactAvatarMountedStoreTest : RoomProcessTest() {
                 // Dialog controls are not in the parent lazy list.
                 compose.onNodeWithText(host.get().getString(C.contactsDetailAvatarChooseFile)).performClick()
                 if (recreateBeforeReturn) recreate()
-                Shadows.shadowOf(host.get().contentResolver).registerInputStream(uri, ByteArrayInputStream(png))
+                registerMedia(host.get(), uri, png)
                 compose.runOnUiThread {
                     assertTrue(registry.dispatchResult(assertNotNull(requestCode), Activity.RESULT_OK, Intent().setData(uri)))
                 }

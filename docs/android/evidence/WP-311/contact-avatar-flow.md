@@ -637,3 +637,27 @@ controls. Cancel leaves storage untouched; Choose requires one persisted avatar.
 Late-open cleanup, unchanged security failure identity and close failure controls
 also cover the provider lifetime. These additions still require actual exact-
 candidate execution; none establish physical-device or TalkBack behavior.
+
+Independent follow-up of provider candidate `8f4c8b60b` correctly identified that
+`openInputStream` supplied no Android cancellation signal. The final adapter uses
+`openAssetFileDescriptor(uri, "r", signal)` with a per-selection signal canceled
+by its lifetime cleanup. Atomic stream ownership still closes a late descriptor
+without reading/decoding; failed stream creation closes its descriptor. Signal
+cancellation is not invoked on normal completion, and concurrent platform
+IO/security failures do not replace genuine coroutine cancellation.
+
+All mounted avatar media fixtures now register actual local ContentProviders and
+descriptor-backed synthetic images rather than shadowing `openInputStream`.
+Two mounted controls hold the provider's open while ignoring thread interruption:
+one exits through the actual signal; the other deliberately returns a descriptor
+after cancellation and requires it to be closed. Both require no avatar/error/
+crop mutation after exit. The separate pure held-read control still requires
+close-responsive cleanup and exactly one close.
+
+Copilot comment 4472191328 also found the source chooser, unlike the repaired
+crop, had no short-window scrolling. Its whole content now scrolls, including the
+title and Cancel, rather than allowing fixed chrome to starve the action viewport.
+An existing-avatar mounted case at 220 dp / 200% font requires full reachable
+photo/file/remove/cancel targets, unchanged bytes on picker/cancel returns and
+one actual removal. These final assertions remain unexecuted until their exact
+candidate's hosted checks run.

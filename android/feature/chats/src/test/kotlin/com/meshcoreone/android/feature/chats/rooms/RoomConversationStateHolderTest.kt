@@ -118,7 +118,8 @@ class RoomConversationStateHolderTest {
 
         rig.holder.load()
 
-        assertEquals(listOf("fetch", "read", "failed", "notifications", "badge", "changed"), rig.log)
+        assertEquals(listOf("fetch", "read", "failed", "badge", "changed"), rig.log)
+        assertFalse(rig.log.contains("notifications"), "A mounted read cannot retire a notification retry")
         assertTrue(rig.holder.state.value.hasLoadedOnce)
     }
 
@@ -133,7 +134,7 @@ class RoomConversationStateHolderTest {
         assertEquals("secret:false", rig.service.joinCall)
         assertTrue(rig.holder.state.value.session.isConnected)
         assertNull(rig.holder.state.value.authenticationContact)
-        assertEquals(listOf("fetch", "read", "failed", "notifications", "badge", "changed"), rig.log)
+        assertEquals(listOf("fetch", "read", "failed", "badge", "changed"), rig.log)
     }
 
     @Test

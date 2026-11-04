@@ -117,10 +117,18 @@ class ContactWriteDispatch(
     val terminalFailure: Exception? get() = failure.get()
 
     val outcome: ContactWriteDispatchOutcome
-        get() = terminalOutcome.get() ?: when (exchangeDispatch.cancellationDisposition) {
-            ChannelWriteCancellationDisposition.UNKNOWN -> ContactWriteDispatchOutcome.UNKNOWN
-            ChannelWriteCancellationDisposition.DEFINITELY_UNSENT -> ContactWriteDispatchOutcome.DEFINITELY_UNSENT
-            ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN -> ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN
+        get() {
+            val terminal = terminalOutcome.get()
+            val disposition = exchangeDispatch.cancellationDisposition
+            if (terminal == ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN &&
+                disposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                return ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+            }
+            return terminal ?: when (disposition) {
+                ChannelWriteCancellationDisposition.UNKNOWN -> ContactWriteDispatchOutcome.UNKNOWN
+                ChannelWriteCancellationDisposition.DEFINITELY_UNSENT -> ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+                ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN -> ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN
+            }
         }
 
     internal fun beforeDispatch() {

@@ -320,7 +320,13 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
-    fun unresolvedRawReplyRefusesContactOperationsWithoutCreatingRecovery() = runTest {
+    fun unresolvedRawReplyRefusesContactOperationsWithoutCreatingRecovery() = unresolvedReplyRefusesContactOperations(raw = true)
+
+    @Test
+    fun unresolvedBatteryErrorRefusesContactOperationsAfterAdmissionWithoutCreatingRecovery() =
+        unresolvedReplyRefusesContactOperations(raw = false)
+
+    private fun unresolvedReplyRefusesContactOperations(raw: Boolean) = runTest {
         for (remove in listOf(false, true)) {
             withFixture {
                 val row = ContactDTO.fromFrame(radioA, frame(2, "Retained"))
@@ -331,22 +337,46 @@ class ContactWriteRecoveryTests {
                     flags = flags,
                     logger = ContactServiceLogger { level, message -> logs += level to message },
                 )
-                val raw = async {
+                var addDispatch: ContactWriteDispatch? = null
+                var removeDispatch: ChannelWriteDispatch? = null
+                val observedSession = object : ContactSessionOps by session {
+                    override suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+                        addDispatch = dispatch
+                        session.addContact(contact, dispatch, onCommitted)
+                    }
+                    override suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+                        removeDispatch = dispatch
+                        session.removeContact(publicKey, dispatch)
+                    }
+                }
+                val observedProducer = service(
+                    connection = observedSession, flags = flags,
+                    logger = ContactServiceLogger { level, message -> logs += level to message },
+                )
+                val timedOut = async {
                     assertFailsWith<MeshCoreException.Timeout> {
-                        session.sendAndWait<Unit>(Bytes.of(0x14), timeout = 0.1) { null }
+                        if (raw) session.sendAndWait<Unit>(Bytes.of(0x14), timeout = 0.1) { null }
+                        else session.getBattery()
                     }
                 }
                 runCurrent()
-                advanceTimeBy(101)
+                advanceTimeBy(if (raw) 101 else 5_001)
                 runCurrent()
-                raw.await()
+                timedOut.await()
                 repeat(2) {
                     val failure = assertFailsWith<ContactServiceError.SessionError> {
-                        if (remove) producer.removeContact(radioA, row.publicKey)
-                        else producer.addOrUpdateContact(radioA, frame(3, "Must not send"))
+                        if (remove) observedProducer.removeContact(radioA, row.publicKey)
+                        else observedProducer.addOrUpdateContact(radioA, frame(3, "Must not send"))
                     }
                     assertIs<MeshCoreException.ConnectionLost>(failure.error)
                     assertSame(failure.error, failure.cause)
+                    if (remove) {
+                        assertEquals(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT, assertNotNull(removeDispatch).cancellationDisposition)
+                    } else {
+                        val dispatch = assertNotNull(addDispatch)
+                        assertTrue(dispatch.definitelyUnsent)
+                        if (!raw) assertIs<MeshCoreException.ConnectionLost>(dispatch.terminalFailure)
+                    }
                 }
                 assertTrue(radio.writes.isEmpty())
                 assertTrue(radio.removeRequests.isEmpty())

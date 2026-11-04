@@ -32,6 +32,28 @@ import org.junit.jupiter.api.TestFactory
 class ChannelWriteDispatchTest {
     @TestFactory
     fun realSessionCases() = listOf(
+        nativeCase("contact uncertainty yields only to definitive serializer no-send proof") {
+            for (sent in listOf(false, true)) {
+                var completionOutcome: ContactWriteDispatchOutcome? = null
+                val dispatch = ContactWriteDispatch(onExchangeFinishedAction = { completionOutcome = it.outcome })
+                val serializer = RequestResponseSerializer(backgroundScope)
+                val failure = IllegalStateException("Command refused or failed")
+                assertFailsWith<IllegalStateException> {
+                    serializer.withOwnedSerialization(dispatch.exchangeDispatch) {
+                        if (sent) beforeSend()
+                        dispatch.markUncertain(failure)
+                        throw failure
+                    }
+                }
+                assertEquals(
+                    if (sent) ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN
+                    else ContactWriteDispatchOutcome.DEFINITELY_UNSENT,
+                    completionOutcome,
+                )
+                assertEquals(completionOutcome, dispatch.outcome)
+                assertSame(failure, dispatch.terminalFailure)
+            }
+        },
         nativeCase("ordinary serializer failure accounts dispatch before the completion callback") {
             for (sent in listOf(false, true)) {
                 var completionDisposition: ChannelWriteCancellationDisposition? = null

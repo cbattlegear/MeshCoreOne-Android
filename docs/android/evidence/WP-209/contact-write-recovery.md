@@ -758,3 +758,14 @@ operations after physical stop and a fresh session. The serializer control
 checks ordinary failures both before and after `beforeSend`, observing the
 disposition inside the completion callback itself. Earlier-epoch and on-wire
 cancellation controls remain unchanged. No unresolved-reply fence is relaxed.
+
+The inside-command refusal successor also tests a timed-out real `getBattery`
+request, whose unresolved error correlation rejects Add inside `simple` after
+`beforeDispatch`. Its tentative terminal `MAY_HAVE_WRITTEN` must not override
+the serializer's definitive no-send receipt. `ContactWriteDispatch.outcome`
+therefore refines only that tentative uncertainty when the actual serializer
+proves `DEFINITELY_UNSENT`; accepted/rejected outcomes and actual entered-send
+ambiguity remain unchanged. Both raw and battery timeout families exercise Add
+and Remove, assert the real dispatch receipt and original public error mapping,
+then verify ordinary work is possible on a safely replaced session without a
+false persistent contact recovery lock.

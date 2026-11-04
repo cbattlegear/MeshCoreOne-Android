@@ -40,26 +40,6 @@ class BitmapImageDecoderNativeTest {
             } finally {
                 handle.bitmap.recycle()
             }
-
-            @Test
-            fun `cache charges retained native allocation rather than reduced bitmap dimensions`() {
-                val encoded = NativeImageFixtures.png(64, 32)
-                val bitmap = requireNotNull(BitmapFactory.decodeByteArray(
-                    encoded, 0, encoded.size, BitmapFactory.Options().apply { inMutable = true },
-                ))
-                try {
-                    val allocation = bitmap.allocationByteCount
-                    bitmap.reconfigure(8, 4, Bitmap.Config.ARGB_8888)
-                    assertEquals(allocation, bitmap.allocationByteCount)
-                    assertTrue(allocation > bitmap.rowBytes * bitmap.height)
-                    val handle = BitmapDecodedImageHandle(bitmap)
-                    assertEquals(allocation, handle.costBytes)
-                    val entry = CachedDecodedImage(handle, isGif = false, data = encoded)
-                    assertEquals(allocation.toLong() + encoded.size, entry.cost)
-                } finally {
-                    bitmap.recycle()
-                }
-            }
         }
 
         val encoded = NativeImageFixtures.png(100, 50)
@@ -80,6 +60,26 @@ class BitmapImageDecoderNativeTest {
         } finally {
             cache.clearDecodedMirror()
             handle.bitmap.recycle()
+        }
+    }
+
+    @Test
+    fun `cache charges retained native allocation rather than reduced bitmap dimensions`() {
+        val encoded = NativeImageFixtures.png(64, 32)
+        val bitmap = requireNotNull(BitmapFactory.decodeByteArray(
+            encoded, 0, encoded.size, BitmapFactory.Options().apply { inMutable = true },
+        ))
+        try {
+            val allocation = bitmap.allocationByteCount
+            bitmap.reconfigure(8, 4, Bitmap.Config.ARGB_8888)
+            assertEquals(allocation, bitmap.allocationByteCount)
+            assertTrue(allocation > bitmap.rowBytes * bitmap.height)
+            val handle = BitmapDecodedImageHandle(bitmap)
+            assertEquals(allocation, handle.costBytes)
+            val entry = CachedDecodedImage(handle, isGif = false, data = encoded)
+            assertEquals(allocation.toLong() + encoded.size, entry.cost)
+        } finally {
+            bitmap.recycle()
         }
     }
 }

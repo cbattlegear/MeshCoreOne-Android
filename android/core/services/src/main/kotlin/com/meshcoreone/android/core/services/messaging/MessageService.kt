@@ -254,6 +254,10 @@ class MessageService(
                 throw failure
             }
         }
+        if (row.status == MessageStatus.FAILED) {
+            dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.SENT)
+            if (!cleanup) ownership.check("commitAcknowledgement.restoreForAck")
+        }
         dataStore.updateMessageAck(key(messageID), ack.code.ackCodeUInt32, MessageStatus.DELIVERED, ack.tripTime)
         if (!cleanup) ownership.check("commitAcknowledgement.saved")
         val committed = dataStore.fetchMessage(key(messageID))
@@ -372,11 +376,24 @@ class MessageService(
                         mutation(messageID).withLock {
                             if (pendingAck(messageID)?.acknowledgement == null) {
                                 ownership.checkPersistenceCompletion("failMessage")
-                                synchronized(lock) { pendingAcks.remove(messageID) }
                                 val changed = dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
                                 ownership.checkPersistenceCompletion("failMessage.saved")
-                                if (notify && changed) broadcastFailed(messageID)
-                                recovered("failPending.$messageID")
+                                val acknowledgementArrived = synchronized(lock) {
+                                    if (pendingAcks[messageID]?.acknowledgement != null) true
+                                    else {
+                                        pendingAcks.remove(messageID)
+                                        false
+                                    }
+                                }
+                                if (acknowledgementArrived) {
+                                    if (changed) {
+                                        dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.SENT)
+                                        ownership.checkPersistenceCompletion("failMessage.restoreForAck")
+                                    }
+                                } else {
+                                    if (notify && changed) broadcastFailed(messageID)
+                                    recovered("failPending.$messageID")
+                                }
                             }
                         }
                     } else {

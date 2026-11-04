@@ -10,12 +10,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
-import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -68,12 +65,7 @@ class TraceMapMountedConsumerTest {
     private var tableContacts = listOf(north, south)
     private val tableVersion = mutableIntStateOf(0)
     private val failures = mutableListOf<Exception>()
-    private var frameClock: BroadcastFrameClock? = null
-    private var frameNanos = 0L
-
     @Before fun createHost() {
-        frameClock = null
-        frameNanos = 0L
         cameraChange = null
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
@@ -84,7 +76,6 @@ class TraceMapMountedConsumerTest {
 
     @After fun destroyHost() {
         host.pause().stop().destroy()
-        frameClock?.cancel()
     }
 
     @Test fun pretraceCandidatesEditLastHopAndRetainPanAcrossLivePreferences() {
@@ -162,7 +153,7 @@ class TraceMapMountedConsumerTest {
     }
 
     @Test fun explicitTraceFramingReissuesAfterPanAndOnRepeatedFit() {
-        mount(deterministicFrames = true)
+        mount()
         val initialRevision = latest!!.cameraCommandRevision
         val reportCamera = requireNotNull(cameraChange)
         host.get().runOnUiThread { reportCamera(panned) }
@@ -190,7 +181,6 @@ class TraceMapMountedConsumerTest {
 
     private fun mount(
         appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM,
-        deterministicFrames: Boolean = false,
     ) {
         val directory = object : TraceNodeDirectory {
             override suspend fun fetchContacts(radioId: RadioId) = tableContacts
@@ -216,15 +206,7 @@ class TraceMapMountedConsumerTest {
             feature, recent, TraceDiagnostics { _, error -> failures += error }, radio, 0, preferences,
         )
         host.get().runOnUiThread {
-            val parent = if (deterministicFrames) {
-                BroadcastFrameClock().also { frameClock = it }.let { clock ->
-                    host.get().window.decorView.createLifecycleAwareWindowRecomposer(
-                        coroutineContext = clock,
-                        lifecycle = host.get().lifecycle,
-                    )
-                }
-            } else null
-            host.get().setContent(parent = parent) {
+            host.get().setContent {
                 MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false) {
                     TracePathScreen(
                         dependencies.copy(nodeTableVersion = tableVersion.intValue),
@@ -264,16 +246,6 @@ class TraceMapMountedConsumerTest {
     private fun advanceFrames() {
         repeat(6) {
             compose.mainClock.advanceTimeByFrame()
-            val clock = frameClock
-            if (clock == null) {
-                Shadows.shadowOf(Looper.getMainLooper()).idle()
-            } else {
-                host.get().runOnUiThread {
-                    Snapshot.sendApplyNotifications()
-                    frameNanos += 16_000_000L
-                    clock.sendFrame(frameNanos)
-                }
-            }
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
         }

@@ -10,15 +10,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
-import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -71,12 +68,7 @@ class MapMountedConsumerTest {
         UUID(0, 3), radio, Bytes(ByteArray(32) { 2 }), "Located discovery", 1u,
         Instant.EPOCH, 0u, 38.0, -123.0, 255u, Bytes.EMPTY, null, null,
     )
-    private var frameClock: BroadcastFrameClock? = null
-    private var frameNanos = 0L
-
     @Before fun createHost() {
-        frameClock = null
-        frameNanos = 0L
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
@@ -86,7 +78,6 @@ class MapMountedConsumerTest {
 
     @After fun destroyHost() {
         host.pause().stop().destroy()
-        frameClock?.cancel()
     }
 
     @Test fun mountedContactDetailAndMessageForwardTheActualDtoAndClearSelection() {
@@ -296,7 +287,7 @@ class MapMountedConsumerTest {
         var loads = 0
         val initial = MapFeatureDependencies(source { loads++; content() }, offline(), preferences = store)
         val dependencies = mutableStateOf(initial)
-        mount(initial, dependenciesProvider = { dependencies.value }, deterministicFrames = true)
+        mount(initial, dependenciesProvider = { dependencies.value })
         compose.onNodeWithTag("pick:${contact.id}").assertExists()
 
         host.get().runOnUiThread {
@@ -398,22 +389,13 @@ class MapMountedConsumerTest {
         onPresentation: (MapPresentationState) -> Unit = {},
         appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM,
         dependenciesProvider: (() -> MapFeatureDependencies)? = null,
-        deterministicFrames: Boolean = false,
     ) {
         val bound = dependencies.copy(preferences = dependencies.preferences ?: AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,
             host.get().getSharedPreferences("shared-map", 0),
         ))
         host.get().runOnUiThread {
-            val parent = if (deterministicFrames) {
-                BroadcastFrameClock().also { frameClock = it }.let { clock ->
-                    host.get().window.decorView.createLifecycleAwareWindowRecomposer(
-                        coroutineContext = clock,
-                        lifecycle = host.get().lifecycle,
-                    )
-                }
-            } else null
-            host.get().setContent(parent = parent) {
+            host.get().setContent {
                 MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false, motionScale = 0f) {
                     MapEntry(
                         FeatureRoute(FeatureId.MAP), { error("No generic navigation") },
@@ -447,16 +429,6 @@ class MapMountedConsumerTest {
     private fun advanceFrames() {
         repeat(6) {
             compose.mainClock.advanceTimeByFrame()
-            val clock = frameClock
-            if (clock == null) {
-                Shadows.shadowOf(Looper.getMainLooper()).idle()
-            } else {
-                host.get().runOnUiThread {
-                    Snapshot.sendApplyNotifications()
-                    frameNanos += 16_000_000L
-                    clock.sendFrame(frameNanos)
-                }
-            }
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
         }

@@ -93,7 +93,9 @@ internal object ContactWriteRecovery {
             if (!shouldMutate()) return@withLock
             synchronized(this) {
                 loadEpoch(preferences, radioId, state)
-                if (state.dispatchingWrites.isNotEmpty()) throw ContactServiceError.SyncInterrupted()
+                if (state.dispatchingWrites.isNotEmpty() || hasUnresolvedWrite(state)) {
+                    throw ContactServiceError.SyncInterrupted()
+                }
                 state.syncing = true
                 state.writes.filterNot { it in state.dispatchingWrites }.forEach {
                     state.invalidatedWrites.add(it)

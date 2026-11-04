@@ -140,7 +140,7 @@ event, recovery marker or queued-write invalidation.
 Protected V-contact no-ops also return while an unrelated snapshot is paused in
 persistence, without waiting for or mutating that sync fence.
 
-The 32 test methods are authored source controls, not test-discovery or execution
+The preceding 32 test methods are authored source controls, not test-discovery or execution
 evidence; they remain unexecuted while the shared Gradle reservation is held.
 The cleanup-cancellation control injects `CancellationException` from a suspend
 cleanup callback rather than cancelling a suspended caller job. No post-failure
@@ -316,3 +316,51 @@ not resolve the separate protocol invalidation/retirement-to-Room-prune/marker
 linearization prerequisite. The WP-107 proof-only candidate remains unimported
 and does not authorize prune or recovery-marker clearing; full #517 reconciliation
 therefore remains incomplete.
+
+### Unresolved-exchange deletion admission
+
+The bounded successor to `3c3e56edb1002ec147600553d8e972d2080c78f9`
+extends deletion admission from active dispatches to the existing
+`hasUnresolvedWrite` predicate. A finished exchange with an unknown outcome,
+a potentially writable exchange, an accepted exchange with an unfinished local
+tail, or persisted recovery without dispatch provenance cannot admit deletion.
+The check runs under the existing per-radio state lock while holding `syncMutex`,
+after the protected-contact recheck and before changing queued-write state.
+No additional mutex, protocol callback, Room operation or unrelated sync phase
+is introduced. A terminal accepted exchange whose local completion failed can
+still permit deletion; deletion does not clear the full-radio recovery marker.
+
+Four additional real-session service controls are authored (36 methods in this
+file in total, none discovered or executed for this successor):
+
+- A timed-out exchange is retired; replacement remote/local deletes and sync
+  are refused before and after the test radio applies that pending command
+  without delivering an ACK. A newer local row, marker and empty event stream
+  remain unchanged. This exercises the test radio queue, not physical firmware.
+- Protected V-contact remote/local deletion remains a no-op despite retired
+  unknown-write provenance.
+- An ACK followed by failed local persistence admits a later confirmed device
+  removal, emits `NodeDeleted`, and retains full-radio recovery.
+- A canceled caller's late ACK is held in local persistence; both delete paths
+  and replacement sync are refused. An intervening newer local frame survives
+  the existing `saveContactPreservingNewer` check, and no stale navigation occurs.
+
+The newer-frame control uses the existing in-memory atomic persistence role,
+not Room evidence. No new general recovery/reuse or callback-deadlock proof is
+claimed. Static admission and source validation do not compile these controls.
+The retained Gradle reservation, publication and acceptance holds remain.
+WP-209 `reserve.py admit --operation modify` passed for the recovery source,
+service-test and evidence paths. `git diff --check` and
+`python .\tools\android-port\controller\validate.py` passed (Python 3.12.4,
+validator result `valid`). No Gradle, native/device test, CI dispatch or
+publication was attempted.
+
+The external prerequisite is unchanged: protocol source invalidation, successor
+fetch and session retirement must participate in an ordered guard spanning
+WP-202's destructive Room reconciliation/transaction and the matching WP-209
+recovery-marker linearization. A source-bound terminal full-baseline proof and
+a current-generation marker reread must be validated inside that guard; count
+equality or an instantaneous `inspect()` is not permission. Room I/O must not
+run under protocol/core/lifecycle locks. No such integration is added or enabled
+here. Existing count-based recovery branches in this held candidate remain
+unaccepted and are not evidence of safe full reconciliation.

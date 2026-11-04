@@ -1005,6 +1005,194 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
+    fun retiredUnknownWriteBlocksBothDeletionPathsBeforeAndAfterUnacknowledgedRadioAcceptance() = runTest {
+        withFixture {
+            val newer = ContactDTO.fromFrame(radioA, frame(1, "Newer local", 200u))
+            store.seed(newer)
+            val write = backgroundScope.async {
+                try {
+                    service().addOrUpdateContact(radioA, frame(1, "Older pending", 1u))
+                    null
+                } catch (error: ContactServiceError.SessionError) {
+                    error
+                }
+            }
+            runCurrent()
+            advanceTimeBy(5_001)
+            runCurrent()
+            assertIs<MeshCoreException.Timeout>(assertNotNull(write.await()).error)
+            session.stop()
+
+            val replacementRadio = radio.replacementView()
+            val replacement = service(newSession(replacementRadio))
+            val events = replacement.events()
+            val collectedEvents = async { events.events.toList() }
+            val key = EntityKey(radioA, newer.id)
+
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                replacement.removeContact(radioA, newer.publicKey)
+            }
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                replacement.removeLocalContact(key, newer.publicKey)
+            }
+            assertEquals(newer, store.fetchContact(radioA, newer.publicKey))
+            assertTrue(replacementRadio.removeRequests.isEmpty())
+            assertTrue(replacement.needsContactWriteReconciliation(radioA))
+
+            radio.accept(reply = false)
+            runCurrent()
+            assertEquals("Older pending", radio.contact(newer.publicKey)?.advertisedName)
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                replacement.removeContact(radioA, newer.publicKey)
+            }
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                replacement.removeLocalContact(key, newer.publicKey)
+            }
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                replacement.syncContacts(radioA, null)
+            }
+            assertEquals(newer, store.fetchContact(radioA, newer.publicKey))
+            assertTrue(replacementRadio.removeRequests.isEmpty())
+            assertTrue(replacementRadio.contactRequests.isEmpty())
+            assertTrue(replacement.needsContactWriteReconciliation(radioA))
+            replacement.finishEvents()
+            assertEquals(emptyList(), collectedEvents.await())
+        }
+    }
+
+    @Test
+    fun protectedRemovalsRemainNoOpsWithRetiredUnknownWriteProvenance() = runTest {
+        withFixture {
+            val vKey = assertNotNull(VContactIdentity.publicKey(contactsKey(0x01)))
+            val protected = ContactDTO(radioId = radioA, publicKey = vKey, name = "V-contact", lastHeardTimestamp = null)
+            store.seed(protected)
+            val write = backgroundScope.async {
+                try {
+                    service().addOrUpdateContact(radioA, frame(2, "Unknown"))
+                    null
+                } catch (error: ContactServiceError.SessionError) {
+                    error
+                }
+            }
+            runCurrent()
+            advanceTimeBy(5_001)
+            runCurrent()
+            assertIs<MeshCoreException.Timeout>(assertNotNull(write.await()).error)
+            session.stop()
+
+            val replacementRadio = radio.replacementView()
+            val replacement = service(newSession(replacementRadio))
+            val events = replacement.events()
+            val collectedEvents = async { events.events.toList() }
+            replacement.removeContact(radioA, vKey)
+            replacement.removeLocalContact(EntityKey(radioA, protected.id), vKey)
+
+            assertEquals(protected, store.fetchContact(radioA, vKey))
+            assertTrue(replacementRadio.removeRequests.isEmpty())
+            assertEquals(1, radio.writes.size)
+            assertTrue(replacement.needsContactWriteReconciliation(radioA))
+            replacement.finishEvents()
+            assertEquals(emptyList(), collectedEvents.await())
+        }
+    }
+
+    @Test
+    fun acknowledgedFinishedWriteWithLocalFailureAllowsConfirmedRemovalWithoutClearingRecovery() = runTest {
+        withFixture {
+            val original = ContactDTO.fromFrame(radioA, frame(1, "Local"))
+            store.seed(original)
+            val failing = object : ContactPersisting by store {
+                override suspend fun saveContactPreservingNewer(
+                    radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
+                ): ContactSaveResult = throw IOException("accepted write local save failed")
+            }
+            val write = backgroundScope.async {
+                try {
+                    service(persistence = failing).addOrUpdateContact(radioA, frame(1, "Accepted", 2u))
+                    null
+                } catch (error: ContactWriteCompletionFailed) {
+                    error
+                }
+            }
+            runCurrent()
+            radio.accept()
+            runCurrent()
+            assertNotNull(write.await())
+            assertEquals("Accepted", radio.contact(original.publicKey)?.advertisedName)
+
+            val coordinator = ContactsFakeSyncCoordinator()
+            val producer = service(coordinator = coordinator)
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+            val events = producer.events()
+            val collectedEvents = async { events.events.toList() }
+            producer.removeContact(radioA, original.publicKey)
+
+            assertEquals(1, radio.completedRemovals)
+            assertNull(radio.contact(original.publicKey))
+            assertNull(store.fetchContact(radioA, original.publicKey))
+            assertEquals(listOf("contactsChanged"), coordinator.notifications)
+            assertTrue(producer.needsContactWriteReconciliation(radioA), "Deletion is not full-radio recovery")
+            producer.finishEvents()
+            assertEquals(listOf<ContactServiceEvent>(ContactServiceEvent.NodeDeleted), collectedEvents.await())
+        }
+    }
+
+    @Test
+    fun cancelledLateAckPersistenceBlocksDeletesAndSnapshotWithoutOverwritingNewerMetadata() = runTest {
+        withFixture {
+            val original = ContactDTO.fromFrame(radioA, frame(1, "Original"))
+            store.seed(original)
+            val saveGate = SuspensionGate()
+            val held = object : ContactPersisting by store {
+                override suspend fun saveContactPreservingNewer(
+                    radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
+                ): ContactSaveResult? {
+                    saveGate.pause()
+                    return store.saveContactPreservingNewer(radioId, frame, expectedFrame)
+                }
+            }
+            var navigated = false
+            val caller = async {
+                service(persistence = held).addOrUpdateContact(radioA, frame(1, "Late older", 2u))
+                navigated = true
+            }
+            runCurrent()
+            caller.cancelAndJoin()
+            radio.accept()
+            runCurrent()
+            assertTrue(saveGate.entered.isCompleted, "The ACK precedes the held local completion")
+            assertEquals("Late older", radio.contact(original.publicKey)?.advertisedName)
+
+            val newer = original.updating(frame(1, "Newer local", 200u))
+            store.seed(newer)
+            val replacementRadio = radio.replacementView()
+            val replacement = service(newSession(replacementRadio))
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                replacement.removeContact(radioA, original.publicKey)
+            }
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                replacement.removeLocalContact(EntityKey(radioA, original.id), original.publicKey)
+            }
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                replacement.syncContacts(radioA, null)
+            }
+            assertTrue(replacementRadio.removeRequests.isEmpty())
+            assertTrue(replacementRadio.contactRequests.isEmpty())
+            assertEquals(newer, store.fetchContact(radioA, original.publicKey))
+
+            saveGate.release.complete(Unit)
+            runCurrent()
+            assertEquals(newer, store.fetchContact(radioA, original.publicKey))
+            assertTrue(replacement.needsContactWriteReconciliation(radioA))
+            assertFalse(navigated)
+            assertTrue(caller.isCancelled)
+            assertTrue(diagnostics.any {
+                it is com.meshcoreone.android.core.protocol.session.SessionDiagnostic.BackgroundFailure
+            })
+        }
+    }
+
+    @Test
     fun unresolvedWriteRejectsReplacementSyncBeforeSnapshotAndKeepsQueuedWriteBlocked() = runTest {
         withFixture {
             val producer = service()

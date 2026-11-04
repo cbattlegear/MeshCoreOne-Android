@@ -92,7 +92,7 @@ The following are authored tests, **not executed passing evidence**:
 | Real dispatcher replacement | ACCEPTED/UNCERTAIN actions are not re-invoked; an uncommitted cancelled action remains retryable; capacity stays 32 |
 | Posted Android reply PendingIntent | RemoteInput -> real receiver/dispatcher -> App session adapter -> MessageService/MeshCoreSession/Room; replace dispatcher after acceptance/before Boolean acknowledgement and assert no second transmission |
 
-The App witnesses cover direct/channel accepted replies, unknown direct response
+The App witnesses cover direct/channel accepted replies, unknown direct/channel response
 and cancellation before the wire with subsequent legitimate retry. Core witnesses
 cover the tighter session-owned result-loss boundary. Existing transaction tests
 are retained; their explicit cancellation target now refers to the outer caller
@@ -107,6 +107,32 @@ The receipt also exposes `wireNotDispatched()`: only the protocol dispatch owner
 may reset IN_FLIGHT to READY after the cancelled call settles with definite-unsent
 proof. A guard regression forbids resetting UNCERTAIN or ACCEPTED. The protocol
 producer prerequisite and real serializer contention cases remain required.
+
+## Independent continuation and channel-origin limitation
+
+The additional App channel-unknown witness uses the posted RemoteInput action,
+real dispatcher/session/Room graph and an actual channel command with its response
+withheld. It asserts UNCERTAIN after cancellation, no automatic retransmission by
+the replacement dispatcher and no unsent-failure notification. It is authored,
+not executed evidence for this consumer candidate. No producer or queue production
+path was changed to add it.
+
+The separate wrong-occupant report is not fixed by this cancellation receipt.
+Trusted main `cf1ee845b3d6022990d7d699cd5bb2a373c8e456` has no persisted
+message-to-channel-occupant binding. The queue owner confirmed its inspected
+`c7aaff1` candidate still uses generic inbound `saveMessage` without occupant
+provenance before posting, with no production `saveChannelMessage` caller.
+Missing origin is rejected as `UNKNOWN_MESSAGE_ORIGIN`/`UNBOUND_HISTORY`, not
+reconstructed from the current slot.
+
+WP-401 identified its committed producer
+`39389b517bf427d8b549dc00a9683dbd38d5f044`: a per-built-post UUID in the action
+URI and extras prevents a later build from rewriting the retained token. It does
+not supply durable reply consumption or distinguish a fresh submission from
+redelivery of identical text through that token, and does not reach the current
+`NotificationResponse`. Its inactive durable OPEN store is not reply provenance.
+The producer/history/action-identity prerequisites and submission-policy decision
+remain separate; no implicit one-reply-per-token policy is implemented here.
 
 ## Actual local verification
 

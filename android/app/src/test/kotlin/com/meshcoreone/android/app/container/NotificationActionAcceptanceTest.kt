@@ -50,6 +50,9 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
     @Test fun unknownDirectAcceptanceIsNotReplayedOrRestoredAsUnsent() = runTest {
         replyBoundary(channel = false, unknown = true)
     }
+    @Test fun unknownChannelAcceptanceIsNotReplayedOrReportedAsUnsent() = runTest {
+        replyBoundary(channel = true, unknown = true)
+    }
     @Test fun replyCancelledBeforeWireCanBeRetriedByReplacementDispatcher() = runTest {
         replyBoundary(channel = false, beforeWire = true)
     }
@@ -128,13 +131,14 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             firmware.respond = { command ->
                 when (command[0].toInt()) {
                     2 -> if (unknown) emptyList() else listOf(sentReply(command, firmware.publicKey))
-                    3 -> listOf(Bytes.of(0))
+                    3 -> if (unknown) emptyList() else listOf(Bytes.of(0))
                     else -> null
                 }
             }
         }
         val firstOwner = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
         val replacementOwner = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val sendCommand = if (channel) 3 else 2
         try {
             h.manager.connect(h.target())
             h.settle()
@@ -179,7 +183,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
 
             if (unknown) {
                 h.eventually("wire command awaiting an unobserved reply", virtualBudgetMillis = 0) {
-                    h.links.radios.single().sent.any { it[0].toInt() == 2 }
+                    h.links.radios.single().sent.any { it[0].toInt() == sendCommand }
                 }
                 assertEquals(NotificationActionReceipt.State.IN_FLIGHT, requireNotNull(receipt).state)
             } else {
@@ -213,7 +217,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             if (beforeWire) h.eventually("pre-acceptance retry completed") { retryFinished.isCompleted }
             repeat(10) { runCurrent() }
             assertEquals(if (beforeWire) 2 else 1, attempts)
-            assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == if (channel) 3 else 2 })
+            assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == sendCommand })
             assertNull(session.notificationService.consumeDraft(contactKey))
             if (!beforeWire) assertTrue(h.delivery.posted.isEmpty())
         } finally {

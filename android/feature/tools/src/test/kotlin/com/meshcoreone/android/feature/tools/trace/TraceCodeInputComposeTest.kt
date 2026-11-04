@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
@@ -24,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.FocusManager
@@ -113,6 +116,7 @@ class TraceCodeInputComposeTest {
                         dependencies, recents, RecordingDiagnostics(), RADIO, 1,
                         mapPreferences = host.get().mapPreferences,
                     ),
+                    mapSurface = host.get().mapSurface,
                 )
             }
         }
@@ -1112,6 +1116,9 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
     internal val recents = MapRecentsStorage()
     internal val sender = FakeTraceSender()
     internal val mapPreferences: MapPreferenceStore = TraceCodeInputMapPreferences()
+    internal val mapSurface: TraceMapSurface = { _, _, _, _, _, overlay ->
+        Box(Modifier.fillMaxSize(), content = overlay)
+    }
     internal var observedHolder: TracePathStateHolder? = null
         private set
     private val contacts = listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")) +
@@ -1159,6 +1166,7 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
                         dependencies, recents, RecordingDiagnostics(), signaledRadioId(), connectionGeneration,
                         mapPreferences = mapPreferences,
                     ),
+                    mapSurface = mapSurface,
                 )
             }
         }

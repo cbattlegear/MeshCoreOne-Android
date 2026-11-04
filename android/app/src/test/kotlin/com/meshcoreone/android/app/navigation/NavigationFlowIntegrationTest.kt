@@ -3858,7 +3858,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 assertEquals(AppTab.NODES, state.selectedTab)
                 assertEquals(NavigationDestination.ContactDetail(persisted), state.activeStack.last().destination)
                 assertNull(state.pendingContactLink)
-                assertEquals(accounted, pending.consumedDeliveryIds())
+                assertEquals<Set<String>>(accounted, pending.consumedDeliveryIds())
                 compose.waitForIdle()
                 compose.onNodeWithTag("entry:${state.activeStack.last().id}").assertIsDisplayed()
                 compose.onAllNodesWithText(persisted.displayName).onFirst().assertIsDisplayed()
@@ -3883,7 +3883,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     ),
                     staged,
                 )
-                assertEquals(accounted, pending.consumedDeliveryIds())
+                assertEquals<Set<String>>(accounted, pending.consumedDeliveryIds())
                 compose.waitForIdle()
                 compose.onNodeWithTag("contact-link-confirmation").assertIsDisplayed()
                 compose.onNodeWithTag("contact-link-cancel").performClick()

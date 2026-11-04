@@ -123,9 +123,9 @@ class SyncChannelNotificationTargetTest {
             entered.await()
             assertFalse(held.isCompleted)
             services.dataStore.replaceChannelSlotForTest(middle)
-            assertEquals(listOf(middle.id), services.dataStore.fetchChannels(radioId).map { it.id })
+            assertEquals(listOf(middle), services.dataStore.fetchChannels(radioId).toList())
             if (sameKey) services.dataStore.replaceChannelSlotForTest(replacement)
-            assertEquals(listOf(replacement.id), services.dataStore.fetchChannels(radioId).map { it.id })
+            assertEquals(listOf(replacement), services.dataStore.fetchChannels(radioId).toList())
             handler(
                 channelMessage("Peer: replacement @[TestDevice]", clock.now().plusSeconds(1), replacement.index),
                 replacement, DeliveryContext.Live,

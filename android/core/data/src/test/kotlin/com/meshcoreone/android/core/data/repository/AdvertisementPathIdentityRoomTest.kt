@@ -78,7 +78,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
                 assertEquals(foreign, saved(foreign))
                 assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
                 assertEquals(0, intercepted.pathCalls)
-                assertEquals(listOf(AdvertisementEvent.PathDiscoveryResponse(response())), events)
+                assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.PathDiscoveryResponse(response())), events)
                 assertTrue(logs.any { it.first == DebugLogLevel.WARNING && "ambiguous" in it.second })
             }
             store.deleteContact(EntityKey(RADIO_A, first.id))
@@ -106,7 +106,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             val discovered = store.fetchDiscoveredNodes(RADIO_A).single()
             assertEquals(original.publicKey, discovered.publicKey)
             assertEquals(AT, discovered.lastHeard)
-            assertEquals(listOf(AdvertisementEvent.PathDiscoveryResponse(response())), events)
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.PathDiscoveryResponse(response())), events)
             assertTrue(logs.none { it.first == DebugLogLevel.ERROR })
         }
     }
@@ -123,7 +123,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             runCurrent()
             assertNull(saved(original))
             assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
-            assertEquals(listOf(AdvertisementEvent.PathDiscoveryResponse(response())), events)
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.PathDiscoveryResponse(response())), events)
             assertTrue(logs.any { it.first == DebugLogLevel.WARNING && "changed" in it.second })
         }
     }
@@ -153,7 +153,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             runCurrent()
             assertEquals(newer, saved(newer))
             assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
-            assertEquals(listOf(AdvertisementEvent.PathDiscoveryResponse(response())), events)
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.PathDiscoveryResponse(response())), events)
             assertTrue(logs.any { it.first == DebugLogLevel.WARNING && "changed" in it.second })
         }
     }
@@ -174,7 +174,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             runCurrent()
             assertEquals(replacement, saved(replacement))
             assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
-            assertEquals(listOf(AdvertisementEvent.PathDiscoveryResponse(response())), events)
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.PathDiscoveryResponse(response())), events)
             assertTrue(logs.any { it.first == DebugLogLevel.WARNING && "changed" in it.second })
         }
     }
@@ -193,7 +193,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             assertEquals(first, saved(first))
             assertEquals(second, saved(second))
             assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
-            assertEquals(listOf(AdvertisementEvent.PathDiscoveryResponse(response())), events)
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.PathDiscoveryResponse(response())), events)
             assertTrue(logs.any { it.first == DebugLogLevel.WARNING && "ambiguous" in it.second })
         }
     }
@@ -204,7 +204,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             assertTrue(store.fetchContacts(RADIO_A).isEmpty())
             assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
             assertEquals(0, intercepted.pathCalls)
-            assertEquals(listOf(AdvertisementEvent.PathDiscoveryResponse(response())), events)
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.PathDiscoveryResponse(response())), events)
             assertTrue(logs.any { it.first == DebugLogLevel.INFO && "no matching" in it.second })
         }
     }
@@ -217,7 +217,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             emitResponse()
             assertEquals(original, saved(original))
             assertEquals(0, intercepted.pathCalls)
-            assertEquals(listOf(AdvertisementEvent.PathDiscoveryResponse(response())), events)
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.PathDiscoveryResponse(response())), events)
             assertEquals(1, logs.count { it.first == DebugLogLevel.ERROR && "controlled prefix read failure" in it.second })
             assertTrue(logs.none { "no matching" in it.second })
         }
@@ -235,7 +235,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
                 emitResponse()
                 assertEquals(original, saved(original))
                 assertTrue(store.fetchDiscoveredNodes(RADIO_A).isEmpty())
-                assertEquals(listOf(AdvertisementEvent.PathDiscoveryResponse(response())), events)
+                assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.PathDiscoveryResponse(response())), events)
                 assertEquals(1, logs.count { it.first == DebugLogLevel.ERROR })
                 assertTrue(logs.none { "no matching" in it.second })
             }
@@ -254,7 +254,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
                 saved(original),
             )
             assertEquals(AT, store.fetchDiscoveredNodes(RADIO_A).single().lastHeard)
-            assertEquals(listOf(AdvertisementEvent.PathDiscoveryResponse(response())), events)
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.PathDiscoveryResponse(response())), events)
         }
     }
 
@@ -275,7 +275,7 @@ class AdvertisementPathIdentityRoomTest : RepositoryTest() {
             assertEquals(publicKey(1), discovered.publicKey)
             assertEquals(AT, discovered.lastHeard)
             assertEquals(listOf(publicKey(1)), source.requestedContacts)
-            assertEquals(listOf(AdvertisementEvent.ContactUpdated), events)
+            assertEquals(listOf<AdvertisementEvent>(AdvertisementEvent.ContactUpdated), events)
             assertEquals(1, intercepted.materializeCalls)
         }
     }

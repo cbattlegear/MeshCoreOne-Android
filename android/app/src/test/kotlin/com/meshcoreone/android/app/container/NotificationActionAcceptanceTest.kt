@@ -199,7 +199,12 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             firstOwner.cancel()
             h.eventually("cancelled router unwound", virtualBudgetMillis = 0) { previousDeliveryFinished.isCompleted }
             if (beforeWire) {
-                assertEquals("one reply", session.notificationService.consumeDraft(contactKey))
+                if (channel) {
+                    assertNull(session.notificationService.consumeDraft(contactKey))
+                    assertEquals(1, h.delivery.posted.size)
+                } else {
+                    assertEquals("one reply", session.notificationService.consumeDraft(contactKey))
+                }
                 assertFalse(requireNotNull(receipt).preventsReplay)
                 assertTrue(h.links.radios.single().sent.none { it[0].toInt() == sendCommand })
                 holdBeforeWire = false

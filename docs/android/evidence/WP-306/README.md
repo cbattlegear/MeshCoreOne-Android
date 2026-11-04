@@ -221,6 +221,15 @@ row types in their original order, including under UNREAD and category filters.
 Negative vectors must return no rows. The test does not copy comparator logic
 or mock the filtering consumer.
 
+`productionConversationFilteredRetainsOnlyMatchingRowsInInputOrder` adds six
+interleaved, uniquely identified production rows: three matching and three
+nonmatching direct/channel/room rows. For each filter, `alpha` must return the
+literal room/channel/direct subset in input order, `beacon` only the matching
+channel, and `echo` only the otherwise nonmatching room. These 15 intended
+list comparisons distinguish row-by-row selection from returning all rows
+whenever any row matches. They do not derive expected subsets using the
+matcher under test. All 21 original vectors and their assertions are retained.
+
 The expected values retain the original WP-306 oracle and WP-311 `std` outputs,
 including partial/full expansion, capital sharp-S, Hangul, fullwidth digits and
 letters, dotless-i and ZWJ distinctions. No locale is inferred for `wp311_more`;

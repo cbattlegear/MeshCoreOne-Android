@@ -48,6 +48,66 @@ class ConversationSearchParityTest {
         }
     }
 
+    @Test
+    fun productionConversationFilteredRetainsOnlyMatchingRowsInInputOrder() {
+        val matchingRoom = Conversation.Room(
+            RemoteNodeSessionDTO(
+                id = UUID(0, 11), radioId = radio, publicKey = key, name = "Alpha Room",
+                role = RemoteNodeRole.ROOM_SERVER, notificationLevel = NotificationLevel.MUTED,
+            ),
+        )
+        val otherDirect = Conversation.Direct(
+            ContactDTO(
+                id = UUID(0, 12), radioId = radio, publicKey = key, name = "Bravo",
+                lastHeardTimestamp = null, isMuted = true,
+            ),
+        )
+        val matchingChannel = Conversation.Channel(
+            ChannelDTO(
+                id = UUID(0, 13), radioId = radio, index = 1u, name = "Alpha Beacon",
+                notificationLevel = NotificationLevel.MUTED,
+            ),
+        )
+        val otherRoom = Conversation.Room(
+            RemoteNodeSessionDTO(
+                id = UUID(0, 14), radioId = radio, publicKey = key, name = "Echo",
+                role = RemoteNodeRole.ROOM_SERVER, notificationLevel = NotificationLevel.MUTED,
+            ),
+        )
+        val matchingDirect = Conversation.Direct(
+            ContactDTO(
+                id = UUID(0, 15), radioId = radio, publicKey = key, name = "Alpha Direct",
+                lastHeardTimestamp = null, isMuted = true,
+            ),
+        )
+        val otherChannel = Conversation.Channel(
+            ChannelDTO(
+                id = UUID(0, 16), radioId = radio, index = 2u, name = "Foxtrot",
+                notificationLevel = NotificationLevel.MUTED,
+            ),
+        )
+        val rows = listOf(
+            matchingRoom, otherDirect, matchingChannel, otherRoom, matchingDirect, otherChannel,
+        )
+        for (filter in ChatFilter.entries) {
+            assertEquals(
+                "$filter: mixed matching rows retain input order",
+                listOf(matchingRoom, matchingChannel, matchingDirect),
+                rows.filtered(filter, "alpha", strings),
+            )
+            assertEquals(
+                "$filter: only the channel matches beacon",
+                listOf(matchingChannel),
+                rows.filtered(filter, "beacon", strings),
+            )
+            assertEquals(
+                "$filter: only the room matches echo",
+                listOf(otherRoom),
+                rows.filtered(filter, "echo", strings),
+            )
+        }
+    }
+
     private fun conversations(name: String): List<Conversation> = listOf(
         Conversation.Direct(
             ContactDTO(

@@ -83,3 +83,52 @@ integration into trusted default-branch code. Until that occurs, the deployed
 publisher does not recognize this scope. Bootstrap, publication, workflow
 dispatch, protection changes, merge and deployment are separate actions and are
 not authorized by preparing this contract.
+
+## Compiler-action authority is not provided by this route
+
+Inspection of trusted main `43341865f923d439ace1f22edac81f7fb642355c`
+found no independently controlled compiler-action verifier. The Android CI job
+checks out the candidate and executes its Python launcher and Gradle wrapper,
+settings, build logic and plugins. Wrapper/dependency checksums, environment
+allowlisting and committed-input comparison establish selected input identity,
+not independent control of compiler actions. Candidate-authored task observers,
+source hashes, output files, task types and successful process exits cannot prove
+that a compiler performed the declared work. Moving only the observer into a
+trusted init script would still permit candidate build configuration to replace
+compiler actions in that Gradle process.
+
+The default-branch publisher is independently controlled but deliberately
+data-only: it fetches candidate Git objects, revalidates the authenticated source
+review and checks the original CI job/log. It does not execute a separate
+compiler or provide an isolated observer of compiler execution. Its successful
+publication therefore cannot be repurposed as compiler proof. The other
+controller workflows are read-only previews/audits, not an execution route.
+An active Actions workflow catalog entry is not evidence that the file exists
+in the current trusted tree or that a verifier was deployed.
+
+Source-authoring admission and publication admission remain different. At that
+trusted revision, WP-003 admits `ci.py` with `wp-owned/modify` and `test_ci.py`
+with `wp-owned/test`; `wp003-ci-reader-route-v1` refuses both with
+`Infrastructure scope has unknown, missing, duplicate or untested paths`.
+The complete #518 successor also contains six other paths absent from the finite
+map: the CI README, WP-003 deviation, `local_scope.py`,
+`verify_candidate_task_graph.gradle`, `test_ci_environment.py` and
+`test_local_scope.py`. Omitting them from the declared scope is not a workaround.
+A new `.github/workflows/android-compiler-verification.yml` can be authored under
+`trusted-workflows/update-directly-required-job-or-input`, but this finite
+publication route rejects it too. No new workflow or compiler verifier has been
+created, deployed or dispatched by this investigation.
+
+The supported alternative is a separately reviewed, explicitly authorized
+exact-candidate bootstrap into trusted default-branch infrastructure, as required
+by the bootstrap boundary above. Before positive compiler acceptance, that
+infrastructure needs a trusted executable-input closure and compiler invocation
+whose actions cannot be replaced by candidate configuration, a separate
+credential-free candidate execution boundary, and evidence bound to the exact
+source/input/toolchain and actual run/attempt. An authenticated controller must
+validate the result in both live and historical readers. Its finite publication
+path map must first admit the actual implementation/test/workflow surfaces;
+the candidate cannot authorize that expansion or mint its own receipt.
+Any new check must remain non-required until it has passed end to end on a
+representative real PR. Do not change protection or treat a unit-test fixture,
+workflow dispatch or source-review publication as that operational proof.

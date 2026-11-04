@@ -168,6 +168,39 @@ def build_log(modules, **changes):
 
 
 class RepairContractTests(unittest.TestCase):
+    def test_infrastructure_v1_authoring_admission_is_not_compiler_verifier_deployment(self):
+        from controller.capabilities import CapabilityEngine
+
+        paths = (
+            ("tools/android-port/controller/ci.py", "modify", "wp-owned"),
+            ("tools/android-port/tests/test_ci.py", "test", "wp-owned"),
+            ("tools/android-port/controller/local_scope.py", "modify", "wp-owned"),
+            ("tools/android-port/controller/verify_candidate_task_graph.gradle", "modify", "wp-owned"),
+            ("tools/android-port/tests/test_ci_environment.py", "test", "wp-owned"),
+            ("tools/android-port/tests/test_local_scope.py", "test", "wp-owned"),
+            ("docs/android/ci/README.md", "modify", "wp-owned"),
+            ("docs/android/deviations/WP-003.md", "modify", "wp-owned"),
+            (".github/workflows/android-compiler-verification.yml",
+             "update-directly-required-job-or-input", "trusted-workflows"),
+        )
+        for path, operation, capability in paths:
+            with self.subTest(path=path, operation=operation):
+                manifest, rules, value, scope = infrastructure_fixture()
+                admission = CapabilityEngine(rules).admit(
+                    "WP-003", manifest.wp("WP-003")["write_paths"], path, operation,
+                )
+                self.assertEqual(admission.capability_id, capability)
+                self.assertNotIn(path, INFRASTRUCTURE_PATH_OPERATIONS)
+                scope["paths"] = sorted([
+                    "tools/android-port/controller/merged_acceptance.py",
+                    "tools/android-port/tests/test_merged_acceptance.py",
+                    path,
+                ])
+                with self.assertRaisesRegex(PortError, "Infrastructure scope has unknown"):
+                    validate_infrastructure_scope(
+                        scope, value.binding, manifest, rules, scope["paths"],
+                    )
+
     def test_infrastructure_scope_admits_only_exact_paths_and_capability_operations(self):
         manifest, rules, value, scope = infrastructure_fixture()
         self.assertEqual(

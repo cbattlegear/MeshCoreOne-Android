@@ -623,7 +623,7 @@ class MessageService(
                     }
                     validate(row.text, contact)
                     if (!isResend && row.status == MessageStatus.DELIVERED) {
-                        return@withFreshNotificationAction row
+                        return@owned row
                     }
                     val claim = newDirectClaim(claimID, row, contact, isResend)
                     val wireTimestamp = synchronized(lock) { claim.timestamp } ?: (

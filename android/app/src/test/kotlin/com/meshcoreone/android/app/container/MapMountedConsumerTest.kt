@@ -445,12 +445,16 @@ class MapMountedConsumerTest {
     }
 
     private fun advanceFrames() {
-        val clock = frameClock ?: return
         repeat(6) {
-            host.get().runOnUiThread {
-                Snapshot.sendApplyNotifications()
-                frameNanos += 16_000_000L
-                clock.sendFrame(frameNanos)
+            val clock = frameClock
+            if (clock == null) {
+                compose.mainClock.advanceTimeByFrame()
+            } else {
+                host.get().runOnUiThread {
+                    Snapshot.sendApplyNotifications()
+                    frameNanos += 16_000_000L
+                    clock.sendFrame(frameNanos)
+                }
             }
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))

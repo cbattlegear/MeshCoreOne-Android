@@ -137,6 +137,16 @@ internal class ContactsFakeStore(
         upsert(radioId, frame)
     }
 
+    override suspend fun saveContactPreservingNewer(
+        radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
+    ): ContactSaveResult? = synchronized(lock) {
+        val existing = contactRows.values.firstOrNull { it.radioId == radioId && it.publicKey == frame.publicKey }
+        if (existing != null && (existing.lastModified > frame.lastModified ||
+                (existing.lastModified == frame.lastModified && existing.toContactFrame() != expectedFrame &&
+                    existing.toContactFrame() != frame))) null
+        else upsert(radioId, frame)
+    }
+
     override suspend fun saveContact(dto: ContactDTO) = synchronized(lock) { contactRows[dto.id] = dto }
 
     override suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long = synchronized(lock) {

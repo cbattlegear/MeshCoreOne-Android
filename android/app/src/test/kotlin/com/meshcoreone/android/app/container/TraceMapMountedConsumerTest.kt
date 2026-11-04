@@ -10,9 +10,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
+import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -24,6 +27,7 @@ import com.meshcoreone.android.core.maps.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.tools.trace.*
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
@@ -64,8 +68,12 @@ class TraceMapMountedConsumerTest {
     private var tableContacts = listOf(north, south)
     private val tableVersion = mutableIntStateOf(0)
     private val failures = mutableListOf<Exception>()
+    private var frameClock: BroadcastFrameClock? = null
+    private var frameNanos = 0L
 
     @Before fun createHost() {
+        frameClock = null
+        frameNanos = 0L
         cameraChange = null
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
@@ -74,7 +82,10 @@ class TraceMapMountedConsumerTest {
         runBlocking { MeshCoreStorage.get(host.get()).preferences.resetAppPreferences() }
     }
 
-    @After fun destroyHost() { host.pause().stop().destroy() }
+    @After fun destroyHost() {
+        host.pause().stop().destroy()
+        frameClock?.cancel()
+    }
 
     @Test fun pretraceCandidatesEditLastHopAndRetainPanAcrossLivePreferences() {
         mount()
@@ -151,28 +162,32 @@ class TraceMapMountedConsumerTest {
     }
 
     @Test fun explicitTraceFramingReissuesAfterPanAndOnRepeatedFit() {
-        mount()
+        mount(deterministicFrames = true)
         val initialRevision = latest!!.cameraCommandRevision
         val reportCamera = requireNotNull(cameraChange)
-        compose.runOnIdle { reportCamera(panned) }
+        host.get().runOnUiThread { reportCamera(panned) }
+        advanceFrames()
         compose.waitForIdle()
         compose.waitUntil(5_000) { latest?.camera == panned }
         assertEquals(initialRevision, latest!!.cameraCommandRevision)
 
         compose.onNodeWithTag("trace-map:center-all").performClick()
-        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        advanceFrames()
         compose.waitForIdle()
         compose.waitUntil(5_000) {
             latest?.camera != panned && latest!!.cameraCommandRevision > initialRevision
         }
         val firstFitRevision = latest!!.cameraCommandRevision
         compose.onNodeWithTag("trace-map:center-all").performClick()
-        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        advanceFrames()
         compose.waitForIdle()
         compose.waitUntil(5_000) { latest!!.cameraCommandRevision > firstFitRevision }
     }
 
-    private fun mount(appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM) {
+    private fun mount(
+        appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM,
+        deterministicFrames: Boolean = false,
+    ) {
         val directory = object : TraceNodeDirectory {
             override suspend fun fetchContacts(radioId: RadioId) = tableContacts
             override suspend fun fetchDiscoveredNodes(radioId: RadioId) = listOf(hill)
@@ -196,31 +211,43 @@ class TraceMapMountedConsumerTest {
         val dependencies = TracePathScreen.Dependencies(
             feature, recent, TraceDiagnostics { _, error -> failures += error }, radio, 0, preferences,
         )
-        host.get().setContent {
-            MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false) {
-                TracePathScreen(
-                    dependencies.copy(nodeTableVersion = tableVersion.intValue),
-                    mapSurface = { presentation, _, _, camera, marker, overlay ->
-                        SideEffect {
-                            latest = presentation
-                            cameraChange = camera
-                        }
-                        Box(Modifier.fillMaxSize()) {
-                            Column {
-                                presentation.points.forEach { point ->
-                                    TextButton(
-                                        onClick = { marker(point) }, modifier = Modifier.testTag("pin:${point.id}"),
-                                    ) { Text(point.label ?: point.id.toString()) }
-                                }
-                                TextButton(onClick = { camera(panned) }, modifier = Modifier.testTag("pan")) { Text("Pan") }
+        host.get().runOnUiThread {
+            val parent = if (deterministicFrames) {
+                BroadcastFrameClock().also { frameClock = it }.let { clock ->
+                    host.get().window.decorView.createLifecycleAwareWindowRecomposer(
+                        coroutineContext = clock,
+                        lifecycle = host.get().lifecycle,
+                    )
+                }
+            } else null
+            host.get().setContent(parent = parent) {
+                MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false) {
+                    TracePathScreen(
+                        dependencies.copy(nodeTableVersion = tableVersion.intValue),
+                        mapSurface = { presentation, _, _, camera, marker, overlay ->
+                            SideEffect {
+                                latest = presentation
+                                cameraChange = camera
                             }
-                            overlay()
-                        }
-                    },
-                )
+                            Box(Modifier.fillMaxSize()) {
+                                Column {
+                                    presentation.points.forEach { point ->
+                                        TextButton(
+                                            onClick = { marker(point) }, modifier = Modifier.testTag("pin:${point.id}"),
+                                        ) { Text(point.label ?: point.id.toString()) }
+                                    }
+                                    TextButton(onClick = { camera(panned) }, modifier = Modifier.testTag("pan")) { Text("Pan") }
+                                }
+                                overlay()
+                            }
+                        },
+                    )
+                }
             }
         }
+        advanceFrames()
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_map)).performClick()
+        advanceFrames()
         compose.waitUntil(5_000) {
             latest?.points?.size == 3 &&
                 compose.onAllNodesWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_pathedit_filter_favorites))
@@ -228,6 +255,19 @@ class TraceMapMountedConsumerTest {
         }
         compose.onNodeWithTag("trace-map:center-all").assertIsEnabled()
         assertNotNull(latest!!.camera)
+    }
+
+    private fun advanceFrames() {
+        val clock = frameClock ?: return
+        repeat(6) {
+            host.get().runOnUiThread {
+                Snapshot.sendApplyNotifications()
+                frameNanos += 16_000_000L
+                clock.sendFrame(frameNanos)
+            }
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
+        }
     }
 
     private fun text(id: Int): String = host.get().getString(id)

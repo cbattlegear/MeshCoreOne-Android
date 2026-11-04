@@ -10,12 +10,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -33,6 +36,7 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.map.*
 import java.io.IOException
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
@@ -67,8 +71,12 @@ class MapMountedConsumerTest {
         UUID(0, 3), radio, Bytes(ByteArray(32) { 2 }), "Located discovery", 1u,
         Instant.EPOCH, 0u, 38.0, -123.0, 255u, Bytes.EMPTY, null, null,
     )
+    private var frameClock: BroadcastFrameClock? = null
+    private var frameNanos = 0L
 
     @Before fun createHost() {
+        frameClock = null
+        frameNanos = 0L
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
@@ -76,7 +84,10 @@ class MapMountedConsumerTest {
         runBlocking { MeshCoreStorage.get(host.get()).preferences.resetAppPreferences() }
     }
 
-    @After fun destroyHost() { host.pause().stop().destroy() }
+    @After fun destroyHost() {
+        host.pause().stop().destroy()
+        frameClock?.cancel()
+    }
 
     @Test fun mountedContactDetailAndMessageForwardTheActualDtoAndClearSelection() {
         val details = mutableListOf<ContactDTO>()
@@ -285,13 +296,13 @@ class MapMountedConsumerTest {
         var loads = 0
         val initial = MapFeatureDependencies(source { loads++; content() }, offline(), preferences = store)
         val dependencies = mutableStateOf(initial)
-        mount(initial, dependenciesProvider = { dependencies.value })
+        mount(initial, dependenciesProvider = { dependencies.value }, deterministicFrames = true)
         compose.onNodeWithTag("pick:${contact.id}").assertExists()
 
-        compose.runOnIdle {
+        host.get().runOnUiThread {
             dependencies.value = initial.copy(dataSource = source { loads++; content() })
         }
-        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        advanceFrames()
         compose.waitForIdle()
         compose.waitUntil(5_000) {
             loads == 2 && compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
@@ -387,38 +398,63 @@ class MapMountedConsumerTest {
         onPresentation: (MapPresentationState) -> Unit = {},
         appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM,
         dependenciesProvider: (() -> MapFeatureDependencies)? = null,
+        deterministicFrames: Boolean = false,
     ) {
         val bound = dependencies.copy(preferences = dependencies.preferences ?: AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,
             host.get().getSharedPreferences("shared-map", 0),
         ))
-        host.get().setContent {
-            MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false, motionScale = 0f) {
-                MapEntry(
-                    FeatureRoute(FeatureId.MAP), { error("No generic navigation") },
-                    dependenciesProvider?.invoke() ?: bound,
-                    focus = focus(),
-                    onFocusConsumed = onFocusConsumed,
-                    mapSurface = { state, _, _, _, select, overlay ->
-                        SideEffect { onPresentation(state) }
-                        Box(Modifier.fillMaxSize()) {
-                            Column(Modifier.align(androidx.compose.ui.Alignment.Center).testTag("test-renderer")) {
-                                state.points.forEach { marker ->
-                                    TextButton({ select(marker) }, Modifier.testTag("pick:${marker.id}")) { Text(marker.label.orEmpty()) }
+        host.get().runOnUiThread {
+            val parent = if (deterministicFrames) {
+                BroadcastFrameClock().also { frameClock = it }.let { clock ->
+                    host.get().window.decorView.createLifecycleAwareWindowRecomposer(
+                        coroutineContext = clock,
+                        lifecycle = host.get().lifecycle,
+                    )
+                }
+            } else null
+            host.get().setContent(parent = parent) {
+                MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false, motionScale = 0f) {
+                    MapEntry(
+                        FeatureRoute(FeatureId.MAP), { error("No generic navigation") },
+                        dependenciesProvider?.invoke() ?: bound,
+                        focus = focus(),
+                        onFocusConsumed = onFocusConsumed,
+                        mapSurface = { state, _, _, _, select, overlay ->
+                            SideEffect { onPresentation(state) }
+                            Box(Modifier.fillMaxSize()) {
+                                Column(Modifier.align(androidx.compose.ui.Alignment.Center).testTag("test-renderer")) {
+                                    state.points.forEach { marker ->
+                                        TextButton({ select(marker) }, Modifier.testTag("pick:${marker.id}")) { Text(marker.label.orEmpty()) }
+                                    }
                                 }
+                                overlay()
                             }
-                            overlay()
-                        }
-                    },
-                )
+                        },
+                    )
+                }
             }
         }
+        advanceFrames()
         compose.waitForIdle()
         compose.waitUntil(5_000) {
             compose.onAllNodesWithText(text(R.string.l10n_app_map_map_controls_centerall))
                 .fetchSemanticsNodes().isNotEmpty()
         }
         compose.waitForIdle()
+    }
+
+    private fun advanceFrames() {
+        val clock = frameClock ?: return
+        repeat(6) {
+            host.get().runOnUiThread {
+                Snapshot.sendApplyNotifications()
+                frameNanos += 16_000_000L
+                clock.sendFrame(frameNanos)
+            }
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
+        }
     }
 
     private fun content() = MapFeatureContent(listOf(

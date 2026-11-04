@@ -131,7 +131,7 @@ object TracePathScreen {
         DisposableEffect(holder) { onDispose { holder.stopListening(); holder.cancelBatchTrace() } }
         val state by holder.state.collectAsStateWithLifecycle()
         val savedState by savedPaths.state.collectAsStateWithLifecycle()
-        TracePathContent(state, holder, savedState, savedPaths)
+        TracePathContent(state, holder, savedState, savedPaths, dependencies.generation, dependencies.radioId)
     }
 }
 
@@ -153,10 +153,13 @@ private fun TracePathContent(
     holder: TracePathStateHolder,
     savedState: SavedPathsState,
     savedPaths: SavedPathsStateHolder,
+    connectionGeneration: Int,
+    radioId: RadioId?,
 ) {
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val codeInput = rememberTraceCodeInputState(holder, connectionGeneration, radioId)
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(12.dp),
@@ -180,7 +183,7 @@ private fun TracePathContent(
                 Text(stringResource(C.contactsTraceSaved))
             }
         }
-        if (showMap) TracePathMapContent(state) else TracePathListContent(state, holder)
+        if (showMap) TracePathMapContent(state) else TracePathListContent(state, holder, codeInput)
     }
     if (showSaved) {
         AlertDialog(
@@ -221,7 +224,7 @@ private fun TracePathContent(
 }
 
 @Composable
-private fun TracePathListContent(state: TracePathState, holder: TracePathStateHolder) {
+private fun TracePathListContent(state: TracePathState, holder: TracePathStateHolder, codeInput: TraceCodeInputState) {
     val scope = rememberCoroutineScope()
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -279,6 +282,7 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
                 }
             }
         }
+        item(key = "trace-code-input") { TraceCodeInput(state, holder, codeInput) }
         if (state.availableRepeaters.isNotEmpty()) {
             item {
                 Text(stringResource(T.toolsNodeDiscoveryRepeaters), style = MaterialTheme.typography.titleMedium)

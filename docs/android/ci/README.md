@@ -116,7 +116,16 @@ does not establish the hosted isolation boundary.
 These are producer observations, not independent proof: candidate-controlled
 build configuration, earlier Python steps and other executable inputs still
 require a trusted immutable execution-input closure and reader enforcement.
-Trusted acceptance remains blocked pending that separately reviewed boundary.
+Both the live executor and historical acceptance reader now reject even
+structurally valid matching task/source records with an explicit independent
+compiler-evidence blocker. A successful Gradle exit, fresh state, task types,
+source hashes or replayed hosted log cannot turn these observations into a
+successful consumer-compilation report. No candidate JSON field, environment
+override or self-issued receipt enables a positive path. Acceptance requires a
+separately reviewed and deployed independent execution-input boundary and
+verifier; neither is currently available. The bounded infrastructure-review
+publication route is source-review/test authority, not compiler-action proof,
+and its finite path map does not admit `ci.py` or `test_ci.py`.
 The historical reader detects the new declaration from immutable base/head
 workflows while preserving older workflows' existing acceptance. The
 compile-only result does not establish a full benchmark build, performance,

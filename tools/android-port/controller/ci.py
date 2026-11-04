@@ -389,7 +389,12 @@ def validate_benchmark_consumer_compilation(records, snapshot):
         seen.add(task)
     if seen != set(BENCHMARK_CONSUMER_KOTLIN_TASKS):
         raise PortError("Missing benchmark consumer compilation task")
-    return sorted(records, key=lambda record: record["task"])
+    # Gradle configuration and every record here remain candidate-controlled.
+    raise PortError(
+        "Independent benchmark consumer compiler evidence is unavailable: "
+        "producer-only task/source observations cannot prove compiler execution; "
+        "a separately trusted execution-input boundary and verifier must be deployed"
+    )
 
 
 def read_benchmark_consumer_compilation(path, repo):

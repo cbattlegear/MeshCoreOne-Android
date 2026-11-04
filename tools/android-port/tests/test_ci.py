@@ -414,11 +414,15 @@ class BenchmarkConsumerTests(unittest.TestCase):
             execute.assert_not_called()
             self.assertTrue((project / "build").is_dir())
 
-    def test_source_evidence_requires_each_exact_task_and_committed_blob(self):
+    def test_source_evidence_rejects_even_exact_producer_records(self):
         snapshot = {path: str(index + 1) * 40 for index, path in enumerate(ci.BENCHMARK_CONSUMER_SOURCES)}
         sources = ci.benchmark_consumer_sources(snapshot)
         valid = [{"task": task, "sources": sources.copy()} for task in ci.BENCHMARK_CONSUMER_KOTLIN_TASKS]
-        self.assertEqual(ci.validate_benchmark_consumer_compilation(valid[::-1], snapshot), valid)
+        for records in (valid, valid[::-1]):
+            with self.subTest(records=records), self.assertRaisesRegex(
+                PortError, "Independent benchmark consumer compiler evidence is unavailable"
+            ):
+                ci.validate_benchmark_consumer_compilation(records, snapshot)
         invalid = (
             [],
             valid[:1],
@@ -454,7 +458,8 @@ class BenchmarkConsumerTests(unittest.TestCase):
             evidence.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
             with patch.object(ci, "git", return_value=("a" * 40).encode()), \
                     patch.object(ci, "tree", return_value=snapshot):
-                self.assertEqual(ci.read_benchmark_consumer_compilation(evidence, root), records)
+                with self.assertRaisesRegex(PortError, "producer-only task/source observations"):
+                    ci.read_benchmark_consumer_compilation(evidence, root)
                 evidence.write_text("{bad-json}\n", encoding="utf-8")
                 with self.assertRaises(PortError):
                     ci.read_benchmark_consumer_compilation(evidence, root)
@@ -462,6 +467,52 @@ class BenchmarkConsumerTests(unittest.TestCase):
                 (root / ci.BENCHMARK_CONSUMER_SOURCES[0]).write_text("dirty", encoding="utf-8")
                 with self.assertRaisesRegex(PortError, "differs from the committed head"):
                     ci.read_benchmark_consumer_compilation(evidence, root)
+
+    def test_successful_candidate_commands_and_fabricated_records_cannot_print_success(self):
+        for local in (False, True):
+            with self.subTest(local=local), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = root / "android"
+                project.mkdir()
+                (project / "settings.gradle.kts").write_text("", encoding="utf-8")
+                snapshot = {}
+                for index, relative in enumerate(ci.BENCHMARK_CONSUMER_SOURCES):
+                    source = root / relative
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    data = f"fixture {index}\n".encode()
+                    source.write_bytes(data)
+                    snapshot[relative] = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+                records = [
+                    {"task": task, "sources": snapshot.copy()}
+                    for task in ci.BENCHMARK_CONSUMER_KOTLIN_TASKS
+                ]
+
+                def candidate_command(command, environment, log, **kwargs):
+                    if log.name == "gradle-scaffold.log":
+                        Path(environment["ANDROID_CI_BENCHMARK_CONSUMER"]).write_text(
+                            "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8",
+                        )
+
+                with (
+                    patch.object(ci, "REPO", root),
+                    patch.object(ci, "load_manifest", return_value=object()),
+                    patch.object(ci, "port_map", return_value=[]),
+                    patch.object(ci, "candidate_environment", return_value={}),
+                    patch.object(ci, "verify_wrapper"),
+                    patch.object(ci, "execute", side_effect=candidate_command) as execute,
+                    patch.object(ci, "validate_candidate_task_graph",
+                                 return_value={"tasks": 1, "result": "no-duplicate-ci-evidence"}),
+                    patch.object(ci, "git", return_value=("a" * 40).encode()),
+                    patch.object(ci, "tree", return_value=snapshot),
+                    contextlib.redirect_stdout(io.StringIO()) as printed,
+                    self.assertRaisesRegex(PortError, "producer-only task/source observations"),
+                ):
+                    ci.run_stage(
+                        "scaffold", {"host": "linux", "private_root": str(root / "private")},
+                        root / "output", local=local, scopes=[ci.BENCHMARK_CONSUMER_SCOPE],
+                    )
+                self.assertEqual(execute.call_count, 3)
+                self.assertNotIn('"result": "success"', printed.getvalue())
 
 
 class SourceDispositionTests(unittest.TestCase):

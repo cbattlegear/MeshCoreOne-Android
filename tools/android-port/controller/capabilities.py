@@ -58,7 +58,8 @@ class CapabilityEngine:
         path = path.replace("\\", "/")
         if pattern.endswith("/**"):
             root = pattern[:-3].rstrip("/")
-            return path == root or path.startswith(root + "/")
+            if not any(char in root for char in "*?["):
+                return path == root or path.startswith(root + "/")
         return fnmatchcase(path, pattern)
 
     def admit(self, wp_id: str, assigned_paths: list[str], path: str, operation: str) -> Admission:

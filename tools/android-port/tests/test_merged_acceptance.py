@@ -22,11 +22,12 @@ from controller.ledger import Identity, validate_merged_implementation
 from controller.merged_acceptance import (
     BoundedRepair, HumanGateRequired, MergedAcceptance, NoImplementationFound,
     declares_benchmark_consumer, declares_completion, validate_benchmark_build_log,
-    validate_benchmark_consumer_build_log,
+    validate_benchmark_consumer_build_log, timestamp,
 )
 from controller.model import REFERENCE_SHA, git
 from controller.native_review import PUBLICATION_MARKER, PUBLICATION_STEP, RESULT_MARKER, REVIEW_MARKER, WORKFLOW_PATH
 from controller.render import marker
+from controller.schema import digest
 
 
 class MergedAcceptanceTests(unittest.TestCase):
@@ -460,11 +461,34 @@ class MergedAcceptanceTests(unittest.TestCase):
         if bounded:
             review = api.routes[("GET", prefix + "/pulls/123/reviews?per_page=100&page=1")][0]
             receipt = json.loads(review["body"][len(REVIEW_MARKER):])
-            receipt.update(schema_version=2, evidence={"schema_version": 3}, scope_comment_id=700)
+            if bounded == "infrastructure":
+                scope = {
+                    "schema_version": 1, "kind": "bounded-infrastructure-verification",
+                    "scope_id": "wp003-ci-reader-route-v1", "paths": ["tools/android-port/controller/native_review.py"],
+                }
+                receipt.update(
+                    schema_version=4,
+                    evidence={
+                        "schema_version": 5, "verification_scope": scope,
+                        "runs": [{"check": "android-ci", "run_id": 1, "run_attempt": 1}],
+                    },
+                )
+            else:
+                scope = None
+                receipt.update(schema_version=2, evidence={"schema_version": 3}, scope_comment_id=700)
             review["body"] = REVIEW_MARKER + json.dumps(receipt)
             result = json.loads(checks[0]["output"]["summary"][len(RESULT_MARKER):])
-            result.update(acceptance_kind="bounded-repair", wp_complete=False, dependency_unlock=False,
-                          review_body_sha256=hashlib.sha256(review["body"].encode()).hexdigest())
+            result.update(
+                acceptance_kind=(
+                    "bounded-infrastructure-verification" if bounded == "infrastructure" else "bounded-repair"
+                ),
+                wp_complete=False, dependency_unlock=False,
+                review_body_sha256=hashlib.sha256(review["body"].encode()).hexdigest(),
+            )
+            if bounded == "infrastructure":
+                result.update(
+                    verification_scope_id=scope["scope_id"], scope_sha256=digest(scope), ci_run_ids=[1],
+                )
             for check in checks:
                 check["output"]["summary"] = RESULT_MARKER + json.dumps(result)
         for check in checks:
@@ -492,6 +516,34 @@ class MergedAcceptanceTests(unittest.TestCase):
                             self.assertEqual(result["kind"], "merged-implementation")
                         self.assertEqual(result["review_ids"], [90])
                         self.assertTrue(all(call.args[1] == 102 for call in logs.call_args_list))
+
+    def test_infrastructure_publisher_scope_and_ci_receipt_must_match_historical_consumer(self):
+        reader, api, prefix, manifest, rules, checks, log = self.normalized_merged_fixture(
+            bounded="infrastructure",
+        )
+        pr = api.routes[("GET", prefix + "/pulls/123")]
+        merged_at = timestamp(pr["merged_at"], "merge")
+        with patch("controller.repair_acceptance.read_job_log", return_value=log):
+            scope = reader.published_scope("WP-101", 123, BASE, HEAD, merged_at, manifest, rules)
+        self.assertEqual(scope["review_id"], 90)
+        self.assertEqual(scope["approvals"], [])
+        result = json.loads(checks[0]["output"]["summary"][len(RESULT_MARKER):])
+        result["ci_run_ids"] = [999]
+        summary = RESULT_MARKER + json.dumps(result)
+        for check in checks:
+            check["output"]["summary"] = summary
+        receipt_log = {
+            "check_ids": sorted(check["id"] for check in checks),
+            "result_sha256": hashlib.sha256(summary.encode()).hexdigest(),
+        }
+        log = (
+            f"Native review WP-101 PR 123 receipt 90\t{PUBLICATION_STEP}\t"
+            f"2026-10-10T11:45:00Z {PUBLICATION_MARKER}{json.dumps(receipt_log)}\n"
+        )
+        with patch("controller.repair_acceptance.read_job_log", return_value=log), self.assertRaisesRegex(
+            PortError, "disagrees with its source receipt",
+        ):
+            reader.published_scope("WP-101", 123, BASE, HEAD, merged_at, manifest, rules)
 
     def test_normalized_historical_checks_keep_receipt_timestamp_and_attempt_guards(self):
         for kind in ("missing-receipt", "copied-id", "changed-summary", "late-check",
@@ -942,11 +994,19 @@ class MergedAcceptanceTests(unittest.TestCase):
         def line(value, step="Compile benchmark consumer"):
             return f"job\t{step}\t2026-10-10T11:00:00Z {json.dumps(value)}\n"
 
-        validate_benchmark_consumer_build_log(line(report), snapshot)
+        for log in (
+            line(report),
+            line(report).replace("2026-10-10T11:00:00Z", "2026-11-04T21:45:00Z"),
+        ):
+            with self.subTest(log=log), self.assertRaisesRegex(
+                PortError, "producer-only task/source observations"
+            ):
+                validate_benchmark_consumer_build_log(log, snapshot)
         for kind in (
             "missing", "duplicate-report", "wrong-step", "failed", "non-strict", "wrong-scope",
             "wrong-tasks", "missing-phase", "phase-count", "missing-record", "duplicate-record",
             "wrong-task", "wrong-blob", "missing-source", "extra-claim", "unexpected-tests",
+            "self-issued-proof",
         ):
             value = copy.deepcopy(report)
             if kind == "failed":
@@ -977,6 +1037,10 @@ class MergedAcceptanceTests(unittest.TestCase):
                 value["performance_measured"] = True
             elif kind == "unexpected-tests":
                 value["compiled_test_sources"] = {"app": {}}
+            elif kind == "self-issued-proof":
+                value["independent_compiler_proof"] = {
+                    "verified": True, "head": HEAD, "run_id": 1, "sources": snapshot.copy(),
+                }
             log = "" if kind == "missing" else line(
                 value, "Run parallel Gradle validation and Android tasks" if kind == "wrong-step"
                 else "Compile benchmark consumer"
@@ -1054,7 +1118,8 @@ class MergedAcceptanceTests(unittest.TestCase):
                 patch("controller.merged_acceptance.declares_benchmark_consumer",
                       side_effect=lambda _repo, revision, _tree: revision == HEAD), \
                 patch("controller.merged_acceptance.validate_benchmark_build_log") as full_benchmark:
-            reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            with self.assertRaisesRegex(PortError, "producer-only task/source observations"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
             full_benchmark.assert_not_called()
             for value in (None, False, "true"):
                 scope_report["benchmark_consumer"] = value
@@ -1069,7 +1134,8 @@ class MergedAcceptanceTests(unittest.TestCase):
             ]
             paths[:] = ["tools/android-port/controller/verify_candidate_task_graph.gradle"]
             scope_report["scopes"] = classify(paths)
-            reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            with self.assertRaisesRegex(PortError, "producer-only task/source observations"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
             full_benchmark.assert_not_called()
 
     def test_new_consumer_contract_allows_unselected_documentation_only_diff(self):

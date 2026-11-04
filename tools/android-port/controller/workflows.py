@@ -455,6 +455,9 @@ def validate_candidate(value: dict, text: str):
     parity_runner_command = runner_command.replace(
         " --candidate-event-name", " --include-tests android/parity-tests --candidate-event-name", 1,
     )
+    infrastructure_runner_command = parity_runner_command.replace(
+        " --candidate-event-name", " --include-tests tools/android-port/oracle --candidate-event-name", 1,
+    )
     selectors = [step for step in jobs["scope"]["steps"] if "controller/test_runner.py" in step.get("run", "")]
     if (
         len(selectors) != 1 or "if" in selectors[0] or selectors[0].get("continue-on-error")
@@ -470,7 +473,7 @@ def validate_candidate(value: dict, text: str):
         or [
             line for line in runners[0].get("run", "").splitlines()
             if "controller/test_runner.py" in line
-        ] not in ([runner_command], [parity_runner_command])
+        ] not in ([runner_command], [parity_runner_command], [infrastructure_runner_command])
     ):
         raise PortError("Controller CI must discover the real native accessibility runner regressions once and fail closed")
     controller_checks = [
@@ -481,10 +484,12 @@ def validate_candidate(value: dict, text: str):
         "python android/parity-tests/semantic.py --check",
     ]
     runner_lines = executable_lines(
-        runners[0]["run"], expression_lines=(runner_command, parity_runner_command),
+        runners[0]["run"],
+        expression_lines=(runner_command, parity_runner_command, infrastructure_runner_command),
     )
     if runner_lines not in (
         [runner_command, *controller_checks], [parity_runner_command, *controller_checks],
+        [infrastructure_runner_command, *controller_checks],
     ):
         raise PortError("Controller CI must run the complete fixed validation sequence without overrides")
     validate_fixed_steps(controller_steps, [
@@ -518,7 +523,8 @@ def validate_candidate(value: dict, text: str):
             "if": unselected_controller,
             "run": ['echo "Controller suite not selected."'],
         },
-    ], "Controller job", powershell=False, expression_lines=(runner_command, parity_runner_command))
+    ], "Controller job", powershell=False,
+        expression_lines=(runner_command, parity_runner_command, infrastructure_runner_command))
     for name in ("build", "external-oracle", "backup-oracle"):
         job = jobs[name]
         if job.get("if") == "${{ always() }}" or "scope" not in job.get("needs", []):

@@ -188,6 +188,7 @@ def validate_benchmark_build_log(log):
 
 
 def validate_benchmark_consumer_build_log(log, snapshot):
+    """Reject producer-only compiler observations, including successful historical runs."""
     from .ci import (
         BENCHMARK_CONSUMER_SCOPE, BENCHMARK_CONSUMER_TASKS,
         validate_benchmark_consumer_compilation,
@@ -445,11 +446,16 @@ class MergedAcceptance:
                 raise PortError("Historical native checks do not reference the same published review")
             selected.append(integrity)
         result = decode_json(summary[len(RESULT_MARKER):])
-        bounded = isinstance(result, dict) and result.get("acceptance_kind") == "bounded-repair"
+        acceptance_kind = result.get("acceptance_kind") if isinstance(result, dict) else None
+        bounded = acceptance_kind in ("bounded-repair", "bounded-infrastructure-verification")
+        infrastructure = acceptance_kind == "bounded-infrastructure-verification"
+        result_fields = {"acceptance_kind", "wp_complete", "dependency_unlock"} if bounded else set()
+        if infrastructure:
+            result_fields |= {"verification_scope_id", "scope_sha256", "ci_run_ids"}
         fields(result, {
             "binding", "pr_number", "review_id", "review_body_sha256",
             "publisher_run_id", "publisher_run_attempt",
-        } | ({"acceptance_kind", "wp_complete", "dependency_unlock"} if bounded else set()),
+        } | result_fields,
                label="published review result")
         expected = Binding(
             self.policy["repository"], wp_id, base, head, REFERENCE_SHA,
@@ -464,6 +470,18 @@ class MergedAcceptance:
             or bounded and (result["wp_complete"] is not False or result["dependency_unlock"] is not False)
         ):
             raise PortError("Published review has stale or conflicting scope provenance")
+        expected_receipt_schema = {
+            "bounded-repair": 2,
+            "bounded-infrastructure-verification": 4,
+        }.get(acceptance_kind)
+        if infrastructure and (
+            result["verification_scope_id"] != "wp003-ci-reader-route-v1"
+            or not isinstance(result["scope_sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", result["scope_sha256"]) is None
+            or not isinstance(result["ci_run_ids"], list) or len(result["ci_run_ids"]) != 1
+            or type(result["ci_run_ids"][0]) is not int or result["ci_run_ids"][0] < 1
+        ):
+            raise PortError("Published infrastructure result has malformed scope or CI provenance")
         native = NativeReview(self.backend, manifest, policy)
         run, suite = native.workflow_run(
             result["publisher_run_id"], result["publisher_run_attempt"], WORKFLOW_PATH, base,
@@ -477,9 +495,24 @@ class MergedAcceptance:
         body, receipt = native.source_receipt(actual[0], expected)
         if (
             hashlib.sha256(body.encode()).hexdigest() != result["review_body_sha256"]
-            or (receipt["schema_version"] == 2) != bounded
+            or expected_receipt_schema is not None and receipt["schema_version"] != expected_receipt_schema
+            or expected_receipt_schema is None and receipt["schema_version"] in (2, 4)
         ):
             raise PortError("Published review scope disagrees with the authenticated source review")
+        if infrastructure:
+            from .schema import digest
+
+            evidence = receipt["evidence"]
+            scope = evidence.get("verification_scope") if isinstance(evidence, dict) else None
+            runs = evidence.get("runs") if isinstance(evidence, dict) else None
+            if (
+                not isinstance(scope, dict) or not isinstance(runs, list) or len(runs) != 1
+                or scope.get("scope_id") != result["verification_scope_id"]
+                or digest(scope) != result["scope_sha256"]
+                or not isinstance(runs[0], dict) or type(runs[0].get("run_id")) is not int
+                or result["ci_run_ids"] != [runs[0]["run_id"]]
+            ):
+                raise PortError("Published infrastructure result disagrees with its source receipt")
         return {"bounded": bounded, "review_id": review_id, "approvals": receipt["approvals"]}
 
     def discover_implementation(self, wp_id):

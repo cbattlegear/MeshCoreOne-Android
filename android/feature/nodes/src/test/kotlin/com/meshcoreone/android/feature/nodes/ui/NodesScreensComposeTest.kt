@@ -293,6 +293,8 @@ abstract class NodesScreensComposeTestBase {
             harness.store.contacts += contacts
             val discovered = Fixtures.node(radioId = radio, publicKey = flood.publicKey, name = flood.name)
             harness.store.discovered += discovered
+            val loadedHops = mutableListOf<Long?>()
+            harness.store.fetchContactsGate = { loadedHops += harness.store.discovered.single().inboundHopCount }
             mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
 
             val context = controller.get()
@@ -305,9 +307,12 @@ abstract class NodesScreensComposeTestBase {
             click(sortAction)
             assertVisibleOrder(fixed.name, flood.name)
 
-            listOf(1L, 3L, null).forEach { hops ->
+            val hopUpdates = listOf(1L, 3L, null)
+            hopUpdates.forEachIndexed { index, hops ->
                 harness.store.discovered[0] = discovered.copy(inboundHopCount = hops)
                 click(awaitAction(context.getString(C.contactsListSyncNodes)))
+                awaitSync(harness, index + 1)
+                assertEquals(listOf(null) + hopUpdates.take(index + 1), loadedHops, "Every hop update must be loaded")
                 assertEquals(contacts, harness.store.contacts, "Only discovered inbound hops may change")
                 if (sortOrder == NodeSortOrder.HOPS && hops == 1L) {
                     assertVisibleOrder(flood.name, fixed.name)
@@ -317,6 +322,18 @@ abstract class NodesScreensComposeTestBase {
             }
             assertEquals(listOf("sync", "sync", "sync"), harness.contactService.calls)
             assertEquals(listOf(true, false, true, false, true, false), harness.adverts.syncingFlags)
+        }
+
+        private fun awaitSync(harness: Harness, count: Int) {
+            val expectedCalls = List(count) { "sync" }
+            val expectedFlags = List(count) { listOf(true, false) }.flatten()
+            repeat(100) {
+                Thread.sleep(10)
+                advanceFrames()
+                if (harness.contactService.calls == expectedCalls && harness.adverts.syncingFlags == expectedFlags) return
+            }
+            assertEquals(expectedCalls, harness.contactService.calls, "Each refresh must invoke the live Sync action")
+            assertEquals(expectedFlags, harness.adverts.syncingFlags, "Each refresh must complete before checking order")
         }
 
         private fun assertVisibleOrder(first: String, second: String) {
@@ -337,7 +354,9 @@ abstract class NodesScreensComposeTestBase {
             }
             error(
                 "$first must appear above $second after refresh; $first=${lastBounds.first}, $second=${lastBounds.second}; " +
-                    "nodes=${allSemanticsNodes().joinToString { "${it.config}@${it.boundsInRoot}" }}",
+                    "nodes=${allSemanticsNodes().joinToString {
+                        "${it.config.getOrElse(SemanticsProperties.Text) { emptyList() }}@${it.boundsInRoot}"
+                    }}",
             )
         }
     }

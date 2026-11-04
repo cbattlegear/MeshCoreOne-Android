@@ -131,8 +131,31 @@ URI and extras prevents a later build from rewriting the retained token. It does
 not supply durable reply consumption or distinguish a fresh submission from
 redelivery of identical text through that token, and does not reach the current
 `NotificationResponse`. Its inactive durable OPEN store is not reply provenance.
-The producer/history/action-identity prerequisites and submission-policy decision
-remain separate; no implicit one-reply-per-token policy is implemented here.
+The producer/history/action-identity prerequisites remain separate. The coordinator
+subsequently selected one logical quick-reply send per posted action token under
+assignment `call_VVsNf3MAXXZHXhcTq68iZXxr`: exact redelivery reuses its receipt;
+differing later text must be retained recoverably with an explicit fresh-action
+or open-app path; an intentional identical second reply requires a fresh action.
+This decision is not yet activated by the current consumer. It must not be
+implemented by inventing a per-receiver UUID or using a text hash as submission
+identity.
+
+### Remaining producer and consumer boundaries
+
+| Boundary | Actual current evidence | Required integration |
+| --- | --- | --- |
+| Posted reply token | WP-401's immutable per-post UUID plus action | Versioned validated envelope and durable staging of exact text before dispatch, separate from OPEN |
+| Original channel occupant | Missing from actual inbound persistence path | Receive/session-owned capture persisted with the original message; unproved origin blocks transmission and retains text |
+| Outgoing row | WP-208's `PendingMessageCreation` observes one process-memory row creation | Real stable outgoing identity and outcome API bound to the staged action, not an incoming-origin substitute |
+| Wire outcome | `NotificationActionReceipt` is process-memory acceptance/proven-unsent/uncertain state | Durable consumer must not infer safe retry from a missing result, a FAILED row or a restarted process |
+| Conflicting reply text | Existing direct `saveDraft` overwrites a session-memory map entry; channel has no equivalent durable draft | Preserve original and conflicting text without overwrite, including denied notifications and failed posting |
+| Displayed channel target | WP-401/WP-214 are coordinating a distinct typed display target from the same displayed DTO | Propagate into tap callbacks and WP-302 validation; never reinterpret display identity as RF or quick-reply origin |
+
+Trusted main `cf1ee845b3d6022990d7d699cd5bb2a373c8e456` was integrated at
+`a24f1271eb9be7b027cd34ff40290df7310d040d` without changing the historical
+producer-first gate. The source pin remains unchanged. Shared callback path
+admissions were reconfirmed against current trusted rules; production changes
+must still reconcile the actual producer and consumer owners.
 
 ## Actual local verification
 

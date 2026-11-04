@@ -63,13 +63,19 @@ class ChannelDraftRecoveryPersistenceTest : RepositoryTest() {
         val retained = draft(1, status = MessageStatus.SENT)
         val foreignPendingOnly = draft(2, status = MessageStatus.SENT)
         val deliveredWithPending = draft(3, status = MessageStatus.DELIVERED)
-        for (row in listOf(retained, foreignPendingOnly, deliveredWithPending)) store.saveMessage(row)
+        val directPendingOnly = draft(4, status = MessageStatus.SENT)
+        for (row in listOf(retained, foreignPendingOnly, deliveredWithPending, directPendingOnly)) store.saveMessage(row)
         val queued = listOf(
             pending(messageID = retained.id),
             pending(messageID = deliveredWithPending.id),
             pending(radio = RADIO_B, messageID = foreignPendingOnly.id),
+            pending(messageID = directPendingOnly.id),
         ).map {
-            it.copy(kind = PendingSendKind.CHANNEL, contactID = null, channelIndex = 5u)
+            it.copy(
+                kind = if (it.messageID == directPendingOnly.id) PendingSendKind.DM else PendingSendKind.CHANNEL,
+                contactID = if (it.messageID == directPendingOnly.id) CONTACT_A else null,
+                channelIndex = if (it.messageID == directPendingOnly.id) null else 5u,
+            )
         }
         // Raw persisted legacy evidence cannot be manufactured by the guarded enqueue API.
         for (row in queued) db.pendingSends().insert(row.toEntity())

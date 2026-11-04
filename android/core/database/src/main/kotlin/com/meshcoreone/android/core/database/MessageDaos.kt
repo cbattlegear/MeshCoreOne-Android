@@ -42,7 +42,9 @@ interface MessageDao : RowWriter<MessageEntity> {
         WHERE m.radioId = :radioId AND m.contactID IS NULL AND m.channelIndex IS NOT NULL
           AND m.directionRawValue = 1
           AND (m.statusRawValue IN (0, 1, 4, 5) OR EXISTS(
-              SELECT 1 FROM pending_sends p WHERE p.radioId = m.radioId AND p.messageID = m.id
+              SELECT 1 FROM pending_sends p
+              WHERE p.radioId = m.radioId AND p.messageID = m.id
+                AND p.kindRawValue = 1 AND p.contactID IS NULL AND p.channelIndex = m.channelIndex
           ))
           AND (m.channelOccupantID IS NULL OR NOT EXISTS(
               SELECT 1 FROM channel_occupants o JOIN channels c

@@ -8,6 +8,7 @@ import android.content.res.Configuration
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.view.inspector.WindowInspector
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +34,7 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.NodesNavigation
+import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
@@ -84,6 +86,16 @@ class ContactShareApi31ComposeTest : NodesScreensComposeTestBase.ContactShareCom
 @Config(sdk = [37], qualifiers = "w360dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactShareApi37ComposeTest : NodesScreensComposeTestBase.ContactShareComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ContactHopSortApi31ComposeTest : NodesScreensComposeTestBase.ContactHopSortComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [37], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ContactHopSortApi37ComposeTest : NodesScreensComposeTestBase.ContactHopSortComposeTestBase()
 
 abstract class NodesScreensComposeTestBase {
     protected lateinit var controller: ActivityController<ComponentActivity>
@@ -245,6 +257,63 @@ abstract class NodesScreensComposeTestBase {
         repeat(6) {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
+        }
+    }
+
+    abstract class ContactHopSortComposeTestBase : NodesScreensComposeTestBase() {
+        override fun rootView(): View =
+            WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown } ?: super.rootView()
+
+        @Test
+        fun hopOnlyRefreshReordersVisibleContactsWithoutReselectingSort() {
+            exerciseHopRefresh(NodeSortOrder.HOPS)
+        }
+
+        @Test
+        fun hopOnlyRefreshPreservesNameSort() {
+            exerciseHopRefresh(NodeSortOrder.NAME)
+        }
+
+        private fun exerciseHopRefresh(sortOrder: NodeSortOrder) {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            val fixed = Fixtures.contact(
+                radioId = radio, name = "Fixed", publicKey = Fixtures.repeated(0x11), outPathLength = 2u,
+            )
+            val flood = Fixtures.contact(
+                radioId = radio, name = "Flood", publicKey = Fixtures.repeated(0x22), outPathLength = 0xFFu,
+            )
+            val contacts = listOf(fixed, flood)
+            harness.store.contacts += contacts
+            val discovered = Fixtures.node(radioId = radio, publicKey = flood.publicKey, name = flood.name)
+            harness.store.discovered += discovered
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+
+            val context = controller.get()
+            awaitText(fixed.name)
+            awaitText(flood.name)
+            click(awaitAction(context.getString(C.contactsListSort)))
+            click(awaitAction(context.getString(sortOrder.titleRes)))
+            assertVisibleOrder(fixed.name, flood.name)
+
+            listOf(1L, 3L, null).forEach { hops ->
+                harness.store.discovered[0] = discovered.copy(inboundHopCount = hops)
+                click(awaitAction(context.getString(C.contactsListSyncNodes)))
+                assertEquals(contacts, harness.store.contacts, "Only discovered inbound hops may change")
+                if (sortOrder == NodeSortOrder.HOPS && hops == 1L) {
+                    assertVisibleOrder(flood.name, fixed.name)
+                } else {
+                    assertVisibleOrder(fixed.name, flood.name)
+                }
+            }
+            assertEquals(listOf("sync", "sync", "sync"), harness.contactService.calls)
+            assertEquals(listOf(true, false, true, false, true, false), harness.adverts.syncingFlags)
+        }
+
+        private fun assertVisibleOrder(first: String, second: String) {
+            val firstRow = awaitText(first)
+            val secondRow = awaitText(second)
+            assertTrue(firstRow.boundsInRoot.top < secondRow.boundsInRoot.top, "$first must appear above $second")
         }
     }
 

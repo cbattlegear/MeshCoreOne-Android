@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactFavoriteUpdateResult
 import com.meshcoreone.android.core.contracts.domain.ContactServiceProtocol
 import com.meshcoreone.android.core.contracts.domain.ContactSyncResult
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
@@ -479,7 +480,11 @@ class ContactService(
         pushFlags(existing, newFlags)
 
         // Device confirmed - update local storage
-        contacts.saveContact(existing.rebuiltThroughContactModel().copy(flags = newFlags, isFavorite = isFavorite))
+        when (contacts.updateContactFavorite(contact, existing.publicKey, isFavorite)) {
+            ContactFavoriteUpdateResult.UPDATED -> Unit
+            ContactFavoriteUpdateResult.CONTACT_NOT_FOUND,
+            ContactFavoriteUpdateResult.IDENTITY_MISMATCH -> throw ContactServiceError.ContactNotFound()
+        }
     }
 
     /**

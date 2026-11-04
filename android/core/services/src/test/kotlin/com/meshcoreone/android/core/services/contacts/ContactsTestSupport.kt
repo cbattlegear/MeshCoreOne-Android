@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactFavoriteUpdateResult
 import com.meshcoreone.android.core.contracts.domain.ContactSaveResult
 import com.meshcoreone.android.core.contracts.domain.ContactServiceProtocol
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
@@ -153,6 +154,19 @@ internal class ContactsFakeStore(
     override suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long = synchronized(lock) {
         frames.forEach { upsert(radioId, it) }
         frames.size.toLong()
+    }
+
+    override suspend fun updateContactFavorite(
+        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+    ): ContactFavoriteUpdateResult = synchronized(lock) {
+        val row = contactRows[key.id]?.takeIf { it.radioId == key.radioId }
+            ?: return@synchronized ContactFavoriteUpdateResult.CONTACT_NOT_FOUND
+        if (row.publicKey != expectedPublicKey) return@synchronized ContactFavoriteUpdateResult.IDENTITY_MISMATCH
+        contactRows[key.id] = row.copy(
+            flags = ((row.flags.toInt() and 0xFE) or if (isFavorite) 1 else 0).toUByte(),
+            isFavorite = isFavorite,
+        )
+        ContactFavoriteUpdateResult.UPDATED
     }
 
     private fun upsert(radioId: RadioId, frame: ContactFrame): ContactSaveResult {

@@ -42,10 +42,18 @@ internal class ChannelRepository(
         if (channel == null || !channel.isEnabled || occupantID != scope.expectedOccupantID) {
             return@channelWrite ChannelOccupantMetadataMutationOutcome.STALE_OR_UNPROVED
         }
-        database.channels().upsert(channel.copy(
-            lastMessageDate = lastMessageDate?.let(StoredInstant::from),
-            unreadCount = if (incrementUnreadCount) checkedIncrement(channel.unreadCount) else channel.unreadCount,
-        ))
+        val storedDate = lastMessageDate?.let(StoredInstant::from)
+        val unreadCount = if (incrementUnreadCount) checkedIncrement(channel.unreadCount) else channel.unreadCount
+        val updated = database.channels().updateMessageMetadata(
+            channel.radioId, channel.id, channel.index,
+            storedDate?.seconds, storedDate?.nanos, unreadCount,
+        )
+        if (updated != 1) {
+            throw PersistenceStoreException(
+                PersistenceStoreError.SaveFailed("Channel message metadata update was not applied"),
+                IllegalStateException("Expected one channel row update but affected $updated"),
+            )
+        }
         save()
         ChannelOccupantMetadataMutationOutcome.APPLIED
     }

@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
 import com.meshcoreone.android.core.contracts.domain.ChannelOccupantMetadataMutationOutcome
 import com.meshcoreone.android.core.contracts.domain.ChannelOccupantSnapshot
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
@@ -206,6 +207,44 @@ class ChannelOccupantMetadataPersistenceTest : BackupRoomTest() {
                 original, AT.plusSeconds(27), incrementUnreadCount = true,
             )
         }
+        val unchanged = assertNotNull(store.fetchChannel(RADIO, 5u))
+        assertNull(unchanged.lastMessageDate)
+        assertEquals(0L, unchanged.unreadCount)
+    }
+
+    @Test fun ignoredInsertDoesNotSuppressTheActualMetadataUpdate() = runBlocking {
+        val channelID = store.saveChannel(RADIO, info())
+        val original = scope(assertNotNull(store.fetchChannelOccupantSnapshot(RADIO, 5u)))
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER ignore_channel_metadata_insert BEFORE INSERT ON channels " +
+                "WHEN EXISTS(SELECT 1 FROM channels WHERE radioId = NEW.radioId AND id = NEW.id) " +
+                "BEGIN SELECT RAISE(IGNORE); END",
+        )
+
+        assertEquals(
+            ChannelOccupantMetadataMutationOutcome.APPLIED,
+            store.applyChannelMessageMetadataIfCurrentOccupant(original, AT.plusSeconds(28), incrementUnreadCount = true),
+        )
+        val updated = assertNotNull(store.fetchChannel(RADIO, 5u))
+        assertEquals(channelID, updated.id)
+        assertEquals(AT.plusSeconds(28), updated.lastMessageDate)
+        assertEquals(1L, updated.unreadCount)
+    }
+
+    @Test fun ignoredUpdateReturnsTypedSaveFailureWithoutSuccessShapedOutcome() = runBlocking {
+        store.saveChannel(RADIO, info())
+        val original = scope(assertNotNull(store.fetchChannelOccupantSnapshot(RADIO, 5u)))
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER ignore_channel_metadata_update BEFORE UPDATE OF unreadCount, lastMessageDate_seconds, " +
+                "lastMessageDate_nanos ON channels BEGIN SELECT RAISE(IGNORE); END",
+        )
+
+        val failure = assertFailsWith<PersistenceStoreException> {
+            store.applyChannelMessageMetadataIfCurrentOccupant(
+                original, AT.plusSeconds(29), incrementUnreadCount = true,
+            )
+        }
+        assertEquals(PersistenceStoreError.SaveFailed("Channel message metadata update was not applied"), failure.error)
         val unchanged = assertNotNull(store.fetchChannel(RADIO, 5u))
         assertNull(unchanged.lastMessageDate)
         assertEquals(0L, unchanged.unreadCount)

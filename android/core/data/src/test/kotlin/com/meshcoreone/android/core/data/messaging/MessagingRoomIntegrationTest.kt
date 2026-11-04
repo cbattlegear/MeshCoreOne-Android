@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.protocol.bytes.ByteWriter
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.event.ContactMessage
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
@@ -127,6 +128,16 @@ class MessagingRoomIntegrationTest {
         store.saveDevice(DeviceDTO(radioId = radio, publicKey = self, nodeName = "Local"))
         store.saveContact(contact)
     }
+    private suspend fun seedChannel(index: UByte, name: String, secret: Bytes): ChannelOccupantSnapshot {
+        store.saveChannel(radio, ChannelInfo(index, name, secret))
+        return assertNotNull(store.fetchChannelOccupantSnapshot(radio, index))
+    }
+    private suspend fun channelMessage(text: String, origin: ChannelHistoryScope): MessageDTO =
+        store.createOrReconcileChannelMessage(
+            ChannelMessageCreation(UUID.randomUUID(), origin, text),
+            timestamp = 1u,
+            createdAt = base,
+        )
     private inner class RadioGeneration(
         number: Long,
         persistence: PersistenceStoreProtocol = store,
@@ -465,8 +476,9 @@ class MessagingRoomIntegrationTest {
 
     private suspend fun TestScope.exerciseChannelNotFound(initialAttempts: Long, boundedWait: Boolean) {
         seed()
-        val channel = ChannelDTO(radioId = radio, index = 0u, name = "Test Channel", secret = Bytes(ByteArray(16) { 0xAA.toByte() }))
-        store.saveChannel(channel)
+        val snapshot = seedChannel(0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
+        val origin = ChannelHistoryScope.from(snapshot)
+        val channel = snapshot.channel
         lateinit var channels: ChannelService
         val g = RadioGeneration(74, config = MessageServiceConfig(poolBackoff = PoolBackoffConfig(attemptCap = 2, baseDelay = 0.01)),
             channelQuery = MessagingChannelQuery { channels.fetchChannel(it) })
@@ -474,9 +486,10 @@ class MessagingRoomIntegrationTest {
         g.start()
         g.firmware.error = 2u
         g.firmware.emptyChannelSlot = true
-        val message = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
+        val message = channelMessage("Hello channel", origin)
         val row = PendingSendDTO.fromEnvelope(ChannelMessageEnvelope(message.id, 0u, true,
-            message.text, message.timestamp, "Test Radio"), radio).copy(sequence = 1, attemptCount = initialAttempts)
+            message.text, message.timestamp, "Test Radio", origin.expectedOccupantID), radio)
+            .copy(sequence = 1, attemptCount = initialAttempts)
         store.upsertPendingSend(row)
         val foreign = row.copy(radioId = other)
         store.upsertPendingSend(foreign)
@@ -518,8 +531,9 @@ class MessagingRoomIntegrationTest {
     @OriginalCase("ChatSendQueueServiceTests::Channel fetchChannel failure counter is per-envelope and does not cascade()")
     @Test fun channelQueryFailureCapRetiresOnlyItsEnvelopeAndPreservesTheNextActualRoomRow() = runTest(scheduler) {
         seed()
-        val channel = ChannelDTO(UUID.randomUUID(), radio, 0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
-        store.saveChannel(channel)
+        val snapshot = seedChannel(0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
+        val origin = ChannelHistoryScope.from(snapshot)
+        val channel = snapshot.channel
         val queryFailure = MeshCoreException.Timeout()
         val g = RadioGeneration(29,
             config = MessageServiceConfig(poolBackoff = PoolBackoffConfig(attemptCap = 2, baseDelay = 0.01)),
@@ -531,13 +545,13 @@ class MessagingRoomIntegrationTest {
         )
         g.start()
         g.firmware.error = 2u
-        val first = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
-        val second = g.service.createPendingChannelMessage("Second message", 0u, radio)
+        val first = channelMessage("Hello channel", origin)
+        val second = channelMessage("Second message", origin)
         val firstRow = PendingSendDTO.fromEnvelope(
-            ChannelMessageEnvelope(first.id, 0u, true, first.text, first.timestamp, "Test Radio"), radio,
+            ChannelMessageEnvelope(first.id, 0u, true, first.text, first.timestamp, "Test Radio", origin.expectedOccupantID), radio,
         ).copy(sequence = 1, attemptCount = 7)
         val secondRow = PendingSendDTO.fromEnvelope(
-            ChannelMessageEnvelope(second.id, 0u, false, second.text, second.timestamp, "Test Radio"), radio,
+            ChannelMessageEnvelope(second.id, 0u, false, second.text, second.timestamp, "Test Radio", origin.expectedOccupantID), radio,
         ).copy(sequence = 2, attemptCount = 2)
         store.upsertPendingSend(firstRow)
         store.upsertPendingSend(secondRow)

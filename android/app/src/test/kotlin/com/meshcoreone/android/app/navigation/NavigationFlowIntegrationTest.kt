@@ -69,6 +69,7 @@ import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import com.meshcoreone.android.feature.chats.list.ContactLinkResolvedTarget
 import com.meshcoreone.android.feature.chats.list.ContactLinkResult
 import com.meshcoreone.android.feature.chats.list.ContactLinkTargetCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkTargetResolution
 import com.meshcoreone.android.feature.chats.list.ContactLinkHandoffReceipt
 import com.meshcoreone.android.feature.chats.list.ContactLinkHandoffOutcome
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
@@ -3754,6 +3755,39 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 assertNull(navigation.currentState.pendingContactDetail)
                 assertFalse(origin.registrationSealed.get(), "The source remains mounted throughout cancellation")
                 assertTrue(diagnostics.isEmpty())
+
+                val context = ContactLinkPublications().use { publications ->
+                    underlying.captureContactLinkContext(publicKey, publications)
+                }
+                val resolved = assertIs<ContactLinkTargetResolution.Current>(
+                    underlying.resolveContactLinkContext(context, publicKey),
+                )
+                val target = assertIs<ContactLinkLookupResolution.Current>(resolved.target)
+                val lateCancellation = Job()
+                val (cancellation, observation) = ContactLinkCancellation.observe(lateCancellation)
+                try {
+                    val beforeOffer = navigation.currentState
+                    var validated = false
+                    assertFailsWith<CancellationException> {
+                        ContactLinkPublications().use { publications ->
+                            navigation.offerChatContact(
+                                origin, context, target,
+                                ContactLinkRequest("Mounted cancellation claim", publicKey, ContactType.REPEATER),
+                                null, publications, cancellation,
+                            ) {
+                                validated = true
+                                lateCancellation.cancel()
+                                true
+                            }
+                        }
+                    }
+                    assertTrue(validated, "Cancellation must occur after the offer's current-context check")
+                    assertTrue(navigation.pendingChatContactOffers().isEmpty())
+                    assertEquals(beforeOffer, navigation.currentState)
+                } finally {
+                    observation.dispose()
+                    lateCancellation.cancel()
+                }
 
                 assertTrue(ChatLinkRouter(environment, controlScope).route(uri))
                 await(h) {

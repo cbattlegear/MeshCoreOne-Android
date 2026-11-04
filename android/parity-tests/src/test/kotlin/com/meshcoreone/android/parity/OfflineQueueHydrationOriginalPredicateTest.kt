@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.transport.mock.MockTransport
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
 import com.meshcoreone.android.core.services.messaging.MessageService
 import java.time.Instant
@@ -144,7 +145,10 @@ class OfflineQueueHydrationOriginalPredicateTest : RoomProcessTest() {
         }
         val transport = MockTransport()
         val session = MeshCoreSession(transport, coroutineContext = scope.coroutineContext)
-        val messages = MessageService(token, Bytes(ByteArray(32)), session, store, signals, scope)
+        val channelFence = ChannelDispatchFence(ChannelIdentityMutex.PROCESS)
+        val channelLease = channelFence.openSession(token, session, ChannelDispatchAdmission(token, session))
+        val messages = MessageService(token, Bytes(ByteArray(32)), session, store, signals, scope,
+            channelDispatchLease = channelLease)
         val queue = ChatSendQueueService(token, store, messages,
             MessagingChannelQuery { error("DM-only originals must not query a channel") },
             OutgoingChannelReactionIndexer { _, _, _, _, _ -> error("DM-only originals must not index a channel") },
@@ -155,6 +159,7 @@ class OfflineQueueHydrationOriginalPredicateTest : RoomProcessTest() {
             assertTrue(transport.sentData.isEmpty())
             assertFalse(transport.isConnected())
         } finally {
+            channelFence.retire(channelLease)
             try { assertTrue(queue.shutdown().isComplete) } finally {
                 try { assertTrue(messages.close().isComplete) } finally {
                     try { session.stop() } finally { job.cancelAndJoin() }

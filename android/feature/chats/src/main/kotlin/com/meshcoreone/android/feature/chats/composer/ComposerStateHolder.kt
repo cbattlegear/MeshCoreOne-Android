@@ -9,6 +9,9 @@ package com.meshcoreone.android.feature.chats.composer
 
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
+import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmission
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.model.ChannelMessageEnvelope
@@ -55,6 +58,14 @@ class ComposerStateHolder(
     private var cooldownJob: Job? = null
     private var sendJob: Job? = null
     private var shareJob: Job? = null
+    private data class ChannelSendRequest(
+        val text: String,
+        val messageID: UUID,
+        val pendingID: UUID,
+        val localNodeName: String?,
+        val origin: ChannelHistoryScope? = null,
+    )
+    private var channelSendRequest: ChannelSendRequest? = null
     private val observers = ArrayList<Job>()
 
     init {
@@ -98,6 +109,7 @@ class ComposerStateHolder(
 
     /** User typed or pasted; also persists the draft (empty clears it). */
     fun onDraftChanged(text: String) {
+        if (channelSendRequest?.text != text) channelSendRequest = null
         mutableState.update { withMentions(it.copy(draft = text, sendPhase = clearFailure(it.sendPhase))) }
         drafts.set(target.conversationId, text.ifEmpty { null })
     }
@@ -194,42 +206,56 @@ class ComposerStateHolder(
     private suspend fun deliver(text: String) {
         var pendingId: UUID? = null
         try {
-            val pending = createPending(text)
-            pendingId = pending.id
-            enqueuePending(pending)
+            when (target) {
+                is ComposerTarget.Direct -> {
+                    val pending = sendPort.createPendingDirect(text, target.contact, TextType.PLAIN, null)
+                    pendingId = pending.id
+                    sendPort.enqueueDM(DirectMessageEnvelope(pending.id, target.contact.id))
+                }
+                is ComposerTarget.Channel -> {
+                    var request = channelSendRequest?.takeIf { it.text == text }
+                        ?: ChannelSendRequest(
+                            text, UUID.randomUUID(), UUID.randomUUID(), environment.device.value?.nodeName,
+                        ).also { channelSendRequest = it }
+                    val origin = request.origin ?: sendPort.captureChannelOrigin(
+                        target.channel.radioId, target.channel.index,
+                    ).also {
+                        request = request.copy(origin = it)
+                        channelSendRequest = request
+                    }
+                    val pending = sendPort.createPendingChannel(
+                        ChannelMessageCreation(request.messageID, origin, text, TextType.PLAIN),
+                    )
+                    pendingId = pending.id
+                    sendPort.enqueueChannel(
+                        ChannelSubmission(
+                            request.pendingID,
+                            origin,
+                            ChannelMessageEnvelope(
+                                pending.id, origin.channelIndex, false, pending.text, pending.timestamp,
+                                request.localNodeName, origin.expectedOccupantID,
+                            ),
+                        ),
+                    )
+                    if (channelSendRequest?.messageID == request.messageID) channelSendRequest = null
+                }
+            }
             mutableState.update { it.copy(sendPhase = ComposerSendPhase.Idle) }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
             diagnostics.report("send", failure)
             val saved = pendingId != null
+            val retrySameChannelIntent = target is ComposerTarget.Channel &&
+                pendingId != null && channelSendRequest?.messageID == pendingId
             mutableState.update { current ->
-                val restored = if (!saved && current.draft.isEmpty()) text else current.draft
+                val restored = if ((!saved || retrySameChannelIntent) && current.draft.isEmpty()) text else current.draft
                 withMentions(current.copy(draft = restored, sendPhase = ComposerSendPhase.Failed(classify(failure), saved)))
             }
-            if (!saved) drafts.set(target.conversationId, mutableState.value.draft.ifEmpty { null })
-            pendingId?.let { sendPort.recordLocalEnqueueFailure(it) }
-        }
-    }
-
-    private suspend fun createPending(text: String) = when (target) {
-        is ComposerTarget.Direct -> sendPort.createPendingDirect(text, target.contact, TextType.PLAIN, null)
-        is ComposerTarget.Channel -> sendPort.createPendingChannel(text, target.channel.index, target.channel.radioId, TextType.PLAIN)
-    }
-
-    private suspend fun enqueuePending(message: MessageDTO) {
-        when (target) {
-            is ComposerTarget.Direct -> sendPort.enqueueDM(DirectMessageEnvelope(message.id, target.contact.id))
-            is ComposerTarget.Channel -> sendPort.enqueueChannel(
-                ChannelMessageEnvelope(
-                    messageID = message.id,
-                    channelIndex = target.channel.index,
-                    isResend = false,
-                    messageText = message.text,
-                    messageTimestamp = message.timestamp,
-                    localNodeName = environment.device.value?.nodeName,
-                ),
-            )
+            if (!saved || retrySameChannelIntent) {
+                drafts.set(target.conversationId, mutableState.value.draft.ifEmpty { null })
+            }
+            if (target is ComposerTarget.Direct) pendingId?.let { sendPort.recordLocalEnqueueFailure(it) }
         }
     }
 

@@ -1,6 +1,7 @@
 // AndroidOnly: WP-208 Genuine ChannelService retry outcomes complete before requested recovery teardown.
 package com.meshcoreone.android.core.services.messaging
 
+import com.meshcoreone.android.core.services.contacts.channelServiceFor
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -258,7 +259,7 @@ class ChannelQueryAccountingTest {
                     }
                 }
                 try {
-                    val channels = ChannelService(h.session, store, null, ChannelServiceClock { duration ->
+                    val channels = channelServiceFor(h.serviceSession, store, h.token.radioId, clock = ChannelServiceClock { duration ->
                         retry = duration
                         recovery = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
                             queue.awaitChannelQueryAccounting()
@@ -275,7 +276,7 @@ class ChannelQueryAccountingTest {
                             h.signals.set(null, DeviceConnectionState.DISCONNECTED)
                         }
                         delay(duration)
-                    }, Random(0))
+                    }, Random(0), fence = h.channelFence, lease = h.channelLease)
                     queue = h.queue(query = MessagingChannelQuery(channels::fetchChannel), progress = progress,
                         config = ChatSendQueueConfig(maxConsecutiveFetchChannelFailures = 2),
                         onQueryAccounting = { event ->
@@ -367,7 +368,11 @@ class ChannelQueryAccountingTest {
             val h = connection()
             val m = h.message(MessageStatus.PENDING, 0u); h.pending(m, 2)
             val accounting = mutableListOf<ChannelQueryAccountingEvent>()
-            val channels = ChannelService(h.session, h.store, null, ChannelServiceClock { delay(it) }, Random(0))
+            val channels = channelServiceFor(
+                h.serviceSession, h.store, h.token.radioId,
+                clock = ChannelServiceClock { delay(it) }, random = Random(0),
+                fence = h.channelFence, lease = h.channelLease,
+            )
             val queue = h.queue(query = MessagingChannelQuery(channels::fetchChannel),
                 config = ChatSendQueueConfig(maxConsecutiveFetchChannelFailures = 1), onQueryAccounting = accounting::add)
             start(h, queue)
@@ -422,7 +427,10 @@ class ChannelQueryAccountingTest {
             val release = CompletableDeferred<Unit>()
             h.store.before = { operation -> if (operation == "retireDefinitelyUnsentQueuedChannelAttempt") release.await() }
             try {
-                val channels = ChannelService(h.session, h.store, null)
+                val channels = channelServiceFor(
+                    h.serviceSession, h.store, h.token.radioId,
+                    fence = h.channelFence, lease = h.channelLease,
+                )
                 val queue = h.queue(query = MessagingChannelQuery(channels::fetchChannel), onQueryAccounting = accounting::add)
                 start(h, queue)
                 val observer = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
@@ -568,7 +576,10 @@ class ChannelQueryAccountingTest {
             val m = h.message(MessageStatus.PENDING, 0u); h.pending(m, 2)
             val accounting = mutableListOf<ChannelQueryAccountingEvent>()
             h.transport.channelReplies[0u] = ChannelInfo(0u, "configured", Bytes(ByteArray(16) { 1 }))
-            val channels = ChannelService(h.session, h.store, null)
+            val channels = channelServiceFor(
+                h.serviceSession, h.store, h.token.radioId,
+                fence = h.channelFence, lease = h.channelLease,
+            )
             val queue = h.queue(query = MessagingChannelQuery(channels::fetchChannel), onQueryAccounting = accounting::add)
             start(h, queue)
             queue.awaitChannelQueryAccounting()

@@ -96,6 +96,7 @@ class QueueAttemptCountOriginalPredicateTest {
             assertEquals(listOf(f.contact.copy(lastMessageDate = f.message.createdAt)), f.store.fetchContacts(f.radio))
             assertTrue(f.store.fetchChannels(f.radio).isEmpty())
         } finally {
+            f.retireChannelLease()
             try {
                 val report = f.queue.shutdown()
                 if (expectBumpIssue) {
@@ -162,7 +163,11 @@ class QueueAttemptCountOriginalPredicateTest {
         private val signals = Signals(token)
         private val diagnostics = mutableListOf<MessagingDiagnostic>()
         private val reporter = MessagingIssueReporter { diagnostics += it }
-        val messages = MessageService(token, device.publicKey, session, store, signals, scope, clock = clock, reporter = reporter)
+        private val channelFence = com.meshcoreone.android.core.services.contacts.ChannelDispatchFence(ChannelIdentityMutex.PROCESS)
+        private val channelLease = channelFence.openSession(token, session, ChannelDispatchAdmission(token, session))
+        fun retireChannelLease() = channelFence.retire(channelLease)
+        val messages = MessageService(token, device.publicKey, session, store, signals, scope, clock = clock, reporter = reporter,
+            channelDispatchLease = channelLease)
         val queue = ChatSendQueueService(token, store, messages,
             MessagingChannelQuery { error("DM attempt originals must not query channels") },
             OutgoingChannelReactionIndexer { _, _, _, _, _ -> error("DM attempt originals must not index reactions") },

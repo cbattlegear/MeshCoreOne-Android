@@ -5,6 +5,9 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.state.MessageEvent
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
+import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmission
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
@@ -49,10 +52,19 @@ internal class AppShortcutRadio(private val container: AppContainer) : ShortcutR
         if (session.token.radioId != recipient.radioId) throw ShortcutException(ShortcutError.NOT_CONNECTED)
         val localNodeName = app.connectedDevice?.takeIf { it.radioId == recipient.radioId }?.nodeName
         SendRouting.validate(text, recipient, localNodeName?.toByteArray(Charsets.UTF_8)?.size ?: 0)
+        val channelOrigin = if (recipient is ShortcutRecipient.Channel) {
+            val snapshot = container.processStore.fetchChannelOccupantSnapshot(recipient.radioId, recipient.dto.index)
+                ?: throw ShortcutException(ShortcutError.INVALID_RECIPIENT)
+            ChannelHistoryScope.from(snapshot)
+        } else null
+        val messageID = UUID.randomUUID()
+        val pendingID = UUID.randomUUID()
         val pending = try {
             when (recipient) {
                 is ShortcutRecipient.Contact -> session.messageService.createPendingMessage(text, recipient.dto, TextType.PLAIN, null)
-                is ShortcutRecipient.Channel -> session.messageService.createPendingChannelMessage(text, recipient.dto.index, recipient.radioId, TextType.PLAIN)
+                is ShortcutRecipient.Channel -> session.messageService.createPendingChannelMessage(
+                    ChannelMessageCreation(messageID, requireNotNull(channelOrigin), text, TextType.PLAIN),
+                )
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
@@ -67,18 +79,27 @@ internal class AppShortcutRadio(private val container: AppContainer) : ShortcutR
                 is ShortcutRecipient.Contact -> session.chatSendQueueService.enqueueDM(
                     DirectMessageEnvelope(pending.id, recipient.dto.id),
                 )
-                is ShortcutRecipient.Channel -> session.chatSendQueueService.enqueueChannel(
-                    ChannelMessageEnvelope(
-                        pending.id, recipient.dto.index, false, pending.text, pending.timestamp, localNodeName,
-                    ),
+                is ShortcutRecipient.Channel -> {
+                    val origin = requireNotNull(channelOrigin)
+                    session.chatSendQueueService.enqueueChannel(
+                        ChannelSubmission(
+                            pendingID, origin,
+                            ChannelMessageEnvelope(
+                                pending.id, origin.channelIndex, false, pending.text, pending.timestamp, localNodeName,
+                                origin.expectedOccupantID,
+                            ),
+                        ),
+                    )
                 )
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
-            try {
-                container.chatsFeature.failPending(pending)
-            } catch (cleanup: PersistenceStoreException) {
-                Logger.getLogger("com.mc1.Shortcuts").log(Level.WARNING, "Mark shortcut pending send failed", cleanup)
+            if (recipient is ShortcutRecipient.Contact) {
+                try {
+                    container.chatsFeature.failPending(pending)
+                } catch (cleanup: PersistenceStoreException) {
+                    Logger.getLogger("com.mc1.Shortcuts").log(Level.WARNING, "Mark shortcut pending send failed", cleanup)
+                }
             }
             throw sendFailure(failure)
         }

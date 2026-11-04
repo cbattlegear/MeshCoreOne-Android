@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ChannelSyncErrorType
 import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
@@ -40,7 +41,7 @@ class ChannelServicePipelineTest {
             val radioId = channelsRadioId()
             val store = ChannelsInMemoryStore()
             withPipelineSession { transport, session ->
-                val service = ChannelService(session, store, null, ChannelsRecordingClock())
+                val service = channelServiceFor(session, store, radioId, clock = ChannelsRecordingClock())
                 val sync = async { service.syncChannels(radioId, 8u, usePipelinedRead = true) }
                 channelsWaitUntil("all eight channel reads should be primed") { transport.sentData.size == 9 }
                 val configuredIndices = setOf(0, 2, 7)
@@ -61,7 +62,7 @@ class ChannelServicePipelineTest {
             session.setStubbedChannels((0..3).associate { it.toUByte() to ChannelInfo(it.toUByte(), "ch$it", channelsSecret(0xAB)) })
             // Index 2 is never answered in the pipeline (simulated dropped Write Command).
             session.pipelineMissing = setOf(2u)
-            val service = ChannelService(session, store, null, ChannelsRecordingClock())
+            val service = channelServiceFor(session, store, radioId, clock = ChannelsRecordingClock())
 
             val result = service.syncChannels(radioId, 4u, usePipelinedRead = true)
 
@@ -79,7 +80,7 @@ class ChannelServicePipelineTest {
             val radioId = channelsRadioId()
             val store = ChannelsInMemoryStore()
             withPipelineSession { transport, session ->
-                val service = ChannelService(session, store, null, ChannelsRecordingClock())
+                val service = channelServiceFor(session, store, radioId, clock = ChannelsRecordingClock())
                 // appStart was send #1; fail every send from #2 (the first channel read) onward.
                 transport.failSends(2)
                 assertFails { service.syncChannels(radioId, 4u, usePipelinedRead = true) }
@@ -104,17 +105,24 @@ class ChannelServicePipelineTest {
             session.script(2u, { failureEntries++; throw failure })
             var commits = 0
             val observedStore = object : ChannelPersisting by store {
-                override suspend fun batchSaveChannels(
-                    radioId: RadioId, configured: SnapshotList<ChannelInfo>,
-                    unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
-                ) = store.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond).also {
-                    commits++
-                    assertEquals(read, configured.toList())
-                    assertTrue(unconfiguredIndices.isEmpty(), "an unread slot must not be classified as empty")
-                    assertEquals(4.toUByte(), pruneBeyond)
+                override suspend fun <T> withChannelOperation(
+                    block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
+                ): T = store.withChannelOperation { scoped, scope ->
+                    val observed = object : ChannelPersisting by scoped {
+                        override suspend fun batchSaveChannels(
+                            radioId: RadioId, configured: SnapshotList<ChannelInfo>,
+                            unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
+                        ) = scoped.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond).also {
+                            commits++
+                            assertEquals(read, configured.toList())
+                            assertTrue(unconfiguredIndices.isEmpty(), "an unread slot must not be classified as empty")
+                            assertEquals(4.toUByte(), pruneBeyond)
+                        }
+                    }
+                    block(observed, scope)
                 }
             }
-            val service = ChannelService(session, observedStore, null, ChannelsRecordingClock())
+            val service = channelServiceFor(session, observedStore, radioId, clock = ChannelsRecordingClock())
 
             val result = service.syncChannels(radioId, 4u, usePipelinedRead = true)
 
@@ -149,7 +157,7 @@ class ChannelServicePipelineTest {
             session.pipelineMissing = (2..7).map { it.toUByte() }.toSet()
             // Any accidental same-link retry would enter this failure script.
             (2..7).forEach { index -> session.script(index.toUByte(), { throw MeshTransportError.SendFailed("simulated send failure") }) }
-            val service = ChannelService(session, store, null, ChannelsRecordingClock())
+            val service = channelServiceFor(session, store, radioId, clock = ChannelsRecordingClock())
 
             val result = service.syncChannels(radioId, 8u, usePipelinedRead = true)
 
@@ -171,7 +179,7 @@ class ChannelServicePipelineTest {
             val radioId = channelsRadioId()
             val store = ChannelsInMemoryStore()
             withPipelineSession(writeWithoutResponse = false) { transport, session ->
-                val service = ChannelService(session, store, null, ChannelsRecordingClock())
+                val service = channelServiceFor(session, store, radioId, clock = ChannelsRecordingClock())
                 val sync = async { service.syncChannels(radioId, 2u, usePipelinedRead = false) }
                 channelsWaitUntil("first serial read should be sent") { transport.sentData.size == 2 }
                 transport.simulateReceive(channelsChannelInfoPacket(0, "ch0", channelsSecret(0xAB)))
@@ -191,9 +199,11 @@ class ChannelServicePipelineTest {
             session.script(2u, { throw MeshCoreException.Timeout() })
             val failure = MeshCoreException.ConnectionLost(IllegalStateException("controlled correlation failure"))
             lateinit var service: ChannelService
-            service = ChannelService(session, ChannelsInMemoryStore(), null, ChannelServiceClock {
-                service.awaitSyncAccounting(failure)
-            })
+            service = channelServiceFor(
+                session, ChannelsInMemoryStore(), clock = ChannelServiceClock {
+                    service.awaitSyncAccounting(failure)
+                },
+            )
 
             val queryFailure = assertFailsWith<ChannelServiceError.SessionError> { service.fetchChannel(2u) }
             assertSame(failure, queryFailure.error)
@@ -227,7 +237,7 @@ class ChannelServicePipelineTest {
                         }
                     }
                 }
-                val service = ChannelService(observedSession, store, null, ChannelsRecordingClock())
+                val service = channelServiceFor(observedSession, store, radioId, clock = ChannelsRecordingClock())
                 val sync = async { service.syncChannels(radioId, 4u, usePipelinedRead = true) }
                 channelsWaitUntil("all four reads should be primed") { transport.sentData.size == 5 }
                 for (index in listOf(0, 1, 3)) {

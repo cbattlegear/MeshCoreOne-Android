@@ -137,7 +137,7 @@ class ChannelServiceTest {
                 SessionConfiguration(defaultTimeout = 5.0, clientIdentifier = "MCTst"),
             )
             try {
-                val service = ChannelService(session, store, null, ChannelsRecordingClock())
+                val service = channelServiceFor(session, store, radioId, clock = ChannelsRecordingClock())
                 val result = service.syncChannels(radioId, 6u, usePipelinedRead = false)
                 assertEquals(3, result.sendTimeoutCount)
                 assertTrue(result.circuitBreakerAborted)
@@ -171,8 +171,8 @@ class ChannelServiceTest {
     fun slotOccupantHandler(): List<DynamicTest> = channelsCases(
         SUITE,
         "clearChannel deletes the row and its messages, then fires the slot handler" to {
-            val radioId = channelsRadioId()
             val fixture = SlotFixture()
+            val radioId = fixture.radioId
             fixture.store.saveChannel(radioId, ChannelInfo(5u, "Old", channelsSecret(0x11)))
             fixture.store.saveTestMessage(radioId, 5u, "old")
 
@@ -183,8 +183,8 @@ class ChannelServiceTest {
             assertEquals(listOf(setOf<UByte>(5u)), fixture.capture.received)
         },
         "setChannel fires the slot handler on a new secret and not on a same-secret rename or first insert" to {
-            val radioId = channelsRadioId()
             val fixture = SlotFixture()
+            val radioId = fixture.radioId
             fixture.service.setChannel(radioId, 5u, "First", "one")
             fixture.service.setChannel(radioId, 5u, "Renamed", "one")
             assertTrue(fixture.capture.received.isEmpty())
@@ -193,8 +193,8 @@ class ChannelServiceTest {
             assertEquals(listOf(setOf<UByte>(5u)), fixture.capture.received)
         },
         "syncChannels fires the slot handler for vacated and secret-changed slots, not first sightings" to {
-            val radioId = channelsRadioId()
             val fixture = SlotFixture()
+            val radioId = fixture.radioId
             fixture.store.saveChannel(radioId, ChannelInfo(1u, "One", channelsSecret(0x11)))
             fixture.store.saveChannel(radioId, ChannelInfo(2u, "Two", channelsSecret(0x22)))
             fixture.session.setStubbedChannels(
@@ -208,10 +208,11 @@ class ChannelServiceTest {
     )
 
     private class SlotFixture {
+        val radioId = channelsRadioId()
         val store = ChannelsInMemoryStore()
         val session = ChannelsMockSession()
         val capture = ChannelsSlotCapture()
-        val service = ChannelService(session, store, null, ChannelsRecordingClock()).also {
+        val service = channelServiceFor(session, store, radioId, clock = ChannelsRecordingClock()).also {
             it.setSlotOccupantChangedHandler(capture.handler)
         }
     }

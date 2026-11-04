@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.services.messaging.MessageService
 import com.meshcoreone.android.core.services.messaging.RecordingStore
 import com.meshcoreone.android.core.services.messaging.TestMessagingClock
 import com.meshcoreone.android.core.services.messaging.TestSignals
+import com.meshcoreone.android.core.services.messaging.testChannelDispatchLease
 import com.meshcoreone.android.core.services.messaging.token
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -80,7 +81,8 @@ class ContactQueueHydrationWitnessTest {
         val signals = TestSignals(token)
         val transport = MockTransport()
         val session = MeshCoreSession(transport, clock = clock, coroutineContext = scope.coroutineContext)
-        val messages = MessageService(token, Bytes(ByteArray(32)), session, observedStore, signals, scope, clock = clock)
+        val messages = MessageService(token, Bytes(ByteArray(32)), session, observedStore, signals, scope, clock = clock,
+            channelDispatchLease = testChannelDispatchLease(token, session))
         val queue = ChatSendQueueService(token, observedStore, messages,
             MessagingChannelQuery { error("missing-contact DM must not query channels") },
             OutgoingChannelReactionIndexer { _, _, _, _, _ -> error("missing-contact DM must not index reactions") },

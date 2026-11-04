@@ -191,15 +191,14 @@ class ChannelDispatchFence(
         operation: suspend () -> T,
     ): T = identity.withChannelOperation {
         requireCurrent(lease)
+        requireReconciled(lease, index)
         if (expectedOccupantID == null) throw ChannelDispatchFailure.UnknownOccupant()
-        synchronized(stateLock) {
-            if (index !in lease.reconciledSlots) throw ChannelDispatchFailure.UnreconciledSession()
-        }
         identity.withChannelIdentityMutation {
             val current = currentOccupantID(lease.token.radioId, index) ?: throw ChannelDispatchFailure.UnknownOccupant()
             if (current != expectedOccupantID) throw ChannelDispatchFailure.ReplacedOccupant()
             currentCoroutineContext().ensureActive()
             requireCurrent(lease)
+            requireReconciled(lease, index)
             val permit = acquire(lease)
             try {
                 withContext(NonCancellable) {
@@ -223,6 +222,10 @@ class ChannelDispatchFence(
             throw ChannelDispatchFailure.RetiredSession()
         }
         uncertainRadios[lease.token.radioId]?.let { throw ChannelDispatchFailure.UnsettledDispatch(it) }
+    }
+
+    private fun requireReconciled(lease: Lease, index: UByte) = synchronized(stateLock) {
+        if (index !in lease.reconciledSlots) throw ChannelDispatchFailure.UnreconciledSession()
     }
 
     private fun acquire(lease: Lease): ChannelDispatchAdmission.Permit =

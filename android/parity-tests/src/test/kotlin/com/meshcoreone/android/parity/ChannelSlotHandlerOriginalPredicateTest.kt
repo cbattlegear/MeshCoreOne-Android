@@ -4,6 +4,11 @@ package com.meshcoreone.android.parity
 
 import com.meshcoreone.android.app.container.OriginalCase
 import com.meshcoreone.android.app.container.RoomProcessTest
+import com.meshcoreone.android.core.contracts.domain.ChannelDispatchAdmission
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageStatus
@@ -13,6 +18,7 @@ import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.session.ChannelFetchResult
 import com.meshcoreone.android.core.protocol.session.ChannelSessionOps
 import com.meshcoreone.android.core.services.contacts.ChannelService
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -25,6 +31,13 @@ import org.junit.Test
 
 class ChannelSlotHandlerOriginalPredicateTest : RoomProcessTest() {
     private val radio = RadioId(UUID.randomUUID())
+
+    private fun channelService(session: ChannelSessionOps): ChannelService {
+        val fence = ChannelDispatchFence(ChannelIdentityMutex.PROCESS)
+        val token = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), radio)
+        val lease = fence.openSession(token, session, ChannelDispatchAdmission(token, session))
+        return ChannelService(session, store, null, channelDispatchFence = fence, channelDispatchLease = lease)
+    }
 
     private fun secret(byte: Int) = Bytes(ByteArray(16) { byte.toByte() })
 
@@ -47,7 +60,7 @@ class ChannelSlotHandlerOriginalPredicateTest : RoomProcessTest() {
         store.saveMessage(message)
         assertEquals(listOf(message.id), store.fetchMessages(radio, 5u).map { it.id })
         val session = StubSession()
-        val service = ChannelService(session, store, null)
+        val service = channelService(session)
         val received = mutableListOf<Set<UByte>>()
         service.setSlotOccupantChangedHandler { actualRadio, indices ->
             assertEquals(radio, actualRadio)
@@ -68,7 +81,7 @@ class ChannelSlotHandlerOriginalPredicateTest : RoomProcessTest() {
     @Test fun originalFirstAndRenamedOneStaySilentThenReplacedTwoCommitsBeforeOneCallback() = runTest {
         seedDevice()
         val session = StubSession()
-        val service = ChannelService(session, store, null)
+        val service = channelService(session)
         val received = mutableListOf<Set<UByte>>()
         var originalSecret: Bytes? = null
         service.setSlotOccupantChangedHandler { actualRadio, indices ->
@@ -103,7 +116,7 @@ class ChannelSlotHandlerOriginalPredicateTest : RoomProcessTest() {
         store.saveChannel(radio, ChannelInfo(2u, "Two", secret(0x22)))
         val expected = listOf(ChannelInfo(1u, "OneB", secret(0x99)), ChannelInfo(3u, "First", secret(0x33)))
         val session = StubSession(expected.associateBy { it.index })
-        val service = ChannelService(session, store, null)
+        val service = channelService(session)
         val received = mutableListOf<Set<UByte>>()
         service.setSlotOccupantChangedHandler { actualRadio, indices ->
             assertEquals(radio, actualRadio)

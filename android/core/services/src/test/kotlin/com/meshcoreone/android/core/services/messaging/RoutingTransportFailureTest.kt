@@ -102,7 +102,8 @@ class RoutingTransportFailureTest {
         }
         val service = MessageService(fixture.token, SELF, role, fixture.store, fixture.signals,
             fixture.scope, config, fixture.clock, jitter = { 1.0 },
-            reporter = MessagingIssueReporter { fixture.diagnostics += it })
+            reporter = MessagingIssueReporter { fixture.diagnostics += it },
+            channelDispatchLease = testChannelDispatchLease(fixture.token, role))
         try {
             fixture.start()
             val result = service.sendMessageWithRetry("optional path reset", fixture.contact)
@@ -156,8 +157,10 @@ class RoutingTransportFailureTest {
         val diagnostics = mutableListOf<MessagingDiagnostic>()
         val transport = FailingTransport(cause)
         val session = MeshCoreSession(transport, SessionConfiguration(defaultTimeout = 5.0), clock, scope.coroutineContext)
-        val service = MessageService(token(), SELF, session, store, signals, scope, clock = clock,
-            reporter = MessagingIssueReporter { diagnostics += it })
+        private val sessionToken = token()
+        val service = MessageService(sessionToken, SELF, session, store, signals, scope, clock = clock,
+            reporter = MessagingIssueReporter { diagnostics += it },
+            channelDispatchLease = testChannelDispatchLease(sessionToken, session))
 
         suspend fun seed(status: MessageStatus): MessageDTO {
             val ack = Bytes.of(0xFE, 0xED, 0xFA, 0xCE)

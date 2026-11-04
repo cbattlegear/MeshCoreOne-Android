@@ -33,7 +33,7 @@ class ChannelServiceNativeTest {
             val session = ChannelsMockSession()
             val gate = CompletableDeferred<Unit>()
             session.script(0u, { gate.await(); ChannelInfo(0u, "ch0", channelsSecret(0xAB)) })
-            val service = ChannelService(session, ChannelsInMemoryStore(), null, ChannelsRecordingClock())
+            val service = channelServiceFor(session, ChannelsInMemoryStore(), radioId, clock = ChannelsRecordingClock())
             val first = async { service.syncChannels(radioId, 1u, usePipelinedRead = false) }
             channelsWaitUntil("first sync should be reading slot 0") { session.recordedGetChannelIndices.isNotEmpty() }
 
@@ -50,7 +50,7 @@ class ChannelServiceNativeTest {
             val session = ChannelsMockSession()
             session.script(0u, { awaitCancellation() })
             val store = ChannelsInMemoryStore()
-            val service = ChannelService(session, store, null, ChannelsRecordingClock())
+            val service = channelServiceFor(session, store, radioId, clock = ChannelsRecordingClock())
             val sync = async { service.syncChannels(radioId, 3u, usePipelinedRead = false) }
             channelsWaitUntil("sync should be reading slot 0") { session.recordedGetChannelIndices.isNotEmpty() }
 
@@ -68,7 +68,7 @@ class ChannelServiceNativeTest {
             session.script(0u, { throw MeshCoreException.Timeout() })
             val sleeping = AtomicBoolean(false)
             val clock = ChannelServiceClock { sleeping.set(true); awaitCancellation() }
-            val service = ChannelService(session, ChannelsInMemoryStore(), null, clock)
+            val service = channelServiceFor(session, ChannelsInMemoryStore(), radioId, clock = clock)
             val sync = async { service.syncChannels(radioId, 2u, usePipelinedRead = false) }
             channelsWaitUntil("fetch should be backing off") { sleeping.get() }
 
@@ -81,7 +81,11 @@ class ChannelServiceNativeTest {
         "cancelling a retry during its initial delay frees the guard" to {
             val radioId = channelsRadioId()
             val sleeping = AtomicBoolean(false)
-            val service = ChannelService(ChannelsMockSession(), ChannelsInMemoryStore(), null, ChannelServiceClock { sleeping.set(true); awaitCancellation() })
+            val radioId = channelsRadioId()
+            val service = channelServiceFor(
+                ChannelsMockSession(), ChannelsInMemoryStore(), radioId,
+                clock = ChannelServiceClock { sleeping.set(true); awaitCancellation() },
+            )
             val retry = async { service.retryFailedChannels(radioId, SnapshotList.of(1u)) }
             channelsWaitUntil("retry should be waiting") { sleeping.get() }
             retry.cancel()
@@ -97,7 +101,7 @@ class ChannelServiceNativeTest {
             val session = ChannelsMockSession()
             session.script(0u, { throw MeshCoreException.Timeout() }, { throw MeshCoreException.Timeout() }, { throw MeshCoreException.Timeout() })
             val clock = ChannelsRecordingClock()
-            val service = ChannelService(session, ChannelsInMemoryStore(), null, clock, Random(SEED))
+            val service = channelServiceFor(session, ChannelsInMemoryStore(), clock = clock, random = Random(SEED))
             val expected = Random(SEED).let { listOf(500 + it.nextInt(-100, 101), 1000 + it.nextInt(-100, 101)) }.map { it.milliseconds }
 
             val failure = assertFailsWith<ChannelServiceError.SessionError> { service.fetchChannel(0u) }
@@ -111,7 +115,7 @@ class ChannelServiceNativeTest {
             val session = ChannelsMockSession()
             session.script(4u, { throw MeshCoreException.Timeout() }, { ChannelInfo(4u, "four", channelsSecret(0x44)) })
             val clock = ChannelsRecordingClock()
-            val service = ChannelService(session, ChannelsInMemoryStore(), null, clock)
+            val service = channelServiceFor(session, ChannelsInMemoryStore(), clock = clock)
             assertEquals(ChannelInfo(4u, "four", channelsSecret(0x44)), service.fetchChannel(4u))
             assertEquals(1, clock.sleeps.size)
         },
@@ -124,7 +128,7 @@ class ChannelServiceNativeTest {
             session.script(3u, { ChannelInfo(3u, "", channelsSecret(0x33)) })
             session.script(4u, { throw MeshCoreException.Timeout() }, { throw MeshCoreException.Timeout() }, { throw MeshCoreException.Timeout() })
             val store = ChannelsInMemoryStore()
-            val service = ChannelService(session, store, null, ChannelsRecordingClock())
+            val service = channelServiceFor(session, store, radioId, clock = ChannelsRecordingClock())
 
             val result = service.syncChannels(radioId, 5u, usePipelinedRead = false)
 
@@ -143,13 +147,13 @@ class ChannelServiceNativeTest {
         "platform transport failures count toward the breaker only through the injected classifier" to {
             val radioId = channelsRadioId()
             val unclassified = ChannelsMockSession().apply { stubbedGetChannelError = IllegalStateException("ble link dropped") }
-            val plain = ChannelService(unclassified, ChannelsInMemoryStore(), null, ChannelsRecordingClock())
+            val plain = channelServiceFor(unclassified, ChannelsInMemoryStore(), radioId, clock = ChannelsRecordingClock())
             val plainResult = plain.syncChannels(radioId, 6u, usePipelinedRead = false)
             assertEquals(List(6) { ChannelSyncErrorType.Unknown }, plainResult.errors.map { it.errorType })
 
             val classified = ChannelsMockSession().apply { stubbedGetChannelError = IllegalStateException("ble link dropped") }
-            val service = ChannelService(
-                classified, ChannelsInMemoryStore(), null, ChannelsRecordingClock(),
+            val service = channelServiceFor(
+                classified, ChannelsInMemoryStore(), radioId, clock = ChannelsRecordingClock(),
                 transportClassifier = { if (it is IllegalStateException) ChannelSyncErrorType.TransportError else null },
             )
             val result = service.syncChannels(radioId, 6u, usePipelinedRead = false)
@@ -163,7 +167,7 @@ class ChannelServiceNativeTest {
             val store = ChannelsInMemoryStore().apply { batchSaveFailure = IllegalStateException("disk full") }
             val capture = ChannelsSlotCapture()
             val cache = ChannelsDecryptionCapture()
-            val service = ChannelService(session, store, cache, ChannelsRecordingClock())
+            val service = channelServiceFor(session, store, radioId, cache, ChannelsRecordingClock())
             service.setSlotOccupantChangedHandler(capture.handler)
 
             val result = service.syncChannels(radioId, 2u, usePipelinedRead = true)
@@ -189,7 +193,7 @@ class ChannelServiceNativeTest {
             val clock = ChannelsRecordingClock()
             val capture = ChannelsSlotCapture()
             val cache = ChannelsDecryptionCapture()
-            val service = ChannelService(session, store, cache, clock, Random(SEED))
+            val service = channelServiceFor(session, store, radioId, cache, clock, Random(SEED))
             service.setSlotOccupantChangedHandler(capture.handler)
 
             val result = service.retryFailedChannels(radioId, SnapshotList.of(3u, 1u, 2u, 4u, 5u))
@@ -210,7 +214,9 @@ class ChannelServiceNativeTest {
             val radioId = channelsRadioId()
             val clock = ChannelsRecordingClock()
             val cache = ChannelsDecryptionCapture()
-            val service = ChannelService(ChannelsMockSession(), ChannelsInMemoryStore(), cache, clock)
+            val service = channelServiceFor(
+                ChannelsMockSession(), ChannelsInMemoryStore(), radioId, cache, clock,
+            )
             assertEquals(ChannelSyncResult(0, SnapshotList.empty()), service.retryFailedChannels(radioId, SnapshotList.empty()))
             assertTrue(clock.sleeps.isEmpty())
             assertEquals(ChannelSyncResult(0, SnapshotList.empty()), service.retryFailedChannels(radioId, SnapshotList.of(2u)))
@@ -223,7 +229,7 @@ class ChannelServiceNativeTest {
         "writes truncate names to 31 UTF-8 bytes on grapheme boundaries, validate secrets and map session errors" to {
             val radioId = channelsRadioId()
             val session = ChannelsMockSession()
-            val service = ChannelService(session, ChannelsInMemoryStore(), null, ChannelsRecordingClock())
+            val service = channelServiceFor(session, ChannelsInMemoryStore(), radioId, clock = ChannelsRecordingClock())
             service.setChannel(radioId, 1u, "a".repeat(40), "pass")
             service.setChannel(radioId, 2u, "b".repeat(29) + "🔐", "pass")
             assertEquals(listOf("a".repeat(31), "b".repeat(29)), session.recordedSetChannels.map { it.name })
@@ -241,7 +247,7 @@ class ChannelServiceNativeTest {
             val radioId = channelsRadioId()
             val session = ChannelsMockSession()
             val cache = ChannelsDecryptionCapture()
-            val service = ChannelService(session, ChannelsInMemoryStore(), cache, ChannelsRecordingClock())
+            val service = channelServiceFor(session, ChannelsInMemoryStore(), radioId, cache, ChannelsRecordingClock())
             assertTrue(service.hasRxLogServiceWired)
             assertFalse(service.hasPublicChannel(radioId))
             service.setupPublicChannel(radioId)
@@ -260,7 +266,7 @@ class ChannelServiceNativeTest {
             store.incrementChannelUnreadCount(EntityKey(radioId, id))
             store.incrementChannelUnreadMentionCount(EntityKey(radioId, id))
             store.saveTestMessage(radioId, 2u, "hello")
-            val service = ChannelService(ChannelsMockSession(), store, null, ChannelsRecordingClock())
+            val service = channelServiceFor(ChannelsMockSession(), store, radioId, clock = ChannelsRecordingClock())
             assertEquals(listOf<UByte>(2u), service.getActiveChannels(radioId).map { it.index })
 
             service.clearChannelMessages(radioId, 2u)
@@ -278,7 +284,7 @@ class ChannelServiceNativeTest {
             store.saveTestMessage(radioId, 7u, "orphan")
             val session = ChannelsMockSession()
             val capture = ChannelsSlotCapture()
-            val service = ChannelService(session, store, null, ChannelsRecordingClock())
+            val service = channelServiceFor(session, store, radioId, clock = ChannelsRecordingClock())
             service.setSlotOccupantChangedHandler(capture.handler)
             service.clearChannel(radioId, 7u)
             assertTrue(store.fetchMessages(radioId, 7u).isEmpty())

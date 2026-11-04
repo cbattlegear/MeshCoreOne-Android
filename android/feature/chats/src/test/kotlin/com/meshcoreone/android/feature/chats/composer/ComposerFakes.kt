@@ -1,6 +1,9 @@
 // AndroidOnly: WP-308 JVM fakes: scripted send port, environment, virtual-clock timer and draft store.
 package com.meshcoreone.android.feature.chats.composer
 
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
+import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmission
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.model.ChannelMessageEnvelope
 import com.meshcoreone.android.core.model.ChatConversationID
@@ -76,7 +79,9 @@ internal class FakeSendPort(val radio: RadioId) : ComposerSendPort {
     val calls = ArrayList<String>()
     val pendingMessages = ArrayList<MessageDTO>()
     val directEnvelopes = ArrayList<DirectMessageEnvelope>()
-    val channelEnvelopes = ArrayList<ChannelMessageEnvelope>()
+    val channelSubmissions = ArrayList<ChannelSubmission>()
+    val channelEnvelopes get() = channelSubmissions.map { it.envelope }
+    private val channelRows = linkedMapOf<UUID, MessageDTO>()
     val localEnqueueFailures = ArrayList<UUID>()
     var createFailure: Throwable? = null
     var createGate: CompletableDeferred<Unit>? = null
@@ -112,16 +117,32 @@ internal class FakeSendPort(val radio: RadioId) : ComposerSendPort {
         localEnqueueFailures += messageId
     }
 
-    override suspend fun createPendingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO {
-        calls += "createPendingChannel:$channelIndex:$text"
-        createGate?.await()
-        createFailure?.let { throw it }
-        return row(text, null, channelIndex).also(pendingMessages::add)
+    override suspend fun captureChannelOrigin(radioId: RadioId, channelIndex: UByte): ChannelHistoryScope {
+        calls += "captureChannelOrigin:$channelIndex"
+        return ChannelHistoryScope(radioId, channelIndex, UUID.fromString("BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF"))
     }
 
-    override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) {
+    override suspend fun createPendingChannel(creation: ChannelMessageCreation): MessageDTO {
+        calls += "createPendingChannel:${creation.origin.channelIndex}:${creation.text}"
+        createGate?.await()
+        createFailure?.let { throw it }
+        val existing = channelRows[creation.messageID]
+        if (existing != null) {
+            check(existing.text == creation.text && existing.channelIndex == creation.origin.channelIndex &&
+                existing.channelOccupantID == creation.origin.expectedOccupantID)
+            return existing
+        }
+        return row(creation.text, null, creation.origin.channelIndex).copy(
+            id = creation.messageID, channelOccupantID = creation.origin.expectedOccupantID,
+        ).also {
+            channelRows[creation.messageID] = it
+            pendingMessages += it
+        }
+    }
+
+    override suspend fun enqueueChannel(submission: ChannelSubmission) {
         calls += "enqueueChannel"
-        channelEnvelopes += envelope
+        channelSubmissions += submission
         enqueueGate?.await()
         enqueueFailure?.let { throw it }
     }

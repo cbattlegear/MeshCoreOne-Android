@@ -5,6 +5,7 @@ import com.meshcoreone.android.app.state.AppSession
 import com.meshcoreone.android.app.state.BatteryServices
 import com.meshcoreone.android.app.state.MessageEventSources
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ChannelDispatchAdmission
 import com.meshcoreone.android.core.contracts.domain.LifecycleStage
 import com.meshcoreone.android.core.contracts.domain.MessagingChannelQuery
 import com.meshcoreone.android.core.contracts.domain.MonitoringOptions
@@ -30,6 +31,7 @@ import com.meshcoreone.android.core.runtime.RuntimeServiceInputs
 import com.meshcoreone.android.core.runtime.RuntimeServices
 import com.meshcoreone.android.core.runtime.RuntimeSyncResult
 import com.meshcoreone.android.core.services.contacts.AdvertisementService
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.contacts.ContactCleanupCoordinator
 import com.meshcoreone.android.core.services.contacts.ContactService
@@ -104,6 +106,8 @@ class RadioSessionContainer private constructor(
     private val scope: CoroutineScope,
     private val ownership: FactoryOwnership,
     reactionPersistenceMutex: Mutex,
+    private val channelDispatchFence: ChannelDispatchFence,
+    internal val channelDispatchLease: ChannelDispatchFence.Lease,
 ) : RuntimeServices, AppSession {
     override val transportType: TransportType get() = inputs.transportType
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
@@ -183,8 +187,12 @@ class RadioSessionContainer private constructor(
         token, inputs.device.publicKey, session, dataStore, inputs.connection.signals, scope,
         config = env.messageServiceConfig,
         reporter = env.messagingReporter,
+        channelDispatchLease = channelDispatchLease,
     )
-    override val channelService = ChannelService(session, dataStore, ChannelDecryptionAdapter(rxLogService))
+    override val channelService = ChannelService(
+        session, dataStore, ChannelDecryptionAdapter(rxLogService),
+        channelDispatchFence = channelDispatchFence, channelDispatchLease = channelDispatchLease,
+    )
     // The settings/device services validate their generation against the published connection snapshot when they
     // are built, and the runtime publishes CONNECTED only after the factory returns. They are therefore created on
     // first use (app-state wiring and sync both run after publication) and fail fast if reached earlier.
@@ -483,6 +491,7 @@ class RadioSessionContainer private constructor(
             }.let { it to true }
         }
         if (!claimed) return withContext(NonCancellable) { receipt.await() }
+        channelDispatchFence.retire(channelDispatchLease)
         val issues = mutableListOf<TeardownIssue>()
         suspend fun step(stage: LifecycleStage, work: suspend () -> Unit) {
             try {
@@ -546,6 +555,8 @@ class RadioSessionContainer private constructor(
             ownership: FactoryOwnership,
             env: SessionEnvironment,
             reactionPersistenceMutex: Mutex,
+            channelDispatchFence: ChannelDispatchFence,
+            channelDispatchLease: ChannelDispatchFence.Lease,
         ): RadioSessionContainer {
             val parent = inputs.connection.scope.coroutineContext[Job]
             val job = SupervisorJob(parent)
@@ -553,6 +564,7 @@ class RadioSessionContainer private constructor(
             ownership.own(LifecycleStage.STOP_SERVICES) { job.cancelAndJoin() }
             val container = RadioSessionContainer(
                 inputs.connection.token, inputs, env, job, scope, ownership, reactionPersistenceMutex,
+                channelDispatchFence, channelDispatchLease,
             )
             ownership.register(container)
             env.onSessionLifecycle.created(container)

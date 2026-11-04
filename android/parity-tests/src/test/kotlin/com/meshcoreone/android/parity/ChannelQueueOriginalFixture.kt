@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SessionCorrelationException
 import com.meshcoreone.android.core.services.contacts.ChannelService
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.contacts.ChannelServiceClock
 import com.meshcoreone.android.core.services.contacts.ChannelServiceError
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueConfig
@@ -83,6 +84,7 @@ internal suspend fun TestScope.withChannelQueueFixture(
         assertTrue(f.store.fetchContacts(f.radio).isEmpty())
     }
     withContext(NonCancellable) {
+        f.retireChannelLease()
         retainFailure {
             val report = f.queue.shutdown()
             if (expectQueryIssue) {
@@ -156,9 +158,13 @@ internal class ChannelQueueOriginalFixture(
         }
     }
     val session = MeshCoreSession(transport, SessionConfiguration(defaultTimeout = 0.2), clock, scope.coroutineContext)
+    private val channelFence = ChannelDispatchFence(ChannelIdentityMutex.PROCESS)
+    private val channelLease = channelFence.openSession(token, session, ChannelDispatchAdmission(token, session))
+    fun retireChannelLease() = channelFence.retire(channelLease)
     val messages = MessageService(token, device.publicKey, session, store, signals, scope,
-        config, clock, jitter = { 1.0 }, reporter = reporter)
-    private val channelService = ChannelService(session, store, null, ChannelServiceClock { delay(it) }, Random(0))
+        config, clock, jitter = { 1.0 }, reporter = reporter, channelDispatchLease = channelLease)
+    private val channelService = ChannelService(session, store, null, ChannelServiceClock { delay(it) }, Random(0),
+        channelDispatchFence = channelFence, channelDispatchLease = channelLease)
     val queries = mutableListOf<UByte>()
     val queryResults = mutableListOf<ChannelInfo?>()
     val queue = ChatSendQueueService(token, store, messages, MessagingChannelQuery { index ->

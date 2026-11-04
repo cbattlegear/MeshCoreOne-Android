@@ -71,6 +71,23 @@ class ChannelsInMemoryStoreIdentityTest {
     }
 
     @Test
+    fun dtoOnlyRotationRemainsUnresolvedUntilAuthoritativeChannelInfoSave() = runTest {
+        val store = ChannelsInMemoryStore(ChannelIdentityMutex())
+        val radio = channelsRadioId()
+        val first = ChannelInfo(1u, "old", channelsSecret(1))
+        store.saveChannel(radio, first)
+        val priorOccupant = assertNotNull(store.fetchChannelOccupantID(radio, 1u))
+        val row = assertNotNull(store.fetchChannel(radio, 1u))
+
+        store.saveChannel(row.copy(secret = channelsSecret(2)))
+
+        assertNull(store.fetchChannelOccupantID(radio, 1u), "DTO-only rotation must not mint authoritative proof")
+        store.saveChannel(radio, first.copy(secret = channelsSecret(2)))
+        assertNotNull(store.fetchChannelOccupantID(radio, 1u))
+        assertNotEquals(priorOccupant, store.fetchChannelOccupantID(radio, 1u))
+    }
+
+    @Test
     fun unresolvedMarkerRequiresScopedBeginAndAuthoritativeReconciliation() = runTest {
         val store = ChannelsInMemoryStore(ChannelIdentityMutex())
         val radio = channelsRadioId()

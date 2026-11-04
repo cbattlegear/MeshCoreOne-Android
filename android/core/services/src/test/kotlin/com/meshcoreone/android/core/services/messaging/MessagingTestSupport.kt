@@ -46,6 +46,12 @@ internal val CONTACT = UUID.fromString("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
 internal val BASE_TIME = Instant.parse("2026-10-05T12:00:00Z")
 internal fun token(radio: RadioId = RADIO, generation: Long = 1) =
     SessionToken(ProcessEpoch(UUID.fromString("33333333-3333-3333-3333-333333333333")), Generation(generation), radio)
+internal fun testChannelDispatchLease(
+    token: SessionToken, connection: Any,
+): ChannelDispatchFence.Lease {
+    val fence = ChannelDispatchFence(ChannelIdentityMutex())
+    return fence.openSession(token, connection, ChannelDispatchAdmission(token, connection))
+}
 
 internal class TestMessagingClock(val scheduler: TestCoroutineScheduler) : SessionClock {
     var offset: Long = 0
@@ -96,8 +102,19 @@ private fun unsupportedStore(): PersistenceStoreProtocol = PersistenceStoreProto
     },
 )
 
+private fun unsupportedChannelHistory(): ChannelHistoryPersisting = ChannelHistoryPersisting::class.java.cast(
+    Proxy.newProxyInstance(ChannelHistoryPersisting::class.java.classLoader, arrayOf(ChannelHistoryPersisting::class.java)) { _, method, _ ->
+        throw UnsupportedOperationException("Undeclared test operation: ${method.name}")
+    },
+)
+
 internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(),
-    QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting {
+    ChannelHistoryPersisting by unsupportedChannelHistory(),
+    ChannelSubmissionPersisting, QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting {
+    val channelIdentity = ChannelIdentityMutex()
+    override suspend fun <T> withChannelOperation(block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T): T =
+        channelIdentity.withChannelOperationScope { scope -> block(this, scope) }
+
     val messages = linkedMapOf<EntityKey, MessageDTO>()
     val contacts = linkedMapOf<EntityKey, ContactDTO>()
     val channels = linkedMapOf<EntityKey, ChannelDTO>()
@@ -105,6 +122,7 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(),
     val pending = linkedMapOf<EntityKey, PendingSendDTO>()
     val channelAttempts = linkedMapOf<QueuedChannelAttemptKey, QueuedChannelAttempt>()
     val channelOccupants = mutableMapOf<Pair<RadioId, UByte>, UUID>()
+    private val channelSubmissions = linkedMapOf<UUID, Pair<ChannelSubmission, Instant>>()
     val calls = mutableListOf<String>()
     val faults = mutableMapOf<String, PersistenceStoreException>()
     var before: (suspend (String) -> Unit)? = null
@@ -115,6 +133,85 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(),
         faults[name]?.let { throw it }
     }
     override suspend fun saveMessage(dto: MessageDTO) { access("saveMessage"); messages[EntityKey(dto.radioId, dto.id)] = dto }
+    override suspend fun createOrReconcileChannelMessage(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO {
+        access("createOrReconcileChannelMessage")
+        val origin = creation.origin
+        val key = EntityKey(origin.radioId, creation.messageID)
+        val existing = messages[key]
+        if (existing != null) {
+            if (existing.contactID != null || existing.channelIndex != origin.channelIndex ||
+                existing.direction != MessageDirection.OUTGOING
+            ) throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, key))
+            if (existing.channelOccupantID == null) {
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    ChannelHistoryRejected(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, origin, key))
+            }
+            if (existing.channelOccupantID != origin.expectedOccupantID || existing.text != creation.text ||
+                existing.textType != creation.textType
+            ) throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key))
+            return existing
+        }
+        return MessageDTO(
+            id = creation.messageID, radioId = origin.radioId, channelIndex = origin.channelIndex,
+            text = creation.text, timestamp = timestamp, createdAt = createdAt, textType = creation.textType,
+            channelOccupantID = origin.expectedOccupantID,
+        ).also { messages[key] = it }
+    }
+
+    override suspend fun admitChannelSubmission(
+        submission: ChannelSubmission, enqueuedAt: Instant,
+    ): ChannelSubmissionEvidence {
+        access("admitChannelSubmission")
+        val identity = EntityKey(submission.origin.radioId, submission.pendingID)
+        channelSubmissions[submission.pendingID]?.let { (prior, at) ->
+            if (prior != submission) throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelSubmissionRejected(identity, ChannelSubmissionConflict.IDENTITY_CONFLICT))
+            val pending = this.pending[identity]
+            return ChannelSubmissionEvidence(prior, at, pending?.sequence ?: 1L,
+                ChannelSubmissionPhase.ADMITTED, pending, SnapshotList.empty())
+        }
+        val message = messages[EntityKey(submission.origin.radioId, submission.envelope.messageID)]
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        if (message.direction != MessageDirection.OUTGOING || message.contactID != null ||
+            message.channelIndex != submission.origin.channelIndex ||
+            message.channelOccupantID != submission.origin.expectedOccupantID ||
+            message.text != submission.envelope.messageText ||
+            message.timestamp != submission.envelope.messageTimestamp
+        ) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        if (pending.values.any { it.radioId == identity.radioId && it.messageID == submission.envelope.messageID }) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelSubmissionRejected(identity, ChannelSubmissionConflict.IDENTITY_CONFLICT))
+        }
+        val sequence = Math.incrementExact(pending.values.filter { it.radioId == identity.radioId }.maxOfOrNull { it.sequence } ?: 0L)
+        val row = PendingSendDTO.fromEnvelope(
+            submission.envelope, identity.radioId, identity.id, enqueuedAt,
+        ).copy(sequence = sequence, channelDispatchState = QueuedChannelDispatchState.READY)
+        pending[identity] = row
+        channelSubmissions[submission.pendingID] = submission to enqueuedAt
+        return ChannelSubmissionEvidence(submission, enqueuedAt, sequence, ChannelSubmissionPhase.ADMITTED,
+            row, SnapshotList.empty())
+    }
+
+    override suspend fun reconcileChannelSubmission(
+        submission: ChannelSubmission,
+    ): ChannelSubmissionReconciliation {
+        access("reconcileChannelSubmission")
+        val retained = channelSubmissions[submission.pendingID]
+            ?: return ChannelSubmissionReconciliation.Unknown(ChannelSubmissionUnknown.ABSENT)
+        if (retained.first != submission) throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+            ChannelSubmissionRejected(EntityKey(submission.origin.radioId, submission.pendingID),
+                ChannelSubmissionConflict.IDENTITY_CONFLICT))
+        return ChannelSubmissionReconciliation.Known(
+            ChannelSubmissionEvidence(retained.first, retained.second,
+                pending[EntityKey(submission.origin.radioId, submission.pendingID)]?.sequence ?: 1L,
+                ChannelSubmissionPhase.ADMITTED,
+                pending[EntityKey(submission.origin.radioId, submission.pendingID)], SnapshotList.empty()),
+        )
+    }
     override suspend fun fetchMessage(key: EntityKey): MessageDTO? { access("fetchMessage"); return messages[key] }
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.values.firstOrNull { it.radioId == radioId && it.deduplicationKey == deduplicationKey }
@@ -486,13 +583,13 @@ internal class Harness(
     val clock = TestMessagingClock(test.testScheduler)
     val transport = FirmwareTransport(localPublicKey).also { if (startupPacket != null) it.appStartReply = startupPacket }
     val session = MeshCoreSession(transport, SessionConfiguration(defaultTimeout = sessionTimeout), clock, scope.coroutineContext)
-    private val serviceSession = eventDispatcher?.let { dispatcher ->
+    internal val serviceSession = eventDispatcher?.let { dispatcher ->
         object : MeshCoreSessionProtocol by session {
             override fun events(): Flow<MeshEvent> = dispatcher.subscribe()
             override fun events(filter: EventFilter): Flow<MeshEvent> = dispatcher.subscribe(filter)
         }
     } ?: session
-    private val channelIdentity = ChannelIdentityMutex()
+    private val channelIdentity = store.channelIdentity
     val channelFence = ChannelDispatchFence(channelIdentity)
     val channelLease = channelFence.openSession(token, serviceSession, ChannelDispatchAdmission(token, serviceSession))
     val diagnostics = mutableListOf<MessagingDiagnostic>()
@@ -527,6 +624,11 @@ internal class Harness(
             channelOccupantID = occupant)
         store.saveMessage(dto)
         return dto
+    }
+    suspend fun prepareChannel(index: UByte): UUID {
+        val seed = message(MessageStatus.SENT, index)
+        store.messages.remove(EntityKey(token.radioId, seed.id))
+        return requireNotNull(seed.channelOccupantID)
     }
     fun tracking(
         message: MessageDTO, code: Bytes = Bytes.of(0xAB, 0xCD, 0xEF, 0x12), age: Long = 0,

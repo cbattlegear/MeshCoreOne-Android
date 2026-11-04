@@ -26,6 +26,7 @@ import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.math.pow
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -59,12 +60,12 @@ class MessageService(
     },
     reporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
     private val newID: () -> UUID = UUID::randomUUID,
-    private val channelDispatchLease: ChannelDispatchFence.Lease? = null,
+    private val channelDispatchLease: ChannelDispatchFence.Lease,
 ) : MessagingSendPort {
     init {
         require(localPublicKey.size == ProtocolLimits.PUBLIC_KEY_SIZE)
-        channelDispatchLease?.let {
-            require(it.token == token && it.connection === session) { "Channel dispatch requires the actual connection lease" }
+        require(channelDispatchLease.token == token && channelDispatchLease.connection === session) {
+            "Channel dispatch requires the actual connection lease"
         }
     }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
@@ -112,10 +113,11 @@ class MessageService(
     }
 
     private suspend fun <T> owned(operation: String, mutex: Mutex? = null, block: suspend () -> T): T {
+        val receipt = currentCoroutineContext()[PendingMessageCreation] ?: EmptyCoroutineContext
         ownership.check(operation)
         val task = synchronized(lock) {
             if (ownership.closing) throw MessageServiceException(MessageServiceError.NotConnected)
-            ownership.scope.async(start = CoroutineStart.LAZY) {
+            ownership.scope.async(context = receipt, start = CoroutineStart.LAZY) {
                 suspend fun runOperation(): T {
                     ownership.check(operation)
                     return block()
@@ -755,40 +757,104 @@ class MessageService(
         }
     }
 
-    private suspend fun outgoingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO {
-        ownership.check("createPendingChannel")
-        rejectChannelText(text, radioId)
-        return MessageDTO(newID(), radioId, channelIndex = channelIndex, text = text, timestamp = timestamp(),
-            createdAt = clock.wallClock.instant(), textType = textType)
-    }
+    override suspend fun createPendingChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO =
+        owned("createPendingChannel", pendingOperations) {
+            rejectChannelText(text, radioId)
+            persistChannelCreation(ChannelMessageCreation(newID(), captureChannelOrigin(radioId, channelIndex), text, textType))
+        }
 
-    override suspend fun createPendingChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO {
-        val dto = outgoingChannel(text, channelIndex, radioId, textType)
-        dataStore.saveMessage(dto)
+    suspend fun createPendingChannelMessage(creation: ChannelMessageCreation): MessageDTO =
+        owned("createPendingChannel", pendingOperations) {
+            persistChannelCreation(creation)
+        }
+
+    private suspend fun persistChannelCreation(creation: ChannelMessageCreation): MessageDTO {
+        ownership.check("createPendingChannel")
+        val origin = creation.origin
+        if (origin.radioId != token.radioId) throw MessageServiceException(MessageServiceError.NotConnected)
+        rejectChannelText(creation.text, origin.radioId)
+        val history = dataStore as? ChannelHistoryPersisting
+            ?: throw PersistenceStoreException(
+                PersistenceStoreError.InvalidData,
+                UnsupportedOperationException("Caller-origin channel creation is not wired"),
+            )
+        val createdAt = clock.wallClock.instant()
+        val createdTimestamp = timestamp()
+        val proposed = MessageDTO(
+            id = creation.messageID,
+            radioId = origin.radioId,
+            channelIndex = origin.channelIndex,
+            channelOccupantID = origin.expectedOccupantID,
+            text = creation.text,
+            timestamp = createdTimestamp,
+            createdAt = createdAt,
+            direction = MessageDirection.OUTGOING,
+            status = MessageStatus.PENDING,
+            textType = creation.textType,
+        )
+        val receipt = currentCoroutineContext()[PendingMessageCreation]
+        receipt?.writing(proposed)
+        val persisted = try {
+            history.createOrReconcileChannelMessage(creation, createdTimestamp, createdAt)
+        } catch (failure: Exception) {
+            receipt?.settled(PendingMessageCreation.State.UNKNOWN)
+            throw failure
+        }
+        val intentMatches = persisted.id == creation.messageID && persisted.radioId == origin.radioId &&
+            persisted.contactID == null && persisted.channelIndex == origin.channelIndex &&
+            persisted.channelOccupantID == origin.expectedOccupantID &&
+            persisted.direction == MessageDirection.OUTGOING && persisted.text == creation.text &&
+            persisted.textType == creation.textType
+        if (!intentMatches) {
+            receipt?.settled(PendingMessageCreation.State.UNKNOWN)
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        if (receipt?.committed(persisted) == false) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
         ownership.check("createPendingChannel.saved")
-        return dto
+        return persisted
     }
 
     override suspend fun sendChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): ChannelSendReceipt =
         owned("sendChannelMessage", channelOperations) {
-            val dto = outgoingChannel(text, channelIndex, radioId, textType)
-            sendBoundary(dto.id, true) {
-                dataStore.saveMessage(dto)
-                ownership.check("sendChannelMessage.persisted")
-                withPoolBackoff(2u) {
+            rejectChannelText(text, radioId)
+            val creation = ChannelMessageCreation(newID(), captureChannelOrigin(radioId, channelIndex), text, textType)
+            sendCreatedChannelMessage(creation)
+        }
+
+    suspend fun sendChannelMessage(creation: ChannelMessageCreation): ChannelSendReceipt =
+        owned("sendChannelMessage", channelOperations) { sendCreatedChannelMessage(creation) }
+
+    private suspend fun sendCreatedChannelMessage(creation: ChannelMessageCreation): ChannelSendReceipt {
+        val dto = persistChannelCreation(creation)
+        val origin = creation.origin
+        sendBoundary(dto.id, true) {
+            withPoolBackoff(2u) {
+                channelDispatchLease.owner.dispatch(
+                    channelDispatchLease, origin.channelIndex, origin.expectedOccupantID, dataStore::fetchChannelOccupantID,
+                ) {
                     checkIdentity("sendChannelMessage.wire")
-                    session.sendChannelMessage(channelIndex, text, Instant.ofEpochSecond(dto.timestamp.toLong()))
+                    session.sendChannelMessage(origin.channelIndex, creation.text, Instant.ofEpochSecond(dto.timestamp.toLong()))
                 }
             }
-            ownership.check("sendChannelMessage.accepted")
-            bookkeeping("inlineChannel.${dto.id}") {
-                dataStore.updateMessageStatus(key(dto.id), MessageStatus.SENT)
-                ownership.check("sendChannelMessage.saved")
-                events.yield(MessageStatusEvent.StatusResolved(dto.id, MessageStatus.SENT, null))
-                updateChannelDate(channelIndex)
-            }
-            ChannelSendReceipt(dto.id, dto.timestamp)
         }
+        ownership.check("sendChannelMessage.accepted")
+        bookkeeping("inlineChannel.${dto.id}") {
+            dataStore.updateMessageStatus(key(dto.id), MessageStatus.SENT)
+            ownership.check("sendChannelMessage.saved")
+            events.yield(MessageStatusEvent.StatusResolved(dto.id, MessageStatus.SENT, null))
+            updateChannelDate(origin.channelIndex, origin.expectedOccupantID)
+        }
+        return ChannelSendReceipt(dto.id, dto.timestamp)
+    }
+
+    private suspend fun captureChannelOrigin(radioId: RadioId, channelIndex: UByte): ChannelHistoryScope {
+        if (radioId != token.radioId) throw MessageServiceException(MessageServiceError.NotConnected)
+        val occupantID = dataStore.fetchChannelOccupantID(radioId, channelIndex)
+            ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+        return ChannelHistoryScope(radioId, channelIndex, occupantID)
+    }
 
     override suspend fun sendPendingChannelMessage(messageID: UUID) { queuedChannel(messageID, false, true) }
     override suspend fun resendChannelMessage(messageID: UUID, preserveTimestamp: Boolean): UInt =
@@ -814,7 +880,6 @@ class MessageService(
                     QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)))
         }
         val lease = channelDispatchLease
-            ?: throw retainedChannel(pendingID, ChannelDispatchFailure.RetiredSession())
         val row = dataStore.fetchMessage(key(envelope.messageID))
         if (row == null || row.direction != MessageDirection.OUTGOING || row.contactID != null ||
             row.channelIndex != envelope.channelIndex || row.channelOccupantID != occupantID ||
@@ -846,6 +911,9 @@ class MessageService(
                     try {
                         dataStore.beginQueuedChannelAttempt(attemptKey, occupantID, stamp)
                     } catch (failure: PersistenceStoreException) {
+                        if (failure.cause is QueuedChannelAttemptRejected) {
+                            return@dispatch ChannelPrewireResult.Rejected(failure)
+                        }
                         // A lost begin response may have committed DISPATCHING. Never infer READY or send.
                         remember("channelBegin.$pendingID", failure)
                         try { dataStore.fetchQueuedChannelAttempt(attemptKey) }
@@ -929,7 +997,9 @@ class MessageService(
                 if (dataStore.fetchMessage(key(attemptKey.messageID))?.status != MessageStatus.DELIVERED) {
                     events.yield(MessageStatusEvent.StatusResolved(attemptKey.messageID, MessageStatus.SENT, null))
                 }
-                bookkeeping("channelDate.${attemptKey.messageID}") { updateChannelDate(accepted.channelIndex) }
+                bookkeeping("channelDate.${attemptKey.messageID}") {
+                    updateChannelDate(accepted.channelIndex, accepted.channelOccupantID)
+                }
             }
         }
 
@@ -939,6 +1009,7 @@ class MessageService(
             val row = sendBoundary(id, false) {
                 val row = fetchSaved(id)
                 if (row.channelIndex == null) throw MessageServiceException(MessageServiceError.SendFailed("Not a channel message"))
+                if (row.channelOccupantID == null) throw ChannelDispatchFailure.UnknownOccupant()
                 row
             }
             val index = requireNotNull(row.channelIndex)
@@ -949,8 +1020,12 @@ class MessageService(
                     if (isResend && !preserveTimestamp) dataStore.updateMessageTimestamp(key(id), stamp)
                     ownership.check("queuedChannel.timestamp")
                     withPoolBackoff(2u) {
-                        checkIdentity("queuedChannel.wire")
-                        session.sendChannelMessage(index, row.text, Instant.ofEpochSecond(stamp.toLong()))
+                        channelDispatchLease.owner.dispatch(
+                            channelDispatchLease, index, row.channelOccupantID, dataStore::fetchChannelOccupantID,
+                        ) {
+                            checkIdentity("queuedChannel.wire")
+                            session.sendChannelMessage(index, row.text, Instant.ofEpochSecond(stamp.toLong()))
+                        }
                     }
                 }
                 ownership.check("queuedChannel.accepted")
@@ -974,16 +1049,19 @@ class MessageService(
                 events.yield(MessageStatusEvent.Resent(id))
             } else {
                 events.yield(MessageStatusEvent.StatusResolved(id, MessageStatus.SENT, null))
-                bookkeeping("channelDate.$id") { updateChannelDate(index) }
+                bookkeeping("channelDate.$id") { updateChannelDate(index, row.channelOccupantID) }
             }
             synchronized(lock) { acceptedChannels.remove(id) }
             stamp
         }
 
-    private suspend fun updateChannelDate(index: UByte) {
-        dataStore.fetchChannel(token.radioId, index)?.let {
+    private suspend fun updateChannelDate(index: UByte, expectedOccupantID: UUID?) {
+        if (expectedOccupantID == null) return
+        dataStore.withChannelOperation { scoped, _ ->
+            if (scoped.fetchChannelOccupantID(token.radioId, index) != expectedOccupantID) return@withChannelOperation
+            val channel = scoped.fetchChannel(token.radioId, index) ?: return@withChannelOperation
             ownership.check("channelDate.read")
-            dataStore.updateChannelLastMessage(key(it.id), clock.wallClock.instant())
+            scoped.updateChannelLastMessage(key(channel.id), clock.wallClock.instant())
             ownership.check("channelDate.saved")
         }
     }

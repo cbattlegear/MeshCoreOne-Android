@@ -131,6 +131,57 @@ class ChatSendQueueService(
         val pending = PendingSendDTO.fromEnvelope(envelope, token.radioId, newID(), clock.wallClock.instant())
         submitPersistence(pending) { scheduleChannel(ChannelEntry(pending.id, envelope)) }
     }
+    suspend fun enqueueChannel(submission: ChannelSubmission) {
+        checkQueueLifetime("persistChannelSubmission")
+        val persistence = dataStore as? ChannelSubmissionPersisting
+            ?: throw ChatSendQueueServiceException(ChatSendQueueServiceError.PersistFailed(
+                PersistenceStoreException(
+                    PersistenceStoreError.InvalidData,
+                    UnsupportedOperationException("Durable channel submission admission is not wired"),
+                ),
+            ))
+        val task = synchronized(lock) {
+            if (teardown != null || ownership.closing) {
+                throw ChatSendQueueServiceException(ChatSendQueueServiceError.NotConnected)
+            }
+            persistenceScope.async<Result<Unit>>(start = CoroutineStart.LAZY) {
+                try {
+                    val evidence = persistence.admitChannelSubmission(submission, clock.wallClock.instant())
+                    if (evidence.submission != submission) {
+                        throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                    }
+                    val pending = evidence.pending
+                    if (evidence.phase == ChannelSubmissionPhase.ADMITTED && pending == null) {
+                        throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                    }
+                    if (pending != null && evidence.phase != ChannelSubmissionPhase.RETIRED) {
+                        if (pending.radioId != submission.origin.radioId ||
+                            pending.id != submission.pendingID ||
+                            pending.channelMessageEnvelope() != submission.envelope
+                        ) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                        synchronized(lock) {
+                            if (!ownership.closing) {
+                                scheduleChannel(ChannelEntry(submission.pendingID, submission.envelope))
+                            }
+                        }
+                    }
+                    Result.success(Unit)
+                } catch (failure: PersistenceStoreException) {
+                    val typed = ChatSendQueueServiceException(ChatSendQueueServiceError.PersistFailed(failure))
+                    record("persistChannelSubmission.${submission.pendingID}", typed)
+                    Result.failure(typed)
+                }
+            }.also { work ->
+                persistenceSubmissions += work
+                work.invokeOnCompletion { cause ->
+                    if (cause != null) record("persistChannelSubmission.${submission.pendingID}", cause)
+                    synchronized(lock) { persistenceSubmissions.remove(work) }
+                }
+                work.start()
+            }
+        }
+        task.await().getOrThrow()
+    }
     private fun scheduleChannel(entry: ChannelEntry) = synchronized(lock) {
         if (channelEntries.putIfAbsent(entry.pendingID, entry) == null) {
             queued.add(entry.envelope.messageID)
@@ -428,7 +479,13 @@ class ChatSendQueueService(
             envelope.localNodeName?.let {
                 if (!synchronized(lock) { entry.pendingID in indexedChannels }) {
                     try {
-                        reactionIndexer.indexMessage(id, envelope.channelIndex, it, envelope.messageText, accepted.wireTimestamp)
+                        dataStore.withChannelOperation { scoped, _ ->
+                            if (scoped.fetchChannelOccupantID(token.radioId, envelope.channelIndex) ==
+                                accepted.channelOccupantID
+                            ) {
+                                reactionIndexer.indexMessage(id, envelope.channelIndex, it, envelope.messageText, accepted.wireTimestamp)
+                            }
+                        }
                         ownership.check("channel.indexed")
                         synchronized(lock) { indexedChannels += entry.pendingID }
                     } catch (cancelled: CancellationException) { throw cancelled }

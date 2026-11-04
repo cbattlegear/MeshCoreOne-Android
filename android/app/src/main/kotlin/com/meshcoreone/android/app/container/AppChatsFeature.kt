@@ -9,7 +9,11 @@ import com.meshcoreone.android.app.navigation.ChannelLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.state.MessageEvent
-import com.meshcoreone.android.core.contracts.domain.ChannelQuery
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
+import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmission
+import com.meshcoreone.android.core.contracts.domain.QueuedChannelAttemptConflict
+import com.meshcoreone.android.core.contracts.domain.QueuedChannelAttemptRejected
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
@@ -115,6 +119,24 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
 
     internal fun maximumChannels(): UByte = app.connectedDevice?.maxChannels ?: 0u
 
+    private fun channelHistory(): com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting =
+        store as? com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+            ?: throw PersistenceStoreException(
+                PersistenceStoreError.InvalidData,
+                UnsupportedOperationException("Channel history identity is not wired"),
+            )
+
+    private suspend fun channelHistoryScope(radioId: RadioId, channelIndex: UByte): ChannelHistoryScope {
+        val snapshot = store.fetchChannelOccupantSnapshot(radioId, channelIndex)
+            ?: throw PersistenceStoreException(
+                PersistenceStoreError.InvalidData,
+                com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected(
+                    com.meshcoreone.android.core.contracts.domain.ChannelHistoryConflict.UNKNOWN_AUTHORITY,
+                ),
+            )
+        return ChannelHistoryScope.from(snapshot)
+    }
+
     internal fun pathDevice(radio: RadioId, screenScope: kotlinx.coroutines.CoroutineScope): StateFlow<DeviceDTO?> {
         fun current() = app.connectedDevice?.takeIf { it.radioId == radio }
         return changes.map { current() }.stateIn(screenScope, SharingStarted.Eagerly, current())
@@ -156,10 +178,16 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             override suspend fun fetchLastMessages(contactIds: List<UUID>, limit: Int) =
                 store.fetchLastMessages(contactIds.map(::key).snapshot(), limit.toLong())
                     .entries.associate { it.key.id to it.value }
-            override suspend fun fetchLastChannelMessages(channels: List<ChatChannelKey>, limit: Int) =
-                store.fetchLastChannelMessages(
-                    channels.map { ChannelQuery(it.radioId, it.channelIndex, it.id) }.snapshot(), limit.toLong(),
-                ).entries.associate { it.key.id to it.value }
+            override suspend fun fetchLastChannelMessages(channels: List<ChatChannelKey>, limit: Int): Map<UUID, List<MessageDTO>> {
+                val currentChannels = channels.filter { channel ->
+                    store.fetchChannel(channel.radioId, channel.channelIndex)?.id == channel.id
+                }
+                val scopes = currentChannels.map { channelHistoryScope(it.radioId, it.channelIndex) }
+                val rows = channelHistory().fetchLastChannelHistory(scopes.snapshot(), limit.toLong())
+                return currentChannels.indices.associate { index ->
+                    currentChannels[index].id to rows[scopes[index]].orEmpty()
+                }
+            }
             override suspend fun fetchFailedSendConversationKeys(radioId: RadioId) =
                 store.fetchFailedSendConversationKeys(radioId)
             override suspend fun setContactMuted(contactId: UUID, isMuted: Boolean) =
@@ -365,11 +393,29 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 current.reactionService.buildDMReactionText(emoji, message.text, message.reactionTimestamp),
                 conversation.contact,
             )
-            is TimelineConversation.Channel -> current.messageService.sendChannelMessage(
-                current.reactionService.buildReactionText(emoji, message.senderNodeName ?: app.connectedDevice?.nodeName
-                    ?: throw MessageServiceException(MessageServiceError.NotConnected), message.text, message.reactionTimestamp),
-                conversation.channel.index, conversation.channel.radioId,
-            )
+            is TimelineConversation.Channel -> {
+                if (message.channelIndex != conversation.channel.index ||
+                    message.radioId != conversation.channel.radioId
+                ) throw MessageServiceException(MessageServiceError.ChannelNotFound)
+                val occupantID = message.channelOccupantID
+                    ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                        com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected(
+                            com.meshcoreone.android.core.contracts.domain.ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN,
+                            messageKey = EntityKey(message.radioId, message.id),
+                        ))
+                val text = current.reactionService.buildReactionText(
+                    emoji, message.senderNodeName ?: app.connectedDevice?.nodeName
+                        ?: throw MessageServiceException(MessageServiceError.NotConnected),
+                    message.text, message.reactionTimestamp,
+                )
+                current.messageService.sendChannelMessage(
+                    ChannelMessageCreation(
+                        UUID.randomUUID(),
+                        ChannelHistoryScope(message.radioId, message.channelIndex, occupantID),
+                        text,
+                    ),
+                )
+            }
         }
     }
 
@@ -557,8 +603,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     is TimelineConversation.Direct -> store.fetchMessages(
                         EntityKey(conversation.contact.radioId, conversation.contact.id), limit.toLong(), offset.toLong(),
                     )
-                    is TimelineConversation.Channel -> store.fetchMessages(
-                        conversation.channel.radioId, conversation.channel.index, limit.toLong(), offset.toLong(),
+                    is TimelineConversation.Channel -> channelHistory().fetchChannelHistory(
+                        channelHistoryScope(conversation.channel.radioId, conversation.channel.index),
+                        limit.toLong(), offset.toLong(),
                     )
                 }
             override suspend fun fetchMessageWindow(conversation: TimelineConversation, anchorSortDate: Instant?, floorLimit: Int) =
@@ -566,11 +613,26 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     is TimelineConversation.Direct -> store.fetchMessageWindow(
                         EntityKey(conversation.contact.radioId, conversation.contact.id), anchorSortDate, floorLimit.toLong(),
                     )
-                    is TimelineConversation.Channel -> store.fetchMessageWindow(
-                        conversation.channel.radioId, conversation.channel.index, anchorSortDate, floorLimit.toLong(),
+                    is TimelineConversation.Channel -> channelHistory().fetchChannelHistoryWindow(
+                        channelHistoryScope(conversation.channel.radioId, conversation.channel.index),
+                        anchorSortDate, floorLimit.toLong(),
                     )
                 }
-            override suspend fun fetchMessage(messageId: UUID) = store.fetchMessage(EntityKey(radio, messageId))
+            override suspend fun fetchMessage(messageId: UUID): MessageDTO? {
+                val message = store.fetchMessage(EntityKey(radio, messageId)) ?: return null
+                return when (conversation) {
+                    is TimelineConversation.Direct ->
+                        message.takeIf { it.contactID == conversation.contact.id && it.channelIndex == null }
+                    is TimelineConversation.Channel -> {
+                        if (message.channelIndex == null || message.contactID != null) return null
+                        val origin = channelHistory().validateChannelMessageOrigin(EntityKey(radio, messageId))
+                        if (origin.radioId == conversation.channel.radioId &&
+                            origin.channelIndex == conversation.channel.index &&
+                            origin == channelHistoryScope(conversation.channel.radioId, conversation.channel.index)
+                        ) message else null
+                    }
+                }
+            }
             override suspend fun unreadAnchorMessageId(conversation: TimelineConversation): UUID? =
                 when (conversation) {
                     is TimelineConversation.Direct ->
@@ -607,7 +669,15 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val events: Flow<TimelineEvent> get() = this@AppChatsFeature.events().transform<MessageEvent, TimelineEvent> { event ->
             val ids = when (event) {
                 is MessageEvent.DirectMessageReceived -> listOf(event.message.id)
-                is MessageEvent.ChannelMessageReceived -> listOf(event.message.id)
+                is MessageEvent.ChannelMessageReceived -> {
+                    if (conversation is TimelineConversation.Channel &&
+                        event.message.radioId == conversation.channel.radioId &&
+                        event.channelIndex == conversation.channel.index
+                    ) {
+                        emit(TimelineEvent.HistoryChanged(conversation.id))
+                    }
+                    emptyList()
+                }
                 is MessageEvent.ChannelHistoryDeleted -> {
                     if (conversation is TimelineConversation.Channel && event.radioId == radio) {
                         emit(TimelineEvent.HistoryChanged(conversation.id))
@@ -629,18 +699,24 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 val message = store.fetchMessage(EntityKey(radio, id)) ?: continue
                 val belongs = when (conversation) {
                     is TimelineConversation.Direct -> message.contactID == conversation.contact.id
-                    is TimelineConversation.Channel -> message.channelIndex == conversation.channel.index
+                    is TimelineConversation.Channel -> {
+                        val occupantID = message.channelOccupantID
+                        radio == conversation.channel.radioId &&
+                            message.channelIndex == conversation.channel.index &&
+                            occupantID != null &&
+                            store.fetchChannelOccupantID(radio, conversation.channel.index) == occupantID
+                    }
                 }
                 if (belongs) {
                     if (event is MessageEvent.MessageFailed && !message.failureSeen) {
                         markFailedSendSeenIfVisible(message)
                         app.refreshConversations()
                     }
-                    emit(when (event) {
-                        is MessageEvent.DirectMessageReceived, is MessageEvent.ChannelMessageReceived ->
-                            TimelineEvent.MessageReceived(conversation.id, message)
-                        else -> TimelineEvent.MessageChanged(conversation.id, message.id)
-                    })
+                    if (event is MessageEvent.DirectMessageReceived) {
+                        emit(TimelineEvent.MessageReceived(conversation.id, message))
+                    } else {
+                        emit(TimelineEvent.MessageChanged(conversation.id, message.id))
+                    }
                 }
             }
         }
@@ -653,15 +729,20 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 app.messageEventStream.send(MessageEvent.DirectMessageReceived(it, contact))
                 app.refreshConversations()
             }
-        override suspend fun createPendingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType) =
-            session(radio).messageService.createPendingChannelMessage(text, channelIndex, radioId, textType).also {
-                app.messageEventStream.send(MessageEvent.ChannelMessageReceived(it, channelIndex))
+        override suspend fun captureChannelOrigin(radioId: RadioId, channelIndex: UByte): ChannelHistoryScope {
+            val snapshot = store.fetchChannelOccupantSnapshot(radioId, channelIndex)
+                ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+            return ChannelHistoryScope.from(snapshot)
+        }
+        override suspend fun createPendingChannel(creation: ChannelMessageCreation) =
+            session(radio).messageService.createPendingChannelMessage(creation).also {
+                app.messageEventStream.send(MessageEvent.ChannelMessageReceived(it, creation.origin.channelIndex))
                 app.refreshConversations()
             }
         override suspend fun enqueueDM(envelope: DirectMessageEnvelope) =
             sendQueue(radio).enqueueDM(envelope)
-        override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) =
-            sendQueue(radio).enqueueChannel(envelope)
+        override suspend fun enqueueChannel(submission: ChannelSubmission) =
+            sendQueue(radio).enqueueChannel(submission)
         override suspend fun signalDMEnqueued(envelope: DirectMessageEnvelope) =
             sendQueue(radio).signalDMEnqueued(envelope)
         override suspend fun recordLocalEnqueueFailure(messageId: UUID) =
@@ -678,8 +759,21 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         val message = savedMessage(radio, id)
         val index = message.channelIndex
             ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+        val occupantID = message.channelOccupantID
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                QueuedChannelAttemptRejected(EntityKey(radio, id), QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION))
+        val retained = store.fetchPendingSendsForMessage(EntityKey(radio, id))
+        if (retained.isNotEmpty()) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                QueuedChannelAttemptRejected(EntityKey(radio, retained.first().id), QueuedChannelAttemptConflict.RETAINED_SUBMISSION))
+        }
+        val origin = ChannelHistoryScope(radio, index, occupantID)
         queue.enqueueChannel(
-            ChannelMessageEnvelope(id, index, isResend, message.text, message.timestamp, localName),
+            ChannelSubmission(
+                UUID.randomUUID(),
+                origin,
+                ChannelMessageEnvelope(id, index, isResend, message.text, message.timestamp, localName, occupantID),
+            ),
         )
     }
 
@@ -791,7 +885,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val recentSenderOrder = changes.map {
             when (target) {
                 is ComposerTarget.Direct -> emptyMap()
-                is ComposerTarget.Channel -> store.fetchMessages(target.channel.radioId, target.channel.index)
+                is ComposerTarget.Channel -> channelHistory().fetchChannelHistory(
+                    channelHistoryScope(target.channel.radioId, target.channel.index), 50,
+                )
                     .filter { it.senderNodeName != null }
                     .groupBy { checkNotNull(it.senderNodeName) }
                     .mapValues { (_, messages) -> messages.maxOf { it.timestamp } }

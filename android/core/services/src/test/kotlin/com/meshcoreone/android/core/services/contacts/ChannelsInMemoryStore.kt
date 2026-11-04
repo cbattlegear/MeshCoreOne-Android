@@ -151,9 +151,13 @@ internal class ChannelsInMemoryStore(
 
     fun replace(dto: ChannelDTO) = synchronized(lock) {
         val prior = channels.firstOrNull { it.radioId == dto.radioId && it.index == dto.index }
-        if (prior == null || prior.secret != dto.secret || (!prior.isEnabled && dto.isEnabled) || (dto.radioId to dto.index) !in occupants) {
+        val rotated = prior != null && (
+            prior.secret != dto.secret || (!prior.isEnabled && dto.isEnabled)
+        )
+        if (rotated || prior == null || (dto.radioId to dto.index) !in occupants) {
             occupants[dto.radioId to dto.index] = UUID.randomUUID()
         }
+        if (rotated) unresolvedOccupants += dto.radioId to dto.index
         channels = channels.filterNot { it.id == dto.id } + dto
     }
 

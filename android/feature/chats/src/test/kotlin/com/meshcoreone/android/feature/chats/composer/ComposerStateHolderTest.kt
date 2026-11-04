@@ -151,15 +151,19 @@ class ComposerStateHolderTest {
         val rig = rig(ComposerTarget.Channel(channel))
         rig.holder.onDraftChanged("net check")
         rig.holder.send()
-        assertEquals(listOf("createPendingChannel:2:net check", "enqueueChannel"), rig.port.calls)
+        assertEquals(listOf("captureChannelOrigin:2", "createPendingChannel:2:net check", "enqueueChannel"), rig.port.calls)
         val pending = rig.port.pendingMessages.single()
-        assertEquals(ChannelMessageEnvelope(pending.id, 2u, false, pending.text, pending.timestamp, null),
-            rig.port.channelEnvelopes.single())
+        val submission = rig.port.channelSubmissions.single()
+        assertEquals(pending.id, submission.envelope.messageID)
+        assertEquals(2u, submission.origin.channelIndex)
+        assertEquals(submission.origin.expectedOccupantID, submission.envelope.channelOccupantID)
+        assertEquals(ChannelMessageEnvelope(pending.id, 2u, false, pending.text, pending.timestamp, null,
+            submission.origin.expectedOccupantID), submission.envelope)
         assertTrue(rig.port.directEnvelopes.isEmpty())
     }
 
     @Test
-    fun `channel envelope captures current node identity after pending creation`() = scenario {
+    fun `channel submission captures origin and node identity before pending creation`() = scenario {
         val env = FakeEnvironment(device = ComposerDeviceInfo("Before", Bytes(ByteArray(32))))
         val rig = rig(ComposerTarget.Channel(channel), env)
         rig.port.createGate = CompletableDeferred()
@@ -172,8 +176,9 @@ class ComposerStateHolderTest {
         assertEquals("original \u4e2d\uD83D\uDE80 text", pending.text)
         assertEquals(channel.radioId, pending.radioId)
         assertEquals(channel.index, pending.channelIndex)
-        assertEquals(ChannelMessageEnvelope(pending.id, channel.index, false, pending.text, pending.timestamp, "After"),
-            rig.port.channelEnvelopes.single())
+        val submission = rig.port.channelSubmissions.single()
+        assertEquals(ChannelMessageEnvelope(pending.id, channel.index, false, pending.text, pending.timestamp,
+            "Before", submission.origin.expectedOccupantID), submission.envelope)
     }
 
     @Test
@@ -215,7 +220,11 @@ class ComposerStateHolderTest {
                 assertEquals("new draft", rig.drafts.values[target.conversationId])
                 assertEquals("saved pending", rig.port.pendingMessages.single().text)
                 assertEquals(listOf<Throwable>(failure), rig.failures)
-                assertEquals(listOf(rig.port.pendingMessages.single().id), rig.port.localEnqueueFailures)
+                if (target is ComposerTarget.Direct) {
+                    assertEquals(listOf(rig.port.pendingMessages.single().id), rig.port.localEnqueueFailures)
+                } else {
+                    assertTrue(rig.port.localEnqueueFailures.isEmpty())
+                }
             }
         }
     }
@@ -281,6 +290,29 @@ class ComposerStateHolderTest {
         assertEquals(ComposerSendPhase.Failed(ComposerSendFailure.OTHER, messageSaved = true), rig.state.sendPhase)
         rig.holder.onDraftChanged("x")
         assertEquals(ComposerSendPhase.Idle, rig.state.sendPhase, "typing clears the failure banner")
+    }
+
+    @Test
+    fun `channel queue retry reuses caller message pending and occupant identities`() = scenario {
+        val rig = rig(ComposerTarget.Channel(channel))
+        rig.port.enqueueFailure = ChatSendQueueServiceException(
+            ChatSendQueueServiceError.PersistFailed(IllegalStateException("response lost")),
+        )
+        rig.holder.onDraftChanged("retry this")
+        rig.holder.send()
+        val first = rig.port.channelSubmissions.single()
+        assertEquals("retry this", rig.state.draft)
+        assertEquals("retry this", rig.drafts.values[channel.let {
+            ComposerTarget.Channel(it).conversationId
+        }])
+
+        rig.timer.advance()
+        rig.port.enqueueFailure = null
+        assertTrue(rig.holder.send())
+        val replay = rig.port.channelSubmissions.last()
+        assertEquals(first, replay)
+        assertEquals(first.envelope.messageID, rig.port.pendingMessages.single().id)
+        assertEquals(1, rig.port.pendingMessages.size)
     }
 
     @Test

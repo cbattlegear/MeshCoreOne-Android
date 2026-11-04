@@ -1,10 +1,13 @@
 // AndroidOnly: WP-303 The runtime service factory: one graph per connection generation, built only after its prerequisites exist.
 package com.meshcoreone.android.app.container
 
+import com.meshcoreone.android.core.contracts.domain.ChannelDispatchAdmission
+import com.meshcoreone.android.core.contracts.domain.LifecycleStage
 import com.meshcoreone.android.core.runtime.FactoryOwnership
 import com.meshcoreone.android.core.runtime.RuntimeServiceFactory
 import com.meshcoreone.android.core.runtime.RuntimeServiceInputs
 import com.meshcoreone.android.core.runtime.RuntimeServices
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import kotlinx.coroutines.sync.Mutex
 
 /**
@@ -16,18 +19,32 @@ import kotlinx.coroutines.sync.Mutex
 class RadioSessionContainerFactory(
     private val environment: SessionEnvironment,
     private val registry: SessionRegistry,
+    private val channelDispatchFence: ChannelDispatchFence = ChannelDispatchFence.PROCESS,
 ) : RuntimeServiceFactory {
     // Screen-owned history can retain an old service after the connection graph is torn down.
     private val reactionPersistenceMutex = Mutex()
 
     override suspend fun create(inputs: RuntimeServiceInputs, ownership: FactoryOwnership): RuntimeServices {
-        val container = RadioSessionContainer.create(
-            inputs, ownership,
-            environment.withLifecycle(registry),
-            reactionPersistenceMutex,
-        )
-        registry.publish(container)
-        return container
+        val token = inputs.connection.token
+        val session = inputs.connection.session
+        val lease = channelDispatchFence.openSession(token, session, ChannelDispatchAdmission(token, session))
+        try {
+            ownership.own(LifecycleStage.STOP_SERVICES) {
+                channelDispatchFence.retire(lease)
+            }
+            val container = RadioSessionContainer.create(
+                inputs, ownership,
+                environment.withLifecycle(registry),
+                reactionPersistenceMutex,
+                channelDispatchFence,
+                lease,
+            )
+            registry.publish(container)
+            return container
+        } catch (failure: Exception) {
+            channelDispatchFence.retire(lease)
+            throw failure
+        }
     }
 
     private fun SessionEnvironment.withLifecycle(registry: SessionRegistry): SessionEnvironment {

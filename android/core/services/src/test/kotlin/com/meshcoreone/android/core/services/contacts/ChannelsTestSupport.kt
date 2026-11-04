@@ -1,16 +1,24 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Services/ChannelServicePipelineTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.services.contacts
 
+import com.meshcoreone.android.core.contracts.domain.ChannelDispatchAdmission
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.ResponseCode
+import com.meshcoreone.android.core.protocol.session.ChannelSessionOps
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
+import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -42,6 +50,24 @@ private fun channelsCase(name: String, body: ChannelsCaseBody): DynamicTest =
     DynamicTest.dynamicTest(name) { runBlocking { withTimeout(CHANNELS_CASE_TIMEOUT) { body() } } }
 
 internal fun channelsRadioId(): RadioId = RadioId(UUID.randomUUID())
+
+internal fun channelServiceFor(
+    session: ChannelSessionOps,
+    store: ChannelPersisting,
+    radioId: RadioId = channelsRadioId(),
+    decryptionCache: ChannelDecryptionCache? = null,
+    clock: ChannelServiceClock = ChannelServiceClock.SYSTEM,
+    random: Random = Random.Default,
+    transportClassifier: ChannelTransportFailureClassifier = ChannelTransportFailureClassifier.NONE,
+    fence: ChannelDispatchFence = ChannelDispatchFence(ChannelIdentityMutex.PROCESS),
+    lease: ChannelDispatchFence.Lease? = null,
+): ChannelService {
+    val activeLease = lease ?: run {
+        val token = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), radioId)
+        fence.openSession(token, session, ChannelDispatchAdmission(token, session))
+    }
+    return ChannelService(session, store, decryptionCache, clock, random, transportClassifier, fence, activeLease)
+}
 
 internal fun channelsSecret(byte: Int): Bytes = Bytes(ByteArray(16) { byte.toByte() })
 

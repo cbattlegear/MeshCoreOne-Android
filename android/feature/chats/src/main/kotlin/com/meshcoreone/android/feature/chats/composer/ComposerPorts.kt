@@ -2,8 +2,10 @@
 package com.meshcoreone.android.feature.chats.composer
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
+import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmission
 import com.meshcoreone.android.core.model.ChannelDTO
-import com.meshcoreone.android.core.model.ChannelMessageEnvelope
 import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
@@ -39,11 +41,10 @@ interface ComposerSendPort {
     suspend fun createPendingDirect(
         text: String, contact: ContactDTO, textType: TextType = TextType.PLAIN, replyToId: UUID? = null,
     ): MessageDTO
-    suspend fun createPendingChannel(
-        text: String, channelIndex: UByte, radioId: RadioId, textType: TextType = TextType.PLAIN,
-    ): MessageDTO
+    suspend fun captureChannelOrigin(radioId: RadioId, channelIndex: UByte): ChannelHistoryScope
+    suspend fun createPendingChannel(creation: ChannelMessageCreation): MessageDTO
     suspend fun enqueueDM(envelope: DirectMessageEnvelope)
-    suspend fun enqueueChannel(envelope: ChannelMessageEnvelope)
+    suspend fun enqueueChannel(submission: ChannelSubmission)
 
     /** The caller already persisted the retry row; signal the queue without inserting it again. */
     suspend fun signalDMEnqueued(envelope: DirectMessageEnvelope)

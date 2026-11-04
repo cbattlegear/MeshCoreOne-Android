@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.session.SessionClock
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
 import com.meshcoreone.android.core.services.messaging.MessageService
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
@@ -42,6 +43,7 @@ internal suspend fun TestScope.withDirectQueueFixture(
         assertEquals(listOf(f.device), f.store.fetchDevices())
         assertEquals(listOf(f.contact.copy(lastMessageDate = f.message.createdAt)), f.store.fetchContacts(f.radio))
     } finally {
+        f.retireChannelLease()
         try { assertTrue(f.queue.shutdown().isComplete) } finally {
             try { assertTrue(f.messages.close().isComplete) } finally {
                 try { f.session.stop() } finally {
@@ -110,13 +112,17 @@ internal class DirectQueueOriginalFixture(
     }
     val session = MeshCoreSession(transport,
         SessionConfiguration(defaultTimeout = if (connected) 0.2 else 5.0), clock, scope.coroutineContext)
+    private val channelFence = ChannelDispatchFence(ChannelIdentityMutex.PROCESS)
+    private val channelLease = channelFence.openSession(token, session, ChannelDispatchAdmission(token, session))
+    fun retireChannelLease() = channelFence.retire(channelLease)
     private val signals = Signals(token, connected)
     val connectionState get() = signals.snapshot.value.state
     private val diagnostics = mutableListOf<MessagingDiagnostic>()
     private val reporter = MessagingIssueReporter { diagnostics += it }
     val messages = MessageService(token,
         if (connected) Bytes(ByteArray(32) { 0xAB.toByte() }) else device.publicKey,
-        session, store, signals, scope, config, clock, jitter = { 1.0 }, reporter = reporter)
+        session, store, signals, scope, config, clock, jitter = { 1.0 }, reporter = reporter,
+        channelDispatchLease = channelLease)
     val queue = ChatSendQueueService(token, store, messages,
         MessagingChannelQuery { error("DM originals must not query channels") },
         OutgoingChannelReactionIndexer { _, _, _, _, _ -> error("DM originals must not index channel reactions") },

@@ -19,6 +19,33 @@ import org.junit.jupiter.api.TestFactory
 @OptIn(ExperimentalCoroutinesApi::class)
 class SourceChatQueueTest {
     @TestFactory fun queues() = listOf(
+        original("ChannelSubmission", "exact retry preserves caller pending identity and changed intent is rejected") {
+            val h = Harness(this)
+            val message = h.message(MessageStatus.PENDING, 2u, "caller origin")
+            val origin = ChannelHistoryScope(RADIO, 2u, assertNotNull(message.channelOccupantID))
+            val submission = ChannelSubmission(
+                UUID.fromString("CCCCCCCC-DDDD-EEEE-FFFF-000000000001"),
+                origin,
+                ChannelMessageEnvelope(message.id, origin.channelIndex, false, message.text, message.timestamp,
+                    "caller", origin.expectedOccupantID),
+            )
+            h.signals.set(h.token, DeviceConnectionState.DISCONNECTED)
+            val queue = h.queue()
+            queue.enqueueChannel(submission)
+            val original = h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)).single()
+            assertEquals(submission.pendingID, original.id)
+            assertEquals(QueuedChannelDispatchState.READY, original.channelDispatchState)
+
+            queue.enqueueChannel(submission)
+            assertEquals(listOf(original), h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)))
+            val changed = submission.copy(envelope = submission.envelope.copy(messageText = "changed"))
+            val failure = assertFailsWith<ChatSendQueueServiceException> { queue.enqueueChannel(changed) }
+            assertIs<ChatSendQueueServiceError.PersistFailed>(failure.error)
+            assertEquals(listOf(original), h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)))
+            assertTrue(h.transport.sentData.isEmpty())
+            queue.shutdown()
+            h.close()
+        },
         original("ChatSendQueueServiceTests", "hydrate replays persisted PendingSend rows and drains them") {
             val h = Harness(this); val dto = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(UUID.randomUUID(), UUID.randomUUID()), RADIO)
             h.store.insertPendingSendAssigningSequence(dto); val q = h.queue()

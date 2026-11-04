@@ -9,6 +9,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -58,6 +60,38 @@ class CliToolStateHolderTest {
     fun `Prompt shows countdown during login`() {
         configured()
         assertFalse(holder.promptText.contains("Logging in"))
+        val admin = FakeRepeaterAdmin()
+        val remote = FakeRemoteNode(storedPassword = "pw", loginTimeoutSeconds = 3)
+        val gate = CompletableDeferred<Unit>()
+        remote.loginGate = gate
+        val directory = FakeDirectory(contacts = listOf(contact("MyRepeater")))
+        holder.configure(
+            dependencies(
+                repeaterAdminService = { admin }, remoteNodeService = { remote },
+                dataStore = { directory }, radioId = { TEST_RADIO },
+            ),
+            localDeviceName = "TestDevice",
+        )
+        scheduler.runCurrent()
+        execute("login MyRepeater")
+        assertTrue(holder.isWaitingForResponse)
+        assertEquals(3, holder.state.value.remainingSeconds)
+        assertEquals("Logging in... (3s)", holder.promptText)
+        assertEquals(1, scheduler.clock.pendingSleepers)
+        scheduler.advanceBy(1.seconds)
+        assertEquals("Logging in... (2s)", holder.promptText)
+
+        holder.cancelCurrentCommand()
+        scheduler.runCurrent()
+        assertFalse(holder.isWaitingForResponse)
+        assertNull(holder.state.value.remainingSeconds)
+        assertEquals(0, scheduler.clock.pendingSleepers)
+        assertEquals("TestDevice> ", holder.promptText)
+        gate.complete(Unit)
+        scheduler.advanceBy(5.seconds)
+        assertEquals("TestDevice> ", holder.promptText)
+        assertTrue(holder.state.value.remoteSessions.isEmpty())
+        assertTrue(remote.storedPasswords.isEmpty())
     }
 
     // MARK: - History
@@ -95,10 +129,43 @@ class CliToolStateHolderTest {
 
     @Test @OriginalCase("CLIToolViewModelTests::Login command stored in history without password()")
     fun `Login command stored in history without password`() {
-        configured()
-        holder.executeCommand("login MyRepeater")
+        val repeater = contact("MyRepeater")
+        val admin = FakeRepeaterAdmin()
+        val remote = FakeRemoteNode()
+        val directory = FakeDirectory(contacts = listOf(repeater))
+        holder.configure(
+            dependencies(
+                repeaterAdminService = { admin }, remoteNodeService = { remote },
+                dataStore = { directory }, radioId = { TEST_RADIO },
+            ),
+            localDeviceName = "TestDevice",
+        )
+        scheduler.runCurrent()
+        execute("login MyRepeater")
+        assertEquals(repeater, holder.state.value.pendingLoginContact)
+        assertEquals("Password: ", holder.promptText)
+        assertTrue(remote.loginCalls.isEmpty())
         holder.historyUp()
         assertEquals("login MyRepeater", terminal.currentInput)
+
+        val password = "history-redaction-secret"
+        val controller = CliTerminalController(holder, scheduler.scope, scheduler.clock)
+        controller.onTextChanged(password, password.length)
+        controller.onSubmit()
+        scheduler.runCurrent()
+
+        assertEquals(listOf(password), remote.loginCalls.map { it.second })
+        assertEquals(listOf(password), remote.storedPasswords)
+        assertNull(holder.state.value.pendingLoginContact)
+        assertFalse(assertNotNull(holder.state.value.activeSession).isLocal)
+        assertEquals("", terminal.currentInput)
+        assertEquals(listOf("login MyRepeater"), terminal.commandHistory)
+        assertTrue(terminal.outputLines.any { it.text == "Password: ****" && it.type == CliOutputType.COMMAND })
+        assertFalse(output.contains(password))
+        controller.onHistoryUp()
+        assertEquals("login MyRepeater", terminal.currentInput)
+        controller.onHistoryDown()
+        assertEquals("", terminal.currentInput)
     }
 
     // MARK: - Built-in commands

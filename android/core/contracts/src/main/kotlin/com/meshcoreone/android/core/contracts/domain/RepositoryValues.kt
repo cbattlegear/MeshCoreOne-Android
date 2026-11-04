@@ -56,6 +56,9 @@ sealed interface PersistenceStoreError {
     data object InvalidData : PersistenceStoreError
 }
 
+class QueuedChannelAttemptRejected(val pending: EntityKey, val reason: QueuedChannelAttemptConflict) :
+    Exception(reason.name)
+
 class PersistenceStoreException(val error: PersistenceStoreError, cause: Throwable? = null) :
     Exception(error.javaClass.simpleName, cause)
 

@@ -173,6 +173,14 @@ jobs:
           path: android/core/data/build/reports/wp203/interop/
           if-no-files-found: error
           retention-days: 1
+      - name: Capture generated Room schema
+        if: ${{ !cancelled() && hashFiles('android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/4.json') != '' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: room-schema-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/4.json
+          if-no-files-found: error
+          retention-days: 1
 
   external-oracle:
     name: Swift codec oracle

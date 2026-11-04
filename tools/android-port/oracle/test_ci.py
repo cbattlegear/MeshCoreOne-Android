@@ -202,13 +202,14 @@ class FoundationWorkflowTests(unittest.TestCase):
             with self.subTest(kind=kind), self.assertRaises(PortError):
                 validate_boundary(value, self.text)
 
-    def test_only_actual_backup_bytes_cross_the_job_boundary(self):
+    def test_only_product_outputs_cross_the_job_boundary(self):
         steps = self.workflow["jobs"]["build"]["steps"]
         uploads = [step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@")]
-        self.assertEqual(len(uploads), 2)
+        self.assertEqual(len(uploads), 3)
         self.assertEqual({step["with"]["path"] for step in uploads}, {
             "android/app/build/outputs/apk/debug/app-debug.apk",
             "android/core/data/build/reports/wp203/interop/",
+            "android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/4.json",
         })
         transfers = [
             step for job in self.workflow["jobs"].values() for step in job["steps"]
@@ -222,3 +223,11 @@ class FoundationWorkflowTests(unittest.TestCase):
         self.assertIn("wp203/interop", paths)
         for upload in uploads:
             self.assertNotIn("ci-result", upload["with"]["path"])
+
+        schema = next(step for step in uploads if step["name"] == "Capture generated Room schema")
+        self.assertEqual(schema["if"],
+            "${{ !cancelled() && hashFiles('android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/4.json') != '' }}")
+        self.assertEqual(schema["with"]["name"],
+            "room-schema-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}")
+        self.assertEqual(schema["with"]["if-no-files-found"], "error")
+        self.assertEqual(schema["with"]["retention-days"], "1")

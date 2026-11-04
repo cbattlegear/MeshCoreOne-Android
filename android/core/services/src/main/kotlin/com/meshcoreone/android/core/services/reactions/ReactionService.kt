@@ -15,6 +15,8 @@ import java.util.UUID
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A reaction waiting for its target message to be indexed. */
 data class PendingReaction(
@@ -24,6 +26,8 @@ data class PendingReaction(
     val rawText: String,
     val radioId: RadioId,
     val receivedAt: Instant,
+    internal val queueKeyOrder: Long? = null,
+    internal val queueEntryOrder: Long? = null,
 )
 
 /** A DM reaction waiting for its target message to be indexed. */
@@ -34,6 +38,8 @@ data class PendingDMReaction(
     val rawText: String,
     val radioId: RadioId,
     val receivedAt: Instant,
+    internal val queueKeyOrder: Long? = null,
+    internal val queueEntryOrder: Long? = null,
 )
 
 /** Result of persisting a reaction. */
@@ -44,15 +50,19 @@ data class ReactionPersistResult(val messageID: UUID, val summary: String)
  * shared [MessageLRUCache] and a session-lifetime queue of reactions whose target has not arrived yet.
  *
  * Swift isolates this in an actor. Here the pending queues are immutable values swapped under one lock that
- * is never held across a suspension; [MessageLRUCache] has its own lock. Nothing is scheduled, so no
- * coroutine scope is needed; [clock] stamps `receivedAt` on queued reactions.
+ * is never held across a suspension; [MessageLRUCache] has its own lock. A separate mutex serializes
+ * complete persistence/summary operations across suspension. The process factory shares that mutex
+ * across connection generations; queues and caches remain session-owned. Nothing is scheduled, so no coroutine
+ * scope is needed; [clock] stamps `receivedAt` on queued reactions.
  */
 class ReactionService internal constructor(
     private val messageCache: MessageLRUCache,
     private val clock: Clock,
+    private val persistenceMutex: Mutex = Mutex(),
 ) {
     /** A service with its own message cache; [clock] also stamps the cache's `indexedAt`. */
-    constructor(clock: Clock = Clock.systemUTC()) : this(MessageLRUCache(clock = clock), clock)
+    constructor(clock: Clock = Clock.systemUTC(), persistenceMutex: Mutex = Mutex()) :
+        this(MessageLRUCache(clock = clock), clock, persistenceMutex)
 
     private val logger: Logger = Logger.getLogger("ReactionService")
     private val lock = Any()
@@ -77,7 +87,9 @@ class ReactionService internal constructor(
         // Check pending queue for matching reactions.
         val key = PendingReactionKey.of(channelIndex, senderName, ReactionParser.generateMessageHash(text, timestamp))
         val matched = synchronized(lock) {
-            val (remaining, taken) = pendingReactions.take(key)
+            val (remaining, taken) = pendingReactions.take(key) { value, keyOrder, entryOrder ->
+                value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+            }
             pendingReactions = remaining
             taken
         } ?: return emptyList()
@@ -115,12 +127,22 @@ class ReactionService internal constructor(
         logger.fine { "Queued pending reaction ${parsed.emoji} for ${parsed.targetSender}" }
     }
 
+    /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
+    fun requeuePendingReaction(pending: PendingReaction) {
+        val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
+        synchronized(lock) {
+            pendingReactions = pendingReactions.enqueue(
+                key, pending, MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
+            )
+        }
+    }
+
     /** Clears all pending reactions (call on disconnect). */
     internal fun clearPendingReactions() {
         val cleared = synchronized(lock) {
             val count = pendingReactions.count + pendingDMReactions.count
-            pendingReactions = PendingQueue.empty()
-            pendingDMReactions = PendingQueue.empty()
+            pendingReactions = pendingReactions.cleared()
+            pendingDMReactions = pendingDMReactions.cleared()
             count
         }
         if (cleared > 0) logger.fine { "Cleared $cleared pending reaction(s)" }
@@ -129,26 +151,45 @@ class ReactionService internal constructor(
     // MARK: - Persistence
 
     /**
-     * Persists a reaction and updates the message's reaction summary (built from the newest 100 reactions, the
-     * store's default fetch limit). Store failures are logged and yield null; cancellation propagates.
+     * Persists a reaction unless the store already has its sender/emoji, then rebuilds the summary from the
+     * newest 100 reactions (the store's default fetch limit). Store failures are logged and yield null;
+     * cancellation propagates.
      */
-    suspend fun persistReactionAndUpdateSummary(reaction: ReactionDTO, dataStore: ReactionPersisting): ReactionPersistResult? {
+    suspend fun persistReactionAndUpdateSummary(
+        reaction: ReactionDTO,
+        dataStore: ReactionPersisting,
+    ): ReactionPersistResult? = persistenceMutex.withLock {
         val message = EntityKey(reaction.radioId, reaction.messageID)
+        val exists = try {
+            dataStore.reactionExists(message, reaction.senderName, reaction.emoji)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            logger.log(Level.SEVERE, "Failed to check reaction for message ${reaction.messageID}: ${error.message}", error)
+            return@withLock null
+        }
         try {
-            dataStore.saveReaction(reaction)
+            if (!exists) dataStore.saveReaction(reaction)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             logger.log(Level.SEVERE, "Failed to save reaction for message ${reaction.messageID}: ${error.message}", error)
-            return null
+            return@withLock null
         }
+        reconcileSummaryLocked(message, dataStore)
+    }
 
+    /** Rebuilds a committed reaction's summary without saving or replacing the reaction row again. */
+    suspend fun reconcileSummary(message: EntityKey, dataStore: ReactionPersisting): ReactionPersistResult? =
+        persistenceMutex.withLock { reconcileSummaryLocked(message, dataStore) }
+
+    private suspend fun reconcileSummaryLocked(message: EntityKey, dataStore: ReactionPersisting): ReactionPersistResult? {
         val reactions = try {
             dataStore.fetchReactions(message)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            logger.log(Level.SEVERE, "Failed to fetch reactions for message ${reaction.messageID}: ${error.message}", error)
+            logger.log(Level.SEVERE, "Failed to fetch reactions for message ${message.id}: ${error.message}", error)
             return null
         }
 
@@ -158,10 +199,10 @@ class ReactionService internal constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            logger.log(Level.SEVERE, "Failed to update reaction summary for message ${reaction.messageID}: ${error.message}", error)
+            logger.log(Level.SEVERE, "Failed to update reaction summary for message ${message.id}: ${error.message}", error)
             return null
         }
-        return ReactionPersistResult(reaction.messageID, summary)
+        return ReactionPersistResult(message.id, summary)
     }
 
     // MARK: - DM Reactions
@@ -171,7 +212,9 @@ class ReactionService internal constructor(
         messageCache.indexDM(messageID = id, contactID = contactID, text = text, timestamp = timestamp)
         val key = PendingDMReactionKey(contactID, ReactionParser.generateMessageHash(text, timestamp))
         val matched = synchronized(lock) {
-            val (remaining, taken) = pendingDMReactions.take(key)
+            val (remaining, taken) = pendingDMReactions.take(key) { value, keyOrder, entryOrder ->
+                value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+            }
             pendingDMReactions = remaining
             taken
         } ?: return emptyList()
@@ -197,6 +240,16 @@ class ReactionService internal constructor(
         logger.fine { "Queued pending DM reaction ${parsed.emoji}" }
     }
 
+    /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
+    fun requeuePendingDMReaction(pending: PendingDMReaction) {
+        val key = PendingDMReactionKey(pending.contactID, pending.parsed.messageHash)
+        synchronized(lock) {
+            pendingDMReactions = pendingDMReactions.enqueue(
+                key, pending, MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
+            )
+        }
+    }
+
     /** Test-visible total of queued reactions (channel, DM). */
     internal val pendingCounts: Pair<Int, Int> get() = synchronized(lock) { pendingReactions.count to pendingDMReactions.count }
 
@@ -213,29 +266,40 @@ class ReactionService internal constructor(
 
 /**
  * Immutable pending-reaction queue: entries grouped by key plus first-queued key order. Swift keeps the two
- * dictionaries/arrays inline and duplicates the eviction loop for channel and DM; the semantics here are the same.
+ * dictionaries/arrays inline and duplicates the eviction loop for channel and DM. Ordinals additionally let a
+ * failed history drain restore its original key and entry priority, independently of wall-clock timestamps.
  */
 internal class PendingQueue<K, V> private constructor(
-    private val entries: Map<K, List<V>>,
-    private val order: List<K>,
+    private val entries: Map<K, List<Entry<V>>>,
+    private val keyOrders: Map<K, Long>,
+    private val nextOrder: Long,
 ) {
+    private data class Entry<V>(val value: V, val order: Long)
     val count: Int get() = entries.values.sumOf { it.size }
 
+    fun cleared(): PendingQueue<K, V> = PendingQueue(emptyMap(), emptyMap(), nextOrder)
+
     /** Appends [value] under [key] (a new key joins the end of the order), then evicts down to [maxCount]. */
-    fun enqueue(key: K, value: V, maxCount: Int): PendingQueue<K, V> {
-        val existing = entries[key]
-        val queued = if (existing != null) {
-            PendingQueue(entries + (key to existing + value), order)
-        } else {
-            PendingQueue(entries + (key to listOf(value)), order + key)
-        }
+    fun enqueue(
+        key: K, value: V, maxCount: Int, restoredKeyOrder: Long? = null, restoredEntryOrder: Long? = null,
+    ): PendingQueue<K, V> {
+        require((restoredKeyOrder == null) == (restoredEntryOrder == null))
+        val entryOrder = restoredEntryOrder ?: nextOrder
+        val keyOrder = minOf(keyOrders[key] ?: Long.MAX_VALUE, restoredKeyOrder ?: nextOrder)
+        val values = (entries[key].orEmpty() + Entry(value, entryOrder)).sortedBy { it.order }
+        val queued = PendingQueue(
+            entries + (key to values), keyOrders + (key to keyOrder),
+            maxOf(nextOrder, Math.incrementExact(entryOrder)),
+        )
         return queued.evicted(maxCount)
     }
 
     /** Removes every value queued under [key]; returns the remaining queue and the values (null when none). */
-    fun take(key: K): Pair<PendingQueue<K, V>, List<V>?> {
+    fun take(key: K, withOrder: (V, Long, Long) -> V): Pair<PendingQueue<K, V>, List<V>?> {
         val matched = entries[key] ?: return this to null
-        return PendingQueue(entries - key, order.filter { it != key }) to matched
+        val keyOrder = keyOrders.getValue(key)
+        return PendingQueue(entries - key, keyOrders - key, nextOrder) to
+            matched.map { withOrder(it.value, keyOrder, it.order) }
     }
 
     /**
@@ -246,27 +310,27 @@ internal class PendingQueue<K, V> private constructor(
         var total = count
         if (total <= maxCount) return this
         var nextEntries = entries
-        var nextOrder = order
-        while (total > maxCount && nextOrder.isNotEmpty()) {
-            val oldestKey = nextOrder.first()
+        var nextKeyOrders = keyOrders
+        while (total > maxCount && nextKeyOrders.isNotEmpty()) {
+            val oldestKey = nextKeyOrders.minBy { it.value }.key
             val values = nextEntries[oldestKey]
             if (!values.isNullOrEmpty()) {
                 val remaining = values.drop(1)
                 total -= 1
                 if (remaining.isEmpty()) {
                     nextEntries = nextEntries - oldestKey
-                    nextOrder = nextOrder.drop(1)
+                    nextKeyOrders = nextKeyOrders - oldestKey
                 } else {
                     nextEntries = nextEntries + (oldestKey to remaining)
                 }
             } else {
-                nextOrder = nextOrder.drop(1)
+                nextKeyOrders = nextKeyOrders - oldestKey
             }
         }
-        return PendingQueue(nextEntries, nextOrder)
+        return PendingQueue(nextEntries, nextKeyOrders, nextOrder)
     }
 
     companion object {
-        fun <K, V> empty(): PendingQueue<K, V> = PendingQueue(emptyMap(), emptyList())
+        fun <K, V> empty(): PendingQueue<K, V> = PendingQueue(emptyMap(), emptyMap(), 0)
     }
 }

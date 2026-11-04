@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.runtime.FactoryOwnership
 import com.meshcoreone.android.core.runtime.RuntimeServiceFactory
 import com.meshcoreone.android.core.runtime.RuntimeServiceInputs
 import com.meshcoreone.android.core.runtime.RuntimeServices
+import kotlinx.coroutines.sync.Mutex
 
 /**
  * Creates a [RadioSessionContainer] for each generation the runtime connection manager starts. The runtime calls it
@@ -16,10 +17,14 @@ class RadioSessionContainerFactory(
     private val environment: SessionEnvironment,
     private val registry: SessionRegistry,
 ) : RuntimeServiceFactory {
+    // Screen-owned history can retain an old service after the connection graph is torn down.
+    private val reactionPersistenceMutex = Mutex()
+
     override suspend fun create(inputs: RuntimeServiceInputs, ownership: FactoryOwnership): RuntimeServices {
         val container = RadioSessionContainer.create(
             inputs, ownership,
             environment.withLifecycle(registry),
+            reactionPersistenceMutex,
         )
         registry.publish(container)
         return container

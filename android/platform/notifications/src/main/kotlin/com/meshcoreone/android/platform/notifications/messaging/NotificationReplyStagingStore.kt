@@ -1,4 +1,4 @@
-// AndroidOnly: WP-401 Unactivated private reply intake; no claim, dispatch, settlement or retention.
+// AndroidOnly: WP-401 Unactivated reply intake and conservative durable custody; never dispatch authority.
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.content.Context
@@ -38,12 +38,39 @@ data class NotificationReplyLimits(
 class NotificationReplyStagingStore internal constructor(
     private val databaseFile: File,
     private val limits: NotificationReplyLimits,
+    private val afterLifecycleCommit: (() -> Unit)? = null,
 ) {
     constructor(context: Context, limits: NotificationReplyLimits) : this(
         File(context.applicationContext.noBackupFilesDir, "notification-reply-staging.db"), limits,
     )
 
     data class RecordIdentity(val storeId: UUID, val recordId: UUID, val sequence: Long)
+
+    enum class Custody { UNCLAIMED, UNBOUND, CLAIMED_POSSIBLE_SEND, INDETERMINATE }
+    enum class Uncertainty { OWNER_REPORTED, RECOVERY, CANCELLED, OUTCOME_UNKNOWN }
+
+    /**
+     * A durable custody receipt, not a radio receipt. Revision and both caller-chosen UUIDs fence
+     * journal mutations only. Even a fresh claim supplies no target authority or dispatch permission.
+     */
+    data class CustodyReceipt(
+        val identity: RecordIdentity,
+        val revision: Long,
+        val state: Custody,
+        val claimId: UUID?,
+        val ownerId: UUID?,
+        val uncertainty: Uncertainty?,
+    )
+
+    sealed interface CustodyResult {
+        data class NewlyClaimed(val receipt: CustodyReceipt) : CustodyResult
+        data class Observed(val receipt: CustodyReceipt) : CustodyResult
+        data class SettledIndeterminate(val receipt: CustodyReceipt) : CustodyResult
+        data class Fenced(val current: CustodyReceipt) : CustodyResult
+        data class Failed(val reason: Failure) : CustodyResult
+        /** The operation may have committed; never mint a replacement claim or infer unsent. */
+        data class Indeterminate(val identity: RecordIdentity) : CustodyResult
+    }
 
     sealed interface StageResult {
         data class Staged(val identity: RecordIdentity, val outgoingMessageId: UUID) : StageResult
@@ -66,12 +93,14 @@ class NotificationReplyStagingStore internal constructor(
             override val exactText: String,
             val payload: NotificationPayload,
             val outgoingMessageId: UUID,
+            val custody: CustodyReceipt?,
         ) : RecoveryEntry
 
         class UnboundConflict internal constructor(
             override val identity: RecordIdentity,
             override val post: NotificationReplyPost,
             override val exactText: String,
+            val custody: CustodyReceipt?,
         ) : RecoveryEntry
     }
 
@@ -89,6 +118,8 @@ class NotificationReplyStagingStore internal constructor(
     enum class Failure {
         INVALID_IDENTITY, INVALID_PAYLOAD, INVALID_TEXT, INVALID_LIMITS, LIMITS_MISMATCH,
         RECORD_CAPACITY, PRIVATE_DATA_CAPACITY, MISSING_STORAGE, STORAGE_UNAVAILABLE, CORRUPT_STORAGE,
+        LIFECYCLE_NOT_INITIALIZED, LIFECYCLE_CAPACITY, INVALID_LIFECYCLE_BUDGET, RECORD_NOT_FOUND,
+        IDENTITY_MISMATCH,
     }
 
     // Neither the current payload nor a display-time full key proves the radio's prefix destination.
@@ -201,6 +232,12 @@ class NotificationReplyStagingStore internal constructor(
                         "UPDATE reply_metadata SET record_count=?, content_bytes=? WHERE singleton=1",
                         arrayOf<Any>(state.rows.size + 1, state.contentBytes + row.contentBytes),
                     )
+                    if (db.version == 2) {
+                        val receipt = initialCustody(state.storeId, row)
+                        val before = readCustody(db, state)
+                        writeCustody(db, receipt, insert = true)
+                        checkCustodyBudget(db, before.values + receipt)
+                    }
                     val retained = load(db)
                     val actual = retained.rows.lastOrNull() ?: corrupt()
                     if (retained.storeId != state.storeId || retained.rows.size != state.rows.size + 1 ||
@@ -235,15 +272,17 @@ class NotificationReplyStagingStore internal constructor(
             database { db ->
                 transaction(db) {
                     val state = load(db)
+                    val custody = if (db.version == 2) readCustody(db, state) else emptyMap()
                     ReadResult.Inventory(state.rows.map { row ->
                         val identity = RecordIdentity(state.storeId, row.recordId, row.sequence)
                         if (row.parentId == null) {
                             RecoveryEntry.StagedReply(
                                 identity, row.post, decodeText(row.text),
                                 decodePayload(row.payload), requireNotNull(row.outgoingId),
+                                custody[row.recordId],
                             )
                         } else {
-                            RecoveryEntry.UnboundConflict(identity, row.post, decodeText(row.text))
+                            RecoveryEntry.UnboundConflict(identity, row.post, decodeText(row.text), custody[row.recordId])
                         }
                     })
                 }
@@ -291,7 +330,12 @@ class NotificationReplyStagingStore internal constructor(
     }
 
     private fun load(db: SQLiteDatabase): State {
-        if (db.version != 1 || userTables(db) != setOf("reply_metadata", "reply_records")) corrupt()
+        val expected = when (db.version) {
+            1 -> setOf("reply_metadata", "reply_records")
+            2 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy")
+            else -> corrupt()
+        }
+        if (userTables(db) != expected) corrupt()
         checkColumns(db, "reply_metadata", listOf(
             "singleton", "store_id", "record_count", "content_bytes", "max_records",
             "max_record_bytes", "max_total_bytes",
@@ -357,8 +401,271 @@ class NotificationReplyStagingStore internal constructor(
             }
         }
         if (state.count != state.rows.size.toLong() || state.contentBytes != totalBytes) corrupt()
+        if (db.version == 2) readCustody(db, state)
         return state
     }
+
+    /**
+     * Explicit transactional v1 -> v2 migration. The separate caller-selected byte budget covers
+     * serialized custody receipts, not SQLite overhead. Existing intake limits/text never change.
+     * No dispatch, accepted or definitely-unsent evidence exists in this schema.
+     */
+    suspend fun initializeLifecycle(maxTotalReceiptBytes: Long): InitializeResult = withContext(Dispatchers.IO) {
+        if (!limits.isValid()) return@withContext InitializeResult.Failed(Failure.INVALID_LIMITS)
+        if (maxTotalReceiptBytes <= 0) {
+            return@withContext InitializeResult.Failed(Failure.INVALID_LIFECYCLE_BUDGET)
+        }
+        var commitAttempted = false
+        try {
+            database { db ->
+                transaction(db) {
+                    val state = load(db)
+                    if (db.version == 1) {
+                        db.execSQL(
+                            """CREATE TABLE reply_custody_policy(
+                               singleton INTEGER PRIMARY KEY CHECK(singleton=1), max_bytes INTEGER NOT NULL,
+                               digest BLOB NOT NULL)""",
+                        )
+                        db.execSQL(
+                            "INSERT INTO reply_custody_policy VALUES(1, ?, ?)",
+                            arrayOf<Any>(maxTotalReceiptBytes, policyDigest(state.storeId, maxTotalReceiptBytes)),
+                        )
+                        db.execSQL(
+                            """CREATE TABLE reply_custody(
+                               record_id TEXT PRIMARY KEY NOT NULL, revision INTEGER NOT NULL,
+                               state TEXT NOT NULL, claim_id TEXT UNIQUE, owner_id TEXT,
+                               uncertainty TEXT, digest BLOB NOT NULL)""",
+                        )
+                        state.rows.forEach { writeCustody(db, initialCustody(state.storeId, it), insert = true) }
+                        checkCustodyBudget(db, state.rows.map { initialCustody(state.storeId, it) })
+                        db.version = 2
+                    }
+                    if (custodyBudget(db) != maxTotalReceiptBytes) throw StoreFailure(Failure.LIMITS_MISMATCH)
+                    load(db)
+                    commitAttempted = true
+                    InitializeResult.Ready
+                }
+            }
+        } catch (error: StoreFailure) {
+            InitializeResult.Failed(error.reason)
+        } catch (_: SQLiteDatabaseCorruptException) {
+            InitializeResult.Failed(Failure.CORRUPT_STORAGE)
+        } catch (_: SQLiteException) {
+            if (commitAttempted) InitializeResult.Indeterminate
+            else InitializeResult.Failed(Failure.STORAGE_UNAVAILABLE)
+        } catch (_: SecurityException) {
+            if (commitAttempted) InitializeResult.Indeterminate
+            else InitializeResult.Failed(Failure.STORAGE_UNAVAILABLE)
+        }
+    }
+
+    /**
+     * Caller must retain claimId/ownerId before calling. Only the first atomic UNCLAIMED transition
+     * returns NewlyClaimed. Replays, restarts and other handles only observe/fence the existing claim;
+     * there is no timeout, takeover, release or transition back to UNCLAIMED.
+     */
+    suspend fun claim(
+        identity: RecordIdentity,
+        claimId: UUID,
+        ownerId: UUID,
+    ): CustodyResult = mutateCustody(identity) { current, all ->
+        if (current.state == Custody.UNCLAIMED) {
+            if (all.any { it.claimId == claimId }) return@mutateCustody CustodyResult.Failed(Failure.IDENTITY_MISMATCH)
+            CustodyResult.NewlyClaimed(current.copy(
+                revision = 1, state = Custody.CLAIMED_POSSIBLE_SEND, claimId = claimId, ownerId = ownerId,
+            ))
+        } else if (current.claimId == claimId && current.ownerId == ownerId) {
+            CustodyResult.Observed(current)
+        } else {
+            CustodyResult.Fenced(current)
+        }
+    }
+
+    /**
+     * The sole available settlement is conservative uncertainty. Exact revision/claim/owner must
+     * match; recovery may use the retained receipt to quarantine an abandoned claim. This cannot
+     * cancel an actual in-flight dispatch or justify a retry. Definitive settlement is unavailable.
+     */
+    suspend fun settleIndeterminate(expected: CustodyReceipt, reason: Uncertainty): CustodyResult =
+        mutateCustody(expected.identity) { current, _ ->
+            when {
+                current == expected && current.state == Custody.CLAIMED_POSSIBLE_SEND -> {
+                    CustodyResult.SettledIndeterminate(current.copy(
+                        revision = current.revision + 1, state = Custody.INDETERMINATE, uncertainty = reason,
+                    ))
+                }
+                current.state == Custody.INDETERMINATE &&
+                    current.claimId == expected.claimId && current.ownerId == expected.ownerId &&
+                    expected.state == Custody.CLAIMED_POSSIBLE_SEND &&
+                    expected.uncertainty == null &&
+                    expected.revision == 1L && current.revision == 2L &&
+                    current.uncertainty == reason -> CustodyResult.Observed(current)
+                else -> CustodyResult.Fenced(current)
+            }
+        }
+
+    private suspend fun mutateCustody(
+        identity: RecordIdentity,
+        operation: (CustodyReceipt, Collection<CustodyReceipt>) -> CustodyResult,
+    ): CustodyResult = withContext(Dispatchers.IO) {
+        if (!limits.isValid()) return@withContext CustodyResult.Failed(Failure.INVALID_LIMITS)
+        var commitAttempted = false
+        try {
+            val result = database { db ->
+                transaction(db) {
+                    val state = load(db)
+                    if (db.version != 2) return@transaction CustodyResult.Failed(Failure.LIFECYCLE_NOT_INITIALIZED)
+                    if (state.storeId != identity.storeId) {
+                        return@transaction CustodyResult.Failed(Failure.IDENTITY_MISMATCH)
+                    }
+                    val all = readCustody(db, state)
+                    val current = all[identity.recordId]
+                        ?: return@transaction CustodyResult.Failed(Failure.RECORD_NOT_FOUND)
+                    if (current.identity != identity) {
+                        return@transaction CustodyResult.Failed(Failure.IDENTITY_MISMATCH)
+                    }
+                    val proposed = operation(current, all.values)
+                    val next = when (proposed) {
+                        is CustodyResult.NewlyClaimed -> proposed.receipt
+                        is CustodyResult.SettledIndeterminate -> proposed.receipt
+                        else -> return@transaction proposed
+                    }
+                    checkCustodyBudget(db, all.values.filter { it.identity != identity } + next)
+                    writeCustody(db, next, insert = false)
+                    val retained = load(db)
+                    if (readCustody(db, retained)[identity.recordId] != next) corrupt()
+                    commitAttempted = true
+                    proposed
+                }
+            }
+            if (commitAttempted) afterLifecycleCommit?.invoke()
+            result
+        } catch (error: StoreFailure) {
+            if (commitAttempted) CustodyResult.Indeterminate(identity) else CustodyResult.Failed(error.reason)
+        } catch (_: SQLiteDatabaseCorruptException) {
+            if (commitAttempted) CustodyResult.Indeterminate(identity)
+            else CustodyResult.Failed(Failure.CORRUPT_STORAGE)
+        } catch (_: SQLiteException) {
+            if (commitAttempted) CustodyResult.Indeterminate(identity)
+            else CustodyResult.Failed(Failure.STORAGE_UNAVAILABLE)
+        } catch (_: SecurityException) {
+            if (commitAttempted) CustodyResult.Indeterminate(identity)
+            else CustodyResult.Failed(Failure.STORAGE_UNAVAILABLE)
+        }
+    }
+
+    private fun initialCustody(storeId: UUID, row: Row) = CustodyReceipt(
+        RecordIdentity(storeId, row.recordId, row.sequence), 0,
+        if (row.parentId == null) Custody.UNCLAIMED else Custody.UNBOUND, null, null, null,
+    )
+
+    private fun readCustody(db: SQLiteDatabase, state: State): Map<UUID, CustodyReceipt> {
+        checkColumns(db, "reply_custody", listOf(
+            "record_id", "revision", "state", "claim_id", "owner_id", "uncertainty", "digest",
+        ))
+        val rows = state.rows.associateBy { it.recordId }
+        val receipts = mutableMapOf<UUID, CustodyReceipt>()
+        val claims = mutableSetOf<UUID>()
+        db.rawQuery("SELECT * FROM reply_custody", null).use { cursor ->
+            while (cursor.moveToNext()) {
+                if (receipts.size >= state.rows.size ||
+                    listOf(0, 2).any { cursor.getType(it) != Cursor.FIELD_TYPE_STRING } ||
+                    cursor.getType(1) != Cursor.FIELD_TYPE_INTEGER ||
+                    cursor.getType(6) != Cursor.FIELD_TYPE_BLOB ||
+                    listOf(3, 4, 5).any { !cursor.isNull(it) && cursor.getType(it) != Cursor.FIELD_TYPE_STRING }
+                ) corrupt()
+                val row = rows[uuid(cursor.getString(0))] ?: corrupt()
+                val disposition = Custody.entries.firstOrNull { it.name == cursor.getString(2) } ?: corrupt()
+                val uncertainty = if (cursor.isNull(5)) null
+                else Uncertainty.entries.firstOrNull { it.name == cursor.getString(5) } ?: corrupt()
+                val receipt = CustodyReceipt(
+                    RecordIdentity(state.storeId, row.recordId, row.sequence), cursor.getLong(1), disposition,
+                    if (cursor.isNull(3)) null else uuid(cursor.getString(3)),
+                    if (cursor.isNull(4)) null else uuid(cursor.getString(4)), uncertainty,
+                )
+                val initial = initialCustody(state.storeId, row)
+                if (receipt.state == Custody.UNCLAIMED || receipt.state == Custody.UNBOUND) {
+                    if (receipt != initial) corrupt()
+                } else {
+                    if (row.parentId != null || receipt.claimId == null || receipt.ownerId == null ||
+                        !claims.add(receipt.claimId) ||
+                        receipt.state == Custody.CLAIMED_POSSIBLE_SEND &&
+                        (receipt.revision != 1L || receipt.uncertainty != null) ||
+                        receipt.state == Custody.INDETERMINATE &&
+                        (receipt.revision != 2L || receipt.uncertainty == null)
+                    ) corrupt()
+                }
+                if (!custodyDigest(receipt).contentEquals(cursor.getBlob(6)) ||
+                    receipts.put(row.recordId, receipt) != null
+                ) corrupt()
+            }
+        }
+        if (receipts.size != state.rows.size) corrupt()
+        checkCustodyBudget(db, receipts.values, persisted = true)
+        return receipts
+    }
+
+    private fun custodyBudget(db: SQLiteDatabase): Long {
+        checkColumns(db, "reply_custody_policy", listOf("singleton", "max_bytes", "digest"))
+        return db.rawQuery("SELECT * FROM reply_custody_policy", null).use {
+            if (!it.moveToFirst() || it.getType(0) != Cursor.FIELD_TYPE_INTEGER ||
+                it.getLong(0) != 1L || it.getType(1) != Cursor.FIELD_TYPE_INTEGER ||
+                it.getType(2) != Cursor.FIELD_TYPE_BLOB
+            ) corrupt()
+            val budget = it.getLong(1)
+            val storeId = db.rawQuery("SELECT store_id FROM reply_metadata WHERE singleton=1", null).use { metadata ->
+                if (!metadata.moveToFirst()) corrupt()
+                uuid(metadata.getString(0))
+            }
+            if (budget <= 0 || !policyDigest(storeId, budget).contentEquals(it.getBlob(2)) || it.moveToNext()) corrupt()
+            budget
+        }
+    }
+
+    private fun checkCustodyBudget(
+        db: SQLiteDatabase,
+        receipts: Collection<CustodyReceipt>,
+        persisted: Boolean = false,
+    ) {
+        var remaining = custodyBudget(db)
+        receipts.forEach {
+            val bytes = custodyBytes(it).size.toLong() + 32L
+            if (bytes > remaining) {
+                if (persisted) corrupt() else throw StoreFailure(Failure.LIFECYCLE_CAPACITY)
+            }
+            remaining -= bytes
+        }
+    }
+
+    private fun writeCustody(db: SQLiteDatabase, receipt: CustodyReceipt, insert: Boolean) {
+        val values = arrayOf<Any?>(
+            receipt.revision, receipt.state.name, receipt.claimId?.toString(),
+            receipt.ownerId?.toString(), receipt.uncertainty?.name, custodyDigest(receipt),
+            receipt.identity.recordId.toString(),
+        )
+        if (insert) {
+            db.execSQL(
+                """INSERT INTO reply_custody(revision,state,claim_id,owner_id,uncertainty,digest,record_id)
+                   VALUES(?,?,?,?,?,?,?)""", values,
+            )
+        } else {
+            db.execSQL(
+                """UPDATE reply_custody SET revision=?,state=?,claim_id=?,owner_id=?,uncertainty=?,digest=?
+                   WHERE record_id=?""", values,
+            )
+        }
+    }
+
+    private fun custodyBytes(receipt: CustodyReceipt): ByteArray = textBytes(
+        "${receipt.identity.storeId}|${receipt.identity.recordId}|${receipt.identity.sequence}|" +
+            "${receipt.revision}|${receipt.state.name}|${receipt.claimId}|${receipt.ownerId}|${receipt.uncertainty}",
+    )
+
+    private fun custodyDigest(receipt: CustodyReceipt): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(custodyBytes(receipt))
+
+    private fun policyDigest(storeId: UUID, budget: Long): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(textBytes("$storeId|$budget"))
 
     private fun decodePayload(bytes: ByteArray): NotificationPayload {
         val payload = NotificationPayloadCodec.decode(decodeText(bytes)) ?: corrupt()

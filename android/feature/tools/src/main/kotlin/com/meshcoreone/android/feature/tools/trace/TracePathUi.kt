@@ -153,7 +153,7 @@ object TracePathScreen {
         TracePathContent(
             state, holder, savedState, savedPaths, dependencies.mapPreferences,
             dependencies.feature.bestAvailableLocation(), dependencies.diagnostics,
-            mapSurface,
+            mapSurface, dependencies.generation, dependencies.radioId,
         )
     }
 }
@@ -180,10 +180,13 @@ private fun TracePathContent(
     location: Coordinate?,
     diagnostics: TraceDiagnostics,
     mapSurface: TraceMapSurface,
+    connectionGeneration: Int,
+    radioId: RadioId?,
 ) {
     var showMap by remember { mutableStateOf(false) }
     var showSaved by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val codeInput = rememberTraceCodeInputState(holder, connectionGeneration, radioId)
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(12.dp),
@@ -208,7 +211,7 @@ private fun TracePathContent(
             }
         }
         if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, mapSurface)
-        else TracePathListContent(state, holder)
+        else TracePathListContent(state, holder, codeInput)
     }
     if (showSaved) {
         AlertDialog(
@@ -249,7 +252,7 @@ private fun TracePathContent(
 }
 
 @Composable
-private fun TracePathListContent(state: TracePathState, holder: TracePathStateHolder) {
+private fun TracePathListContent(state: TracePathState, holder: TracePathStateHolder, codeInput: TraceCodeInputState) {
     val scope = rememberCoroutineScope()
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -307,6 +310,7 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
                 }
             }
         }
+        item(key = "trace-code-input") { TraceCodeInput(state, holder, codeInput) }
         if (state.availableRepeaters.isNotEmpty()) {
             item {
                 Text(stringResource(T.toolsNodeDiscoveryRepeaters), style = MaterialTheme.typography.titleMedium)

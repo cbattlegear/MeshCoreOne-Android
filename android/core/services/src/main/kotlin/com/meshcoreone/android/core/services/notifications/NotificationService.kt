@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -210,6 +211,7 @@ class NotificationService(
         messageID: UUID,
         notificationLevel: NotificationLevel,
         hasSelfMention: Boolean,
+        displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
     ) {
         if (notificationLevel == NotificationLevel.MUTED) return
         if (notificationLevel == NotificationLevel.MENTIONS_ONLY && !hasSelfMention) return
@@ -221,7 +223,7 @@ class NotificationService(
                 id = NotificationId(messageID.canonicalString()), category = NotificationCategory.CHANNEL_MESSAGE,
                 title = channelName, body = senderBody(senderName, messageText), soundEnabled = prefs.soundEnabled,
                 badge = nextBadge(prefs), threadIdentifier = "channel-${radioId.canonicalString}-$channelIndex",
-                payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID),
+                payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID, displayTarget),
             ),
         )
         if (prefs.badgeEnabled) updateBadgeCount()

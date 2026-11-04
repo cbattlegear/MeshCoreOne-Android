@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-005 Native unresolved-message copy. -->
+<resources>
+    <string name="unresolved_messages_title">未确定的消息</string>
+    <string name="unresolved_messages_entry">阅读已保留但发送者未经验证的私信</string>
+    <string name="unresolved_messages_notice">发送者身份未经验证。无法在此回复这些消息。</string>
+    <string name="unresolved_messages_radio">电台：%1$s</string>
+    <string name="unresolved_messages_no_radio">请在设置中选择电台，以阅读其保留的消息。</string>
+    <string name="unresolved_messages_loading">正在加载保留的消息…</string>
+    <string name="unresolved_messages_empty">此电台没有未确定的消息</string>
+    <string name="unresolved_messages_error">无法加载保留的消息。请重试。</string>
+    <string name="unresolved_messages_more">加载较早的消息</string>
+    <string name="unresolved_messages_refresh">刷新</string>
+    <string name="unresolved_messages_sender">发送者未确定</string>
+    <string name="unresolved_messages_candidate">仅匹配本地联系人；发送者未经验证</string>
+    <string name="unresolved_messages_legacy">历史消息；发送者未知</string>
+    <string name="unresolved_messages_wire_time">原始传输时间：%1$s</string>
+    <string name="unresolved_messages_received_time">接收时间：%1$s</string>
+    <string name="unresolved_messages_wire_time_unknown">原始传输时间不可用</string>
+    <string name="unresolved_messages_received_time_unknown">接收时间不可用</string>
+    <string name="unresolved_messages_back">返回</string>
+</resources>

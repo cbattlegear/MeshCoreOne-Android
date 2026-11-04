@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-005 Native unresolved-message copy. -->
+<resources>
+    <string name="unresolved_messages_title">Ungeklärte Nachrichten</string>
+    <string name="unresolved_messages_entry">Gespeicherte Direktnachrichten mit unbestätigtem Absender lesen</string>
+    <string name="unresolved_messages_notice">Die Absenderidentität ist nicht bestätigt. Hier kann auf diese Nachrichten nicht geantwortet werden.</string>
+    <string name="unresolved_messages_radio">Funkgerät: %1$s</string>
+    <string name="unresolved_messages_no_radio">Wähle in den Einstellungen ein Funkgerät, um dessen gespeicherte Nachrichten zu lesen.</string>
+    <string name="unresolved_messages_loading">Gespeicherte Nachrichten werden geladen…</string>
+    <string name="unresolved_messages_empty">Keine ungeklärten Nachrichten für dieses Funkgerät</string>
+    <string name="unresolved_messages_error">Gespeicherte Nachrichten konnten nicht geladen werden. Versuche es erneut.</string>
+    <string name="unresolved_messages_more">Ältere Nachrichten laden</string>
+    <string name="unresolved_messages_refresh">Aktualisieren</string>
+    <string name="unresolved_messages_sender">Ungeklärter Absender</string>
+    <string name="unresolved_messages_candidate">Nur lokaler Kontaktabgleich; Absender unbestätigt</string>
+    <string name="unresolved_messages_legacy">Historische Nachricht; Absender unbekannt</string>
+    <string name="unresolved_messages_wire_time">Ursprüngliche Übertragungszeit: %1$s</string>
+    <string name="unresolved_messages_received_time">Empfangen: %1$s</string>
+    <string name="unresolved_messages_wire_time_unknown">Ursprüngliche Übertragungszeit nicht verfügbar</string>
+    <string name="unresolved_messages_received_time_unknown">Empfangszeit nicht verfügbar</string>
+    <string name="unresolved_messages_back">Zurück</string>
+</resources>

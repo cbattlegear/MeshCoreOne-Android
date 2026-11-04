@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-005 Native unresolved-message copy. -->
+<resources>
+    <string name="unresolved_messages_title">Неопределённые сообщения</string>
+    <string name="unresolved_messages_entry">Читать сохранённые личные сообщения с неподтверждённым отправителем</string>
+    <string name="unresolved_messages_notice">Личность отправителя не подтверждена. Ответить на эти сообщения здесь нельзя.</string>
+    <string name="unresolved_messages_radio">Радиостанция: %1$s</string>
+    <string name="unresolved_messages_no_radio">Выберите радиостанцию в настройках, чтобы читать её сохранённые сообщения.</string>
+    <string name="unresolved_messages_loading">Загрузка сохранённых сообщений…</string>
+    <string name="unresolved_messages_empty">Для этой радиостанции нет неопределённых сообщений</string>
+    <string name="unresolved_messages_error">Не удалось загрузить сохранённые сообщения. Повторите попытку.</string>
+    <string name="unresolved_messages_more">Загрузить более ранние сообщения</string>
+    <string name="unresolved_messages_refresh">Обновить</string>
+    <string name="unresolved_messages_sender">Отправитель не определён</string>
+    <string name="unresolved_messages_candidate">Только локальное совпадение контакта; отправитель не подтверждён</string>
+    <string name="unresolved_messages_legacy">Историческое сообщение; отправитель неизвестен</string>
+    <string name="unresolved_messages_wire_time">Исходное время передачи: %1$s</string>
+    <string name="unresolved_messages_received_time">Получено: %1$s</string>
+    <string name="unresolved_messages_wire_time_unknown">Исходное время передачи недоступно</string>
+    <string name="unresolved_messages_received_time_unknown">Время получения недоступно</string>
+    <string name="unresolved_messages_back">Назад</string>
+</resources>

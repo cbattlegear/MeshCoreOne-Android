@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-005 Native unresolved-message copy. -->
+<resources>
+    <string name="unresolved_messages_title">Nierozstrzygnięte wiadomości</string>
+    <string name="unresolved_messages_entry">Czytaj zachowane wiadomości bezpośrednie od niezweryfikowanego nadawcy</string>
+    <string name="unresolved_messages_notice">Tożsamość nadawcy nie jest zweryfikowana. Nie można tutaj odpowiedzieć na te wiadomości.</string>
+    <string name="unresolved_messages_radio">Radio: %1$s</string>
+    <string name="unresolved_messages_no_radio">Wybierz radio w Ustawieniach, aby odczytać zachowane wiadomości.</string>
+    <string name="unresolved_messages_loading">Wczytywanie zachowanych wiadomości…</string>
+    <string name="unresolved_messages_empty">Brak nierozstrzygniętych wiadomości dla tego radia</string>
+    <string name="unresolved_messages_error">Nie udało się wczytać zachowanych wiadomości. Spróbuj ponownie.</string>
+    <string name="unresolved_messages_more">Wczytaj starsze wiadomości</string>
+    <string name="unresolved_messages_refresh">Odśwież</string>
+    <string name="unresolved_messages_sender">Nierozstrzygnięty nadawca</string>
+    <string name="unresolved_messages_candidate">Tylko lokalne dopasowanie kontaktu; nadawca niezweryfikowany</string>
+    <string name="unresolved_messages_legacy">Wiadomość historyczna; nadawca nieznany</string>
+    <string name="unresolved_messages_wire_time">Oryginalny czas transmisji: %1$s</string>
+    <string name="unresolved_messages_received_time">Odebrano: %1$s</string>
+    <string name="unresolved_messages_wire_time_unknown">Oryginalny czas transmisji niedostępny</string>
+    <string name="unresolved_messages_received_time_unknown">Czas odbioru niedostępny</string>
+    <string name="unresolved_messages_back">Wstecz</string>
+</resources>

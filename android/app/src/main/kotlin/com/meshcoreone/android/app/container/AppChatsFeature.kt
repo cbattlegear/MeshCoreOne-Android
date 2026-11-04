@@ -149,6 +149,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             radio ?: throw MessageServiceException(MessageServiceError.NotConnected), id,
         )
         override val data = object : ChatListDataSource {
+            override suspend fun fetchUnprovedDirectMessages(radioId: RadioId, limit: Long, offset: Long) =
+                (store as? com.meshcoreone.android.core.contracts.domain.UnprovedDirectMessageReading
+                    ?: throw UnsupportedOperationException("Persistence does not support unproved direct-message reading"))
+                    .fetchUnprovedDirectMessages(radioId, limit, offset)
             override suspend fun fetchConversations(radioId: RadioId) = store.fetchConversations(radioId)
             override suspend fun fetchChannels(radioId: RadioId) = store.fetchChannels(radioId)
             override suspend fun fetchRemoteNodeSessions(radioId: RadioId) = store.fetchRemoteNodeSessions(radioId)

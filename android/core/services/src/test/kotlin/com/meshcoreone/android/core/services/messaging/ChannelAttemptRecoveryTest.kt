@@ -5,6 +5,10 @@ import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.CommandCode
+import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
+import com.meshcoreone.android.core.protocol.session.MessageWriteDispatch
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
+import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.*
@@ -13,6 +17,125 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelAttemptRecoveryTest {
+    @TestFactory fun cancellationProvenance() = listOf(false to false, true to false, false to true).map { (written, settlementFails) ->
+        native("real-fenced-channel-cancellation-written-$written-settlement-fails-$settlementFails") {
+            val h = Harness(this); h.start()
+            val row = h.pending(h.message(MessageStatus.PENDING, 0u), attempt = 2)
+            val queued = CompletableDeferred<Deferred<Unit>>()
+            val connection = object : MeshCoreSessionProtocol by h.session {
+                override suspend fun sendChannelMessage(
+                    channel: UByte, text: String, timestamp: Instant, dispatch: MessageWriteDispatch,
+                ) = coroutineScope {
+                    val request = async { h.session.sendChannelMessage(channel, text, timestamp, dispatch) }
+                    queued.complete(request)
+                    request.await()
+                }
+            }
+            val identity = ChannelIdentityMutex()
+            val fence = ChannelDispatchFence(identity)
+            val lease = fence.openSession(h.token, connection, ChannelDispatchAdmission(h.token, connection))
+            identity.withChannelOperationScope { fence.recordReconciled(lease, it, listOf(0u)) }
+            val service = MessageService(h.token, SELF, connection, h.store, h.signals, h.scope,
+                clock = h.clock, channelDispatchLease = lease)
+            val release = CompletableDeferred<Unit>()
+            var prior: Deferred<Unit>? = null
+            val storage = storageFailure()
+            try {
+                if (written) {
+                    h.transport.holdChannelReplies = true
+                } else {
+                    h.transport.beforeReply = {
+                        if (it[0] == CommandCode.RESET_PATH.rawValue) release.await()
+                    }
+                    prior = backgroundScope.async { h.session.resetPath(TARGET) }
+                    runCurrent()
+                    assertEquals(1, h.sends(CommandCode.RESET_PATH).size)
+                }
+                if (settlementFails) h.store.faults["settleQueuedChannelAttempt"] = storage
+                val sending = backgroundScope.async {
+                    assertFailsWith<CancellationException> {
+                        service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
+                    }
+                }
+                runCurrent()
+                assertTrue(queued.isCompleted)
+                val cancellation = CancellationException("cancel actual messaging request")
+                queued.await().cancel(cancellation)
+                runCurrent()
+                assertSame(cancellation, sending.await())
+                val attempt = h.store.channelAttempts.values.single()
+                assertEquals(row.id, attempt.key.pendingID)
+                assertEquals(row.messageID, attempt.key.messageID)
+                assertEquals(row.channelOccupantID, attempt.channelOccupantID)
+                val pending = h.store.pending.getValue(EntityKey(RADIO, row.id))
+                assertEquals(2L, pending.attemptCount)
+                assertEquals(MessageStatus.PENDING, h.stored(row.messageID).status)
+                assertTrue(h.sends(CommandCode.GET_CHANNEL).isEmpty(), "Cancellation is not a NOT_FOUND query trigger")
+                assertEquals(if (written) 1 else 0, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+                if (written || settlementFails) {
+                    assertEquals(if (settlementFails) QueuedChannelAttemptPhase.DISPATCHING else
+                        QueuedChannelAttemptPhase.UNCERTAIN, attempt.phase)
+                    assertEquals(attempt.key.attemptID, pending.channelAttemptID)
+                    assertFailsWith<com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure.UnsettledDispatch> {
+                        fence.withMutation(lease) { fail("Unsettled cancellation cannot release the radio") }
+                    }
+                    if (settlementFails) {
+                        val retained = assertIs<QueuedChannelRetainedException>(cancellation.suppressed.single())
+                        assertSame(storage, retained.cause)
+                    }
+                } else {
+                    assertEquals(QueuedChannelAttemptPhase.DEFINITELY_UNSENT, attempt.phase)
+                    assertEquals(row, pending)
+                    fence.withMutation(lease) { }
+                }
+                release.complete(Unit)
+                if (written) h.transport.mock.simulateOK()
+                runCurrent()
+                prior?.await()
+                assertEquals(if (written) 1 else 0, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size,
+                    "The cancelled protocol task must never dispatch after the prior owner releases")
+                if (!written && !settlementFails) {
+                    service.close()
+                    fence.retire(lease)
+                    h.close()
+                    val next = Harness(this, store = h.store, generation = 2); next.start()
+                    val nextLease = fence.openSession(next.token, next.session,
+                        ChannelDispatchAdmission(next.token, next.session))
+                    identity.withChannelOperationScope { fence.recordReconciled(nextLease, it, listOf(0u)) }
+                    val replacement = MessageService(next.token, SELF, next.session, next.store, next.signals,
+                        next.scope, clock = next.clock, channelDispatchLease = nextLease)
+                    val queue = ChatSendQueueService(next.token, next.store, replacement,
+                        MessagingChannelQuery { fail("Unsent cancellation is not a NOT_FOUND result") },
+                        OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, next.signals, next.scope, clock = next.clock)
+                    try {
+                        queue.hydrate(); runCurrent(); queue.awaitDrainCompletion()
+                        val accepted = next.store.channelAttempts.values.last()
+                        assertEquals(QueuedChannelAttemptPhase.ACCEPTED, accepted.phase)
+                        assertTrue(accepted.isCompleted)
+                        assertEquals(row.id, accepted.key.pendingID)
+                        assertEquals(row.messageID, accepted.key.messageID)
+                        assertEquals(row.channelOccupantID, accepted.channelOccupantID)
+                        assertNotEquals(attempt.key.attemptID, accepted.key.attemptID)
+                        assertEquals(1, next.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+                        assertTrue(next.store.pending.isEmpty())
+                        assertEquals(MessageStatus.SENT, next.stored(row.messageID).status)
+                        assertEquals(attempt, next.store.channelAttempts.getValue(attempt.key))
+                    } finally {
+                        queue.shutdown()
+                        replacement.close()
+                        fence.retire(nextLease)
+                    }
+                }
+            } finally {
+                release.complete(Unit)
+                h.store.faults.clear()
+                service.close()
+                fence.retire(lease)
+                prior?.cancelAndJoin()
+            }
+        }
+    }
+
     @TestFactory fun recovery() = listOf(
         native("direct-invalid-data-preflight-retains-prior-status-and-pending-identity") {
             val h = Harness(this); h.start()

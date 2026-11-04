@@ -43,6 +43,7 @@ internal class QueuedChannelRetainedException(val pendingID: UUID, cause: Throwa
 private sealed interface ChannelPrewireResult {
     data class Accepted(val attempt: QueuedChannelAttempt) : ChannelPrewireResult
     data class Rejected(val failure: PersistenceStoreException) : ChannelPrewireResult
+    data class CancelledUnsent(val cancellation: CancellationException) : ChannelPrewireResult
 }
 
 class MessageService(
@@ -859,10 +860,17 @@ class MessageService(
                         session.sendChannelMessage(envelope.channelIndex, envelope.messageText,
                             Instant.ofEpochSecond(stamp.toLong()), dispatch)
                     } catch (cancelled: CancellationException) {
-                        settleQueuedChannel(attemptKey,
-                            if (dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                        val unsent = dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT
+                        try {
+                            settleQueuedChannel(attemptKey, if (unsent) {
                                 QueuedChannelAttemptOutcome.DEFINITELY_UNSENT
                             } else QueuedChannelAttemptOutcome.UNCERTAIN)
+                        } catch (settlement: QueuedChannelRetainedException) {
+                            cancelled.addSuppressed(settlement)
+                            throw cancelled
+                        }
+                        // Leave the fence normally only after exact unsent settlement, not on raw ERROR.
+                        if (unsent) return@dispatch ChannelPrewireResult.CancelledUnsent(cancelled)
                         throw cancelled
                     } catch (failure: Exception) {
                         try { settleQueuedChannel(attemptKey, QueuedChannelAttemptOutcome.UNCERTAIN) }
@@ -878,6 +886,7 @@ class MessageService(
                 when (result) {
                     is ChannelPrewireResult.Accepted -> result.attempt
                     is ChannelPrewireResult.Rejected -> throw retainedChannel(pendingID, result.failure)
+                    is ChannelPrewireResult.CancelledUnsent -> throw result.cancellation
                 }
             }
         } catch (failure: ChannelDispatchFailure) { throw retainedChannel(pendingID, failure) }

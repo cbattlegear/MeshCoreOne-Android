@@ -52,6 +52,9 @@ internal class MessageRepository(
     override suspend fun saveMessage(dto: MessageDTO) = context.write("saveMessage") {
         database.messages().byId(dto.radioId.value, dto.id)?.let { existing ->
             val occupant = existing.channelOccupantID
+            if (occupant == null && dto.channelOccupantID != null) {
+                rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, message = EntityKey(dto.radioId, dto.id))
+            }
             if (occupant != null) {
                 val key = EntityKey(dto.radioId, dto.id)
                 if (dto.contactID != existing.contactID || dto.channelIndex?.toLong() != existing.channelIndex) {

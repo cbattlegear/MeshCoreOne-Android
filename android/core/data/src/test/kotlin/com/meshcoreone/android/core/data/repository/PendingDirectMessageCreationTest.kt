@@ -4,6 +4,9 @@ package com.meshcoreone.android.core.data.repository
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.withTransaction
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import com.meshcoreone.android.core.contracts.domain.PendingDirectMessageIntent
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -14,9 +17,15 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Proxy
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executor
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -24,6 +33,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -182,33 +193,69 @@ class PendingDirectMessageCreationTest : RepositoryTest() {
     }
 
     @Test fun independentRoomConnectionsSerializeConflictingRadioClaimsAndSurviveFileReopen() = runTest {
+        verifyIndependentRoomConnections()
+    }
+
+    private suspend fun verifyIndependentRoomConnections() = withContext(Dispatchers.IO) {
         val name = "pending-direct-${UUID.randomUUID()}.db"
-        var first = fileDatabase(name)
-        val second = fileDatabase(name)
+        val firstRead = CountDownLatch(1)
+        val secondBegin = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val armed = AtomicBoolean(false)
+        val held = AtomicBoolean(false)
+        val firstReadInTransaction = AtomicBoolean(false)
+        val workers = List(4) { Executors.newSingleThreadExecutor() }
+        lateinit var first: MeshCoreDatabase
+        first = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .setQueryExecutor(workers[0]).setTransactionExecutor(workers[1])
+            .setQueryCallback({ sql, _ ->
+                if (armed.get() && sql.startsWith("SELECT", ignoreCase = true) &&
+                    sql.contains("messages") && held.compareAndSet(false, true)
+                ) {
+                    firstReadInTransaction.set(first.inTransaction())
+                    firstRead.countDown()
+                    check(releaseFirst.await(30, TimeUnit.SECONDS)) { "Controlled DM writer was not released" }
+                }
+            }, Executor { it.run() }).build()
+        val second = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .setQueryExecutor(workers[2]).setTransactionExecutor(workers[3])
+            .openHelperFactory(observingBeginFactory { if (armed.get()) secondBegin.countDown() })
+            .build()
         var firstStore = RoomPersistenceStore(first, owner, clock)
         val secondStore = RoomPersistenceStore(second, owner, clock)
         val intent = intent()
         try {
             first.openHelper.writableDatabase
             second.openHelper.writableDatabase
-            val gate = CompletableDeferred<Unit>()
-            val outcomes = coroutineScope {
-                val work = listOf(firstStore to intent, secondStore to intent.copy(radioId = RADIO_B)).map { (repository, candidate) ->
-                    async(Dispatchers.IO) {
-                        gate.await()
-                        try {
-                            repository.createOrReconcilePendingDirectMessage(candidate, 42u, AT) to null
-                        } catch (failure: PersistenceStoreException) {
-                            null to failure.error
+            armed.set(true)
+            val committed = coroutineScope {
+                val original = async { firstStore.createOrReconcilePendingDirectMessage(intent, 42u, AT) }
+                try {
+                    assertTrue(firstRead.await(10, TimeUnit.SECONDS), "Original writer did not reach its identity read")
+                    assertTrue(firstReadInTransaction.get(), "Identity read must be held inside the Room transaction")
+                    val contender = async {
+                        assertFailsWith<PersistenceStoreException> {
+                            secondStore.createOrReconcilePendingDirectMessage(intent.copy(radioId = RADIO_B), 42u, AT)
                         }
                     }
+                    assertTrue(secondBegin.await(10, TimeUnit.SECONDS), "Independent handle did not reach SQLite BEGIN")
+                    assertFalse(original.isCompleted, "Original must still hold the write transaction")
+                    assertFalse(contender.isCompleted, "Contender must wait for the original transaction")
+                    releaseFirst.countDown()
+                    val saved = withTimeout(20_000) { original.await() }
+                    val rejected = withTimeout(20_000) { contender.await() }
+                    assertEquals(
+                        PersistenceStoreError.InvalidData, rejected.error,
+                        "Conflicting radio must reject by intent, not a storage error (${rejected.cause?.javaClass?.simpleName})",
+                    )
+                    saved
+                } finally {
+                    releaseFirst.countDown()
                 }
-                gate.complete(Unit)
-                work.awaitAll()
             }
-            assertEquals(1, outcomes.count { it.first != null })
-            assertEquals(listOf(PersistenceStoreError.InvalidData), outcomes.mapNotNull { it.second })
-            val committed = assertNotNull(outcomes.mapNotNull { it.first }.single())
+            armed.set(false)
+            assertEquals(listOf(committed), second.messages().forIdentity(intent.messageID).map { it.toDTO() })
+            assertEquals(committed, secondStore.createOrReconcilePendingDirectMessage(intent, 99u, AT.plusSeconds(10)))
             val matching = intent.copy(radioId = committed.radioId)
             val committedKey = entity(committed.radioId, committed.id)
             firstStore.updateMessageAck(committedKey, 123u, MessageStatus.DELIVERED, 7u)
@@ -221,15 +268,48 @@ class PendingDirectMessageCreationTest : RepositoryTest() {
             firstStore = RoomPersistenceStore(first, owner, clock)
             assertEquals(evolved, firstStore.createOrReconcilePendingDirectMessage(matching, 999u, AT.plusSeconds(1000)))
             assertEquals(listOf(evolved.toEntity()), first.messages().forIdentity(intent.messageID))
-            assertEquals(1, first.openHelper.readableDatabase.version)
+            assertEquals(4, first.openHelper.readableDatabase.version)
         } finally {
+            armed.set(false)
+            releaseFirst.countDown()
             secondStore.close()
             second.close()
             firstStore.close()
             first.close()
+            workers.forEach { it.shutdown() }
+            workers.forEach { assertTrue(it.awaitTermination(10, TimeUnit.SECONDS), "Room worker did not finish") }
             context.deleteDatabase(name)
         }
     }
+
+    private fun observingBeginFactory(onBegin: () -> Unit): SupportSQLiteOpenHelper.Factory =
+        SupportSQLiteOpenHelper.Factory { configuration ->
+            val helper = FrameworkSQLiteOpenHelperFactory().create(configuration)
+            Proxy.newProxyInstance(
+                SupportSQLiteOpenHelper::class.java.classLoader, arrayOf(SupportSQLiteOpenHelper::class.java),
+            ) { _, method, args ->
+                val result = invokeDelegate(method, helper, args)
+                if (method.name == "getWritableDatabase" || method.name == "getReadableDatabase") {
+                    val database = result as SupportSQLiteDatabase
+                    Proxy.newProxyInstance(
+                        SupportSQLiteDatabase::class.java.classLoader, arrayOf(SupportSQLiteDatabase::class.java),
+                    ) { _, operation, parameters ->
+                        val sql = parameters?.firstOrNull() as? String
+                        if (operation.name.startsWith("beginTransaction") ||
+                            (operation.name == "execSQL" && sql?.trimStart()?.startsWith("BEGIN", ignoreCase = true) == true)
+                        ) onBegin()
+                        invokeDelegate(operation, database, parameters)
+                    } as SupportSQLiteDatabase
+                } else result
+            } as SupportSQLiteOpenHelper
+        }
+
+    private fun invokeDelegate(method: java.lang.reflect.Method, delegate: Any, args: Array<out Any?>?): Any? =
+        try {
+            method.invoke(delegate, *(args ?: emptyArray()))
+        } catch (failure: InvocationTargetException) {
+            throw failure.targetException
+        }
 
     @Test fun reconnectingAConsumerOrReopeningTheProcessStoreDoesNotResetExistingState() = runTest {
         val intent = intent()

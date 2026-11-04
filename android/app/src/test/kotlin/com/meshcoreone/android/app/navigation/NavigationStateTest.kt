@@ -414,6 +414,33 @@ class NavigationStateTest {
         assertEquals(AppTab.CHATS, n.currentState.selectedTab)
     }
 
+    @Test fun retiredOnboardingAttemptCannotAuthorizeOrReportForItsReplacement() {
+        val n = NavigationCoordinator()
+        n.installOnboardingSessionCapture { { true } }
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        val entry = presented.value.activeStack.last()
+        val retired = n.captureMountedOnboarding(presented, entry.id)
+        val before = n.currentState
+        var injected = false
+        n.installCommitBoundary { action ->
+            if (!injected) {
+                injected = true
+                n.retireMountedOnboarding(retired)
+            }
+            action()
+        }
+
+        assertFalse(n.completeMountedOnboarding(retired, MountedOnboardingProducer.NoDevice))
+        assertTrue(injected)
+        assertFalse(n.reportMountedOnboardingFailure(retired))
+        assertEquals(before, n.currentState)
+        val replacement = n.captureMountedOnboarding(presented, entry.id)
+        assertTrue(n.completeMountedOnboarding(replacement, MountedOnboardingProducer.NoDevice))
+        assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+    }
+
     @Test fun onboardingFailureIsReportedOnlyForTheStillActiveMountedEntry() {
         for (replacement in listOf("none", "tab", "reactivated", "entry")) {
             val n = NavigationCoordinator()
@@ -448,7 +475,8 @@ class NavigationStateTest {
 
     @Test fun onboardingFailureDoesNotOverwriteAnExistingUnrelatedFailure() {
         val n = NavigationCoordinator()
-        n.installOnboardingSessionCapture { { false } }
+        var sessionCurrent = false
+        n.installOnboardingSessionCapture { { sessionCurrent } }
         n.selectTab(AppTab.SETTINGS)
         n.navigate(FeatureRoute(FeatureId.ONBOARDING))
         val presented = n.publishedNavigation.value
@@ -462,15 +490,47 @@ class NavigationStateTest {
         assertEquals(before, n.currentState)
         n.clearFailure()
         assertTrue(n.reportMountedOnboardingFailure(completion))
+        sessionCurrent = true
+        assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice))
         val first = n.currentState.failure
         assertTrue(first is NavigationFailure.StaleOnboarding)
         n.clearFailure(first)
-        assertTrue(n.reportMountedOnboardingFailure(completion))
+        val replacement = n.captureMountedOnboarding(n.publishedNavigation.value, presented.value.activeStack.last().id)
+        assertTrue(n.reportMountedOnboardingFailure(replacement))
         val second = n.currentState.failure
         assertTrue(second is NavigationFailure.StaleOnboarding)
         assertNotEquals(first, second)
         n.clearFailure(first)
         assertEquals(second, n.currentState.failure)
+    }
+
+    @Test fun onboardingRejectionPreservesAnUnreleasedPublicationPredecessor() {
+        val n = NavigationCoordinator()
+        n.installOnboardingSessionCapture { { true } }
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        var interleave = true
+        var lateCompletion: Boolean? = null
+        n.installCommitBoundary { action ->
+            action()
+            if (interleave) {
+                interleave = false
+                lateCompletion = n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice)
+            }
+        }
+        try {
+            assertTrue(n.reportMountedOnboardingFailure(completion))
+            assertEquals(false, lateCompletion)
+            assertTrue(n.currentState.failure is NavigationFailure.StaleOnboarding)
+            assertEquals(AppTab.SETTINGS, n.currentState.selectedTab)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertTrue(n.state.value.failure is NavigationFailure.StaleOnboarding)
     }
 
     @Test fun onboardingCompletionRechecksSourceAfterCompetingLifecycleCommit() {

@@ -32,6 +32,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 
 // Native adaptation: Inject process repositories; this sink never constructs or owns a radio session.
@@ -58,9 +59,14 @@ internal class MountedOnboardingCompletion internal constructor(
     internal val entryId: Long,
     private val sessionCurrent: (MountedOnboardingProducer) -> Boolean,
 ) {
+    private val retired = AtomicBoolean(false)
     internal fun belongsTo(owner: Any): Boolean = this.owner === owner
+    internal fun isActive(owner: Any): Boolean = belongsTo(owner) && !retired.get()
     internal fun isCurrent(owner: Any, producer: MountedOnboardingProducer): Boolean =
-        belongsTo(owner) && sessionCurrent(producer)
+        isActive(owner) && sessionCurrent(producer)
+    internal fun retire(owner: Any) {
+        if (belongsTo(owner)) retired.set(true)
+    }
 }
 
 class NavigationCoordinator(initial: NavigationState = NavigationState()) {
@@ -100,16 +106,25 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         )
     }
 
+    internal fun retireMountedOnboarding(completion: MountedOnboardingCompletion?) {
+        if (completion == null || !completion.belongsTo(onboardingIdentity)) return
+        commitBoundary { completion.retire(onboardingIdentity) }
+    }
+
     internal fun retireBinding(action: () -> Unit) = commitBoundary(action)
 
     private fun commitIfCurrent(
         expected: NavigationStateStore.Snapshot, next: NavigationState, isCurrent: () -> Boolean,
+        onCommitted: () -> Unit = {},
     ): Boolean? {
         var committed: Boolean? = null
         val publication = NavigationStateStore.Publication()
         try {
             commitBoundary {
-                if (isCurrent()) committed = mutableState.compareAndSet(expected, next, publication)
+                if (isCurrent()) {
+                    committed = mutableState.compareAndSet(expected, next, publication)
+                    if (committed == true) onCommitted()
+                }
             }
         } finally {
             if (committed == true) mutableState.release(publication)
@@ -944,9 +959,11 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             ) return false
             val next = current.withRetainedStack(current.selectedTab, current.activeStack.dropLast(1))
                 .select(AppTab.CHATS)
-            when (commitIfCurrent(snapshot, next) {
-                sameSession(mutableState.value) && completion.isCurrent(onboardingIdentity, producer)
-            }) {
+            when (commitIfCurrent(
+                snapshot, next,
+                isCurrent = { sameSession(mutableState.value) && completion.isCurrent(onboardingIdentity, producer) },
+                onCommitted = { completion.retire(onboardingIdentity) },
+            )) {
                 true -> return true
                 null -> return false
                 false -> Unit
@@ -966,8 +983,14 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             ) return false
             if (current.failure != null) return false
             val failure = NavigationFailure.StaleOnboarding(Math.incrementExact(snapshot.revision))
-            if (mutableState.compareAndSet(snapshot, current.copy(failure = failure))) {
-                return true
+            when (commitIfCurrent(
+                snapshot, current.copy(failure = failure),
+                isCurrent = { completion.isActive(onboardingIdentity) },
+                onCommitted = { completion.retire(onboardingIdentity) },
+            )) {
+                true -> return true
+                null -> return false
+                false -> Unit
             }
         }
     }

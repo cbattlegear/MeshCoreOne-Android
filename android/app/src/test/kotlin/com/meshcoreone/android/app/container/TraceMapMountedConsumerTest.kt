@@ -168,8 +168,7 @@ class TraceMapMountedConsumerTest {
         host.get().runOnUiThread { reportCamera(panned) }
         advanceFrames()
         compose.waitForIdle()
-        compose.waitUntil(5_000) {
-            advanceFrames()
+        waitUntilAdvancingFrames {
             latest?.camera == panned
         }
         assertEquals(initialRevision, latest!!.cameraCommandRevision)
@@ -177,16 +176,14 @@ class TraceMapMountedConsumerTest {
         compose.onNodeWithTag("trace-map:center-all").performClick()
         advanceFrames()
         compose.waitForIdle()
-        compose.waitUntil(5_000) {
-            advanceFrames()
+        waitUntilAdvancingFrames {
             latest?.camera != panned && latest!!.cameraCommandRevision > initialRevision
         }
         val firstFitRevision = latest!!.cameraCommandRevision
         compose.onNodeWithTag("trace-map:center-all").performClick()
         advanceFrames()
         compose.waitForIdle()
-        compose.waitUntil(5_000) {
-            advanceFrames()
+        waitUntilAdvancingFrames {
             latest!!.cameraCommandRevision > firstFitRevision
         }
     }
@@ -255,8 +252,7 @@ class TraceMapMountedConsumerTest {
         advanceFrames()
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_map)).performClick()
         advanceFrames()
-        compose.waitUntil(5_000) {
-            advanceFrames()
+        waitUntilAdvancingFrames {
             latest?.points?.size == 3 &&
                 compose.onAllNodesWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_pathedit_filter_favorites))
                     .fetchSemanticsNodes().isNotEmpty()
@@ -276,6 +272,16 @@ class TraceMapMountedConsumerTest {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
         }
+    }
+
+    private fun waitUntilAdvancingFrames(timeoutMillis: Long = 5_000, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            advanceFrames()
+            if (condition()) return
+            Thread.sleep(10)
+        }
+        error("Condition was not satisfied while advancing the trace frame clock")
     }
 
     private fun text(id: Int): String = host.get().getString(id)

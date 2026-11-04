@@ -304,15 +304,14 @@ class MapMountedConsumerTest {
         }
         advanceFrames()
         compose.waitForIdle()
-        compose.waitUntil(5_000) {
+        waitUntilAdvancingFrames {
             loads == 2 && compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isNotEmpty()
         }
 
         runBlocking {
             store.setFilter(MapFilterHost.MAIN_MAP, MapFilterState(favoritesOnly = true))
         }
-        compose.waitUntil(5_000) {
-            advanceFrames()
+        waitUntilAdvancingFrames {
             compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
         }
     }
@@ -438,8 +437,7 @@ class MapMountedConsumerTest {
         }
         advanceFrames()
         compose.waitForIdle()
-        compose.waitUntil(5_000) {
-            advanceFrames()
+        waitUntilAdvancingFrames {
             compose.onAllNodesWithText(text(R.string.l10n_app_map_map_controls_centerall))
                 .fetchSemanticsNodes().isNotEmpty()
         }
@@ -457,6 +455,16 @@ class MapMountedConsumerTest {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
         }
+    }
+
+    private fun waitUntilAdvancingFrames(timeoutMillis: Long = 5_000, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            advanceFrames()
+            if (condition()) return
+            Thread.sleep(10)
+        }
+        error("Condition was not satisfied while advancing the mounted map frame clock")
     }
 
     private fun content() = MapFeatureContent(listOf(

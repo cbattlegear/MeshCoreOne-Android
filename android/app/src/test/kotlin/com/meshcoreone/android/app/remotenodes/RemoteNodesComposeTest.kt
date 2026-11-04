@@ -132,6 +132,16 @@ class RemoteNodesComposeTest {
         compose.waitForIdle()
     }
 
+    private fun waitForSyntheticMap(timeoutMillis: Long = 5_000) {
+        val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            settleMapComposition()
+            if (compose.onAllNodesWithTag("synthetic-map").fetchSemanticsNodes().isNotEmpty()) return
+            Thread.sleep(10)
+        }
+        error("Synthetic map did not appear after remote-map preference retry")
+    }
+
     @Test fun neighborHostUsesRealPersistedFilterAndLiveRestoreWithoutLosingThePannedCamera() {
         val key = com.meshcoreone.android.core.protocol.bytes.Bytes(byteArrayOf(1, 2, 3, 4, 5, 6) + ByteArray(26))
         fixture.contacts = fixture.contacts + fixture.contact.copy(
@@ -219,10 +229,7 @@ class RemoteNodesComposeTest {
         compose.onNodeWithTag("remote-map:retry").performScrollTo().assertExists()
         compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
         releaseRetryObservation.complete(Unit)
-        settleMapComposition()
-        compose.waitUntil(5_000) {
-            compose.onAllNodesWithTag("synthetic-map").fetchSemanticsNodes().isNotEmpty()
-        }
+        waitForSyntheticMap()
         compose.onNodeWithTag("synthetic-map").performScrollTo().assertExists()
         compose.onNodeWithTag("remote-map:retry").assertDoesNotExist()
     }
@@ -264,7 +271,7 @@ class RemoteNodesComposeTest {
         compose.onNodeWithTag("remote-map:retry").assertExists()
         compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
         compose.onNodeWithTag("remote-map:retry").performScrollTo().performClick()
-        settleMapComposition()
+        waitForSyntheticMap()
         compose.onNodeWithTag("synthetic-map").performScrollTo().assertExists()
         compose.onNodeWithTag("remote-map:retry").assertDoesNotExist()
     }

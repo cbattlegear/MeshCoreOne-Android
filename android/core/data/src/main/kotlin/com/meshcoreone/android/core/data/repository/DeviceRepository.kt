@@ -110,12 +110,12 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             RadioId(ghost.radioId)
         }
 
-    override suspend fun deleteDeviceData(id: UUID) = context.write("deleteDeviceData") {
+    override suspend fun deleteDeviceData(id: UUID) = context.channelWrite("deleteDeviceData") {
         deleteAllDeviceData(id)
         save()
     }
 
-    override suspend fun deleteDeviceAndData(id: UUID) = context.write("deleteDeviceAndData") {
+    override suspend fun deleteDeviceAndData(id: UUID) = context.channelWrite("deleteDeviceAndData") {
         deleteAllDeviceData(id)
         database.devices().delete(id)
         save()
@@ -124,6 +124,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
     private suspend fun RepositoryTransaction.deleteAllDeviceData(id: UUID) {
         val device = database.devices().byId(id) ?: return
         val radioId = RadioId(device.radioId)
+        database.channelSubmissions().redactRadio(radioId.value)
         database.reactions().clearRadio(radioId.value)
         val sessions = database.sessions().forRadio(radioId.value)
         for (session in sessions) {
@@ -138,10 +139,14 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         database.discoveredNodes().clearRadio(radioId.value)
         database.contacts().clearRadio(radioId.value)
         val messages = database.messages().backupPageWithoutPreviewBlobs(radioId.value, Long.MAX_VALUE, 0)
-        deleteMessageDependents(radioId, messages, reactionsByMessage = false)
+        deleteMessageDependents(
+            radioId, messages, reactionsByMessage = false, preserveConflictingPending = false,
+        )
         database.pendingSends().clearRadio(radioId.value)
+        database.queuedChannelAttempts().clearRadio(radioId.value)
         database.messages().clearRadio(radioId.value)
         database.channels().clearRadio(radioId.value)
+        database.channelOccupants().clearRadio(radioId.value)
         database.tracePaths().clearRadio(radioId.value)
     }
 }

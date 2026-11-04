@@ -15,7 +15,32 @@ import java.util.UUID
 internal class MessageRepository(
     private val context: RoomRepositoryContext,
     pending: PendingSendRepository,
-) : MessagePersisting, PendingSendPersisting by pending, HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting {
+) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting {
+    override suspend fun createOrReconcilePendingDirectMessage(
+        intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO = context.write("createOrReconcilePendingDirectMessage") {
+        val rows = database.messages().forIdentity(intent.messageID)
+        if (rows.isNotEmpty()) {
+            val row = rows.singleOrNull()
+                ?: invalidData("Direct-message identity is occupied on multiple radios")
+            if (row.radioId != intent.radioId.value || row.contactID != intent.contactID ||
+                row.channelIndex != null || row.directionRawValue != MessageDirection.OUTGOING.rawValue ||
+                row.text != intent.text || row.textTypeRawValue != intent.textType.rawValue.toLong() ||
+                row.replyToID != intent.replyToID
+            ) invalidData("Direct-message identity conflicts with the stored intent")
+            return@write row.toDTO()
+        }
+        val row = MessageDTO(
+            id = intent.messageID, radioId = intent.radioId, contactID = intent.contactID,
+            text = intent.text, textType = intent.textType, replyToID = intent.replyToID,
+            timestamp = timestamp, createdAt = createdAt,
+        ).toEntityPreservingTimestamp()
+        database.messages().insert(row)
+        save()
+        database.messages().byId(intent.radioId.value, intent.messageID)?.toDTO()
+            ?: invalidData("Inserted direct message is missing")
+    }
+
     override suspend fun isDuplicateMessage(deduplicationKey: String, radioId: RadioId): Boolean =
         context.read("isDuplicateMessage") { database.messages().forDeduplicationKey(radioId.value, deduplicationKey).isNotEmpty() }
 
@@ -25,6 +50,21 @@ internal class MessageRepository(
         }
 
     override suspend fun saveMessage(dto: MessageDTO) = context.write("saveMessage") {
+        database.messages().byId(dto.radioId.value, dto.id)?.let { existing ->
+            val occupant = existing.channelOccupantID
+            if (occupant != null) {
+                val key = EntityKey(dto.radioId, dto.id)
+                if (dto.contactID != existing.contactID || dto.channelIndex?.toLong() != existing.channelIndex) {
+                    rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, message = key)
+                }
+                if (dto.channelOccupantID == null) {
+                    rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, message = key)
+                }
+                if (dto.channelOccupantID != occupant) {
+                    rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, message = key)
+                }
+            }
+        }
         database.messages().upsert(dto.toEntity())
         save()
     }
@@ -32,6 +72,157 @@ internal class MessageRepository(
     override suspend fun fetchMessage(key: EntityKey): MessageDTO? = context.read("fetchMessage") {
         database.messages().byId(key.radioId.value, key.id)?.toDTO()
     }
+
+    override suspend fun createOrReconcileChannelMessage(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO = context.write("createOrReconcileChannelMessage") {
+        val origin = creation.origin
+        val key = EntityKey(origin.radioId, creation.messageID)
+        val existing = database.messages().byId(origin.radioId.value, creation.messageID)
+        if (existing != null) {
+            if (existing.contactID != null || existing.channelIndex != origin.channelIndex.toLong() ||
+                existing.directionRawValue != MessageDirection.OUTGOING.rawValue
+            ) rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, key)
+            if (existing.channelOccupantID == null) {
+                rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, origin, key)
+            }
+            if (existing.channelOccupantID != origin.expectedOccupantID ||
+                existing.text != creation.text || existing.textTypeRawValue != creation.textType.rawValue.toLong()
+            ) rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
+            return@write existing.toDTO()
+        }
+        val row = MessageDTO(
+            id = creation.messageID, radioId = origin.radioId, channelIndex = origin.channelIndex,
+            text = creation.text, timestamp = timestamp, createdAt = createdAt, textType = creation.textType,
+            channelOccupantID = origin.expectedOccupantID,
+        )
+        database.messages().insert(row.toEntity())
+        save()
+        row
+    }
+
+    override suspend fun saveChannelMessage(dto: MessageDTO, origin: ChannelHistoryScope) =
+        context.write("saveChannelMessage") {
+            val key = EntityKey(dto.radioId, dto.id)
+            if (dto.radioId != origin.radioId || dto.channelIndex != origin.channelIndex || dto.contactID != null) {
+                rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, key)
+            }
+            if (dto.channelOccupantID == null) rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, origin, key)
+            if (dto.channelOccupantID != origin.expectedOccupantID) rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
+            database.messages().byId(dto.radioId.value, dto.id)?.let { existing ->
+                if (existing.channelOccupantID == null) rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, origin, key)
+                if (existing.channelIndex != origin.channelIndex.toLong() || existing.contactID != null) {
+                    rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, key)
+                }
+                if (existing.channelOccupantID != origin.expectedOccupantID) rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
+            }
+            // A late save retains its initiating proof even after replacement; it never samples the current slot.
+            database.messages().upsert(dto.toEntity())
+            save()
+        }
+
+    override suspend fun validateChannelMessageOrigin(message: EntityKey): ChannelHistoryScope =
+        context.read("validateChannelMessageOrigin") {
+            val row = database.messages().byId(message.radioId.value, message.id)
+                ?: rejectHistory(ChannelHistoryConflict.MESSAGE_NOT_FOUND, message = message)
+            val index = row.toDTO().channelIndex
+            if (index == null || row.contactID != null) rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, message = message)
+            val occupant = row.channelOccupantID
+                ?: rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, message = message)
+            val origin = ChannelHistoryScope(message.radioId, index, occupant)
+            requireCurrentChannelOrigin(origin)
+            origin
+        }
+
+    override suspend fun fetchChannelHistory(origin: ChannelHistoryScope, limit: Long, offset: Long): SnapshotList<MessageDTO> =
+        readChannelHistory("fetchChannelHistory", origin) {
+            queryBounds(limit, offset)
+            displayMessages(database.messages().newestForChannelOccupant(
+                origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, limit, offset,
+            ))
+        }
+
+    override suspend fun fetchChannelHistoryWindow(
+        origin: ChannelHistoryScope, anchorSortDate: Instant?, floorLimit: Long,
+    ): MessageWindow = readChannelHistory("fetchChannelHistoryWindow", origin) {
+        queryBounds(floorLimit)
+        val atAnchor = anchorSortDate?.let {
+            database.messages().countChannelOccupantAtOrAfter(
+                origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, it.epochSecond, it.nano,
+            )
+        } ?: 0
+        val limit = maxOf(floorLimit, atAnchor)
+        window(database.messages().newestForChannelOccupant(
+            origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, checkedIncrement(limit),
+        ), limit)
+    }
+
+    override suspend fun countChannelHistory(origin: ChannelHistoryScope): Long =
+        readChannelHistory("countChannelHistory", origin) {
+            database.messages().countForChannelOccupant(origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID)
+        }
+
+    override suspend fun fetchLastChannelHistory(
+        origins: SnapshotList<ChannelHistoryScope>, limit: Long,
+    ): SnapshotMap<ChannelHistoryScope, SnapshotList<MessageDTO>> = context.read("fetchLastChannelHistory") {
+        queryBounds(limit)
+        val result = LinkedHashMap<ChannelHistoryScope, SnapshotList<MessageDTO>>()
+        for (origin in origins) {
+            requireChannelHistory(origin)
+            result[origin] = displayMessages(database.messages().newestForChannelOccupant(
+                origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, limit,
+            ))
+        }
+        result.snapshotMap()
+    }
+
+    override suspend fun countUnseenChannelHistoryFailures(origin: ChannelHistoryScope): Long =
+        readChannelHistory("countUnseenChannelHistoryFailures", origin) {
+            database.messages().countUnseenChannelOccupantFailures(
+                origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID,
+            )
+        }
+
+    override suspend fun fetchChannelHistoryCandidates(
+        origin: ChannelHistoryScope, timestampWindow: ClosedRange<UInt>, limit: Long,
+    ): SnapshotList<MessageDTO> = readChannelHistory("fetchChannelHistoryCandidates", origin) {
+        queryBounds(limit)
+        database.messages().channelOccupantCandidates(
+            origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID,
+            timestampWindow.start.toLong(), timestampWindow.endInclusive.toLong(), limit,
+        ).map { it.toDTO() }.snapshot()
+    }
+
+    override suspend fun findChannelHistoryMessageForReaction(
+        origin: ChannelHistoryScope, parsedReaction: ParsedReaction, localNodeName: String?,
+        timestampWindow: ClosedRange<UInt>, limit: Long,
+    ): MessageDTO? = fetchChannelHistoryCandidates(origin, timestampWindow, limit)
+        .firstOrNull { matchesChannelReaction(it, parsedReaction, localNodeName) }
+
+    private suspend fun <T> readChannelHistory(
+        operation: String, origin: ChannelHistoryScope, block: suspend RepositoryTransaction.() -> T,
+    ): T = context.read(operation) {
+        requireChannelHistory(origin)
+        block()
+    }
+
+    private suspend fun RepositoryTransaction.requireCurrentChannelOrigin(origin: ChannelHistoryScope) {
+        val channel = database.channels().forIndex(origin.radioId.value, origin.channelIndex.toLong()).singleOrNull()
+        val current = database.channelOccupants().forIndex(origin.radioId.value, origin.channelIndex.toLong())
+        if (channel == null || !channel.isEnabled || current == null) rejectHistory(ChannelHistoryConflict.UNKNOWN_AUTHORITY, origin)
+        if (current != origin.expectedOccupantID) rejectHistory(ChannelHistoryConflict.STALE_OCCUPANT, origin)
+    }
+
+    private suspend fun RepositoryTransaction.requireChannelHistory(origin: ChannelHistoryScope) {
+        requireCurrentChannelOrigin(origin)
+        if (database.messages().hasUnboundChannelHistory(origin.radioId.value, origin.channelIndex.toLong())) {
+            rejectHistory(ChannelHistoryConflict.UNBOUND_HISTORY, origin)
+        }
+    }
+
+    private fun rejectHistory(
+        reason: ChannelHistoryConflict, origin: ChannelHistoryScope? = null, message: EntityKey? = null,
+    ): Nothing = throw PersistenceStoreException(PersistenceStoreError.InvalidData, ChannelHistoryRejected(reason, origin, message))
 
     override suspend fun fetchMessages(contact: EntityKey, limit: Long, offset: Long): SnapshotList<MessageDTO> =
         context.read("fetchContactMessages") {
@@ -125,11 +316,13 @@ internal class MessageRepository(
         timestampWindow: ClosedRange<UInt>, limit: Long,
     ): MessageDTO? {
         val candidates = fetchChannelMessageCandidates(radioId, channelIndex, timestampWindow, limit)
-        return candidates.firstOrNull { candidate ->
-            val senderMatches = if (candidate.isOutgoing) localNodeName != null && localNodeName == parsedReaction.targetSender
-                else candidate.senderNodeName == parsedReaction.targetSender
-            senderMatches && RepositoryReactionPolicy.messageHash(candidate.text, candidate.reactionTimestamp) == parsedReaction.messageHash
-        }
+        return candidates.firstOrNull { matchesChannelReaction(it, parsedReaction, localNodeName) }
+    }
+
+    private fun matchesChannelReaction(candidate: MessageDTO, parsedReaction: ParsedReaction, localNodeName: String?): Boolean {
+        val senderMatches = if (candidate.isOutgoing) localNodeName != null && localNodeName == parsedReaction.targetSender
+            else candidate.senderNodeName == parsedReaction.targetSender
+        return senderMatches && RepositoryReactionPolicy.messageHash(candidate.text, candidate.reactionTimestamp) == parsedReaction.messageHash
     }
 
     override suspend fun findDMMessageForReaction(
@@ -187,6 +380,10 @@ internal class MessageRepository(
     }
 
     override suspend fun deleteMessage(key: EntityKey) = context.write("deleteMessage") {
+        database.pendingSends().forMessage(key.radioId.value, key.id)
+            .filter { it.kindRawValue == PendingSendKind.DM.rawValue }
+            .forEach { requireDirectPendingIdentityAvailable(it) }
+        database.channelSubmissions().redactMessage(key.radioId.value, key.id)
         database.pendingSends().deleteForMessage(key.radioId.value, key.id)
         if (database.messages().byId(key.radioId.value, key.id) != null) {
             database.reactions().deleteForMessage(key.radioId.value, key.id)

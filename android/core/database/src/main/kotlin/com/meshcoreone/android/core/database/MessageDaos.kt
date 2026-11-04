@@ -23,6 +23,9 @@ routeTypeRawValue, regionScope, regionScopeMatches FROM messages
 
 @Dao
 interface MessageDao : RowWriter<MessageEntity> {
+    // Reject caller-ID reuse on a different radio without exposing that radio's DTO.
+    @Query("SELECT * FROM messages WHERE id = :id")
+    suspend fun forIdentity(id: UUID): List<MessageEntity>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND id = :id") suspend fun byId(radioId: UUID, id: UUID): MessageEntity?
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND deduplicationKey = :key")
     suspend fun forDeduplicationKey(radioId: UUID, key: String): List<MessageEntity>
@@ -30,6 +33,18 @@ interface MessageDao : RowWriter<MessageEntity> {
     suspend fun newestForContact(radioId: UUID, contactID: UUID, limit: Long, offset: Long = 0): List<MessageEntity>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex = :index ORDER BY " + MESSAGE_ORDER + " LIMIT :limit OFFSET :offset")
     suspend fun newestForChannel(radioId: UUID, index: Long, limit: Long, offset: Long = 0): List<MessageEntity>
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID ORDER BY " + MESSAGE_ORDER + " LIMIT :limit OFFSET :offset")
+    suspend fun newestForChannelOccupant(radioId: UUID, index: Long, occupantID: UUID, limit: Long, offset: Long = 0): List<MessageEntity>
+    @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID IS NULL)")
+    suspend fun hasUnboundChannelHistory(radioId: UUID, index: Long): Boolean
+    @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID")
+    suspend fun countForChannelOccupant(radioId: UUID, index: Long, occupantID: UUID): Long
+    @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID AND (sortDate_seconds > :seconds OR (sortDate_seconds = :seconds AND sortDate_nanos >= :nanos))")
+    suspend fun countChannelOccupantAtOrAfter(radioId: UUID, index: Long, occupantID: UUID, seconds: Long, nanos: Int): Long
+    @Query("SELECT * FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID AND timestamp BETWEEN :fromTimestamp AND :toTimestamp ORDER BY createdAt_seconds DESC, createdAt_nanos DESC, timestamp DESC LIMIT :limit")
+    suspend fun channelOccupantCandidates(radioId: UUID, index: Long, occupantID: UUID, fromTimestamp: Long, toTimestamp: Long, limit: Long): List<MessageEntity>
+    @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND channelIndex = :index AND channelOccupantID = :occupantID AND statusRawValue = 4 AND directionRawValue = 1 AND failureSeen = 0")
+    suspend fun countUnseenChannelOccupantFailures(radioId: UUID, index: Long, occupantID: UUID): Long
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID = :contactID ORDER BY " + MESSAGE_ORDER)
     fun observeContact(radioId: UUID, contactID: UUID): Flow<List<MessageEntity>>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND contactID IS NULL AND channelIndex IS NULL")
@@ -112,6 +127,14 @@ interface ReactionDao : RowWriter<ReactionEntity> {
 
 @Dao
 interface PendingSendDao : RowWriter<PendingSendEntity> {
+    @Query("SELECT * FROM pending_sends WHERE radioId = :radioId AND id = :id")
+    suspend fun byId(radioId: UUID, id: UUID): PendingSendEntity?
+    @Query("UPDATE pending_sends SET channelDispatchStateRawValue = 1, channelAttemptID = :attemptID WHERE radioId = :radioId AND id = :id AND messageID = :messageID AND kindRawValue = 1 AND channelOccupantID = :occupantID AND channelDispatchStateRawValue = 0 AND channelAttemptID IS NULL")
+    suspend fun beginChannelAttempt(radioId: UUID, id: UUID, messageID: UUID, occupantID: UUID, attemptID: UUID): Int
+    @Query("UPDATE pending_sends SET channelDispatchStateRawValue = :next, channelAttemptID = :nextAttemptID WHERE radioId = :radioId AND id = :id AND messageID = :messageID AND kindRawValue = 1 AND channelOccupantID = :occupantID AND channelDispatchStateRawValue = 1 AND channelAttemptID = :attemptID")
+    suspend fun settleChannelAttempt(radioId: UUID, id: UUID, messageID: UUID, occupantID: UUID, attemptID: UUID, next: Long, nextAttemptID: UUID?): Int
+    @Query("DELETE FROM pending_sends WHERE radioId = :radioId AND id = :id AND messageID = :messageID AND kindRawValue = 1 AND channelDispatchStateRawValue = 2 AND channelAttemptID = :attemptID")
+    suspend fun deleteAcceptedChannelAttempt(radioId: UUID, id: UUID, messageID: UUID, attemptID: UUID): Int
     @Query("SELECT * FROM pending_sends WHERE radioId = :radioId ORDER BY sequence") suspend fun forRadio(radioId: UUID): List<PendingSendEntity>
     @Query("SELECT * FROM pending_sends WHERE radioId = :radioId AND messageID = :messageID ORDER BY sequence")
     suspend fun forMessage(radioId: UUID, messageID: UUID): List<PendingSendEntity>

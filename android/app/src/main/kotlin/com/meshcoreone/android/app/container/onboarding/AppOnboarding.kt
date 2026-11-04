@@ -268,6 +268,7 @@ class AppOnboarding(
         @Synchronized
         override fun onFlowCompletionHandled(coordinator: OnboardingFlowCoordinator) {
             if (flowCoordinator === coordinator) {
+                coordinator.onboarding.retireCompletion()
                 flowCoordinator = null
                 sessionFlags = InMemoryOnboardingFlagStore()
             }

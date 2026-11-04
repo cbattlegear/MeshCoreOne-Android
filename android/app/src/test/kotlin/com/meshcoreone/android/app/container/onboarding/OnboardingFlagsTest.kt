@@ -53,6 +53,53 @@ class OnboardingFlagsTest {
         return MeshCoreStorage.get(context)
     }
 
+    @Test fun `explicit flow retirement rejects the exact attempt synchronously before its seal`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        var durable = false
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, value -> durable = value })
+            val state = OnboardingState(flags)
+            assertFailsWith<IllegalStateException> {
+                state.completeOnboardingWithSeal({}) { attempt ->
+                    state.retireCompletion()
+                    assertTrue(attempt.rejection() != null)
+                    attempt.trySeal()
+                }
+            }
+            assertFalse(durable)
+            assertFalse(flags.hasCompleted.value)
+            assertFalse(state.hasCompletedOnboarding)
+            state.completeOnboarding()
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `reset after a valid seal preserves ordered false and prevents retired flow publication`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val finalizing = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val durableWrites = mutableListOf<Boolean>()
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, value -> durableWrites += value },
+                persistCompletion = { finalizing.complete(Unit); release.await(); durableWrites += true },
+            )
+            val state = OnboardingState(flags)
+            val old = async { runCatching { state.completeOnboarding() } }
+            finalizing.await()
+            val reset = async { state.resetOnboarding() }
+            runCurrent()
+            assertFalse(reset.isCompleted)
+            release.complete(Unit)
+            assertTrue(old.await().isFailure)
+            reset.await()
+            assertEquals(listOf(true, false), durableWrites)
+            assertFalse(flags.hasCompleted.value)
+            assertFalse(state.hasCompletedOnboarding)
+            assertEquals(null, state.completionReceipt)
+        } finally { scope.cancel() }
+    }
+
     @Test fun `process shutdown rejects staged attempts before parent job cancellation and drains finalizers`() = runTest {
         val parent = SupervisorJob()
         val scope = CoroutineScope(parent + UnconfinedTestDispatcher(testScheduler))

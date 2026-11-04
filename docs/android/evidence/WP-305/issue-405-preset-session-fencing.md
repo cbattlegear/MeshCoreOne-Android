@@ -128,6 +128,21 @@ unexecuted APIs are not treated as verified prerequisites. The bridge must retai
 the process-retained exact flow (not only in `remember`) and require real rebuild cancellation/
 cycle controls once that owner's source hold permits repair.
 
+The feature state now owns the exact pending completion attempt and passes it into the durable
+writer. `retireCompletion`, reset, manual flag replacement and a newer completion synchronously
+reject that attempt before returning; the writer's token seal races that same attempt CAS.
+Post-finalization live publication and reset acknowledgements are fenced against feature-state
+replacement. Exact-owner rerun settlement calls retirement before discarding its coordinator.
+Controls retire directly inside the pre-seal callback, and hold a sealed finalizer while the same
+state resets, asserting true then false storage order without stale feature publication. Equal
+WithoutDevice singleton receipts on distinct flows also exercise old-flow settlement without
+retiring the replacement. These are authored controls until exact-head hosted execution is observed.
+
+This does not turn Activity disposal into an abort. The held navigation bridge must call explicit
+retirement for actual owned-flow retirement; no held shell source has been changed. Arbitrary external
+ancestor `Job.cancel` ordering, including a delayed child's notification, remains unestablished and
+blocked: an ordinary cancellation callback is not substituted for synchronous attempt revocation.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

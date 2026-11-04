@@ -191,17 +191,22 @@ class WriteBehindOnboardingFlags(
     override suspend fun persistBoolean(
         key: String, value: Boolean, requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean,
+    ) = persistBoolean(key, value, requireCurrent, seal, OnboardingCompletionAttempt())
+
+    override suspend fun persistBoolean(
+        key: String, value: Boolean, requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean, attempt: OnboardingCompletionAttempt,
     ) {
         requireCurrent()
         suspendCancellableCoroutine { continuation ->
-            val attempt = if (key == OnboardingState.KEY_HAS_COMPLETED && value) OnboardingCompletionAttempt() else null
+            val completion = if (key == OnboardingState.KEY_HAS_COMPLETED && value) attempt else null
             continuation.invokeOnCancellation { cause ->
-                attempt?.reject(CancellationException("Onboarding caller cancelled before sealing").apply { initCause(cause) })
+                completion?.reject(CancellationException("Onboarding caller cancelled before sealing").apply { initCause(cause) })
             }
             synchronized(lock) {
                 val revision = nextRevision + 1
                 nextRevision = revision
-                enqueue(Write(key, value, revision, continuation, requireCurrent, attempt, seal))
+                enqueue(Write(key, value, revision, continuation, requireCurrent, completion, seal))
             }
             wakeups.trySend(Unit).getOrThrow()
         }

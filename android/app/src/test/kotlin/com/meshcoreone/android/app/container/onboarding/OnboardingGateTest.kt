@@ -129,6 +129,31 @@ class OnboardingGateTest {
         MeshCoreTheme { OnboardingFlow(dependencies, onCompleted = {}, onCompletionReceipt = onReceipt) }
     }
 
+    @Test fun `equal no-device receipts never let old flow settlement retire its replacement`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            host.setup().visible()
+            val dependencies = onboarding(
+                InMemoryOnboardingFlagStore(), MutableStateFlow(false), processScope,
+            ).forRerun()
+            val old = checkNotNull(dependencies.retainedFlowCoordinator())
+            old.onboarding.completeOnboarding()
+            val oldReceipt = checkNotNull(old.onboarding.completionReceipt)
+            dependencies.onFlowCompletionHandled(old)
+            val replacement = checkNotNull(dependencies.retainedFlowCoordinator())
+            replacement.onboarding.completeOnboarding()
+            assertSame(oldReceipt, replacement.onboarding.completionReceipt)
+            assertNotSame(old, replacement)
+            dependencies.onFlowCompletionHandled(old)
+            assertTrue(dependencies.ownsFlowCoordinator(replacement))
+            val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+            showFlow(dependencies) { delivered += it; true }
+            compose.waitForIdle()
+            assertEquals(listOf(oldReceipt), delivered)
+            assertFalse(dependencies.ownsFlowCoordinator(replacement))
+        } finally { processScope.cancel() }
+    }
+
     @Test fun `same mounted rejected receipt retries on explicit delivery key and fresh attempt obtains a fresh owned flow`() =
         runBlocking {
             val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)

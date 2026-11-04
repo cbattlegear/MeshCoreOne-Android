@@ -42,6 +42,11 @@ interface OnboardingFlagStore {
         check(seal(attempt)) { "Onboarding completion was retired before finalization" }
         persistBoolean(key, value)
     }
+
+    suspend fun persistBoolean(
+        key: String, value: Boolean, requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean, attempt: OnboardingCompletionAttempt,
+    ) = persistBoolean(key, value, requireCurrent) { seal(attempt) }
 }
 
 class InMemoryOnboardingFlagStore(initial: Map<String, Boolean> = emptyMap()) : OnboardingFlagStore {
@@ -57,6 +62,9 @@ data class OnboardingResumeFacts(val pairedAccessoriesCount: Int, val hasLastCon
 
 /** Onboarding completion flag (persisted) and navigation path; plain state holder, no Android types. */
 class OnboardingState(private val store: OnboardingFlagStore) {
+    private val completionLock = Any()
+    private var pendingAttempt: OnboardingCompletionAttempt? = null
+    private var completionRevision = 0L
     private val completed = MutableStateFlow(store.getBoolean(KEY_HAS_COMPLETED))
     private val path = MutableStateFlow<List<OnboardingStep>>(emptyList())
     @Volatile
@@ -70,9 +78,12 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     var hasCompletedOnboarding: Boolean
         get() = completed.value
         set(value) {
-            store.setBoolean(KEY_HAS_COMPLETED, value)
-            completionReceipt = if (value) OnboardingCompletionReceipt.Restored else null
-            completed.value = value
+            synchronized(completionLock) {
+                invalidateCompletion()
+                store.setBoolean(KEY_HAS_COMPLETED, value)
+                completionReceipt = if (value) OnboardingCompletionReceipt.Restored else null
+                completed.value = value
+            }
         }
 
     val onboardingPath: List<OnboardingStep> get() = path.value
@@ -98,22 +109,56 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean,
     ) {
+        val attempt = OnboardingCompletionAttempt()
+        synchronized(completionLock) {
+            completionRevision++
+            pendingAttempt?.reject(IllegalStateException("A newer onboarding attempt started"))
+            pendingAttempt = attempt
+        }
         val caller = currentCoroutineContext()
         val validate = {
             caller.ensureActive()
             requireCurrent()
-            completionReceipt = receipt
+            synchronized(completionLock) {
+                check(pendingAttempt === attempt) { "Onboarding attempt was retired" }
+                completionReceipt = receipt
+            }
         }
-        validate()
-        store.persistBoolean(KEY_HAS_COMPLETED, true, validate, seal)
-        completed.value = true
+        try {
+            validate()
+            store.persistBoolean(KEY_HAS_COMPLETED, true, validate, seal, attempt)
+            synchronized(completionLock) {
+                check(pendingAttempt === attempt) { "Onboarding attempt was retired" }
+                pendingAttempt = null
+                completed.value = true
+            }
+        } finally {
+            synchronized(completionLock) {
+                attempt.reject(IllegalStateException("Onboarding attempt ended before sealing"))
+                if (pendingAttempt === attempt) pendingAttempt = null
+            }
+        }
+    }
+
+    fun retireCompletion() {
+        invalidateCompletion()
+    }
+
+    private fun invalidateCompletion(): Long = synchronized(completionLock) {
+        pendingAttempt?.reject(IllegalStateException("Onboarding attempt was retired"))
+        pendingAttempt = null
+        ++completionRevision
     }
 
     suspend fun resetOnboarding() {
+        val revision = invalidateCompletion()
         store.persistBoolean(KEY_HAS_COMPLETED, false)
-        completionReceipt = null
-        completed.value = false
-        path.value = emptyList()
+        synchronized(completionLock) {
+            check(completionRevision == revision) { "Onboarding reset was superseded" }
+            completionReceipt = null
+            completed.value = false
+            path.value = emptyList()
+        }
     }
 
     /**

@@ -219,8 +219,10 @@ class MapMountedConsumerTest {
         assertEquals(listOf(favorite.marker.position).boundingCamera(), requireNotNull(latest).camera)
         val initialCommandRevision = requireNotNull(latest).cameraCommandRevision
         compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).assertIsEnabled().performClick()
+        compose.waitUntil(5_000) {
+            requireNotNull(latest).cameraCommandRevision > initialCommandRevision
+        }
         assertEquals(listOf(favorite.marker.position).boundingCamera(), requireNotNull(latest).camera)
-        assertTrue(requireNotNull(latest).cameraCommandRevision > initialCommandRevision)
     }
 
     @Test fun emptyMapHasNoCameraAndCannotCenter() {

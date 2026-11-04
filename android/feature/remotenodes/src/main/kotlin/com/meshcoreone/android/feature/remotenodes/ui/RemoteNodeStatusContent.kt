@@ -78,7 +78,9 @@ internal fun RemoteNodeStatusContent(
                         com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.trustedContactsFavoritesOnly,
                         filter.favoritesOnly, { enabled ->
                             save {
-                                setFilter(com.meshcoreone.android.core.maps.MapFilterHost.NEIGHBOR_SNR, storedFilter.setFavoritesOnly(enabled))
+                                updateFilter(com.meshcoreone.android.core.maps.MapFilterHost.NEIGHBOR_SNR) {
+                                    it.setFavoritesOnly(enabled)
+                                }
                             }
                         },
                     )
@@ -86,7 +88,9 @@ internal fun RemoteNodeStatusContent(
                         com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapCalloutDiscovered,
                         filter.showDiscovered, { enabled ->
                             save {
-                                setFilter(com.meshcoreone.android.core.maps.MapFilterHost.NEIGHBOR_SNR, storedFilter.setShowDiscovered(enabled))
+                                updateFilter(com.meshcoreone.android.core.maps.MapFilterHost.NEIGHBOR_SNR) {
+                                    it.setShowDiscovered(enabled)
+                                }
                             }
                         }, !filter.favoritesOnly,
                     )

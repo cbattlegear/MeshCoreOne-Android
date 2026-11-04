@@ -455,7 +455,9 @@ internal fun TracePathMapContent(
                 FilterChip(
                     selected = loaded.filter.favoritesOnly,
                     onClick = { write("trace-map-write-filter") {
-                        preferences.setFilter(MapFilterHost.TRACE_PATH, loaded.filter.setFavoritesOnly(!loaded.filter.favoritesOnly))
+                        preferences.updateFilter(MapFilterHost.TRACE_PATH) {
+                            it.setFavoritesOnly(!it.favoritesOnly)
+                        }
                     } },
                     label = { Text(stringResource(C.contactsPathEditFilterFavorites)) },
                     modifier = Modifier.sizeIn(minHeight = 48.dp),
@@ -463,7 +465,9 @@ internal fun TracePathMapContent(
                 FilterChip(
                     selected = loaded.filter.effectiveShowDiscovered, enabled = !loaded.filter.favoritesOnly,
                     onClick = { write("trace-map-write-filter") {
-                        preferences.setFilter(MapFilterHost.TRACE_PATH, loaded.filter.setShowDiscovered(!loaded.filter.showDiscovered))
+                        preferences.updateFilter(MapFilterHost.TRACE_PATH) {
+                            it.setShowDiscovered(!it.showDiscovered)
+                        }
                     } },
                     label = { Text(stringResource(C.contactsPathEditFilterDiscovered)) },
                     modifier = Modifier.sizeIn(minHeight = 48.dp),

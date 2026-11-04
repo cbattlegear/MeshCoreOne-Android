@@ -60,11 +60,13 @@ class TraceMapMountedConsumerTest {
     )
     private val panned = MapCamera(GeoPoint(10.0, 20.0), 0.3, 0.4)
     private var latest: MapPresentationState? = null
+    private var cameraChange: ((MapCamera) -> Unit)? = null
     private var tableContacts = listOf(north, south)
     private val tableVersion = mutableIntStateOf(0)
     private val failures = mutableListOf<Exception>()
 
     @Before fun createHost() {
+        cameraChange = null
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
@@ -139,8 +141,8 @@ class TraceMapMountedConsumerTest {
     @Test fun explicitTraceFramingReissuesAfterPanAndOnRepeatedFit() {
         mount()
         val initialRevision = latest!!.cameraCommandRevision
-        compose.onNodeWithTag("pan").performClick()
-        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        val reportCamera = requireNotNull(cameraChange)
+        compose.runOnIdle { reportCamera(panned) }
         compose.waitForIdle()
         compose.waitUntil(5_000) { latest?.camera == panned }
         assertEquals(initialRevision, latest!!.cameraCommandRevision)
@@ -183,7 +185,10 @@ class TraceMapMountedConsumerTest {
                 TracePathScreen(
                     dependencies.copy(nodeTableVersion = tableVersion.intValue),
                     mapSurface = { presentation, _, _, camera, marker, overlay ->
-                        SideEffect { latest = presentation }
+                        SideEffect {
+                            latest = presentation
+                            cameraChange = camera
+                        }
                         Box(Modifier.fillMaxSize()) {
                             Column {
                                 presentation.points.forEach { point ->

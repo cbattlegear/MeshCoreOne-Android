@@ -258,8 +258,8 @@ private fun MapContent(
     ) {
         if (settings != null) MapControls(
             filter = filter,
-            onFilter = {
-                writePreference { preferenceStore.setFilter(MapFilterHost.MAIN_MAP, it) }
+            onFilter = { transform ->
+                writePreference { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
             },
             clustering = clustering,
             onClustering = {
@@ -378,7 +378,7 @@ private fun MapContent(
 @Composable
 private fun MapControls(
     filter: MapFilterState,
-    onFilter: (MapFilterState) -> Unit,
+    onFilter: ((MapFilterState) -> MapFilterState) -> Unit,
     clustering: Boolean,
     onClustering: (Boolean) -> Unit,
     labels: Boolean,
@@ -454,14 +454,14 @@ private fun MapControls(
                 FilterChip(
                     selected = filter.favoritesOnly,
                     modifier = controlModifier,
-                    onClick = { onFilter(filter.setFavoritesOnly(!filter.favoritesOnly)) },
+                    onClick = { onFilter { it.setFavoritesOnly(!it.favoritesOnly) } },
                     label = { Text(stringResource(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)) },
                 )
                 FilterChip(
                     selected = filter.showDiscovered,
                     modifier = controlModifier,
                     enabled = !filter.favoritesOnly,
-                    onClick = { onFilter(filter.setShowDiscovered(!filter.showDiscovered)) },
+                    onClick = { onFilter { it.setShowDiscovered(!it.showDiscovered) } },
                     label = { Text(stringResource(R.string.l10n_app_map_map_callout_discovered)) },
                 )
                 FilterChip(
@@ -481,7 +481,9 @@ private fun MapControls(
                         selected = filter.allows(type),
                         modifier = controlModifier,
                         enabled = !filter.favoritesOnly,
-                        onClick = { onFilter(filter.setContactType(type, !filter.allows(type), MapFilterHost.MAIN_MAP)) },
+                        onClick = {
+                            onFilter { it.setContactType(type, !it.allows(type), MapFilterHost.MAIN_MAP) }
+                        },
                         label = {
                             Text(
                                 stringResource(

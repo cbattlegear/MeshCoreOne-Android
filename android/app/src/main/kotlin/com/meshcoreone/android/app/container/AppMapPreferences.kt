@@ -62,6 +62,15 @@ internal class AppMapPreferences(
         store.set(host.key, MapFilterPreferences.encode(filter, host))
     }
 
+    override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+        store.update {
+            val current = MapFilterPreferences.migrate(
+                snapshot.stored(host.key), snapshot.stored(AppStorageKey.showDiscoveredNodesOnMap), host,
+            ).state
+            this[host.key] = MapFilterPreferences.encode(transform(current), host)
+        }
+    }
+
     override suspend fun setClustering(enabled: Boolean) {
         store.set(AppStorageKey.mapClusteringEnabled, enabled)
     }

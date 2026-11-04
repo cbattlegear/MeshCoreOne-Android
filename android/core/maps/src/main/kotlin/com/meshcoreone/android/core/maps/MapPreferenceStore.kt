@@ -14,6 +14,7 @@ data class MapPreferences(
 interface MapPreferenceStore {
     fun observe(host: MapFilterHost): Flow<MapPreferences>
     suspend fun setFilter(host: MapFilterHost, filter: MapFilterState)
+    suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState)
     suspend fun setClustering(enabled: Boolean)
     suspend fun setLabels(enabled: Boolean)
 }

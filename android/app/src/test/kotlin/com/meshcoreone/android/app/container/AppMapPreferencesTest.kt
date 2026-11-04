@@ -7,6 +7,9 @@ import com.meshcoreone.android.core.datastore.BackupPreferenceSnapshot
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.datastore.PreferenceValue
 import com.meshcoreone.android.core.maps.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -162,5 +165,39 @@ class AppMapPreferencesTest {
             assertFalse(actual.clustering)
             assertFalse(actual.labels)
         }
+    }
+
+    @Test fun concurrentFilterEditsMergeAgainstTheLatestPersistedHostValue() = runBlocking {
+        coroutineScope {
+            val chatType = async(Dispatchers.Default) {
+                adapter.updateFilter(MapFilterHost.MAIN_MAP) {
+                    it.setContactType(ContactMapType.CHAT, false, MapFilterHost.MAIN_MAP)
+                }
+            }
+            val roomType = async(Dispatchers.Default) {
+                adapter.updateFilter(MapFilterHost.MAIN_MAP) {
+                    it.setContactType(ContactMapType.ROOM, false, MapFilterHost.MAIN_MAP)
+                }
+            }
+            chatType.await()
+            roomType.await()
+        }
+
+        val actual = adapter.observe(MapFilterHost.MAIN_MAP).first().filter
+        assertFalse(actual.favoritesOnly)
+        assertFalse(actual.showChat)
+        assertFalse(actual.showRoom)
+        assertTrue(actual.showRepeater)
+        adapter.updateFilter(MapFilterHost.MAIN_MAP) { it.setFavoritesOnly(true) }
+        adapter.updateFilter(MapFilterHost.MAIN_MAP) { it.setShowDiscovered(true) }
+        val frozen = adapter.observe(MapFilterHost.MAIN_MAP).first().filter
+        assertTrue(frozen.favoritesOnly)
+        assertFalse(frozen.showDiscovered)
+        val raw = requireNotNull(storage.preferences.snapshot().stored(AppStorageKey.mapFilterMainMap))
+        assertEquals(frozen, MapFilterState.decode(raw))
+        assertEquals(
+            PreferenceValue.StringValue(raw),
+            storage.backupPreferences.snapshotForBackup().presentValues["mapFilterMainMap"],
+        )
     }
 }

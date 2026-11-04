@@ -12,10 +12,28 @@ NATIVE_SUITE = "android/accessibility-tests"
 NATIVE_INPUTS = (NATIVE_SUITE + "/", "docs/android/accessibility/", "docs/android/evidence/WP-503/")
 
 
+def immutable_candidate_suite(repo, base, head):
+    from controller.model import tree
+    from oracle.workflow_scope import changed_paths
+
+    before, after = (tree(repo, base) if base is not None else {}), tree(repo, head)
+
+    def family(path):
+        return path == NATIVE_SUITE or path.startswith(NATIVE_SUITE + "/")
+
+    committed = {path: blob for path, blob in after.items() if family(path)}
+    relevant = any(
+        family(path) or path == "docs/android/deviations/WP-503.md"
+        or path.startswith(NATIVE_INPUTS)
+        for path in (changed_paths(repo, base, head) if base is not None else ())
+    )
+    return committed, bool(committed) or any(family(path) for path in before) or relevant
+
+
 def candidate_suite(repo, event_name, event):
     from controller.errors import PortError
-    from controller.model import SHA, git, tree
-    from oracle.workflow_scope import changed_paths, endpoints
+    from controller.model import SHA, git
+    from oracle.workflow_scope import endpoints
 
     pair = endpoints(event_name, event)
     if pair is None:
@@ -35,17 +53,7 @@ def candidate_suite(repo, event_name, event):
         raise PortError("Native suite selection head differs from the actual checkout")
     if base is None and git(repo, "cat-file", "-t", head).decode().strip() != "commit":
         raise PortError("Manual suite selection requires a commit object")
-    before, after = (tree(repo, base) if base is not None else {}), tree(repo, head)
-    def family(path):
-        return path == NATIVE_SUITE or path.startswith(NATIVE_SUITE + "/")
-
-    committed = {path: blob for path, blob in after.items() if family(path)}
-    relevant = any(
-        family(path) or path == "docs/android/deviations/WP-503.md"
-        or path.startswith(NATIVE_INPUTS)
-        for path in (changed_paths(repo, base, head) if base is not None else ())
-    )
-    selected = bool(committed) or any(family(path) for path in before) or relevant
+    committed, selected = immutable_candidate_suite(repo, base, head)
     root = repo.resolve() / NATIVE_SUITE
     if selected:
         if not committed or not root.is_dir() or root.is_symlink() or root.resolve() != root:
@@ -80,22 +88,25 @@ def candidate_suite(repo, event_name, event):
     }
 
 
-def run_suite(suite, verbosity=2):
+def run_suite(suite, verbosity=2, discovered_by_root=None):
     discovered = suite.countTestCases()
     if discovered == 0:
         print("BLOCKED: zero discovered controller tests", file=sys.stderr)
         return 2
     result = unittest.TextTestRunner(verbosity=verbosity).run(suite)
-    print(json.dumps({
+    report = {
         "discovered": discovered, "run": result.testsRun,
         "passed": result.testsRun - len(result.failures) - len(result.errors) - len(result.skipped),
         "failed": len(result.failures), "errors": len(result.errors), "skipped": len(result.skipped),
         "scope": "controller fixtures only; not Android/iOS/hardware parity",
-    }))
+    }
+    if discovered_by_root is not None:
+        report["discovered_by_root"] = discovered_by_root
+    print(json.dumps(report))
     return 0 if result.wasSuccessful() and result.testsRun == discovered and not result.skipped else 2
 
 
-def discover_suites(directories):
+def discover_suites(directories, discovered_by_root=None, repo=None):
     suite = unittest.TestSuite()
     seen = set()
     for directory in directories:
@@ -105,9 +116,21 @@ def discover_suites(directories):
         seen.add(directory)
         if not directory.is_dir():
             raise ValueError("missing controller test directory")
+        for path in directory.rglob("*test*.py"):
+            loaded = sys.modules.get(path.stem)
+            origin = getattr(loaded, "__file__", None)
+            if origin and Path(origin).resolve() != path.resolve():
+                del sys.modules[path.stem]
         discovered = unittest.TestLoader().discover(str(directory), pattern="*test*.py")
-        if discovered.countTestCases() == 0:
+        count = discovered.countTestCases()
+        if count == 0:
             raise ValueError("zero discovered tests in controller test directory")
+        if discovered_by_root is not None:
+            try:
+                label = directory.relative_to(repo.resolve()).as_posix() if repo is not None else directory.as_posix()
+            except ValueError:
+                label = directory.as_posix()
+            discovered_by_root[label] = count
         suite.addTests(discovered)
     return suite
 
@@ -138,11 +161,12 @@ def main():
                 return 0
             if selection["selected"]:
                 directories.append(args.repo / NATIVE_SUITE)
-        suite = discover_suites(directories)
+        discovered_by_root = {}
+        suite = discover_suites(directories, discovered_by_root, args.repo)
     except (ImportError, OSError, ValueError, PortError) as error:
         print(f"BLOCKED: controller discovery failed: {error}", file=sys.stderr)
         return 2
-    return run_suite(suite, verbosity=0 if args.quiet else 2)
+    return run_suite(suite, verbosity=0 if args.quiet else 2, discovered_by_root=discovered_by_root)
 
 
 if __name__ == "__main__":

@@ -845,6 +845,7 @@ class MessageService(
 
     override suspend fun sendChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): ChannelSendReceipt =
         owned("sendChannelMessage", channelOperations) {
+            requireFreshNotificationAction("sendChannelMessage")
             val dto = outgoingChannel(text, channelIndex, radioId, textType)
             sendBoundary(dto.id, true) {
                 dataStore.saveMessage(dto)

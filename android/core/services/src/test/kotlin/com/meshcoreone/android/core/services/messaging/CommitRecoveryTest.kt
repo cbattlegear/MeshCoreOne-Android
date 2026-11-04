@@ -274,6 +274,13 @@ class CommitRecoveryTest {
                 assertTrue(receipt.isAccepted); assertTrue(receipt.preventsReplay)
                 assertEquals(1, h.sends(destination.wire).size)
                 assertNotEquals(MessageStatus.FAILED, h.store.messages.values.single().status)
+                h.store.before = null
+                assertFailsWith<MessageServiceException> {
+                    withContext(receipt) { destination.send(h.service) }
+                }
+                assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
+                assertEquals(1, h.store.messages.size)
+                assertEquals(1, h.sends(destination.wire).size)
             },
             native("${destination}_preSaveCancellationIsNotWireAcceptance") {
                 val h = Harness(this); h.start()
@@ -303,6 +310,13 @@ class CommitRecoveryTest {
                 call.cancelAndJoin()
                 assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
                 assertTrue(receipt.preventsReplay); assertFalse(receipt.isAccepted)
+                assertEquals(1, h.sends(destination.wire).size)
+                h.transport.beforeReply = null
+                assertFailsWith<MessageServiceException> {
+                    withContext(receipt) { destination.send(h.service) }
+                }
+                assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+                assertEquals(1, h.store.messages.size)
                 assertEquals(1, h.sends(destination.wire).size)
             },
             native("${destination}_definiteDeviceRejectionPermitsRecovery") {

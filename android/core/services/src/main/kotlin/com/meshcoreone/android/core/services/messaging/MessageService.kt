@@ -301,6 +301,7 @@ class MessageService(
 
     private suspend fun expireOrReconcile(snapshot: PendingAck, now: Instant) {
         if (snapshot.acknowledgement != null) { reconcileAcknowledgement(snapshot.messageID); return }
+        var acknowledgementArrived = false
         mutation(snapshot.messageID).withLock {
             val current = pendingAck(snapshot.messageID) ?: return@withLock
             if (current.isDelivered || Duration.between(current.sentAt, now).toNanos().toDouble() / 1e9 <=
@@ -308,35 +309,32 @@ class MessageService(
             ownership.check("expireAcknowledgement")
             val changed = dataStore.updateMessageStatusUnlessDelivered(key(current.messageID), MessageStatus.FAILED)
             ownership.check("expireAcknowledgement.saved")
-            synchronized(lock) {
-                pendingAcks.remove(current.messageID)
-                activeDirectClaims[current.messageID]?.let {
-                    if (it.acknowledgement == null) it.retiredWithoutAcknowledgement = true
-                }
-            }
-            if (changed) broadcastFailed(current.messageID)
-            recovered("failPending.${current.messageID}")
+            acknowledgementArrived = settleFailedPendingAck(
+                current.messageID, changed, "expireAcknowledgement", notify = true,
+                retireDirectClaim = true, checkOwnership = { operation -> ownership.check(operation) },
+            )
         }
+        if (acknowledgementArrived) reconcileAcknowledgement(snapshot.messageID)
     }
 
     suspend fun failAllPendingMessages() {
         ownership.check("failAllPendingMessages")
         val ids = synchronized(lock) { pendingAcks.values.filter { !it.isDelivered }.map { it.messageID } }
         var firstFailure: PersistenceStoreException? = null
-        for (id in ids) mutation(id).withLock {
-            ownership.check("failAllPendingMessages.entry")
+        for (id in ids) {
+            var acknowledgementArrived = false
             try {
-                if (pendingAck(id)?.isDelivered != false) return@withLock
-                val changed = dataStore.updateMessageStatusUnlessDelivered(key(id), MessageStatus.FAILED)
-                ownership.check("failAllPendingMessages.saved")
-                synchronized(lock) {
-                    pendingAcks.remove(id)
-                    activeDirectClaims[id]?.let {
-                        if (it.acknowledgement == null) it.retiredWithoutAcknowledgement = true
-                    }
+                mutation(id).withLock {
+                    ownership.check("failAllPendingMessages.entry")
+                    if (pendingAck(id)?.isDelivered != false) return@withLock
+                    val changed = dataStore.updateMessageStatusUnlessDelivered(key(id), MessageStatus.FAILED)
+                    ownership.check("failAllPendingMessages.saved")
+                    acknowledgementArrived = settleFailedPendingAck(
+                        id, changed, "failAllPendingMessages", notify = true,
+                        retireDirectClaim = true, checkOwnership = { operation -> ownership.check(operation) },
+                    )
                 }
-                if (changed) broadcastFailed(id)
-                recovered("failPending.$id")
+                if (acknowledgementArrived) reconcileAcknowledgement(id)
             } catch (failure: PersistenceStoreException) {
                 if (!ownership.isCurrent) throw failure
                 remember("failPending.$id", failure)
@@ -346,6 +344,38 @@ class MessageService(
             }
         }
         firstFailure?.let { throw it }
+    }
+
+    private suspend fun settleFailedPendingAck(
+        messageID: UUID,
+        changed: Boolean,
+        operation: String,
+        notify: Boolean,
+        retireDirectClaim: Boolean,
+        checkOwnership: suspend (String) -> Unit,
+    ): Boolean {
+        val acknowledgementArrived = synchronized(lock) {
+            if (pendingAcks[messageID]?.acknowledgement != null) true
+            else {
+                pendingAcks.remove(messageID)
+                if (retireDirectClaim) {
+                    activeDirectClaims[messageID]?.let {
+                        if (it.acknowledgement == null) it.retiredWithoutAcknowledgement = true
+                    }
+                }
+                false
+            }
+        }
+        if (acknowledgementArrived) {
+            if (changed) {
+                dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.SENT)
+                checkOwnership("$operation.restoreForAck")
+            }
+        } else {
+            if (notify && changed) broadcastFailed(messageID)
+            recovered("failPending.$messageID")
+        }
+        return acknowledgementArrived
     }
 
     suspend fun stopAndFailAllPending() { stopAckExpiryChecking(); failAllPendingMessages() }
@@ -373,28 +403,20 @@ class MessageService(
                 val failUnsentInlineRow = notificationReceipt == null || failDefinitelyUnsentInline
                 if (notificationReceipt == null || notificationReceipt.state == NotificationActionReceipt.State.READY) {
                     if (failUnsentInlineRow) {
+                        var ackNeedsReconcile = false
                         mutation(messageID).withLock {
                             if (pendingAck(messageID)?.acknowledgement == null) {
                                 ownership.checkPersistenceCompletion("failMessage")
                                 val changed = dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
                                 ownership.checkPersistenceCompletion("failMessage.saved")
-                                val acknowledgementArrived = synchronized(lock) {
-                                    if (pendingAcks[messageID]?.acknowledgement != null) true
-                                    else {
-                                        pendingAcks.remove(messageID)
-                                        false
-                                    }
-                                }
-                                if (acknowledgementArrived) {
-                                    if (changed) {
-                                        dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.SENT)
-                                        ownership.checkPersistenceCompletion("failMessage.restoreForAck")
-                                    }
-                                } else {
-                                    if (notify && changed) broadcastFailed(messageID)
-                                    recovered("failPending.$messageID")
-                                }
+                                ackNeedsReconcile = settleFailedPendingAck(
+                                    messageID, changed, "failMessage", notify, retireDirectClaim = false,
+                                    checkOwnership = { operation -> ownership.checkPersistenceCompletion(operation) },
+                                )
                             }
+                        }
+                        if (ackNeedsReconcile) {
+                            reconcileAcknowledgement(messageID, cleanup = !ownership.isCurrent)
                         }
                     } else {
                         synchronized(lock) { pendingAcks.remove(messageID) }

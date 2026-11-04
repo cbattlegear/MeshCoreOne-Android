@@ -18,6 +18,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertFailsWith
 
 class PresetSessionFencingTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -58,7 +59,7 @@ class PresetSessionFencingTest {
         assertEquals(first, (state.completionReceipt as OnboardingCompletionReceipt.Preset).target)
     }
 
-    @Test fun receiptExistsBeforeTheDurableAdapterPublishesAndResetRemovesIt() = runBlocking {
+    @Test fun onlyAcknowledgedCompletionPublishesItsReceiptAndResetRemovesIt() = runBlocking {
         lateinit var state: OnboardingState
         val receipt = OnboardingCompletionReceipt.Preset(option.id, first)
         val flags = object : OnboardingFlagStore {
@@ -66,7 +67,7 @@ class PresetSessionFencingTest {
             override fun getBoolean(key: String) = value
             override fun setBoolean(key: String, value: Boolean) { this.value = value }
             override suspend fun persistBoolean(key: String, value: Boolean) {
-                if (value) assertSame(receipt, state.completionReceipt)
+                if (value) assertNull(state.completionReceipt)
                 this.value = value
             }
         }
@@ -75,6 +76,29 @@ class PresetSessionFencingTest {
         assertSame(receipt, state.completionReceipt)
         state.resetOnboarding()
         assertNull(state.completionReceipt)
+    }
+
+    @Test fun completedFlowRejectsAReplacementReceiptBeforeStartingAnotherWrite() = runBlocking {
+        var writes = 0
+        val flags = object : OnboardingFlagStore {
+            var value = false
+            override fun getBoolean(key: String) = value
+            override fun setBoolean(key: String, value: Boolean) { writes++; this.value = value }
+        }
+        val state = OnboardingState(flags)
+        val firstReceipt = OnboardingCompletionReceipt.Preset(option.id, first)
+        state.completeOnboardingWithReceipt(firstReceipt, {}) { it.trySeal() }
+        assertFailsWith<IllegalStateException> {
+            state.completeOnboardingWithReceipt(
+                OnboardingCompletionReceipt.Preset(option.id, first.copy(generation = 2)), {},
+            ) { it.trySeal() }
+        }
+        assertEquals(1, writes)
+        assertSame(firstReceipt, state.completionReceipt)
+        assertTrue(state.hasCompletedOnboarding)
+        state.retireCompletion()
+        assertFailsWith<IllegalStateException> { state.completeOnboarding() }
+        assertEquals(1, writes)
     }
 
     @Test fun explicitNoDeviceReceiptIsDistinctFromMissingIdentityAndRestoredCompletion() = runBlocking {

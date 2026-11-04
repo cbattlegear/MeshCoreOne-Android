@@ -16,7 +16,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     val deviceScan = DeviceScanCoordinator(
         scope, deps.pairing, deps.demo, deps.permissions,
         onConnected = { onboarding.append(OnboardingStep.REGION) },
-        canStartConnection = { !completing },
+        canStartConnection = { !completing && onboarding.canStartCompletion() },
     )
     val wifi = WiFiConnectionCoordinator(
         scope, deps.wifi,
@@ -24,12 +24,14 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
             deviceScan.dismissSheet()
             onboarding.append(OnboardingStep.REGION)
         },
-        canStartConnection = { !completing },
+        canStartConnection = { !completing && onboarding.canStartCompletion() },
     )
     val region = RegionStepCoordinator(scope, deps.region, { deps.permissions.snapshot.value.location == PermissionStatus.GRANTED }) {
         onboarding.append(OnboardingStep.PRESET)
     }
-    val preset = PresetStepCoordinator(scope, deps.region, deps.presets, ::completePreset)
+    val preset = PresetStepCoordinator(
+        scope, deps.region, deps.presets, canStart = onboarding::canStartCompletion, onCompleted = ::completePreset,
+    )
 
     private suspend fun completePreset() {
         onboarding.completeOnboardingWithReceipt(
@@ -90,7 +92,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     }
 
     fun canCompleteWithoutDevice(): Boolean =
-        !completing && !deviceScan.state.value.localBusy &&
+        onboarding.canStartCompletion() && !completing && !deviceScan.state.value.localBusy &&
             !deps.pairing.connection.value.isBusy && !wifi.state.value.isConnecting
 
     fun dismissPairingSheet() {

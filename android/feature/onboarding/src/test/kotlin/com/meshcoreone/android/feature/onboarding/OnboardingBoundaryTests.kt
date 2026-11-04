@@ -302,7 +302,7 @@ class PresetStepCoordinatorTest {
     )
 
     private fun coordinator(port: FakePresets, region: FakeRegion = FakeRegion(presets = presets), done: suspend () -> Unit = {}) =
-        PresetStepCoordinator(scope, region, port, done)
+        PresetStepCoordinator(scope, region, port, onCompleted = done)
 
     @Test fun visiblePresetsFollowRegionWithLocaleFallback() {
         val region = FakeRegion(presets = presets)

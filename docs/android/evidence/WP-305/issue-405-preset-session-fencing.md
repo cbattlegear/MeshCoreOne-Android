@@ -86,7 +86,7 @@ the separately attributable gate/receipt composition and exact-candidate tests b
 The feature exposes `OnboardingCompletionReceipt.Preset(presetId, originalTarget)`,
 `WithoutDevice` (the explicit user decision, not proof that no graph exists) and `Restored`
 (startup preference state, not a new producer). `OnboardingState.completionReceipt` retains the
-original value before storage/live publication; it is not reconstructed from a later target.
+original value only after acknowledged durable completion; it is not reconstructed from a later target.
 `completeOnboardingWithReceipt(receipt, requireCurrent, seal)` combines that identity with
 the decision-sealing path. Preset completion captures its already-applied preset/target and sealer.
 
@@ -95,7 +95,7 @@ the decision-sealing path. Preset completion captures its already-applied preset
 False retains the owned completed flow for the host to retain/report its original witness.
 True acknowledges delivery and retires only that owned flow. Restored/missing preset identity
 must never be mapped to an app `NoDevice` producer. Feature controls cover original identity after
-replacement, receipt availability before durable publication, reset and explicit no-device versus
+replacement, receipt unavailability before durable acknowledgement, reset and explicit no-device versus
 restored state. The mounted JVM/Robolectric control rejects delivery, recreates the Activity,
 accepts the same original object and checks one retirement without rebinding to the later target.
 These controls require the successor's actual hosted result before execution credit.
@@ -142,6 +142,19 @@ This does not turn Activity disposal into an abort. The held navigation bridge m
 retirement for actual owned-flow retirement; no held shell source has been changed. Arbitrary external
 ancestor `Job.cancel` ordering, including a delayed child's notification, remains unestablished and
 blocked: an ordinary cancellation callback is not substituted for synchronous attempt revocation.
+
+Source review of 94f found its validation callback could overwrite the visible receipt while a
+previous completed flow awaited delivery. The successor separates the pending argument from a
+unique immutable acknowledged publication. Compose captures that exact publication, rather than
+rereading pending metadata when a delivery key changes. Completed preset controls remain disabled;
+the feature rejects another completion until an explicit reset or fresh owned flow. The real writer
+second-stage trap checks that an attempted second apply cannot replace or deliver an unsealed receipt,
+and staging failure publishes no receipt before a successful retry.
+
+`retireCompletion()` is terminal for that flow state, not just rejection of an already-created
+attempt. The owner's fresh flow constructs a fresh state. An old suspended radio apply checks the
+flow admission again before starting completion, and cannot mint an attempt after owner settlement.
+This closes the source-only pre-attempt retirement hole; it is not navigation composition evidence.
 
 ## Authored controls
 

@@ -70,7 +70,7 @@ fun PresetStepScreen(
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = OnboardingMetrics.cardSpacing),
             verticalArrangement = Arrangement.spacedBy(OnboardingMetrics.mediumSpacing)) {
             presets.forEach { preset ->
-                PresetRow(preset, preset.id == state.selectedId, enabled = !state.isApplying) {
+                PresetRow(preset, preset.id == state.selectedId, enabled = !state.isApplying && !state.isCompleted) {
                     actions.onSelect(preset.id)
                 }
             }
@@ -82,7 +82,7 @@ fun PresetStepScreen(
         OnboardingPrimaryButton(
             selected?.let { O.presetUse(resources, it.name) } ?: stringResource(O.presetContinue), actions.onApply,
             Modifier.padding(bottom = OnboardingMetrics.cardSpacing),
-            enabled = !state.isApplying && selected != null && canApply, loading = state.isApplying,
+            enabled = !state.isApplying && !state.isCompleted && selected != null && canApply, loading = state.isApplying,
         )
     }
     state.error?.let {

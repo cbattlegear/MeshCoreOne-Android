@@ -129,6 +129,101 @@ class OnboardingGateTest {
         MeshCoreTheme { OnboardingFlow(dependencies, onCompleted = {}, onCompletionReceipt = onReceipt) }
     }
 
+    @Test fun `delivery retry cannot observe a second unsealed preset receipt from a completed flow`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val releaseSecondStage = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            var stages = 0
+            var applies = 0
+            var durable = false
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, value -> durable = value },
+                stageCompletion = {
+                    if (++stages == 2) {
+                        releaseSecondStage.await()
+                        throw java.io.IOException("second attempt rejected before seal")
+                    }
+                },
+            )
+            val first = OnboardingPresetTarget(java.util.UUID.randomUUID(), 1, java.util.UUID.randomUUID())
+            var target = first
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = target
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    applies++
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope, presets = presets)
+            val flow = dependencies.retainedFlowCoordinator()
+            val id = flow.preset.visiblePresets().first().id
+            flow.preset.apply(id)
+            val original = checkNotNull(flow.onboarding.completionReceipt)
+            assertTrue(durable)
+            var deliveryKey by mutableStateOf(0)
+            var accept = false
+            val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+            host.get().setContent {
+                MeshCoreTheme {
+                    OnboardingFlow(
+                        dependencies, onCompleted = { error("Use the receipt") },
+                        onCompletionReceipt = { delivered += it; accept },
+                        completionDeliveryKey = deliveryKey,
+                    )
+                }
+            }
+            compose.waitForIdle()
+            target = first.copy(generation = 2)
+            flow.preset.apply(id)
+            compose.runOnIdle { deliveryKey++ }
+            compose.waitForIdle()
+            assertEquals(2, delivered.size)
+            delivered.forEach { assertSame(original, it) }
+            assertEquals(1, applies)
+            assertEquals(1, stages)
+            assertTrue(flow.preset.state.value.isCompleted)
+            assertFalse(flow.preset.canApply(true, flow.preset.state.value))
+            releaseSecondStage.complete(Unit)
+            compose.runOnIdle { accept = true; deliveryKey++ }
+            compose.waitForIdle()
+            assertEquals(3, delivered.size)
+            delivered.forEach { assertSame(original, it) }
+            assertTrue(durable)
+        } finally { releaseSecondStage.complete(Unit); processScope.cancel() }
+    }
+
+    @Test fun `retiring a flow before its radio apply resumes blocks later completion creation`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val release = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    release.await()
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            val dependencies = onboarding(
+                InMemoryOnboardingFlagStore(), MutableStateFlow(false), processScope, presets = presets,
+            ).forRerun()
+            val old = checkNotNull(dependencies.retainedFlowCoordinator())
+            old.preset.apply(old.preset.visiblePresets().first().id)
+            assertTrue(old.preset.state.value.isApplying)
+            dependencies.onFlowCompletionHandled(old)
+            val replacement = checkNotNull(dependencies.retainedFlowCoordinator())
+            release.complete(Unit)
+            assertFalse(old.onboarding.hasCompletedOnboarding)
+            assertEquals(null, old.onboarding.completionReceipt)
+            assertEquals(0, old.preset.state.value.commitTick)
+            assertFalse(old.preset.state.value.isApplying)
+            assertTrue(dependencies.ownsFlowCoordinator(replacement))
+            assertFalse(replacement.onboarding.hasCompletedOnboarding)
+        } finally { release.complete(Unit); processScope.cancel() }
+    }
+
     @Test fun `equal no-device receipts never let old flow settlement retire its replacement`() = runBlocking {
         val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {

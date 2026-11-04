@@ -47,14 +47,15 @@ fun OnboardingFlow(
     }
     val requester = dependencies.rememberPermissionRequester { flow.onPermissionResult() }
     val path by flow.onboarding.onboardingPathFlow.collectAsState()
-    val completed by flow.onboarding.hasCompletedOnboardingFlow.collectAsState()
+    val completion by flow.onboarding.completionPublication.collectAsState()
     val permissionSnapshot by dependencies.permissions.snapshot.collectAsState()
     val completionError by flow.hasCompletionError.collectAsState()
     val completingWithoutDevice by flow.isCompletingWithoutDevice.collectAsState()
-    LaunchedEffect(flow, completed, completionDeliveryKey) {
-        if (completed) {
+    LaunchedEffect(flow, completion, completionDeliveryKey) {
+        val published = completion
+        if (published != null && flow.onboarding.ownsCompletion(published)) {
             if (dependencies.ownsFlowCoordinator(flow)) {
-                val receipt = checkNotNull(flow.onboarding.completionReceipt)
+                val receipt = published.receipt
                 val accepted = if (onCompletionReceipt != null) {
                     onCompletionReceipt(receipt)
                 } else {

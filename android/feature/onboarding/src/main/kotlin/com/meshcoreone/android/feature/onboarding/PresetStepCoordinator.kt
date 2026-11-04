@@ -28,6 +28,7 @@ data class PresetStepState(
     val retryAlert: PresetRetryAlert? = null,
     val commitTick: Int = 0,
     val completionNeedsRetry: Boolean = false,
+    val isCompleted: Boolean = false,
 )
 
 internal class OnboardingPresetTargetChangedException : IllegalStateException("Onboarding radio session changed")
@@ -36,6 +37,7 @@ class PresetStepCoordinator(
     private val scope: CoroutineScope,
     private val regionPort: OnboardingRegionPort,
     private val presets: OnboardingPresetPort,
+    private val canStart: () -> Boolean = { true },
     private val onCompleted: suspend () -> Unit,
 ) {
     private val mutable = MutableStateFlow(PresetStepState())
@@ -48,16 +50,16 @@ class PresetStepCoordinator(
     fun visiblePresets(): List<OnboardingPresetOption> = regionPort.catalog.presets(regionPort.selection.value)
 
     fun select(id: String) = mutable.update {
-        if (it.isApplying) it else it.copy(selectedId = id)
+        if (it.isApplying || it.isCompleted || !canStart()) it else it.copy(selectedId = id)
     }
     fun dismissError() = mutable.update { it.copy(error = null) }
 
     fun canApply(canApplyToRadio: Boolean, state: PresetStepState): Boolean =
-        !state.isApplying && state.selectedId != null && canApplyToRadio
+        !state.isApplying && !state.isCompleted && canStart() && state.selectedId != null && canApplyToRadio
 
     /** Resolves the user's selection against what is actually visible (a stale id is ignored). */
     fun apply(id: String? = mutable.value.selectedId) {
-        if (mutable.value.isApplying) return
+        if (mutable.value.isApplying || mutable.value.isCompleted || !canStart()) return
         val option = visiblePresets().firstOrNull { it.id == id } ?: return
         val target = presets.currentTarget()
         if (appliedPresetId == option.id && appliedPresetTarget == target) {
@@ -83,6 +85,10 @@ class PresetStepCoordinator(
     }
 
     private suspend fun finish(id: String, target: OnboardingPresetTarget?, outcome: OnboardingPresetOutcome) {
+        if (!canStart()) {
+            mutable.update { it.copy(isApplying = false) }
+            return
+        }
         if (presets.currentTarget() != target) {
             appliedPresetId = null
             appliedPresetTarget = null
@@ -137,7 +143,7 @@ class PresetStepCoordinator(
                 appliedPresetId = null
                 appliedPresetTarget = null
                 mutable.update {
-                    it.copy(isApplying = false, completionNeedsRetry = false, commitTick = it.commitTick + 1)
+                    it.copy(isApplying = false, isCompleted = true, completionNeedsRetry = false, commitTick = it.commitTick + 1)
                 }
             } catch (_: OnboardingPresetTargetChangedException) {
                 appliedPresetId = null
@@ -163,7 +169,7 @@ class PresetStepCoordinator(
 
     fun retry() {
         val current = mutable.value
-        if (current.isApplying) return
+        if (current.isApplying || current.isCompleted || !canStart()) return
         val alert = current.retryAlert
         if (alert != null) {
             mutable.update { it.copy(retryAlert = null) }

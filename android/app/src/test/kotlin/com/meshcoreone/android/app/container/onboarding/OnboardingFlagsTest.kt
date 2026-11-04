@@ -69,9 +69,42 @@ class OnboardingFlagsTest {
             assertFalse(durable)
             assertFalse(flags.hasCompleted.value)
             assertFalse(state.hasCompletedOnboarding)
-            state.completeOnboarding()
-            assertTrue(state.hasCompletedOnboarding)
+            assertFailsWith<IllegalStateException> { state.completeOnboarding() }
+            val fresh = OnboardingState(flags)
+            fresh.completeOnboarding()
+            assertTrue(fresh.hasCompletedOnboarding)
         } finally { scope.cancel() }
+    }
+
+    @Test fun `pending or rejected real writer staging never publishes a completion receipt`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val staged = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var reject = true
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> },
+                stageCompletion = {
+                    if (reject) { staged.complete(Unit); release.await(); throw IOException("stage rejected") }
+                },
+            )
+            val state = OnboardingState(flags)
+            val first = async { runCatching { state.completeOnboarding() } }
+            staged.await()
+            assertEquals(null, state.completionReceipt)
+            assertFalse(state.hasCompletedOnboarding)
+            release.complete(Unit)
+            assertEquals("stage rejected", first.await().exceptionOrNull()?.message)
+            assertEquals(null, state.completionReceipt)
+            assertFalse(state.hasCompletedOnboarding)
+            reject = false
+            state.completeOnboarding()
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice,
+                state.completionReceipt,
+            )
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { release.complete(Unit); scope.cancel() }
     }
 
     @Test fun `reset after a valid seal preserves ordered false and prevents retired flow publication`() = runTest {

@@ -2,11 +2,26 @@
 package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ContactMessage
 import java.time.Instant
 import java.util.UUID
+
+data class LocalDirectMessageEnvelope(
+    val occurrenceID: UUID,
+    val session: SessionToken,
+    val message: ContactMessage,
+    val context: DeliveryContext,
+    val resolution: LocalDirectContactResolution,
+)
+
+/** Separate opt-in receive callback. Legacy CLI, signed and contact callbacks are unchanged. */
+interface LocalDirectMessagePolling {
+    suspend fun setLocalDirectMessageHandler(handler: suspend (LocalDirectMessageEnvelope) -> Unit)
+}
 
 sealed interface LocalDirectContactResolution {
     data object NotFound : LocalDirectContactResolution

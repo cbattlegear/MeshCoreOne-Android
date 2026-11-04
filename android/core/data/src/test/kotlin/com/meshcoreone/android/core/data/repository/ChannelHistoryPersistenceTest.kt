@@ -13,6 +13,7 @@ import java.util.concurrent.Executor
 import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
@@ -215,8 +216,8 @@ class ChannelHistoryPersistenceTest : RepositoryTest() {
         val other = newStore()
         try {
             val results = listOf(
-                async { store.createOrReconcileChannelMessage(creation, 10u, AT) },
-                async { other.createOrReconcileChannelMessage(creation, 20u, AT.plusSeconds(1)) },
+                async(Dispatchers.Default) { store.createOrReconcileChannelMessage(creation, 10u, AT) },
+                async(Dispatchers.Default) { other.createOrReconcileChannelMessage(creation, 20u, AT.plusSeconds(1)) },
             ).awaitAll()
             assertEquals(results[0], results[1])
             assertEquals(listOf(results[0]), store.fetchMessages(RADIO_A, 5u).toList())
@@ -235,6 +236,46 @@ class ChannelHistoryPersistenceTest : RepositoryTest() {
                 }
                 assertEquals(legacy, store.fetchMessage(EntityKey(RADIO_A, legacy.id)))
             }
+        } finally {
+            other.close()
+        }
+    }
+
+    @Test fun conflictingCreationContendersCommitExactlyOneIntentAcrossIndependentStores() = runTest {
+        store.saveChannel(RADIO_A, info())
+        val origin = origin()
+        val first = ChannelMessageCreation(UUID.randomUUID(), origin, "first intent")
+        val contenders = listOf(first, first.copy(text = "second intent", textType = TextType.CLI_DATA))
+        val other = newStore()
+        val ready = listOf(CompletableDeferred<Unit>(), CompletableDeferred<Unit>())
+        val start = CompletableDeferred<Unit>()
+        try {
+            val attempts = contenders.mapIndexed { index, creation ->
+                async(Dispatchers.Default) {
+                    ready[index].complete(Unit)
+                    start.await()
+                    try {
+                        (if (index == 0) store else other)
+                            .createOrReconcileChannelMessage(creation, (10 + index).toUInt(), AT.plusSeconds(index.toLong()))
+                        true
+                    } catch (failure: PersistenceStoreException) {
+                        assertEquals(PersistenceStoreError.InvalidData, failure.error)
+                        assertEquals(ChannelHistoryConflict.ORIGIN_MISMATCH,
+                            assertIs<ChannelHistoryRejected>(failure.cause).reason)
+                        false
+                    }
+                }
+            }
+            ready.forEach { it.await() }
+            start.complete(Unit)
+            val outcomes = attempts.awaitAll()
+            assertEquals(1, outcomes.count { it })
+            val winner = contenders[outcomes.indexOf(true)]
+            val retained = assertNotNull(store.fetchMessage(EntityKey(RADIO_A, first.messageID)))
+            assertEquals(winner.text, retained.text)
+            assertEquals(winner.textType, retained.textType)
+            assertEquals(listOf(retained), store.fetchMessages(RADIO_A, 5u).toList())
+            assertEquals(retained, other.createOrReconcileChannelMessage(winner, 100u, AT.plusSeconds(100)))
         } finally {
             other.close()
         }

@@ -7,6 +7,8 @@ import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.ContactDTO
@@ -555,7 +557,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                         }
                         is SettingsEvent.ClientRepeatUpdated -> connection.updateClientRepeat(event.enabled)
                         is SettingsEvent.PathHashModeUpdated -> {
-                            persistSessionDeviceEdit("path hash") {
+                            persistSessionDeviceEdit("path hash", event.persistence) {
                                 connection.updatePathHashMode(event.mode, wrapped.token)
                             }
                         }
@@ -569,12 +571,23 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         })
     }
 
-    private suspend fun persistSessionDeviceEdit(operation: String, edit: suspend () -> Boolean) {
+    private suspend fun persistSessionDeviceEdit(
+        operation: String,
+        completion: CompletableDeferred<Unit>? = null,
+        edit: suspend () -> Boolean,
+    ) {
         try {
-            if (!edit()) logger.fine("Ignored $operation update from a retired session")
+            if (edit()) {
+                completion?.complete(Unit)
+            } else {
+                completion?.completeExceptionally(SettingsServiceException(SettingsServiceError.NotConnected))
+                logger.fine("Ignored $operation update from a retired session")
+            }
         } catch (cancelled: CancellationException) {
+            completion?.completeExceptionally(cancelled)
             throw cancelled
         } catch (failure: Exception) {
+            completion?.completeExceptionally(failure)
             logger.log(Level.WARNING, "Failed to persist $operation update", failure)
         }
     }

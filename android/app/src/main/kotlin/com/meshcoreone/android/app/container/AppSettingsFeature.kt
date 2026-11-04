@@ -302,7 +302,7 @@ private class SettingsRadioAdapter(private val service: SettingsService) : Setti
         service.setOtherParamsVerified(device, autoAddContacts, telemetryModes, advertLocationPolicy, multiAcks)
     override suspend fun setAutoAddConfigVerified(config: AutoAddConfig) = service.setAutoAddConfigVerified(config)
     override suspend fun refreshAutoAddConfig() = service.refreshAutoAddConfig()
-    override suspend fun setPathHashModeVerified(mode: UByte) = service.setPathHashModeVerified(mode)
+    override suspend fun setPathHashModeVerified(mode: UByte) = service.setPathHashModePersisted(mode)
     override suspend fun getDeviceGPSState() = service.getDeviceGPSState().let { DeviceGpsState(it.isSupported, it.isEnabled) }
     override suspend fun setDeviceGPSEnabledVerified(enabled: Boolean) =
         service.setDeviceGPSEnabledVerified(enabled).let { DeviceGpsState(it.isSupported, it.isEnabled) }

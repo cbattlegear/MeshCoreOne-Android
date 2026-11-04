@@ -545,3 +545,31 @@ reported to the WP-209 producer for a store-level field-specific fix and held-
 acknowledgement Room/service regression. Until that is fixed and covered, this
 candidate does not claim favorite/avatar write consistency or merge readiness.
 Physical device, TalkBack and iOS acceptance remain separate and unclaimed.
+
+## Favorite/avatar write-race follow-up
+
+The bounded WP-209 producer follow-up changes favorite persistence after radio
+acknowledgement from saving a stale full `ContactDTO` to an identity-checked
+field-specific update of `isFavorite` and flags bit 0. The SQL update preserves
+avatar bytes, other metadata and all other flag bits, and does not create rows.
+Its Room/service tests hold the acknowledgement while a second repository
+changes metadata and sets or clears the avatar, for both favorite directions;
+they also cover cancellation, deletion/replacement and radio isolation.
+Producer head `76920597c259903b2cffcbfbe2f733d0a52b4e7a` corrects a class-scope
+placement error in the first version of the repository method. The method is
+now visibly a class-level override following `batchSaveContacts`.
+
+Consumer hosted run
+[41864959311](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41864959311),
+exact head `2df2f95e79c07e2a825167edbde87f8d32bdc1ec`, completed **failure** at
+`:feature:nodes:compileDebugUnitTestKotlin`. Kotlin reported type inference
+errors at three expected-avatar-list assertions because a `Bytes` actual value
+was compared with the fake's nullable `Bytes?` list element type. The expected
+list now explicitly declares `Pair<EntityKey, Bytes?>`, preserving the same
+identity and byte assertions. This is a compile correction, not test execution.
+
+The current local candidate integrates the producer correction and this
+test-only fix; it has not yet been published or run by hosted CI. Producer
+follow-up hosted validation and independent review are also pending. Until
+both exact-candidate results are positive, no favorite/avatar write consistency
+or merge readiness is claimed.

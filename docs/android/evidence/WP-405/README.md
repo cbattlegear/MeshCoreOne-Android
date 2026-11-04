@@ -11,9 +11,13 @@ bypassed; final product validation uses the exact candidate's hosted CI.
 Published #508 was still `9782d78c8580f10da71784396e019e3150c5bea7`.
 Actual failed run `41463646130`, Android job `125338919312`, reported mounted
 channel fixture `Superseded connection generation` cancellations and region
-joins returning null. Retained unpublished repairs include actual retirement
-fixture correction and indexed empty-slot CHANNEL_INFO responses needed for
-authoritative allocation. These are source diagnoses, not a passing rerun.
+joins returning null. Indexed empty-slot CHANNEL_INFO responses needed for
+authoritative region allocation are corrected in retained source. The separate
+retirement fixture correction in `1876812ba` is in LinkConsumerIntegrationTest,
+not the mounted ChannelConfirmationConsumerTest; it is not evidence that the
+mounted generation cancellation is repaired. Those mounted schedules remain
+unchanged pending actual shared-lifecycle composition and hosted execution.
+These are source diagnoses, not a passing rerun.
 
 Retained clean head `646beaacbe7b5e80b63622cca3fc15a56fc31a4c` was reconciled
 with current main `cb4a79ab906db851800bcf93f7c2ebfb5aa34571` by normal merge

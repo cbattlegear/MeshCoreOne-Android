@@ -67,7 +67,7 @@ internal fun AppChatsContent(
     coordinator: NavigationCoordinator,
 ) {
     val state by coordinator.state.collectAsState()
-    val presented = LocalPresentedNavigation.current ?: coordinator.publishedNavigation.value
+    val presented = presentedNavigation(coordinator)
     val entryId = LocalNavigationEntryId.current
     AppPendingChannel(feature, coordinator)
     var newChannel by remember { mutableStateOf(false) }

@@ -57,7 +57,7 @@ internal fun AppSettingsContent(
     feature: AppSettingsFeature, destination: NavigationDestination, coordinator: NavigationCoordinator,
     nodeDocuments: NodeConfigDocuments? = null,
 ) {
-    val presented = LocalPresentedNavigation.current ?: coordinator.publishedNavigation.value
+    val presented = presentedNavigation(coordinator)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val container = feature.container

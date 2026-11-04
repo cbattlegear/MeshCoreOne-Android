@@ -169,6 +169,28 @@ class NavigationComposeTest {
         }
     }
 
+    @Test fun presentedNavigationFallbackTracksChangesWithoutOverridingTheMountedSnapshot() {
+        val n = NavigationCoordinator()
+        val mounted = n.publishedNavigation.value
+        val showMounted = mutableStateOf(false)
+        compose.runOnUiThread {
+            host.get().setContent {
+                CompositionLocalProvider(LocalPresentedNavigation provides if (showMounted.value) mounted else null) {
+                    Text(presentedNavigation(n).value.selectedTab.name, Modifier.testTag("presented-tab"))
+                }
+            }
+        }
+        compose.onNodeWithTag("presented-tab").assertTextEquals(AppTab.CHATS.name)
+        compose.runOnIdle { n.selectTab(AppTab.SETTINGS) }
+        compose.onNodeWithTag("presented-tab").assertTextEquals(AppTab.SETTINGS.name)
+        compose.runOnIdle { showMounted.value = true }
+        compose.onNodeWithTag("presented-tab").assertTextEquals(AppTab.CHATS.name)
+        compose.runOnIdle { n.selectTab(AppTab.MAP) }
+        compose.onNodeWithTag("presented-tab").assertTextEquals(AppTab.CHATS.name)
+        compose.runOnIdle { showMounted.value = false }
+        compose.onNodeWithTag("presented-tab").assertTextEquals(AppTab.MAP.name)
+    }
+
     @Test fun fiveNativeTabsExposeSelectionHeadingUnreadAndFortyEightDpTargets() {
         for (tab in AppTab.entries) {
             compose.onNodeWithTag("tab:${tab.name}").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick()

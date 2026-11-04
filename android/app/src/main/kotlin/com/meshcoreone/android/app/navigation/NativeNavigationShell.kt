@@ -117,6 +117,10 @@ import com.meshcoreone.android.core.l10n.R as Strings
 internal val LocalNavigationEntryId = staticCompositionLocalOf<Long?> { null }
 internal val LocalPresentedNavigation = staticCompositionLocalOf<NavigationStateStore.PublishedSnapshot?> { null }
 
+@Composable
+internal fun presentedNavigation(coordinator: NavigationCoordinator): NavigationStateStore.PublishedSnapshot =
+    LocalPresentedNavigation.current ?: coordinator.publishedNavigation.collectAsStateWithLifecycle().value
+
 internal fun AppTab.titleResource(): Int = when (this) {
     AppTab.CHATS -> Strings.string.tab_chats
     AppTab.NODES -> Strings.string.tab_nodes
@@ -449,7 +453,7 @@ private fun ExistingFeatureContent(
     settings: com.meshcoreone.android.app.container.AppSettingsFeature?,
     coordinator: NavigationCoordinator,
 ) {
-    val presented = LocalPresentedNavigation.current ?: coordinator.publishedNavigation.value
+    val presented = presentedNavigation(coordinator)
     val navigationState = presented.value
     val feature = when (destination) {
         is NavigationDestination.Root -> FeatureId.forTab(destination.tab)

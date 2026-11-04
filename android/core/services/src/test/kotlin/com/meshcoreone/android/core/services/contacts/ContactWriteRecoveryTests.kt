@@ -539,6 +539,58 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
+    fun completeIdentifiedReplacementSnapshotsDoNotProveAnOldRadioWriteCannotStillApply() = runTest {
+        withFixture {
+            val producer = service()
+            val write = backgroundScope.async {
+                assertFailsWith<ContactServiceError.SessionError> {
+                    producer.addOrUpdateContact(radioA, frame(1, "Still pending on radio"))
+                }
+            }
+            runCurrent()
+            advanceTimeBy(5_001)
+            runCurrent()
+            assertIs<MeshCoreException.Timeout>(write.await().error)
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+            val expectedRadioKey = assertNotNull(session.currentSelfInfo).publicKey
+            session.stop()
+
+            val replacementRadio = radio.replacementView()
+            val replacementSession = newSession(replacementRadio)
+            assertEquals(expectedRadioKey, assertNotNull(replacementSession.currentSelfInfo).publicKey)
+            repeat(2) {
+                val snapshot = replacementSession.getContactsReportingTotal(null)
+                assertEquals(0L, snapshot.reportedTotal)
+                assertTrue(snapshot.contacts.isEmpty())
+                assertTrue(assertNotNull(replacementSession.lastContactFetchProgress).completed)
+            }
+            assertEquals(2, replacementRadio.completedSnapshots)
+            assertNull(radio.contact(contactsKey(1)))
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
+
+            // A new preference role models losing the dispatch provenance, not losing the marker.
+            val replacementFlags = object : ContactPreferenceFlags by preferences {}
+            val coordinator = ContactsFakeSyncCoordinator()
+            val replacement = service(
+                connection = replacementSession, flags = replacementFlags, coordinator = coordinator,
+            )
+            assertFailsWith<ContactServiceError.SyncInterrupted> {
+                replacement.syncContactsForRefresh(radioA)
+            }
+            assertFalse(coordinator.manualContactSyncActive)
+            assertEquals(2, replacementRadio.completedSnapshots, "Refresh must not turn a count into drain proof")
+            assertTrue(replacement.needsContactWriteReconciliation(radioA))
+
+            radio.accept(reply = false)
+            assertEquals("Still pending on radio", radio.contact(contactsKey(1))?.advertisedName)
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
+            assertTrue(replacement.needsContactWriteReconciliation(radioA))
+            assertEquals(1, radio.writes.size, "No new write caused the post-snapshot mutation")
+            assertTrue(write.isCompleted)
+        }
+    }
+
+    @Test
     fun localSaveFailureReportsRadioAcceptanceButUnprovedSyncCannotRepairIt() = runTest {
         withFixture {
             val diskFailure = IOException("test disk failure")

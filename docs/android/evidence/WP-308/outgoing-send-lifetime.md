@@ -1,5 +1,35 @@
 # WP-308 outgoing send lifetime (#524)
 
+## Recovery-list consumer preparation (not activated)
+
+The separately assigned R1 consumer fix includes known-old-occupant and
+unbound outgoing recovery text in a separate list with explicit copy into a
+selected composer, never automatic adoption or resend. Storage owns the
+independent recovery query and exact eligibility rules; WP-308 does not
+reimplement its SQL or change canonical contracts.
+
+`RecoveredDraftStateHolder` prepares the feature-side bounded pagination and
+selection/copy state. It preserves rows and selection on storage/copy errors,
+propagates cancellation, serializes operations, reports failures, and clears
+selection only after explicit copy completion. The port requires copy-time
+exact-key eligibility validation and protection of an existing destination
+draft. It has no sending or source-mutation operation.
+
+Six unit controls cover ordered pagination, failed refresh, explicit selection
+and destination, destination-draft conflict, cancelled copy, and a foreign-radio
+page. These controls are authored, **not compiled or executed**. They do not
+replace required actual App/Room A-to-B/reopen/summary/timeline/copy regressions.
+There is no production adapter, mounted recovery surface or scoped-read
+activation in this preparation. The existing enabled restart Send Again defect
+and all producer/invalidation dependencies remain open.
+
+Local source checks: `python tools\android-port\portmap.py`,
+`python tools\android-port\controller\validate.py`, and `git diff --check`
+returned 0. No local Android runtime or retained execution owner was touched.
+New holder and related-test paths were admitted by the actual reserve tool as
+`wp-owned` and `reviewed-support-test`, respectively. The historical failed
+identity claim below remains unchanged and is not represented as a new claim.
+
 ## Candidate and ownership
 
 Source pin: `db14559b39d32322b06477c6ae676112f583db50`.

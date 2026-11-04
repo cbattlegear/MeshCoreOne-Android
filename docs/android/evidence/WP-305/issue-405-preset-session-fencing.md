@@ -112,6 +112,22 @@ WP-302 source/reservation/publication and external-link holds. This is a concret
 not authority to replace the first-run gate with another raw flag effect. Gate/witness composition
 remains separate from this standalone receipt API and from device-tip display.
 
+The receipt entry also exposes independent optional `completionDeliveryKey` and `attemptKey`
+Compose keys. The first explicitly retries delivery of the *same* owned flow/receipt after an
+occupied error slot clears; the second reacquires the owner's current retained coordinator only
+after the host has settled/retired the exact old flow using its original authority. Neither key
+constructs a producer or grants navigation. A same-mounted control holds acceptance, changes only
+the delivery key, verifies the identical receipt, then changes the attempt key after acceptance and
+checks the newly owned incomplete coordinator without duplicate delivery. A key increment alone
+must not be treated as retirement or fresh authority.
+
+The WP-302 owner additionally reported two source-only composition risks: recapturing a Compose-only
+witness after recreation can rebind a retained WithoutDevice decision, and an automatic offline
+rebuild's exposed graph may outlive its cancelled/superseded cycle before cleanup. Those local
+unexecuted APIs are not treated as verified prerequisites. The bridge must retain the witness with
+the process-retained exact flow (not only in `remember`) and require real rebuild cancellation/
+cycle controls once that owner's source hold permits repair.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

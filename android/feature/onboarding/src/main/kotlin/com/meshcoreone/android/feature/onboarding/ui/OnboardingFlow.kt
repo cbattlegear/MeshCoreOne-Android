@@ -37,9 +37,11 @@ fun OnboardingFlow(
     onCompleted: () -> Unit,
     modifier: Modifier = Modifier,
     onCompletionReceipt: ((OnboardingCompletionReceipt) -> Boolean)? = null,
+    attemptKey: Any? = null,
+    completionDeliveryKey: Any? = null,
 ) {
     val scope = rememberCoroutineScope()
-    val flow = remember(dependencies) {
+    val flow = remember(dependencies, attemptKey) {
         dependencies.retainedFlowCoordinator()
             ?: OnboardingFlowCoordinator(scope, dependencies).also { it.restoreStartingPath() }
     }
@@ -49,7 +51,7 @@ fun OnboardingFlow(
     val permissionSnapshot by dependencies.permissions.snapshot.collectAsState()
     val completionError by flow.hasCompletionError.collectAsState()
     val completingWithoutDevice by flow.isCompletingWithoutDevice.collectAsState()
-    LaunchedEffect(flow, completed) {
+    LaunchedEffect(flow, completed, completionDeliveryKey) {
         if (completed) {
             if (dependencies.ownsFlowCoordinator(flow)) {
                 val receipt = checkNotNull(flow.onboarding.completionReceipt)

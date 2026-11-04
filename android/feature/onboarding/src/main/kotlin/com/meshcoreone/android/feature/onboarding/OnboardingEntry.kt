@@ -21,12 +21,16 @@ fun OnboardingEntry(
     onNavigate: (FeatureRoute) -> Unit,
     dependencies: OnboardingFeatureDependencies? = null,
     onCompletionReceipt: ((OnboardingCompletionReceipt) -> Boolean)? = null,
+    attemptKey: Any? = null,
+    completionDeliveryKey: Any? = null,
 ) {
     if (dependencies != null) {
         OnboardingFlow(
             dependencies,
             onCompleted = { onNavigate(FeatureRoute(FeatureId.CHATS)) },
             onCompletionReceipt = onCompletionReceipt,
+            attemptKey = attemptKey,
+            completionDeliveryKey = completionDeliveryKey,
         )
         return
     }

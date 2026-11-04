@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
@@ -30,6 +33,7 @@ import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.services.simulator.DemoModeDefaults
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
+import com.meshcoreone.android.feature.onboarding.InMemoryOnboardingFlagStore
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetOutcome
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
@@ -124,6 +128,49 @@ class OnboardingGateTest {
     ) = host.get().setContent {
         MeshCoreTheme { OnboardingFlow(dependencies, onCompleted = {}, onCompletionReceipt = onReceipt) }
     }
+
+    @Test fun `same mounted rejected receipt retries on explicit delivery key and fresh attempt obtains a fresh owned flow`() =
+        runBlocking {
+            val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                host.setup().visible()
+                val dependencies = onboarding(
+                    InMemoryOnboardingFlagStore(), MutableStateFlow(false), processScope,
+                ).forRerun()
+                val flow = checkNotNull(dependencies.retainedFlowCoordinator())
+                flow.onboarding.completeOnboarding()
+                val original = checkNotNull(flow.onboarding.completionReceipt)
+                var deliveryKey by mutableStateOf(0)
+                var attemptKey by mutableStateOf(0)
+                var occupiedError = true
+                val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+                host.get().setContent {
+                    MeshCoreTheme {
+                        OnboardingFlow(
+                            dependencies, onCompleted = { error("Do not use the Boolean callback") },
+                            onCompletionReceipt = { delivered += it; !occupiedError },
+                            attemptKey = attemptKey,
+                            completionDeliveryKey = deliveryKey,
+                        )
+                    }
+                }
+                compose.waitForIdle()
+                assertEquals(1, delivered.size)
+                assertTrue(dependencies.ownsFlowCoordinator(flow))
+                compose.runOnIdle { occupiedError = false; deliveryKey++ }
+                compose.waitForIdle()
+                assertEquals(2, delivered.size)
+                assertSame(original, delivered[0])
+                assertSame(original, delivered[1])
+                assertFalse(dependencies.ownsFlowCoordinator(flow))
+                compose.runOnIdle { attemptKey++ }
+                compose.waitForIdle()
+                val fresh = checkNotNull(dependencies.retainedFlowCoordinator())
+                assertNotSame(flow, fresh)
+                assertFalse(fresh.onboarding.hasCompletedOnboarding)
+                assertEquals(2, delivered.size)
+            } finally { processScope.cancel() }
+        }
 
     @Test fun `rejected delayed preset receipt survives Activity recreation without relabeling and retires only on acceptance`() =
         runBlocking {

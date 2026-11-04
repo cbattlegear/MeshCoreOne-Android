@@ -157,6 +157,8 @@ class ContactDetailStateHolder(
     }
     private var favoriteJob: Job? = null
     private var favoriteRevision = 0L
+    private var nextRefreshRequest = 0L
+    private var appliedRefreshRequest = 0L
     private val session get() = dependencies.session
     private val current get() = state.value.contact
 
@@ -170,9 +172,9 @@ class ContactDetailStateHolder(
      */
     suspend fun run() {
         path.loadContacts(current.radioId)
-        val revision = favoriteRevision
+        val refresh = beginContactRefresh()
         val fresh = quietly { session.contactService()?.getContact(current.radioId, current.publicKey) }
-        if (fresh != null) applyRefreshedContact(fresh, revision)
+        if (fresh != null) applyRefreshedContact(fresh, refresh)
         val advertisements = session.advertisementService() ?: return
         advertisements.events().use { subscription ->
             // Only a response for this contact may resolve this screen's discovery.
@@ -318,15 +320,22 @@ class ContactDetailStateHolder(
     }
 
     suspend fun refreshContact() {
-        val revision = favoriteRevision
+        val refresh = beginContactRefresh()
         val updated = quietly { session.servicesDataStore()?.fetchContact(current.key) } ?: return
-        applyRefreshedContact(updated, revision)
+        applyRefreshedContact(updated, refresh)
     }
 
-    private fun applyRefreshedContact(updated: ContactDTO, revision: Long) {
+    private data class ContactRefresh(val request: Long, val favoriteRevision: Long)
+
+    private fun beginContactRefresh() = ContactRefresh(++nextRefreshRequest, favoriteRevision)
+
+    private fun applyRefreshedContact(updated: ContactDTO, refresh: ContactRefresh) {
+        if (updated.key != current.key || updated.publicKey != current.publicKey) return
+        // Request precedence is screen-local, not a database version. Failed reads never advance it.
+        if (refresh.request <= appliedRefreshRequest) return
+        appliedRefreshRequest = refresh.request
         mutableState.update {
-            if (updated.key != it.contact.key || updated.publicKey != it.contact.publicKey) it
-            else if (revision != favoriteRevision || it.isSavingFavorite) {
+            if (refresh.favoriteRevision != favoriteRevision || it.isSavingFavorite) {
                 it.copy(contact = updated.copy(isFavorite = it.isFavorite))
             } else {
                 it.copy(contact = updated, isFavorite = updated.isFavorite)
@@ -468,7 +477,7 @@ class ContactDetailStateHolder(
                     AvatarSaveStage.SERVICE_CALL_CANCELLED,
                     { AvatarSaveOutcome.COMPLETED },
                 ) { service.updateContactAvatar(target.key, imageData) }
-                val revision = favoriteRevision
+                val refresh = beginContactRefresh()
                 val updated = observeAvatarStep(
                     operation,
                     AvatarSaveStage.CONTACT_LOOKUP_STARTED,
@@ -484,7 +493,7 @@ class ContactDetailStateHolder(
                     },
                 ) { store.fetchContact(target.key) } ?: throw NodesContactFailure.ContactNotFound()
                 check(updated.key == target.key && updated.publicKey == target.publicKey)
-                applyRefreshedContact(updated, revision)
+                applyRefreshedContact(updated, refresh)
                 operation.observe(AvatarSaveStage.SAVE_SUCCEEDED)
                 true
             }

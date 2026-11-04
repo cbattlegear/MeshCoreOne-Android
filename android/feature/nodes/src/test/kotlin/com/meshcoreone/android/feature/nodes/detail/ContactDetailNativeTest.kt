@@ -389,6 +389,102 @@ class ContactDetailNativeTest {
     }
 
     @Test
+    fun `old initial snapshot cannot replace a newer avatar refresh favorite or bytes`() = scenario {
+        for (initialFavorite in listOf(false, true)) {
+            val harness = Harness(clock).connect()
+            val initial = contact(radioId = checkNotNull(harness.session.radioId), isFavorite = initialFavorite)
+            harness.store.contacts += initial
+            val oldSnapshot = CompletableDeferred<ContactDTO>()
+            val entered = CompletableDeferred<Unit>()
+            harness.contactService.getContactBehavior = { _, _ ->
+                entered.complete(Unit)
+                oldSnapshot.await()
+            }
+            val detail = ContactDetailStateHolder(initial, harness.dependencies, scope)
+            val screen = scope.launch { detail.run() }
+            entered.await()
+            harness.store.contacts[0] = initial.copy(isFavorite = !initialFavorite)
+            val bytes = Bytes.of(7, 8, 9)
+            assertTrue(detail.saveAvatar(bytes))
+            val newer = initial.copy(isFavorite = !initialFavorite, avatarImageData = bytes)
+            assertEquals(newer, detail.state.value.contact)
+            assertEquals(!initialFavorite, detail.state.value.isFavorite)
+            oldSnapshot.complete(initial)
+            settle()
+            assertEquals(newer, detail.state.value.contact)
+            assertEquals(!initialFavorite, detail.state.value.isFavorite)
+            assertEquals(newer, harness.store.contacts.single())
+            assertEquals(listOf(initial.key to bytes), harness.contactService.avatars)
+            assertFalse(detail.state.value.isSavingAvatar)
+            assertNull(detail.state.value.errorMessage)
+            screen.cancel()
+        }
+    }
+
+    @Test
+    fun `failed absent foreign and cancelled newer reads do not suppress a valid older read`() = scenario {
+        for (outcome in listOf("failure", "absent", "foreign", "cancelled")) {
+            val harness = Harness(clock).connect()
+            val initial = contact(radioId = checkNotNull(harness.session.radioId))
+            harness.store.contacts += initial
+            val olderResult = initial.copy(isFavorite = true, avatarImageData = Bytes.of(8))
+            val older = CompletableDeferred<ContactDTO>()
+            val entered = CompletableDeferred<Unit>()
+            harness.contactService.getContactBehavior = { _, _ -> entered.complete(Unit); older.await() }
+            harness.session.servicesStore = object : NodesDataStore by harness.store {
+                override suspend fun fetchContact(key: EntityKey): ContactDTO? = when (outcome) {
+                    "failure" -> throw java.io.IOException("read failed")
+                    "absent" -> null
+                    "foreign" -> olderResult.copy(publicKey = Fixtures.repeated(0xAB))
+                    else -> kotlinx.coroutines.awaitCancellation()
+                }
+            }
+            val detail = ContactDetailStateHolder(initial, harness.dependencies, scope)
+            val screen = scope.launch { detail.run() }
+            entered.await()
+            val refresh = scope.launch { detail.refreshContact() }
+            settle()
+            if (outcome == "cancelled") refresh.cancel()
+            refresh.join()
+            assertEquals(initial, detail.state.value.contact)
+            older.complete(olderResult)
+            settle()
+            assertEquals(olderResult, detail.state.value.contact, outcome)
+            assertTrue(detail.state.value.isFavorite, outcome)
+            assertEquals(outcome == "cancelled", refresh.isCancelled)
+            screen.cancel()
+        }
+    }
+
+    @Test
+    fun `older read completing first does not suppress a later successful refresh`() = scenario {
+        val harness = Harness(clock).connect()
+        val initial = contact(radioId = checkNotNull(harness.session.radioId))
+        harness.store.contacts += initial
+        val older = CompletableDeferred<ContactDTO>()
+        val newer = CompletableDeferred<ContactDTO>()
+        val entered = CompletableDeferred<Unit>()
+        harness.contactService.getContactBehavior = { _, _ -> entered.complete(Unit); older.await() }
+        harness.session.servicesStore = object : NodesDataStore by harness.store {
+            override suspend fun fetchContact(key: EntityKey): ContactDTO = newer.await()
+        }
+        val detail = ContactDetailStateHolder(initial, harness.dependencies, scope)
+        val screen = scope.launch { detail.run() }
+        entered.await()
+        val refresh = scope.launch { detail.refreshContact() }
+        settle()
+        older.complete(initial.copy(name = "Older completed"))
+        settle()
+        assertEquals("Older completed", detail.state.value.contact.name)
+        val latest = initial.copy(isFavorite = true, avatarImageData = Bytes.of(10))
+        newer.complete(latest)
+        refresh.join()
+        assertEquals(latest, detail.state.value.contact)
+        assertTrue(detail.state.value.isFavorite)
+        screen.cancel()
+    }
+
+    @Test
     fun `avatar post-save refresh reflects external favorite changes in both directions`() = scenario {
         for (initialFavorite in listOf(false, true)) {
             val harness = Harness(clock).connect()

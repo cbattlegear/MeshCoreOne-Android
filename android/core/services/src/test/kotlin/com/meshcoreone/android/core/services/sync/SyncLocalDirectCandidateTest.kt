@@ -309,7 +309,7 @@ class SyncLocalDirectCandidateTest {
                 handler(envelope.copy(resolution = LocalDirectContactResolution.NotFound))
             }
             assertEquals("advert admission unavailable", advertFailure.message)
-            assertEquals(listOf(LocalDirectContactResolution.NotFound), adverts.observations)
+            assertEquals(listOf<LocalDirectContactResolution>(LocalDirectContactResolution.NotFound), adverts.observations)
             assertTrue(adverts.materializations.isEmpty())
             adverts.admissionFailure = null
             adverts.beforeSave = { throw IllegalStateException("store unavailable") }

@@ -14,6 +14,12 @@ guarded execution; a candidate checkout is not live authority.
 
 ## Candidate execution contract
 
+The proposed [isolated compiler experiment](bounded-infrastructure-review.md#proposed-isolated-compiler-experiment-not-deployed)
+uses trusted-base executable configuration with candidate source data in a
+credential-free offline container, followed by authenticated original-run
+inspection. It is not deployed, required or a substitute for the live/historical
+consumer-acceptance blockers or the WP-003 bootstrap gate.
+
 ### Hosted CI latency
 
 Pull-request scope classification compares the PR head with its unique Git
@@ -35,9 +41,14 @@ APK handoff. Configuration-resolving tasks (`validateModuleGraph`,
 full-scaffold `resolveScaffoldDependencies`) run in a parallel Gradle preflight
 before the selected build, test and lint tasks. A preflight failure therefore
 prevents that expensive task graph from starting. The remaining tasks run in a
-separate Gradle invocation. Both hosted phases and dependency-only `prepare`
-use `--parallel --max-workers=8`. WP-002 now resolves dependencies in
-project-owned tasks, so the former forced one-worker workaround is removed.
+separate Gradle invocation. Hosted preflight, dependency-only `prepare` and
+the exclusive compile-only consumer invocation use `--parallel --max-workers=8`.
+Hosted scaffold build/test phases, through both the ordinary and affected-candidate
+routes, and the full benchmark build phase instead use `--max-workers=1` without
+`--parallel`. This bounds build concurrency after observed JVM heap exhaustion,
+while retaining every selected task, test and verification. It is a mitigation,
+not proof that concurrency caused the failures. The Gradle daemon's 2 GiB heap,
+test-process heaps and runner are unchanged. WP-002 resolves dependencies in project-owned tasks.
 Validation still precedes build/test work to limit wasted work on failures.
 Local invocations retain their caller-selected worker and parallelism options.
 Each invocation streams
@@ -46,8 +57,91 @@ and resolved task graph for failure evidence. Ctrl-C terminates the streamed
 process group, reaps Gradle and joins its output reader before propagating the
 interrupt.
 
-Hosted Gradle task-output caching is enabled. Only `:core:data:testDebugUnitTest`
-is explicitly eligible for test-result caching; all other Gradle `Test` tasks
+Benchmark inputs under `android/benchmark/`, shared build logic, changes to
+`android/app/build.gradle.kts` or `android/app/proguard-rules.pro`, and shared
+Gradle inputs select the declared `benchmark` scope. The app's main manifest,
+baseline profile and benchmark/profile/release source sets also select it.
+Changes to the benchmark
+build verifier or shared APK-alignment producer also select benchmark; the
+shared alignment producer additionally selects scaffold. The Linux build job runs
+`ci.py run --stage benchmark` only when selected, and the required aggregate
+check requires that job to succeed. Workflow validation checks the actual
+guarded stage commands, exit handling and aggregate result bindings, rather than
+accepting command text inside comments or bypassable workflow-, job- or
+step-level shell overrides and global environment injection. It also requires
+the exact candidate checkout, classifier and native-suite selector, with their
+bound outputs and no additional scope-step commands or output overrides.
+The Linux job's checkout, pinned setup and preflight steps are fixed before the
+selected stages, and localization, APK inspection/upload and backup handoff
+must immediately follow them, with no additional build steps afterward. Added
+or altered intermediate and trailing steps are rejected. Candidate source
+changes still require independent trusted-reader review.
+The controller job also pins its fail-closed job shape, checkout, setup,
+installer, complete runner/validation commands and unselected branch. Extra
+steps and shell, environment or failure-handling overrides are rejected; inert
+Bash comments and both supported runner forms remain allowed.
+PowerShell build-script `#requires` directives are rejected before comment filtering,
+including ASCII case, indentation and argument-whitespace variants: module
+requirements can load code before the fixed commands. Genuinely inert comments,
+including Unicode lookalikes and `#requires` text in Bash scripts, remain allowed.
+Only the fixed event-name and event-path expressions are allowed in the scope
+script. Embedded control or non-LF line separators are rejected rather than
+being parsed differently from the shell. Other GitHub expression expansion is
+forbidden in these scripts, including comments, because substitution occurs
+before shell parsing. Benchmark Gradle scripts,
+lockfiles and Gradle properties also select full scaffold verification because
+they can change the shared task graph; benchmark-only source changes remain
+eligible for the narrower benchmark stage.
+Mixed selections run the benchmark stage before scaffold so scaffold outputs
+remain authoritative. Merged acceptance requires the exact build-job log to
+contain both the successful benchmark task-graph report and the WP-504
+build-infrastructure report, including consistent phase counts, typed APK
+metadata and nonempty 16KB-aligned native library evidence. These checks compile
+and inspect the harness, dataset assertions and APKs; they do not measure
+performance or claim WP-504 device acceptance. Historical five-key scope
+reports remain valid only when the current trusted classification does not
+require benchmark verification.
+
+An independent `benchmark-consumer` output also selects a compile-only
+scaffold invocation when application, core, feature or platform production
+source sets, module build inputs or shared Gradle inputs can affect the
+benchmark/profile variants. Ordinary test, Android-test, debug-only and
+documentation inputs do not select it; unknown Android inputs still fail safe.
+The Gradle task-observation guard itself also selects this route.
+This does not add a scope to historical five- or six-key reports and does not
+run the full benchmark stage for ordinary product changes. The selected Linux
+step executes `validateModuleGraph` and the benchmark/profile Kotlin and Java
+compile tasks. Hosted consumer execution creates a new Gradle user home and
+project cache rather than using the restored home, rejects pre-existing build or
+`.gradle` state in discovered Gradle project directories, and disables build and
+configuration caches. The guard requires the two Kotlin tasks to report
+successful, non-skipped work and records the committed `WorkloadActivity.kt`
+and `Workload.kt` Git blobs before and after their actions. A local consumer run
+does not establish the hosted isolation boundary.
+
+These are producer observations, not independent proof: candidate-controlled
+build configuration, earlier Python steps and other executable inputs still
+require a trusted immutable execution-input closure and reader enforcement.
+Both the live executor and historical acceptance reader now reject even
+structurally valid matching task/source records with an explicit independent
+compiler-evidence blocker. A successful Gradle exit, fresh state, task types,
+source hashes or replayed hosted log cannot turn these observations into a
+successful consumer-compilation report. No candidate JSON field, environment
+override or self-issued receipt enables a positive path. Acceptance requires a
+separately reviewed and deployed independent execution-input boundary and
+verifier; neither is currently available. The bounded infrastructure-review
+publication route is source-review/test authority, not compiler-action proof,
+and its finite path map does not admit `ci.py` or `test_ci.py`.
+The historical reader detects the new declaration from immutable base/head
+workflows while preserving older workflows' existing acceptance. The
+compile-only result does not establish a full benchmark build, performance,
+device behavior or WP-504 acceptance.
+
+Outside the isolated consumer invocation, hosted Gradle task-output caching is
+enabled. Hosted scaffold invocations request Gradle stack traces so the original
+job log can expose nested task failures when available; these diagnostics remain
+enabled independently of the build-phase worker bound. Only `:core:data:testDebugUnitTest` is
+explicitly eligible for test-result caching; all other Gradle `Test` tasks
 are explicitly denied cache eligibility until their external inputs and side
 effects are accounted for. The candidate task-graph init script declares the WP-203
 fixture directory as an input and the interop artifact directory as an output,

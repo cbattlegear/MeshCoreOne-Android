@@ -3,8 +3,45 @@ import groovy.json.JsonOutput
 import org.gradle.api.tasks.AbstractExecTask
 
 def graphTasks = []
+def consumerFile = System.getenv("ANDROID_CI_BENCHMARK_CONSUMER")
+def consumerTasks = [":app:compileBenchmarkKotlin", ":app:compileProfileKotlin"]
+def consumerCaptures = [:]
+def consumerInputs = [:]
 
 gradle.beforeProject { project ->
+    project.tasks.configureEach { task ->
+        if (consumerFile && task.path in consumerTasks) {
+            if (!task.class.name.startsWith("org.jetbrains.kotlin.gradle.tasks.KotlinCompile")) {
+                throw new GradleException("Unexpected benchmark consumer compiler: ${task.path}")
+            }
+            task.outputs.upToDateWhen { false }
+            task.outputs.cacheIf("Benchmark consumer source observation requires task execution") { false }
+            def identify = {
+                def androidRoot = task.project.rootProject.projectDir.canonicalFile.toPath()
+                def sources = task.sources.files.collect { it.canonicalFile } as Set
+                def result = [:]
+                [
+                    "benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt",
+                    "benchmark/dataset/kotlin/com/meshcoreone/android/benchmark/Workload.kt",
+                ].each { relative ->
+                    def file = androidRoot.resolve(relative).toFile()
+                    if (!file.isFile() || java.nio.file.Files.isSymbolicLink(file.toPath()) ||
+                            !file.canonicalFile.toPath().startsWith(androidRoot) ||
+                            !sources.contains(file.canonicalFile)) {
+                        throw new GradleException("Missing benchmark consumer compiler source: ${task.path}: ${relative}")
+                    }
+                    def bytes = file.bytes
+                    def digest = java.security.MessageDigest.getInstance("SHA-1")
+                    digest.update(("blob " + bytes.length + "\u0000").getBytes("UTF-8"))
+                    result["android/" + relative] = digest.digest(bytes).encodeHex().toString()
+                }
+                result
+            }
+            synchronized (gradle) {
+                consumerCaptures[task.path] = identify
+            }
+        }
+    }
     project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->
         def lineageFile = System.getenv("ANDROID_CI_TEST_LINEAGE")
         def sourcesFile = System.getenv("ANDROID_CI_TEST_SOURCES")
@@ -115,6 +152,41 @@ gradle.beforeProject { project ->
                 }
                 project.delete(interopOutput)
             }
+        }
+    }
+}
+
+if (consumerFile) {
+    // Task actions mark the task as having done work, so observation uses listeners.
+    gradle.taskGraph.beforeTask { task ->
+        if (!(task.path in consumerTasks)) {
+            return
+        }
+        synchronized (gradle) {
+            def identify = consumerCaptures[task.path]
+            if (identify == null || consumerInputs.containsKey(task.path)) {
+                throw new GradleException("Missing or duplicate benchmark consumer compiler start: ${task.path}")
+            }
+            consumerInputs[task.path] = identify()
+        }
+    }
+    gradle.taskGraph.afterTask { task, state ->
+        if (!(task.path in consumerTasks) || state.failure != null) {
+            return
+        }
+        if (!state.executed || !state.didWork || state.skipped || state.upToDate ||
+                state.noSource || state.skipMessage != null) {
+            throw new GradleException("Benchmark consumer compiler did not execute: ${task.path}")
+        }
+        synchronized (gradle) {
+            def identify = consumerCaptures.remove(task.path)
+            def observed = consumerInputs.remove(task.path)
+            if (identify == null || observed == null || identify() != observed) {
+                throw new GradleException("Benchmark consumer compiler sources changed during ${task.path}")
+            }
+            new File(consumerFile).append(JsonOutput.toJson([
+                task: task.path, sources: observed,
+            ]) + "\n", "UTF-8")
         }
     }
 }

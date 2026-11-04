@@ -21,7 +21,8 @@ from controller.gates import Binding, policy_revision
 from controller.ledger import Identity, validate_merged_implementation
 from controller.merged_acceptance import (
     BoundedRepair, HumanGateRequired, MergedAcceptance, NoImplementationFound,
-    declares_completion, timestamp,
+    declares_benchmark_consumer, declares_completion, validate_benchmark_build_log,
+    validate_benchmark_consumer_build_log, timestamp,
 )
 from controller.model import REFERENCE_SHA, git
 from controller.native_review import PUBLICATION_MARKER, PUBLICATION_STEP, RESULT_MARKER, REVIEW_MARKER, WORKFLOW_PATH
@@ -858,10 +859,15 @@ class MergedAcceptanceTests(unittest.TestCase):
                 self.assertRaisesRegex(PortError, "changed trusted CI readers"):
             reader.verify_trusted_readers(BASE, HEAD)
 
-    def test_scoped_run_checks_real_selection_and_positive_controller_discovery(self):
+    def test_scoped_run_accepts_historical_five_key_report_and_requires_discovery(self):
         reader, _, _, _, _ = self.fixture()
-        scopes = {"controller": True, "scaffold": False, "protocol": False,
-                  "backup": False, "external-oracle": False}
+        current_scopes = {"controller": True, "scaffold": False, "protocol": False,
+                          "backup": False, "benchmark": False, "external-oracle": False}
+        scopes = {key: value for key, value in current_scopes.items() if key != "benchmark"}
+        self.assertEqual(
+            tuple(scopes),
+            ("controller", "scaffold", "protocol", "backup", "external-oracle"),
+        )
         report = {"base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
                   "paths": ["tools/android-port/controller/engine.py"], "scopes": scopes}
         native = {"suite": "android/accessibility-tests", "base": BASE, "head": HEAD, "selected": False,
@@ -887,18 +893,338 @@ class MergedAcceptanceTests(unittest.TestCase):
         with patch("controller.repair_acceptance.read_job_log", side_effect=log), \
                 patch("oracle.workflow_scope.merge_base", return_value=BASE), \
                 patch("oracle.workflow_scope.changed_paths", return_value=report["paths"]), \
-                patch("oracle.workflow_scope.classify", return_value=scopes), \
+                patch("oracle.workflow_scope.classify", return_value=current_scopes), \
                 patch("controller.merged_acceptance.tree", return_value={}):
             reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
             counts["discovered"] = counts["run"] = counts["passed"] = 0
             controller_log = line("Run controller tests once", counts)
             with self.assertRaisesRegex(PortError, "missing, skipped or failed"):
                 reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            counts["discovered"] = counts["run"] = counts["passed"] = 3
+            controller_log = line("Run controller tests once", counts)
+            with patch("controller.merged_acceptance.declares_benchmark_consumer", return_value=True), \
+                    self.assertRaisesRegex(PortError, "scope does not match"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            with patch("controller.merged_acceptance.declares_benchmark_consumer", side_effect=[True, False]), \
+                    self.assertRaisesRegex(PortError, "removed the trusted benchmark consumer output"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
+    def test_scoped_run_rejects_historical_report_when_benchmark_scope_is_required(self):
+        reader, _, _, _, _ = self.fixture()
+        paths = [
+            "android/benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt"
+        ]
+        current_scopes = {"controller": False, "scaffold": False, "protocol": False,
+                          "backup": False, "benchmark": True, "external-oracle": False}
+        legacy_scopes = {key: value for key, value in current_scopes.items() if key != "benchmark"}
+        report = {"base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
+                  "paths": paths, "scopes": legacy_scopes}
+        native = {"suite": "android/accessibility-tests", "base": BASE, "head": HEAD,
+                  "selected": False, "result": "NOT SELECTED", "committed_files": 0}
+        scope_log = (
+            "job\tClassify changed inputs with fail-safe defaults\t"
+            f"2026-10-10T11:00:00Z {json.dumps(report)}\n"
+            "job\tClassify changed inputs with fail-safe defaults\t"
+            f"2026-10-10T11:00:00Z {json.dumps(native)}\n"
+        )
+        jobs = [
+            {"id": index, "name": name, "run_id": 1, "head_sha": HEAD,
+             "status": "completed", "conclusion": conclusion}
+            for index, (name, conclusion) in enumerate((
+                ("Classify candidate scopes", "success"),
+                ("Controller and workflow policy", "success"),
+                ("One Linux Android build", "success"),
+                ("Swift codec oracle", "skipped"),
+                ("SwiftData restore and export oracle", "skipped"),
+            ), 1)
+        ]
+        with patch("controller.repair_acceptance.read_job_log", return_value=scope_log), \
+                patch("oracle.workflow_scope.merge_base", return_value=BASE), \
+                patch("oracle.workflow_scope.changed_paths", return_value=paths), \
+                patch("oracle.workflow_scope.classify", return_value=current_scopes), \
+                patch("controller.merged_acceptance.tree", return_value={}):
+            with self.assertRaisesRegex(PortError, "scope does not match"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
+    def test_consumer_contract_is_read_as_data_from_exact_commit_workflow(self):
+        path = ".github/workflows/android-ci.yml"
+        snapshot = {path: "a" * 40}
+        legacy = b"jobs:\n  scope:\n    outputs:\n      scaffold: value\n"
+        current = (
+            b"jobs:\n  scope:\n    outputs:\n"
+            b"      benchmark-consumer: '${{ steps.changed.outputs.benchmark-consumer }}'\n"
+        )
+        self.assertFalse(declares_benchmark_consumer(Path.cwd(), BASE, {}))
+        with patch("controller.merged_acceptance.git", return_value=legacy) as read:
+            self.assertFalse(declares_benchmark_consumer(Path.cwd(), BASE, snapshot))
+            read.assert_called_once_with(Path.cwd(), "show", f"{BASE}:{path}")
+        with patch("controller.merged_acceptance.git", return_value=current):
+            self.assertTrue(declares_benchmark_consumer(Path.cwd(), HEAD, snapshot))
+        for value in (
+            b"jobs:\n  scope:\n    outputs:\n      benchmark-consumer: false\n",
+            b"jobs:\n  scope:\n    outputs: []\n",
+            b"jobs:\n  scope:\n    outputs:\n      benchmark-consumer: x\n      benchmark-consumer: x\n",
+        ):
+            with self.subTest(value=value), patch("controller.merged_acceptance.git", return_value=value), \
+                    self.assertRaises(PortError):
+                declares_benchmark_consumer(Path.cwd(), HEAD, snapshot)
+
+    def test_consumer_compilation_report_requires_exact_tasks_and_head_sources(self):
+        from controller.ci import (
+            BENCHMARK_CONSUMER_KOTLIN_TASKS, BENCHMARK_CONSUMER_SOURCES, BENCHMARK_CONSUMER_TASKS,
+        )
+
+        snapshot = {path: str(index + 1) * 40 for index, path in enumerate(BENCHMARK_CONSUMER_SOURCES)}
+        report = {
+            "stage": "scaffold", "scopes": ["benchmark-consumer"], "result": "success",
+            "tasks": list(BENCHMARK_CONSUMER_TASKS), "strict_verification": True,
+            "resolved_task_graph": {
+                "tasks": 2, "result": "no-duplicate-ci-evidence",
+                "phases": {
+                    "preflight": {"tasks": 1, "result": "no-duplicate-ci-evidence"},
+                    "build": {"tasks": 1, "result": "no-duplicate-ci-evidence"},
+                },
+            },
+            "benchmark_consumer_compilation": [
+                {"task": task, "sources": snapshot.copy()} for task in BENCHMARK_CONSUMER_KOTLIN_TASKS
+            ],
+            "compiled_test_sources": {},
+        }
+
+        def line(value, step="Compile benchmark consumer"):
+            return f"job\t{step}\t2026-10-10T11:00:00Z {json.dumps(value)}\n"
+
+        for log in (
+            line(report),
+            line(report).replace("2026-10-10T11:00:00Z", "2026-11-04T21:45:00Z"),
+        ):
+            with self.subTest(log=log), self.assertRaisesRegex(
+                PortError, "producer-only task/source observations"
+            ):
+                validate_benchmark_consumer_build_log(log, snapshot)
+        for kind in (
+            "missing", "duplicate-report", "wrong-step", "failed", "non-strict", "wrong-scope",
+            "wrong-tasks", "missing-phase", "phase-count", "missing-record", "duplicate-record",
+            "wrong-task", "wrong-blob", "missing-source", "extra-claim", "unexpected-tests",
+            "self-issued-proof",
+        ):
+            value = copy.deepcopy(report)
+            if kind == "failed":
+                value["result"] = "skipped"
+            elif kind == "non-strict":
+                value["strict_verification"] = False
+            elif kind == "wrong-scope":
+                value["scopes"] = ["scaffold"]
+            elif kind == "wrong-tasks":
+                value["tasks"].pop()
+            elif kind == "missing-phase":
+                value["resolved_task_graph"]["phases"].pop("preflight")
+            elif kind == "phase-count":
+                value["resolved_task_graph"]["tasks"] += 1
+            elif kind == "missing-record":
+                value["benchmark_consumer_compilation"].pop()
+            elif kind == "duplicate-record":
+                value["benchmark_consumer_compilation"][1] = copy.deepcopy(
+                    value["benchmark_consumer_compilation"][0]
+                )
+            elif kind == "wrong-task":
+                value["benchmark_consumer_compilation"][0]["task"] = ":app:compileDebugKotlin"
+            elif kind == "wrong-blob":
+                value["benchmark_consumer_compilation"][0]["sources"][BENCHMARK_CONSUMER_SOURCES[0]] = "f" * 40
+            elif kind == "missing-source":
+                value["benchmark_consumer_compilation"][0]["sources"].pop(BENCHMARK_CONSUMER_SOURCES[0])
+            elif kind == "extra-claim":
+                value["performance_measured"] = True
+            elif kind == "unexpected-tests":
+                value["compiled_test_sources"] = {"app": {}}
+            elif kind == "self-issued-proof":
+                value["independent_compiler_proof"] = {
+                    "verified": True, "head": HEAD, "run_id": 1, "sources": snapshot.copy(),
+                }
+            log = "" if kind == "missing" else line(
+                value, "Run parallel Gradle validation and Android tasks" if kind == "wrong-step"
+                else "Compile benchmark consumer"
+            )
+            if kind == "duplicate-report":
+                log += line(value)
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_benchmark_consumer_build_log(log, snapshot)
+
+    def test_new_consumer_contract_requires_compile_evidence_without_full_benchmark(self):
+        from controller.ci import (
+            BENCHMARK_CONSUMER_KOTLIN_TASKS, BENCHMARK_CONSUMER_SOURCES, BENCHMARK_CONSUMER_TASKS,
+        )
+        from oracle.workflow_scope import classify
+
+        reader, _, _, _, _ = self.fixture()
+        paths = ["android/feature/chats/src/main/kotlin/TimelineContracts.kt"]
+        scopes = classify(paths)
+        snapshot = {path: str(index + 1) * 40 for index, path in enumerate(BENCHMARK_CONSUMER_SOURCES)}
+        scope_report = {
+            "base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
+            "paths": paths, "scopes": scopes, "benchmark_consumer": True,
+        }
+        native_report = {
+            "suite": "android/accessibility-tests", "base": BASE, "head": HEAD,
+            "selected": False, "result": "NOT SELECTED", "committed_files": 0,
+        }
+        compilation = {
+            "stage": "scaffold", "scopes": ["benchmark-consumer"], "result": "success",
+            "tasks": list(BENCHMARK_CONSUMER_TASKS), "strict_verification": True,
+            "resolved_task_graph": {
+                "tasks": 2, "result": "no-duplicate-ci-evidence",
+                "phases": {
+                    "preflight": {"tasks": 1, "result": "no-duplicate-ci-evidence"},
+                    "build": {"tasks": 1, "result": "no-duplicate-ci-evidence"},
+                },
+            },
+            "benchmark_consumer_compilation": [
+                {"task": task, "sources": snapshot.copy()} for task in BENCHMARK_CONSUMER_KOTLIN_TASKS
+            ],
+            "compiled_test_sources": {},
+        }
+        jobs = [
+            {"id": index, "name": name, "run_id": 1, "head_sha": HEAD,
+             "status": "completed", "conclusion": conclusion}
+            for index, (name, conclusion) in enumerate((
+                ("Classify candidate scopes", "success"), ("Controller and workflow policy", "success"),
+                ("One Linux Android build", "success"), ("Swift codec oracle", "skipped"),
+                ("SwiftData restore and export oracle", "skipped"),
+            ), 1)
+        ]
+
+        def line(step, value):
+            return f"job\t{step}\t2026-10-10T11:00:00Z {json.dumps(value)}\n"
+
+        def read_log(_native, job_id):
+            if job_id == 1:
+                return line("Classify changed inputs with fail-safe defaults", scope_report) + line(
+                    "Classify changed inputs with fail-safe defaults", native_report
+                )
+            if job_id == 2:
+                return line("Run controller tests once", {
+                    "discovered": 1, "run": 1, "passed": 1, "failed": 0, "errors": 0, "skipped": 0,
+                    "scope": "controller fixtures only; not Android/iOS/hardware parity",
+                })
+            return line("Compile benchmark consumer", compilation)
+
+        with patch("controller.repair_acceptance.read_job_log", side_effect=read_log), \
+                patch("controller.repair_acceptance.validate_build_log"), \
+                patch("controller.local_scope.candidate_plan",
+                      return_value={"scopes": ["module:feature/chats"], "tasks": [":feature:chats:testDebugUnitTest"]}), \
+                patch("oracle.workflow_scope.merge_base", return_value=BASE), \
+                patch("oracle.workflow_scope.changed_paths", return_value=paths), \
+                patch("controller.merged_acceptance.tree", return_value=snapshot), \
+                patch("controller.merged_acceptance.declares_benchmark_consumer",
+                      side_effect=lambda _repo, revision, _tree: revision == HEAD), \
+                patch("controller.merged_acceptance.validate_benchmark_build_log") as full_benchmark:
+            with self.assertRaisesRegex(PortError, "producer-only task/source observations"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            full_benchmark.assert_not_called()
+            for value in (None, False, "true"):
+                scope_report["benchmark_consumer"] = value
+                with self.subTest(scope=value), self.assertRaisesRegex(PortError, "scope does not match"):
+                    reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            scope_report["benchmark_consumer"] = True
+            compilation["benchmark_consumer_compilation"].pop()
+            with self.assertRaisesRegex(PortError, "benchmark consumer compilation records"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            compilation["benchmark_consumer_compilation"] = [
+                {"task": task, "sources": snapshot.copy()} for task in BENCHMARK_CONSUMER_KOTLIN_TASKS
+            ]
+            paths[:] = ["tools/android-port/controller/verify_candidate_task_graph.gradle"]
+            scope_report["scopes"] = classify(paths)
+            with self.assertRaisesRegex(PortError, "producer-only task/source observations"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            full_benchmark.assert_not_called()
+
+    def test_new_consumer_contract_allows_unselected_documentation_only_diff(self):
+        from oracle.workflow_scope import classify
+
+        reader, _, _, _, _ = self.fixture()
+        paths = ["docs/android/deviations/WP-307.md"]
+        report = {
+            "base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
+            "paths": paths, "scopes": classify(paths), "benchmark_consumer": False,
+        }
+        native = {
+            "suite": "android/accessibility-tests", "base": BASE, "head": HEAD,
+            "selected": False, "result": "NOT SELECTED", "committed_files": 0,
+        }
+        jobs = [
+            {"id": index, "name": name, "run_id": 1, "head_sha": HEAD,
+             "status": "completed", "conclusion": conclusion}
+            for index, (name, conclusion) in enumerate((
+                ("Classify candidate scopes", "success"), ("Controller and workflow policy", "success"),
+                ("One Linux Android build", "skipped"), ("Swift codec oracle", "skipped"),
+                ("SwiftData restore and export oracle", "skipped"),
+            ), 1)
+        ]
+
+        def line(value):
+            return ("job\tClassify changed inputs with fail-safe defaults\t"
+                    f"2026-10-10T11:00:00Z {json.dumps(value)}\n")
+
+        with patch("controller.repair_acceptance.read_job_log", side_effect=lambda *_: line(report) + line(native)), \
+                patch("oracle.workflow_scope.merge_base", return_value=BASE), \
+                patch("oracle.workflow_scope.changed_paths", return_value=paths), \
+                patch("controller.merged_acceptance.tree", return_value={}), \
+                patch("controller.merged_acceptance.declares_benchmark_consumer", return_value=True):
+            reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            report["benchmark_consumer"] = True
+            with self.assertRaisesRegex(PortError, "scope does not match"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
+    def test_debug_unit_test_only_diff_requires_ordinary_build_not_consumer_evidence(self):
+        from oracle.workflow_scope import classify
+
+        reader, _, _, _, _ = self.fixture()
+        paths = ["android/core/data/src/testDebug/kotlin/RepositoryTest.kt"]
+        report = {
+            "base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
+            "paths": paths, "scopes": classify(paths), "benchmark_consumer": False,
+        }
+        native = {
+            "suite": "android/accessibility-tests", "base": BASE, "head": HEAD,
+            "selected": False, "result": "NOT SELECTED", "committed_files": 0,
+        }
+        log = "".join(
+            "job\tClassify changed inputs with fail-safe defaults\t"
+            f"2026-10-10T11:00:00Z {json.dumps(value)}\n" for value in (report, native)
+        )
+        jobs = [
+            {"id": index, "name": name, "run_id": 1, "head_sha": HEAD,
+             "status": "completed", "conclusion": conclusion}
+            for index, (name, conclusion) in enumerate((
+                ("Classify candidate scopes", "success"), ("Controller and workflow policy", "success"),
+                ("One Linux Android build", "success"), ("Swift codec oracle", "skipped"),
+                ("SwiftData restore and export oracle", "skipped"),
+            ), 1)
+        ]
+        with patch("controller.repair_acceptance.read_job_log", return_value=log), \
+                patch("oracle.workflow_scope.merge_base", return_value=BASE), \
+                patch("oracle.workflow_scope.changed_paths", return_value=paths), \
+                patch("controller.merged_acceptance.tree", return_value={}), \
+                patch("controller.merged_acceptance.declares_benchmark_consumer", return_value=True), \
+                patch("controller.local_scope.candidate_plan", return_value={
+                    "scopes": ["module:core/data"], "tasks": [":core:data:testDebugUnitTest"],
+                }), \
+                patch("controller.repair_acceptance.validate_build_log") as ordinary, \
+                patch("controller.merged_acceptance.validate_benchmark_consumer_build_log") as consumer:
+            reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            self.assertEqual(ordinary.call_args.args[1], ["core/data"])
+            consumer.assert_not_called()
+            ordinary.side_effect = PortError("fixture ordinary build failure")
+            with self.assertRaisesRegex(PortError, "ordinary build failure"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            jobs[2]["conclusion"] = "skipped"
+            with self.assertRaisesRegex(PortError, "missing, skipped or failed"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
 
     def test_scoped_product_changes_cannot_pass_without_runnable_module_tests(self):
         reader, _, _, _, _ = self.fixture()
         scopes = {"controller": False, "scaffold": True, "protocol": False,
-                  "backup": False, "external-oracle": False}
+                  "backup": False, "benchmark": False, "external-oracle": False}
         paths = ["android/core/data/src/main/kotlin/Store.kt"]
         report = {"base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
                   "paths": paths, "scopes": scopes}
@@ -925,6 +1251,226 @@ class MergedAcceptanceTests(unittest.TestCase):
                       return_value={"scopes": ["module:core/data"], "tasks": [":core:data:lint"]}):
             with self.assertRaisesRegex(PortError, "no selected runnable module tests"):
                 reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
+    def test_benchmark_scope_requires_exact_stage_and_build_infrastructure_reports(self):
+        from controller.local_scope import TASKS
+
+        reader, _, _, _, _ = self.fixture()
+        paths = [
+            "android/benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt"
+        ]
+        scopes = {"controller": False, "scaffold": False, "protocol": False,
+                  "backup": False, "benchmark": True, "external-oracle": False}
+        scope_report = {
+            "base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
+            "paths": paths, "scopes": scopes,
+        }
+        native_report = {
+            "suite": "android/accessibility-tests", "base": BASE, "head": HEAD,
+            "selected": False, "result": "NOT SELECTED", "committed_files": 0,
+        }
+        stage_report = {
+            "stage": "benchmark", "scopes": [], "result": "success",
+            "tasks": TASKS["benchmark"], "strict_verification": True,
+            "resolved_task_graph": {
+                "tasks": 2, "result": "no-duplicate-ci-evidence",
+                "phases": {
+                    "preflight": {"tasks": 1, "result": "no-duplicate-ci-evidence"},
+                    "build": {"tasks": 1, "result": "no-duplicate-ci-evidence"},
+                },
+            },
+        }
+        infrastructure_report = {
+            "scope": "WP-504 build infrastructure only",
+            "dataset_assertions": {
+                "discovered": 8, "run": 8, "passed": 8, "failed": 0, "errors": 0, "skipped": 0,
+            },
+            "artifacts": {
+                variant: {
+                    "package": package, "min_sdk": 31, "target_sdk": 37,
+                    "debuggable": False, "static_16kb_alignment_verified": True,
+                    "elf_pt_load_alignment": {"lib/arm64-v8a/libmaplibre.so": [16384, 65536]},
+                    "physical_device_or_native_runtime_verified": False,
+                }
+                for variant, package in (
+                    ("benchmark", "com.meshcoreone.android.benchmark"),
+                    ("profile", "com.meshcoreone.android.benchmark"),
+                    ("release", "com.meshcoreone.android"),
+                )
+            },
+            "instrumentation_producer_compiled": True,
+            "instrumentation_producer_alignment": {
+                "static_16kb_alignment_verified": True,
+                "elf_pt_load_alignment": {"lib/arm64-v8a/libtest.so": [16384]},
+                "physical_device_or_native_runtime_verified": False,
+            },
+            "performance_measured": False, "baseline_profiles_collected": False,
+            "device_battery_anr_or_strictmode_verified": False,
+        }
+
+        def line(step, value):
+            return f"job\t{step}\t2026-10-10T11:00:00Z {json.dumps(value)}\n"
+
+        scope_log = line("Classify changed inputs with fail-safe defaults", scope_report)
+        scope_log += line("Classify changed inputs with fail-safe defaults", native_report)
+        build_log = line("Run parallel Gradle validation and Android tasks", infrastructure_report)
+        build_log += line("Run parallel Gradle validation and Android tasks", stage_report)
+        validate_benchmark_build_log(build_log)
+
+        jobs = [
+            {"id": index, "name": name, "run_id": 1, "head_sha": HEAD,
+             "status": "completed", "conclusion": conclusion}
+            for index, (name, conclusion) in enumerate((
+                ("Classify candidate scopes", "success"), ("Controller and workflow policy", "success"),
+                ("One Linux Android build", "success"), ("Swift codec oracle", "skipped"),
+                ("SwiftData restore and export oracle", "skipped"),
+            ), 1)
+        ]
+
+        def read_log(_native, job_id):
+            return scope_log if job_id == 1 else build_log
+
+        with patch("controller.repair_acceptance.read_job_log", side_effect=read_log), \
+                patch("oracle.workflow_scope.merge_base", return_value=BASE), \
+                patch("oracle.workflow_scope.changed_paths", return_value=paths), \
+                patch("oracle.workflow_scope.classify", return_value=scopes), \
+                patch("controller.merged_acceptance.tree", return_value={}):
+            reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            jobs[2]["head_sha"] = "c" * 40
+            with self.assertRaisesRegex(PortError, "missing, skipped or failed"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            jobs[2]["head_sha"] = HEAD
+            scope_report["benchmark_consumer"] = False
+            scope_log = line("Classify changed inputs with fail-safe defaults", scope_report)
+            scope_log += line("Classify changed inputs with fail-safe defaults", native_report)
+            with patch("controller.merged_acceptance.declares_benchmark_consumer", return_value=True):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
+        for kind in (
+            "missing-stage", "skipped-stage", "wrong-tasks", "missing-infrastructure", "zero-dataset",
+            "inconsistent-graph-total", "missing-alignment-flag", "malformed-alignment",
+            "empty-load-segments", "misaligned-load-segment", "nonpower-load-segment",
+            "boolean-load-segment", "missing-maplibre", "missing-runtime-flag", "device-claim",
+            "noninteger-sdk", "missing-producer-alignment-flag", "malformed-producer-alignment",
+            "unknown-infrastructure-field",
+        ):
+            changed_stage = copy.deepcopy(stage_report)
+            changed_infrastructure = copy.deepcopy(infrastructure_report)
+            if kind == "missing-stage":
+                changed_stage["stage"] = "scaffold"
+            elif kind == "skipped-stage":
+                changed_stage["result"] = "skipped"
+            elif kind == "wrong-tasks":
+                changed_stage["tasks"] = [":app:assembleDebug"]
+            elif kind == "missing-infrastructure":
+                changed_infrastructure.pop("artifacts")
+            elif kind == "zero-dataset":
+                changed_infrastructure["dataset_assertions"]["passed"] = 0
+            elif kind == "inconsistent-graph-total":
+                changed_stage["resolved_task_graph"]["tasks"] += 1
+            elif kind == "missing-alignment-flag":
+                changed_infrastructure["artifacts"]["benchmark"].pop("static_16kb_alignment_verified")
+            elif kind == "malformed-alignment":
+                changed_infrastructure["artifacts"]["profile"]["elf_pt_load_alignment"] = True
+            elif kind == "empty-load-segments":
+                changed_infrastructure["artifacts"]["release"]["elf_pt_load_alignment"] = {
+                    "lib/arm64-v8a/libmaplibre.so": [],
+                }
+            elif kind == "misaligned-load-segment":
+                changed_infrastructure["artifacts"]["benchmark"]["elf_pt_load_alignment"] = {
+                    "lib/arm64-v8a/libmaplibre.so": [4096],
+                }
+            elif kind == "nonpower-load-segment":
+                changed_infrastructure["artifacts"]["benchmark"]["elf_pt_load_alignment"] = {
+                    "lib/arm64-v8a/libmaplibre.so": [24576],
+                }
+            elif kind == "boolean-load-segment":
+                changed_infrastructure["artifacts"]["benchmark"]["elf_pt_load_alignment"] = {
+                    "lib/arm64-v8a/libmaplibre.so": [True],
+                }
+            elif kind == "missing-maplibre":
+                changed_infrastructure["artifacts"]["profile"]["elf_pt_load_alignment"] = {
+                    "lib/arm64-v8a/libother.so": [16384],
+                }
+            elif kind == "missing-runtime-flag":
+                changed_infrastructure["artifacts"]["release"].pop("physical_device_or_native_runtime_verified")
+            elif kind == "device-claim":
+                changed_infrastructure["artifacts"]["release"]["physical_device_or_native_runtime_verified"] = True
+            elif kind == "noninteger-sdk":
+                changed_infrastructure["artifacts"]["benchmark"]["min_sdk"] = 31.0
+            elif kind == "missing-producer-alignment-flag":
+                changed_infrastructure["instrumentation_producer_alignment"].pop("static_16kb_alignment_verified")
+            elif kind == "malformed-producer-alignment":
+                changed_infrastructure["instrumentation_producer_alignment"]["elf_pt_load_alignment"] = True
+            elif kind == "unknown-infrastructure-field":
+                changed_infrastructure["unexpected"] = True
+            changed_log = line(
+                "Run parallel Gradle validation and Android tasks", changed_infrastructure,
+            ) + line("Run parallel Gradle validation and Android tasks", changed_stage)
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_benchmark_build_log(changed_log)
+
+    def test_mixed_benchmark_and_scaffold_selection_requires_both_reports(self):
+        reader, _, _, _, _ = self.fixture()
+        paths = [
+            "android/benchmark/target/kotlin/com/meshcoreone/android/benchmarktarget/WorkloadActivity.kt",
+            "android/core/model/src/main/kotlin/com/meshcoreone/android/core/model/Message.kt",
+        ]
+        scopes = {"controller": False, "scaffold": True, "protocol": False,
+                  "backup": False, "benchmark": True, "external-oracle": False}
+        scope_report = {
+            "base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
+            "paths": paths, "scopes": scopes,
+        }
+        native_report = {
+            "suite": "android/accessibility-tests", "base": BASE, "head": HEAD,
+            "selected": False, "result": "NOT SELECTED", "committed_files": 0,
+        }
+        build_log = (
+            "job\tRun parallel Gradle validation and Android tasks\t"
+            "2026-10-10T11:00:00Z benchmark and scaffold log\n"
+        )
+        scope_log = (
+            "job\tClassify changed inputs with fail-safe defaults\t"
+            f"2026-10-10T11:00:00Z {json.dumps(scope_report)}\n"
+            "job\tClassify changed inputs with fail-safe defaults\t"
+            f"2026-10-10T11:00:00Z {json.dumps(native_report)}\n"
+        )
+        jobs = [
+            {"id": index, "name": name, "run_id": 1, "head_sha": HEAD,
+             "status": "completed", "conclusion": conclusion}
+            for index, (name, conclusion) in enumerate((
+                ("Classify candidate scopes", "success"),
+                ("Controller and workflow policy", "success"),
+                ("One Linux Android build", "success"),
+                ("Swift codec oracle", "skipped"),
+                ("SwiftData restore and export oracle", "skipped"),
+            ), 1)
+        ]
+
+        def read_log(_native, job_id):
+            return scope_log if job_id == 1 else build_log
+
+        with patch("controller.repair_acceptance.read_job_log", side_effect=read_log), \
+                patch("controller.repair_acceptance.validate_build_log") as validate_scaffold, \
+                patch("controller.merged_acceptance.validate_benchmark_build_log") as validate_benchmark, \
+                patch("controller.local_scope.candidate_plan",
+                      return_value={
+                          "scopes": ["module:core/model"],
+                          "tasks": [":core:model:testDebugUnitTest"],
+                      }) as candidate_plan, \
+                patch("oracle.workflow_scope.merge_base", return_value=BASE), \
+                patch("oracle.workflow_scope.changed_paths", return_value=paths), \
+                patch("oracle.workflow_scope.classify", return_value=scopes), \
+                patch("controller.merged_acceptance.tree", return_value={}):
+            reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
+        candidate_plan.assert_called_once_with(
+            reader.manifest.repo, BASE, HEAD, trusted_base=BASE, merge_base_only=True,
+        )
+        self.assertEqual(validate_scaffold.call_args.args[:2], (build_log, ["core/model"]))
+        self.assertEqual(validate_scaffold.call_args.kwargs.keys(), {"plan_for_scopes"})
+        validate_benchmark.assert_called_once_with(build_log)
 
 
 if __name__ == "__main__":

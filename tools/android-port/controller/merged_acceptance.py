@@ -32,6 +32,36 @@ class NoImplementationFound(PortError):
     pass
 
 
+LEGACY_SCOPE_KEYS = ("controller", "scaffold", "protocol", "backup", "external-oracle")
+CI_WORKFLOW_PATH = ".github/workflows/android-ci.yml"
+
+
+def declares_benchmark_consumer(repo, revision, snapshot):
+    if CI_WORKFLOW_PATH not in snapshot:
+        return False
+    from .workflows import parse_yaml
+
+    try:
+        text = git(repo, "show", f"{revision}:{CI_WORKFLOW_PATH}").decode("utf-8")
+    except UnicodeError as error:
+        raise PortError("CI workflow is not valid UTF-8") from error
+    workflow = parse_yaml(text)
+    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
+    if not isinstance(jobs, dict):
+        raise PortError("CI workflow jobs are malformed")
+    if "scope" not in jobs:
+        return False
+    scope = jobs["scope"]
+    outputs = scope.get("outputs") if isinstance(scope, dict) else None
+    if not isinstance(outputs, dict):
+        raise PortError("CI scope outputs are malformed")
+    if "benchmark-consumer" not in outputs:
+        return False
+    if outputs["benchmark-consumer"] != "${{ steps.changed.outputs.benchmark-consumer }}":
+        raise PortError("CI benchmark consumer output is malformed")
+    return True
+
+
 def timestamp(value, label):
     if not isinstance(value, str):
         raise PortError(f"Missing {label} timestamp")
@@ -61,6 +91,139 @@ def log_objects(log, step):
         if isinstance(value, dict):
             objects.append(value)
     return objects
+
+
+def _validate_benchmark_alignment(value, label, *, artifact=False):
+    fields(
+        value,
+        {"static_16kb_alignment_verified", "elf_pt_load_alignment",
+         "physical_device_or_native_runtime_verified"},
+        optional={"package", "min_sdk", "target_sdk", "debuggable"} if artifact else None,
+        label=label,
+    )
+    libraries = value["elf_pt_load_alignment"]
+    if (
+        value["static_16kb_alignment_verified"] is not True
+        or value["physical_device_or_native_runtime_verified"] is not False
+        or not isinstance(libraries, dict) or not libraries
+        or any(
+            not isinstance(name, str) or not name.startswith("lib/") or not name.endswith(".so")
+            or not isinstance(segments, list) or not segments
+            or any(
+                type(alignment) is not int or alignment < 16384 or alignment & (alignment - 1)
+                for alignment in segments
+            )
+            for name, segments in libraries.items()
+        )
+    ):
+        raise PortError(f"{label}: malformed or overclaimed native alignment evidence")
+    if artifact and not any(name.endswith("/libmaplibre.so") for name in libraries):
+        raise PortError(f"{label}: missing MapLibre native alignment evidence")
+
+
+def validate_benchmark_build_log(log):
+    from .ci_evidence import counts
+    from .local_scope import TASKS
+
+    objects = log_objects(log, "Run parallel Gradle validation and Android tasks")
+    reports = [item for item in objects if item.get("stage") == "benchmark"]
+    if len(reports) != 1:
+        raise PortError("Missing/ambiguous actual benchmark report in authoritative hosted log")
+    report = reports[0]
+    graph = report.get("resolved_task_graph")
+    phases = graph.get("phases") if isinstance(graph, dict) else None
+    if (
+        report.get("result") != "success" or report.get("strict_verification") is not True
+        or report.get("tasks") != TASKS["benchmark"] or report.get("scopes") != []
+        or not isinstance(graph, dict) or graph.get("result") != "no-duplicate-ci-evidence"
+        or type(graph.get("tasks")) is not int or graph["tasks"] <= 0
+        or not isinstance(phases, dict) or set(phases) != {"preflight", "build"}
+        or any(
+            not isinstance(value, dict) or value.get("result") != "no-duplicate-ci-evidence"
+            or type(value.get("tasks")) is not int or value["tasks"] <= 0
+            for value in phases.values()
+        )
+        or graph["tasks"] != sum(phase["tasks"] for phase in phases.values())
+    ):
+        raise PortError("Hosted benchmark stage report is incomplete or does not bind declared harness tasks")
+
+    verification = [
+        item for item in objects if item.get("scope") == "WP-504 build infrastructure only"
+    ]
+    if len(verification) != 1:
+        raise PortError("Missing/ambiguous WP-504 build-infrastructure report in authoritative hosted log")
+    value = verification[0]
+    fields(value, {
+        "scope", "dataset_assertions", "artifacts", "instrumentation_producer_compiled",
+        "instrumentation_producer_alignment", "performance_measured", "baseline_profiles_collected",
+        "device_battery_anr_or_strictmode_verified",
+    }, label="WP-504 build-infrastructure report")
+    counts(value["dataset_assertions"], minimum=8)
+    artifacts = value["artifacts"]
+    expected_packages = {
+        "benchmark": "com.meshcoreone.android.benchmark",
+        "profile": "com.meshcoreone.android.benchmark",
+        "release": "com.meshcoreone.android",
+    }
+    if (
+        value["instrumentation_producer_compiled"] is not True
+        or not isinstance(artifacts, dict)
+        or set(artifacts) != set(expected_packages)
+        or value["performance_measured"] is not False
+        or value["baseline_profiles_collected"] is not False
+        or value["device_battery_anr_or_strictmode_verified"] is not False
+    ):
+        raise PortError("Hosted benchmark build-infrastructure evidence is incomplete or overclaims measurements")
+    _validate_benchmark_alignment(value["instrumentation_producer_alignment"], "instrumentation producer")
+    for variant, package in expected_packages.items():
+        artifact = artifacts[variant]
+        if (
+            not isinstance(artifact, dict) or artifact.get("package") != package
+            or type(artifact.get("min_sdk")) is not int or artifact["min_sdk"] != 31
+            or type(artifact.get("target_sdk")) is not int or artifact["target_sdk"] != 37
+            or artifact.get("debuggable") is not False
+        ):
+            raise PortError(f"Hosted benchmark {variant} APK inspection is incomplete")
+        _validate_benchmark_alignment(artifact, f"{variant} APK", artifact=True)
+
+
+def validate_benchmark_consumer_build_log(log, snapshot):
+    """Reject producer-only compiler observations, including successful historical runs."""
+    from .ci import (
+        BENCHMARK_CONSUMER_SCOPE, BENCHMARK_CONSUMER_TASKS,
+        validate_benchmark_consumer_compilation,
+    )
+
+    objects = log_objects(log, "Compile benchmark consumer")
+    reports = [item for item in objects if item.get("stage") == "scaffold"]
+    if len(reports) != 1:
+        raise PortError("Missing/ambiguous benchmark consumer compilation in authoritative hosted log")
+    report = reports[0]
+    fields(
+        report,
+        {"stage", "scopes", "result", "tasks", "strict_verification", "resolved_task_graph",
+         "benchmark_consumer_compilation", "compiled_test_sources"},
+        label="benchmark consumer compilation report",
+    )
+    graph = report["resolved_task_graph"]
+    phases = graph.get("phases") if isinstance(graph, dict) else None
+    if (
+        report["result"] != "success" or report["strict_verification"] is not True
+        or report["scopes"] != [BENCHMARK_CONSUMER_SCOPE]
+        or report["tasks"] != list(BENCHMARK_CONSUMER_TASKS)
+        or report["compiled_test_sources"] != {}
+        or not isinstance(graph, dict) or graph.get("result") != "no-duplicate-ci-evidence"
+        or type(graph.get("tasks")) is not int or graph["tasks"] <= 0
+        or not isinstance(phases, dict) or set(phases) != {"preflight", "build"}
+        or any(
+            not isinstance(value, dict) or value.get("result") != "no-duplicate-ci-evidence"
+            or type(value.get("tasks")) is not int or value["tasks"] <= 0
+            for value in phases.values()
+        )
+        or graph["tasks"] != sum(phase["tasks"] for phase in phases.values())
+    ):
+        raise PortError("Hosted benchmark consumer compilation report is incomplete")
+    validate_benchmark_consumer_compilation(report["benchmark_consumer_compilation"], snapshot)
 
 
 def declares_completion(wp, body):
@@ -608,7 +771,7 @@ class MergedAcceptance:
         from .local_scope import candidate_plan
         from .repair_acceptance import read_job_log, validate_build_log
         from .test_runner import NATIVE_INPUTS, NATIVE_SUITE
-        from oracle.workflow_scope import changed_paths, classify, merge_base
+        from oracle.workflow_scope import changed_paths, classify, merge_base, requires_benchmark_consumer
 
         def job(name, conclusion):
             matches = [item for item in jobs if item.get("name") == name]
@@ -633,7 +796,28 @@ class MergedAcceptance:
         report, native_report = reports[0], native[0]
         diff_base = merge_base(self.manifest.repo, base, head)
         paths = changed_paths(self.manifest.repo, diff_base, head)
+        expected_scopes = classify(paths)
+        reported_scopes = report.get("scopes")
+        legacy_scopes = {key: expected_scopes[key] for key in LEGACY_SCOPE_KEYS}
+
+        def matches_scope_map(value, expected):
+            return (
+                isinstance(value, dict) and set(value) == set(expected)
+                and all(type(enabled) is bool for enabled in value.values())
+                and value == expected
+            )
+
+        scope_matches = matches_scope_map(reported_scopes, expected_scopes) or (
+            expected_scopes["benchmark"] is False
+            and matches_scope_map(reported_scopes, legacy_scopes)
+        )
         before, after = tree(self.manifest.repo, base), tree(self.manifest.repo, head)
+        base_consumer = declares_benchmark_consumer(self.manifest.repo, base, before)
+        head_consumer = declares_benchmark_consumer(self.manifest.repo, head, after)
+        if base_consumer and not head_consumer:
+            raise PortError("Candidate removed the trusted benchmark consumer output")
+        consumer_contract = base_consumer or head_consumer
+        consumer_selected = consumer_contract and requires_benchmark_consumer(paths)
         family = lambda path: path == NATIVE_SUITE or path.startswith(NATIVE_SUITE + "/")
         committed = {path for path in after if family(path)}
         native_selected = (
@@ -649,7 +833,13 @@ class MergedAcceptance:
         if (
             report.get("base") != base or report.get("head") != head
             or report.get("diff_base") != diff_base or report.get("fail_safe") is not False
-            or report.get("paths") != paths or report.get("scopes") != classify(paths)
+            or report.get("paths") != paths or not scope_matches
+            or (
+                consumer_contract and (
+                    type(report.get("benchmark_consumer")) is not bool
+                    or report["benchmark_consumer"] is not consumer_selected
+                )
+            )
             or native_report.get("base") != base or native_report.get("head") != head
             or native_report.get("selected") is not native_selected
             or native_report.get("result") != ("SELECTED" if native_selected else "NOT SELECTED")
@@ -657,7 +847,7 @@ class MergedAcceptance:
             or native_report["committed_files"] != len(committed)
         ):
             raise PortError("Hosted scope does not match the trusted exact-candidate diff")
-        scopes = report["scopes"]
+        scopes = expected_scopes
         controller_job = job("Controller and workflow policy", "success")
         if scopes["controller"] or native_report["selected"]:
             reports = log_objects(read_job_log(self, controller_job["id"]), "Run controller tests once")
@@ -671,34 +861,44 @@ class MergedAcceptance:
                 or any(value.get(key) != 0 for key in ("failed", "errors", "skipped"))
             ):
                 raise PortError("Hosted controller tests were missing, skipped or failed")
-        build_selected = any(scopes[key] for key in ("scaffold", "protocol", "backup"))
+        benchmark_inputs = any(path.startswith("android/benchmark/") for path in paths)
+        if benchmark_inputs and not scopes["benchmark"]:
+            raise PortError("Android benchmark inputs lack selected benchmark verification")
+        non_benchmark_build_selected = any(scopes[key] for key in ("scaffold", "protocol", "backup"))
+        build_selected = non_benchmark_build_selected or scopes["benchmark"] or consumer_selected
         product_changes = any(re.match(
             r"^android/(?:app|(?:core|feature|platform)/[^/]+)/src/"
             r"(?:main|debug|release|commonMain|androidMain)/.+\.(?:kt|java)$", path,
         ) for path in paths)
-        if product_changes and not build_selected:
+        if (product_changes or benchmark_inputs) and not build_selected:
             raise PortError("Android product changes have no selected hosted build or tests")
         if build_selected:
             build = job("One Linux Android build", "success")
-            plan = candidate_plan(self.manifest.repo, base, head, trusted_base=base, merge_base_only=True)
-            modules = []
-            for scope in plan["scopes"]:
-                if scope.startswith("module:"):
-                    module = scope.removeprefix("module:")
-                    prefix = ":" + module.replace("/", ":") + ":"
-                    if prefix + "test" in plan["tasks"] or prefix + "testDebugUnitTest" in plan["tasks"]:
-                        modules.append(module)
-            if not modules and "protocol" in plan["scopes"]:
-                modules.append("core/protocol")
-            if product_changes and not modules:
-                raise PortError("Android product changes have no selected runnable module tests")
-            validate_build_log(
-                read_job_log(self, build["id"]), modules,
-                plan_for_scopes=lambda selected: candidate_plan(
-                    self.manifest.repo, base, head, selected,
-                    trusted_base=base, merge_base_only=True,
-                ),
-            )
+            build_log = read_job_log(self, build["id"])
+            if non_benchmark_build_selected:
+                plan = candidate_plan(self.manifest.repo, base, head, trusted_base=base, merge_base_only=True)
+                modules = []
+                for scope in plan["scopes"]:
+                    if scope.startswith("module:"):
+                        module = scope.removeprefix("module:")
+                        prefix = ":" + module.replace("/", ":") + ":"
+                        if prefix + "test" in plan["tasks"] or prefix + "testDebugUnitTest" in plan["tasks"]:
+                            modules.append(module)
+                if not modules and "protocol" in plan["scopes"]:
+                    modules.append("core/protocol")
+                if product_changes and not modules:
+                    raise PortError("Android product changes have no selected runnable module tests")
+                validate_build_log(
+                    build_log, modules,
+                    plan_for_scopes=lambda selected: candidate_plan(
+                        self.manifest.repo, base, head, selected,
+                        trusted_base=base, merge_base_only=True,
+                    ),
+                )
+            if scopes["benchmark"]:
+                validate_benchmark_build_log(build_log)
+            if consumer_selected:
+                validate_benchmark_consumer_build_log(build_log, after)
         else:
             job("One Linux Android build", "skipped")
         job("Swift codec oracle", "success" if scopes["external-oracle"] else "skipped")

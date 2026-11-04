@@ -14,11 +14,13 @@ from controller.model import SHA, git, tree
 
 CONTROLLER_MODULES = (
     "__init__", "apk_alignment", "authority", "backends", "capabilities", "ci", "ci_environment", "ci_evidence",
-    "dispatch", "disposable", "engine", "errors", "gate_runtime", "gates", "historical", "jvm_lanes", "ledger", "local_scope", "merged_acceptance", "model", "module_junit",
+    "compiler_verification", "dispatch", "disposable", "engine", "errors", "gate_runtime", "gates", "historical", "jvm_lanes", "ledger", "local_scope", "merged_acceptance", "model", "module_junit",
     "native_review", "paths", "performance", "publication", "provision", "repair_acceptance", "render", "runtime_inputs", "scaffold_scope", "schema", "scope_amendment", "settings",
     "software_verification", "staging", "test_runner", "validate", "verification", "verification_config", "windows_guest", "workflows",
 )
 FIXED_INPUTS = (
+    ".github/workflows/android-compiler-verification.yml",
+    "tools/android-port/controller/independent_compiler.gradle",
     ".github/workflows/android-ci.yml", ".github/workflows/copilot-setup-steps.yml",
     ".github/workflows/android-parity-review.yml",
     "tools/android-port/controller/toolchain-pins.json",

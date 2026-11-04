@@ -16,7 +16,7 @@ from oracle.codec_harness import (
     SOURCE_TEST_PATH, WHOLE_FILES,
 )
 
-SCOPES = ("controller", "scaffold", "protocol", "backup", "external-oracle")
+SCOPES = ("controller", "scaffold", "protocol", "backup", "benchmark", "external-oracle")
 SHA = re.compile(r"[0-9a-f]{40}")
 ZERO = "0" * 40
 ALL_SCOPE_INPUTS = {
@@ -40,6 +40,12 @@ ANDROID_DOCUMENTATION_INPUTS = {
     "android/README.md",
     "android/scaffold/README.md",
     "android/tools/meshcli/README.md",
+}
+BENCHMARK_CONSUMER_MODULE = re.compile(
+    r"^android/(?:app|(?:core|feature|platform)/[^/]+)/(.+)$"
+)
+BENCHMARK_CONSUMER_VERIFICATION_INPUTS = {
+    "tools/android-port/controller/verify_candidate_task_graph.gradle",
 }
 
 
@@ -80,6 +86,7 @@ RULES = {
     },
     "scaffold": {
         "exact": {
+            "tools/android-port/controller/apk_alignment.py",
             "tools/android-port/oracle/run_tests.py",
             "tools/android-port/oracle/foundation_ci.py",
             "tools/android-port/oracle/test_ci.py",
@@ -133,12 +140,25 @@ RULES = {
             "MeshCore/Tests/MeshCoreTests/",
         ),
     },
+    "benchmark": {
+        "exact": {
+            "android/app/build.gradle.kts", "android/app/proguard-rules.pro",
+            "android/app/src/main/AndroidManifest.xml", "android/app/src/main/baseline-prof.txt",
+            "tools/android-port/controller/apk_alignment.py",
+            "tools/android-port/controller/performance.py",
+        },
+        "prefix": (
+            "android/benchmark/", "android/build-logic/",
+            "android/app/src/benchmark/", "android/app/src/profile/", "android/app/src/release/",
+        ),
+    },
 }
 
 
 def all_scopes(reason, *, fail_safe=True):
     return {
         "scopes": {scope: True for scope in SCOPES},
+        "benchmark_consumer": True,
         "reason": reason,
         "fail_safe": fail_safe,
     }
@@ -188,9 +208,40 @@ def classify(paths):
     ]
     if unclassified:
         raise PortError("Unclassified Android inputs require full verification: " + ", ".join(unclassified))
+    if any(
+        path.startswith("android/benchmark/")
+        and (path.endswith((".gradle", ".gradle.kts", ".lockfile")) or path.endswith("/gradle.properties"))
+        for path in normalized
+    ):
+        result["scaffold"] = True
     if set(normalized) & SHARED_GRADLE_INPUTS:
-        result.update({"scaffold": True, "protocol": True, "backup": True})
+        result.update({"scaffold": True, "protocol": True, "backup": True, "benchmark": True})
     return result
+
+
+def benchmark_consumer_input(path):
+    match = BENCHMARK_CONSUMER_MODULE.fullmatch(path)
+    if match is not None:
+        relative = match.group(1)
+        source = re.match(r"^src/([^/]+)/.+", relative)
+        documentation = relative in {"README.md", "LICENSE", "NOTICE"}
+    elif path.startswith("android/build-logic/"):
+        relative = path.removeprefix("android/build-logic/")
+        source = re.search(r"(?:^|/)src/([^/]+)/.+", relative)
+        documentation = relative.rsplit("/", 1)[-1] in {"README.md", "LICENSE", "NOTICE"}
+    else:
+        return False
+    if source is not None:
+        return source.group(1) not in {"debug", "test", "testDebug", "androidTest"}
+    return not documentation
+
+
+def requires_benchmark_consumer(paths):
+    return bool(set(paths) & (
+        ALL_SCOPE_INPUTS | SHARED_GRADLE_INPUTS | BENCHMARK_CONSUMER_VERIFICATION_INPUTS
+    )) or any(
+        benchmark_consumer_input(path) for path in paths
+    )
 
 
 def changed_paths(repo: Path, base: str, head: str):
@@ -222,6 +273,7 @@ def evaluate(repo: Path, event_name: str, event: dict):
         paths = changed_paths(repo, diff_base, head)
         return {
             "scopes": classify(paths), "reason": "changed-input-classification",
+            "benchmark_consumer": requires_benchmark_consumer(paths),
             "fail_safe": False, "base": base, "head": head,
             "diff_base": diff_base, "paths": paths,
         }
@@ -245,6 +297,7 @@ def main(argv=None):
     with args.output.open("a", encoding="utf-8", newline="\n") as stream:
         for scope in SCOPES:
             stream.write(f"{scope}={'true' if result['scopes'][scope] else 'false'}\n")
+        stream.write(f"benchmark-consumer={'true' if result['benchmark_consumer'] else 'false'}\n")
     print(json.dumps(result, indent=2))
     return 0
 

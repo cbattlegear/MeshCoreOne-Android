@@ -73,18 +73,6 @@ interface ChannelPersisting {
     // Unknown/legacy/ambiguous slots have no proof. This read is not an atomic dispatch fence.
     suspend fun fetchChannelOccupantID(radioId: RadioId, index: UByte): UUID?
     suspend fun fetchChannelOccupantSnapshot(radioId: RadioId, index: UByte): ChannelOccupantSnapshot?
-    // AndroidOnly: WP-202 Conditional metadata updates validate a caller-carried occupant against Room atomically.
-    /**
-     * Applies message metadata only if this exact occupant is still the resolved Room slot occupant.
-     * Null clears the last-message date; the supplied scope is not RF-origin proof.
-     * Storage failures remain typed exceptions.
-     */
-    suspend fun applyChannelMessageMetadataIfCurrentOccupant(
-        scope: ChannelHistoryScope,
-        lastMessageDate: Instant?,
-        incrementUnreadCount: Boolean,
-    ): ChannelOccupantMetadataMutationOutcome =
-        throw UnsupportedOperationException("Conditional channel metadata mutation is not implemented by this adapter")
     suspend fun invalidateChannelOccupant(radioId: RadioId, index: UByte)
     /** Scoped facade only: commit unresolved authority before SET; only authoritative radio reconciliation clears it. */
     suspend fun beginChannelMutation(radioId: RadioId, index: UByte)

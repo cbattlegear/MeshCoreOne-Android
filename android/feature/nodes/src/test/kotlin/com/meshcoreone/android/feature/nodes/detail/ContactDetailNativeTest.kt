@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.model.VContactIdentity
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.PathInfo
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.feature.nodes.contacts.key
 import com.meshcoreone.android.feature.nodes.deps.NodesAdvertEvent
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage

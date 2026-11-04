@@ -15,7 +15,8 @@ import java.util.UUID
 internal class MessageRepository(
     private val context: RoomRepositoryContext,
     pending: PendingSendRepository,
-) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting {
+) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, ChannelDraftRecoveryPersisting,
+    HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting {
     override suspend fun createOrReconcilePendingDirectMessage(
         intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
     ): MessageDTO = context.write("createOrReconcilePendingDirectMessage") {
@@ -74,6 +75,14 @@ internal class MessageRepository(
 
     override suspend fun fetchMessage(key: EntityKey): MessageDTO? = context.read("fetchMessage") {
         database.messages().byId(key.radioId.value, key.id)?.toDTO()
+    }
+
+    override suspend fun fetchRecoverableChannelDrafts(
+        radioId: RadioId, limit: Long, offset: Long,
+    ): SnapshotList<MessageDTO> = context.read("fetchRecoverableChannelDrafts") {
+        queryBounds(limit, offset)
+        database.messages().recoverableChannelDrafts(radioId.value, limit, offset)
+            .map { it.toDTO() }.snapshot()
     }
 
     override suspend fun createOrReconcileChannelMessage(

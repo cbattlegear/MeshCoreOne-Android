@@ -100,24 +100,24 @@ internal class ContactRepository(
                 database.contacts().upsert(row)
                 byKey[frame.publicKey] = row
             }
-
-            override suspend fun updateContactFavorite(
-                key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
-            ): ContactFavoriteUpdateResult = context.write("updateContactFavorite") {
-                val row = database.contacts().byId(key.radioId.value, key.id)
-                    ?: return@write ContactFavoriteUpdateResult.CONTACT_NOT_FOUND
-                if (row.publicKey != expectedPublicKey) return@write ContactFavoriteUpdateResult.IDENTITY_MISMATCH
-                if (database.contacts().updateFavorite(
-                        key.radioId.value, key.id, expectedPublicKey, isFavorite, if (isFavorite) 1L else 0L,
-                    ) != 1) {
-                    invalidData("Favorite identity changed inside the write transaction")
-                }
-                save()
-                ContactFavoriteUpdateResult.UPDATED
-            }
             save()
             frames.size.toLong()
         }
+    }
+
+    override suspend fun updateContactFavorite(
+        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+    ): ContactFavoriteUpdateResult = context.write("updateContactFavorite") {
+        val row = database.contacts().byId(key.radioId.value, key.id)
+            ?: return@write ContactFavoriteUpdateResult.CONTACT_NOT_FOUND
+        if (row.publicKey != expectedPublicKey) return@write ContactFavoriteUpdateResult.IDENTITY_MISMATCH
+        if (database.contacts().updateFavorite(
+                key.radioId.value, key.id, expectedPublicKey, isFavorite, if (isFavorite) 1L else 0L,
+            ) != 1) {
+            invalidData("Favorite identity changed inside the write transaction")
+        }
+        save()
+        ContactFavoriteUpdateResult.UPDATED
     }
 
     override suspend fun deleteContact(key: EntityKey) =

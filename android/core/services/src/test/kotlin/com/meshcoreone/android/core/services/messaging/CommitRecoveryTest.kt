@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.protocol.session.MessageWriteDispatch
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
 import java.time.Instant
+import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import kotlin.test.*
@@ -18,6 +19,34 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CommitRecoveryTest {
+    @Test fun committedCreationReceiptRetainsTheExactReturnedRow() {
+        val proposed = MessageDTO(
+            id = UUID.randomUUID(), radioId = RADIO, channelIndex = 0u, text = "original",
+            timestamp = 1u, createdAt = Instant.EPOCH, textType = TextType.PLAIN,
+        )
+        val persisted = proposed.copy(timestamp = 2u, status = MessageStatus.SENT)
+        val receipt = PendingMessageCreation()
+
+        receipt.writing(proposed)
+
+        assertTrue(receipt.committed(persisted))
+        assertEquals(PendingMessageCreation.Snapshot(PendingMessageCreation.State.COMMITTED, persisted), receipt.snapshot)
+    }
+
+    @Test fun committedCreationReceiptDoesNotAcceptAnotherRowIdentity() {
+        val proposed = MessageDTO(
+            id = UUID.randomUUID(), radioId = RADIO, channelIndex = 0u, text = "original",
+            timestamp = 1u, createdAt = Instant.EPOCH, textType = TextType.PLAIN,
+        )
+        val receipt = PendingMessageCreation()
+
+        receipt.writing(proposed)
+
+        assertFalse(receipt.committed(proposed.copy(id = UUID.randomUUID())))
+        assertEquals(PendingMessageCreation.State.UNKNOWN, receipt.snapshot.state)
+        assertEquals(proposed, receipt.snapshot.message)
+    }
+
     private enum class Destination(val wire: CommandCode) {
         DIRECT(CommandCode.SEND_MESSAGE), CHANNEL(CommandCode.SEND_CHANNEL_MESSAGE);
 

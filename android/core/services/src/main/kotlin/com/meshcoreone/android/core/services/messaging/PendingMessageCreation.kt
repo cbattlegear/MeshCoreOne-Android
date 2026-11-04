@@ -30,9 +30,21 @@ class PendingMessageCreation : AbstractCoroutineContextElement(Key) {
     }
 
     @Synchronized
+    internal fun committed(message: MessageDTO): Boolean {
+        check(snapshot.state == State.WRITING)
+        val intended = checkNotNull(snapshot.message)
+        if (intended.id != message.id || intended.radioId != message.radioId) {
+            snapshot = Snapshot(State.UNKNOWN, intended)
+            return false
+        }
+        snapshot = Snapshot(State.COMMITTED, message)
+        return true
+    }
+
+    @Synchronized
     internal fun settled(state: State) {
         check(snapshot.state == State.WRITING)
-        check(state == State.COMMITTED || state == State.NOT_COMMITTED || state == State.UNKNOWN)
+        check(state == State.NOT_COMMITTED || state == State.UNKNOWN)
         snapshot = Snapshot(state, checkNotNull(snapshot.message))
     }
 }

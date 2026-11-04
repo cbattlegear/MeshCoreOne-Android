@@ -415,16 +415,15 @@ class MessageService(
             if (receipt != null) withContext(NonCancellable) {
                 try {
                     val stored = dataStore.fetchMessage(key(message.id))
-                    val state = when {
-                        stored == null -> PendingMessageCreation.State.UNKNOWN
-                        stored == message -> PendingMessageCreation.State.COMMITTED
+                    when {
+                        stored == null -> receipt.settled(PendingMessageCreation.State.UNKNOWN)
+                        stored == message -> receipt.committed(stored)
                         else -> {
+                            receipt.settled(PendingMessageCreation.State.UNKNOWN)
                             remember("pendingCreation.${message.id}.identity",
                                 PersistenceStoreException(PersistenceStoreError.InvalidData))
-                            PendingMessageCreation.State.UNKNOWN
                         }
                     }
-                    receipt.settled(state)
                 } catch (readFailure: Exception) {
                     receipt.settled(PendingMessageCreation.State.UNKNOWN)
                     remember("pendingCreation.${message.id}.read", readFailure)
@@ -433,7 +432,11 @@ class MessageService(
             }
             throw failure
         }
-        receipt?.settled(PendingMessageCreation.State.COMMITTED)
+        if (receipt?.committed(message) == false) {
+            val failure = PersistenceStoreException(PersistenceStoreError.InvalidData)
+            remember("pendingCreation.${message.id}.identity", failure)
+            throw failure
+        }
     }
 
     override suspend fun createPendingMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO =

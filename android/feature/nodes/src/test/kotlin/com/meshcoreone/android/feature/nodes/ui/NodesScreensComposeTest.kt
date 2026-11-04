@@ -12,6 +12,7 @@ import android.view.inspector.WindowInspector
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
@@ -21,6 +22,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
@@ -97,8 +99,10 @@ class ContactHopSortApi31ComposeTest : NodesScreensComposeTestBase.ContactHopSor
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactHopSortApi37ComposeTest : NodesScreensComposeTestBase.ContactHopSortComposeTestBase()
 
-abstract class NodesScreensComposeTestBase {
+abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false) {
     protected lateinit var controller: ActivityController<ComponentActivity>
+    private val frameClock = if (deterministicFrames) BroadcastFrameClock() else null
+    private var frameNanos = 0L
 
     @Before
     fun attachHost() {
@@ -113,11 +117,18 @@ abstract class NodesScreensComposeTestBase {
         controller.windowFocusChanged(false)
         controller.pause().stop().destroy()
         idleMainLooper()
+        frameClock?.cancel()
     }
 
     protected fun mount(content: @Composable () -> Unit) {
         controller.get().runOnUiThread {
-            controller.get().setContent {
+            val parent = frameClock?.let {
+                controller.get().window.decorView.createLifecycleAwareWindowRecomposer(
+                    coroutineContext = it,
+                    lifecycle = controller.get().lifecycle,
+                )
+            }
+            controller.get().setContent(parent = parent) {
                 CompositionLocalProvider(
                     LocalDensity provides Density(
                         density = controller.get().resources.displayMetrics.density,
@@ -231,8 +242,16 @@ abstract class NodesScreensComposeTestBase {
     protected open fun rootView(): View = controller.get().window.decorView
 
     protected fun advanceFrames() {
-        controller.get().runOnUiThread { Snapshot.sendApplyNotifications() }
-        idleMainLooper()
+        repeat(if (frameClock == null) 1 else 6) {
+            controller.get().runOnUiThread {
+                Snapshot.sendApplyNotifications()
+                frameClock?.let {
+                    frameNanos += 16_000_000L
+                    it.sendFrame(frameNanos)
+                }
+            }
+            idleMainLooper()
+        }
         controller.get().runOnUiThread {
             val view = findComposeView(rootView())
             if (view.width > 0 && view.height > 0) {
@@ -260,7 +279,7 @@ abstract class NodesScreensComposeTestBase {
         }
     }
 
-    abstract class ContactHopSortComposeTestBase : NodesScreensComposeTestBase() {
+    abstract class ContactHopSortComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
         private var sortMenuOpen = false
 
         override fun rootView(): View =

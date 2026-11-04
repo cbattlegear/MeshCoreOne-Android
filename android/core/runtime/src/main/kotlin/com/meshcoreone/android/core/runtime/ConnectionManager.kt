@@ -605,7 +605,14 @@ class ConnectionManager(
             owner.services = OwnedRadioServices(services, ownership, context)
         }
         requireCurrent(owner)
-        devices.saveDevice(device)
+        if (existing == null) {
+            devices.saveDevice(device)
+        } else {
+            devices.editDevice(deviceId, isCurrent = { isCurrent(owner) }) { latest ->
+                DeviceDTO.fromConnection(deviceId, radioId, info, capabilities, autoAdd, latest, methods, clock.instant)
+                    .copy(isActive = latest.isActive, lastConnected = latest.lastConnected)
+            } ?: throw ConnectionError.DeviceNotFound()
+        }
         requireCurrent(owner)
         devices.setActiveDevice(device.id)
         requireCurrent(owner)
@@ -1159,7 +1166,8 @@ class ConnectionManager(
         if (!isCurrent(owner)) return radioId
         if (radioId == null && before.publicKey != info.publicKey) {
             requireCurrent(owner)
-            devices.saveDevice(before.copy(publicKey = info.publicKey))
+            devices.editDevice(before.id, isCurrent = { isCurrent(owner) }) { it.copy(publicKey = info.publicKey) }
+                ?: throw ConnectionError.DeviceNotFound()
             requireCurrent(owner)
         }
         if (radioId != null || before.publicKey != info.publicKey) {
@@ -1617,6 +1625,20 @@ class ConnectionManager(
     fun replaceConnectedDevice(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? = synchronized(lock) {
         if (active?.token != expectedToken || !values.value.state.isConnected) return@synchronized null
         replaceConnectedDevice(device)
+    }
+
+    fun currentDevice(expectedToken: SessionToken): DeviceDTO? = synchronized(lock) {
+        val owner = active ?: return@synchronized null
+        if (owner.token != expectedToken || !values.value.state.isConnected || !isCurrent(owner)) return@synchronized null
+        deviceValue
+    }
+
+    fun transformConnectedDevice(
+        expectedToken: SessionToken?,
+        transform: (DeviceDTO) -> DeviceDTO,
+    ): ConnectedDeviceEdit? = synchronized(lock) {
+        val current = if (expectedToken == null) deviceValue else currentDevice(expectedToken)
+        replaceConnectedDevice(transform(current ?: return@synchronized null))
     }
 
     /** Swift updateDevice(with:) after a device edit, limited to the current generation's radio. */

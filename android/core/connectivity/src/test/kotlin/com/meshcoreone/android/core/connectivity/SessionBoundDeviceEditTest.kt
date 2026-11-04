@@ -32,6 +32,11 @@ class SessionBoundDeviceEditTest {
         var token: SessionToken? = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), device!!.radioId)
         var beforeReplace: () -> Unit = {}
         override val connectedDevice get() = device
+        override val connectedDeviceToken get() = token
+        override fun currentDevice(expectedToken: SessionToken): DeviceDTO? {
+            beforeReplace()
+            return device.takeIf { token == expectedToken }
+        }
         override fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? =
             error("Session-bound update must not call the unbound replacement")
         override fun replaceConnectedDevice(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? {

@@ -53,6 +53,7 @@ interface AppConnectionPort {
     suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean =
         throw UnsupportedOperationException("Session-bound radio preset updates are not supported")
     fun updateDevice(device: DeviceDTO)
+    fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken)
     fun updateAutoAddConfig(config: AutoAddConfig)
     fun updateClientRepeat(enabled: Boolean)
     fun updatePathHashMode(mode: UByte)

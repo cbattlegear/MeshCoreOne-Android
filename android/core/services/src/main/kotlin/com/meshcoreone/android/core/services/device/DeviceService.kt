@@ -5,6 +5,8 @@ import com.meshcoreone.android.core.contracts.domain.DevicePersisting
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.SessionEvent
+import com.meshcoreone.android.core.contracts.domain.editDevice
+import com.meshcoreone.android.core.contracts.domain.DeviceWriteConflict
 import com.meshcoreone.android.core.contracts.domain.errors.DeviceServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.DeviceServiceException
 import com.meshcoreone.android.core.model.DeviceDTO
@@ -38,12 +40,13 @@ class DeviceService(
     suspend fun updateOCVSettings(deviceID: UUID, preset: String, customArray: String?): Unit = context.operation {
         val (updated, callback) = operationLock.withLock {
             context.requireCurrent()
-            val current = dataStore.fetchDevice(deviceID)
-                ?: throw DeviceServiceException(DeviceServiceError.DeviceNotFound)
-            context.requireCurrent()
-            val updated = current.copy(ocvPreset = preset, customOCVArrayString = customArray)
-            try {
-                dataStore.saveDevice(updated)
+            val updated = try {
+                dataStore.editDevice(deviceID, isCurrent = { context.requireCurrent(); true }) {
+                    it.copy(ocvPreset = preset, customOCVArrayString = customArray)
+                } ?: throw DeviceServiceException(DeviceServiceError.DeviceNotFound)
+            } catch (failure: DeviceWriteConflict) {
+                Logger.getLogger("MeshCore.DeviceService").warning("Device settings write authority changed")
+                throw DeviceServiceException(DeviceServiceError.PersistenceFailed("Device write authority changed"), failure)
             } catch (failure: PersistenceStoreException) {
                 val reason = when (val error = failure.error) {
                     is PersistenceStoreError.SaveFailed -> error.reason

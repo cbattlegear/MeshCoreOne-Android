@@ -125,6 +125,7 @@ class ConnectionManagerAppPort(
     override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean =
         editor.updateDevice(info, appliedRadioPresetId, expectedToken)
     override fun updateDevice(device: DeviceDTO) = editor.updateDevice(device)
+    override fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken) = editor.updateOCVSettings(device, expectedToken)
     override fun updateAutoAddConfig(config: AutoAddConfig) { editor.updateAutoAddConfig(config) }
     override fun updateClientRepeat(enabled: Boolean) { editor.updateClientRepeat(enabled) }
     override fun updatePathHashMode(mode: UByte) { editor.updatePathHashMode(mode) }
@@ -141,6 +142,16 @@ class ManagerDeviceAccess(private val manager: ConnectionManager) : ConnectedDev
     private val mutableChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
     internal val changes: kotlinx.coroutines.flow.StateFlow<Long> = mutableChanges
     override val connectedDevice: DeviceDTO? get() = manager.connectedDevice
+    override val connectedDeviceToken: SessionToken? get() = manager.snapshot.value.token
+    override fun currentDevice(expectedToken: SessionToken): DeviceDTO? = manager.currentDevice(expectedToken)
+    override fun transformConnectedDevice(
+        expectedToken: SessionToken?,
+        transform: (DeviceDTO) -> DeviceDTO,
+    ): ConnectedDeviceEdit? {
+        val edit = manager.transformConnectedDevice(expectedToken, transform)
+        if (edit != null) mutableChanges.update { Math.incrementExact(it) }
+        return edit
+    }
     override fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? {
         val edit = manager.replaceConnectedDevice(device)
         if (edit != null) {

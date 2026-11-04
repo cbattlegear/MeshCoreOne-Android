@@ -251,19 +251,47 @@ class CommitRecoveryTest {
                 val second = backgroundScope.async(receipt) { destination.send(h.service) }
                 runCurrent()
 
-                if (destination == Destination.DIRECT) {
-                    assertFailsWith<MessageServiceException> { second.await() }
-                    assertTrue(h.store.messages.isEmpty())
-                    releaseFirstSave.complete(Unit)
-                    first.await()
-                } else {
-                    releaseFirstSave.complete(Unit)
-                    first.await()
-                    assertFailsWith<MessageServiceException> { second.await() }
-                }
+                assertTrue(second.isCompleted)
+                assertFailsWith<MessageServiceException> { second.await() }
+                assertTrue(h.store.messages.isEmpty())
+                assertTrue(h.sends(destination.wire).isEmpty())
+                assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+                releaseFirstSave.complete(Unit)
+                first.await()
 
                 assertEquals(1, h.store.messages.size)
+                assertEquals(BASE_TIME.epochSecond.toUInt(), h.store.messages.values.single().timestamp)
                 assertEquals(1, h.sends(destination.wire).size)
+                assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
+            },
+            native("${destination}_ownedTopLevelActionKeepsItsClaimAcrossBackoffRetry") {
+                val h = Harness(this); h.start()
+                val firstAttempt = CompletableDeferred<Unit>()
+                var attempts = 0
+                if (destination == Destination.DIRECT) h.transport.directError = 3u else h.transport.channelError = 2u
+                h.transport.beforeReply = {
+                    if (it[0] == destination.wire.rawValue) {
+                        attempts++
+                        if (attempts == 1) firstAttempt.complete(Unit)
+                        else if (attempts == 2) {
+                            if (destination == Destination.DIRECT) h.transport.directError = null
+                            else h.transport.channelError = null
+                        }
+                    }
+                }
+                val receipt = NotificationActionReceipt()
+                val call = backgroundScope.async(receipt) { destination.send(h.service) }
+                firstAttempt.await()
+                runCurrent()
+                assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+                assertEquals(1, h.sends(destination.wire).size)
+                advanceTimeBy(1_000)
+                runCurrent()
+                call.await()
+
+                assertEquals(2, attempts)
+                assertEquals(2, h.sends(destination.wire).size)
+                assertEquals(1, h.store.messages.size)
                 assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
             },
             native("${destination}_cancelBehindActualSerializerProvesUnsentAndAllowsOneRetry") {

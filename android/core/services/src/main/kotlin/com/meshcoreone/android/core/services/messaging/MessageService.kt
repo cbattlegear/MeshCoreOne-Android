@@ -64,6 +64,7 @@ class MessageService(
     private val directClaims = mutableMapOf<UUID, DirectSendClaim>()
     private val activeDirectClaims = mutableMapOf<UUID, DirectSendClaim>()
     private val inFlightRetries = mutableSetOf<UUID>()
+    private val notificationActionClaims = mutableSetOf<NotificationActionReceipt>()
     private val activeOperations = mutableSetOf<Deferred<*>>()
     private val retainedFailures = linkedMapOf<String, Throwable>()
     private val failedNotifications = mutableSetOf<UUID>()
@@ -444,12 +445,20 @@ class MessageService(
         }
     }
 
-    private suspend fun requireFreshNotificationAction(operation: String) {
-        val receipt = currentCoroutineContext()[NotificationActionReceipt] ?: return
-        if (receipt.state != NotificationActionReceipt.State.READY) {
+    private suspend fun <T> withFreshNotificationAction(operation: String, block: suspend () -> T): T {
+        val receipt = currentCoroutineContext()[NotificationActionReceipt] ?: return block()
+        val claimed = synchronized(lock) {
+            receipt.state == NotificationActionReceipt.State.READY && notificationActionClaims.add(receipt)
+        }
+        if (!claimed) {
             throw MessageServiceException(
-                MessageServiceError.SendFailed("$operation cannot replay a consumed notification action"),
+                MessageServiceError.SendFailed("$operation cannot replay or overlap a notification action"),
             )
+        }
+        try {
+            return block()
+        } finally {
+            synchronized(lock) { notificationActionClaims.remove(receipt) }
         }
     }
 
@@ -496,32 +505,35 @@ class MessageService(
         notificationWire(block)
 
     override suspend fun sendDirectMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO =
-        owned("sendDirectMessage") {
-            requireFreshNotificationAction("sendDirectMessage")
-            validate(text, contact)
-            val message = outgoing(text, contact, textType, replyToID)
-            val (info, tracking, predicted) = sendBoundary(message.id, true) {
-                dataStore.saveMessage(message)
-                ownership.check("sendDirectMessage.saved")
-                checkIdentity("sendDirectMessage")
-                val predicted = AckCodeBuilder.expectedAck(message.timestamp, 0u, text, localPublicKey)
-                val tracking = trackPendingAck(message.id, contact.id, predicted, checkInterval, contact.publicKey)
-                val info = withPoolBackoff(3u) {
-                    dmOperations.withLock {
-                        checkIdentity("sendDirectMessage.wire")
-                        inlineWire { dispatch ->
-                            val timestamp = Instant.ofEpochSecond(message.timestamp.toLong())
-                            if (dispatch == null) session.sendMessage(contact.publicKey, text, timestamp)
-                            else session.sendMessage(contact.publicKey, text, timestamp, dispatch = dispatch)
+        withFreshNotificationAction("sendDirectMessage") {
+            owned("sendDirectMessage") {
+                validate(text, contact)
+                val message = outgoing(text, contact, textType, replyToID)
+                val (info, tracking, predicted) = sendBoundary(message.id, true) {
+                    dataStore.saveMessage(message)
+                    ownership.check("sendDirectMessage.saved")
+                    checkIdentity("sendDirectMessage")
+                    val predicted = AckCodeBuilder.expectedAck(message.timestamp, 0u, text, localPublicKey)
+                    val tracking = trackPendingAck(message.id, contact.id, predicted, checkInterval, contact.publicKey)
+                    val info = withPoolBackoff(3u) {
+                        dmOperations.withLock {
+                            checkIdentity("sendDirectMessage.wire")
+                            inlineWire { dispatch ->
+                                val timestamp = Instant.ofEpochSecond(message.timestamp.toLong())
+                                if (dispatch == null) session.sendMessage(contact.publicKey, text, timestamp)
+                                else session.sendMessage(contact.publicKey, text, timestamp, dispatch = dispatch)
+                            }
                         }
                     }
+                    Triple(info, tracking, predicted)
                 }
-                Triple(info, tracking, predicted)
+                ownership.check("sendDirectMessage.accepted")
+                if (pendingAck(message.id)?.receipt === tracking.receipt) {
+                    mergeSentInfo(message.id, contact.id, predicted, info, 0u, null)
+                }
+                postDMSent(message.id, contact.id, info)
+                fetchSaved(message.id)
             }
-            ownership.check("sendDirectMessage.accepted")
-            if (pendingAck(message.id)?.receipt === tracking.receipt) mergeSentInfo(message.id, contact.id, predicted, info, 0u, null)
-            postDMSent(message.id, contact.id, info)
-            fetchSaved(message.id)
         }
 
     override suspend fun sendMessageWithRetry(
@@ -591,41 +603,47 @@ class MessageService(
             failedNotifications.remove(id)
         }
         try {
-            return owned("queuedDirectMessage") {
-                requireFreshNotificationAction("queuedDirectMessage")
-                val row = fetchSaved(id)
-                if (row.contactID != contact.id || contact.radioId != token.radioId) throw MessageServiceException(MessageServiceError.ContactNotFound)
-                validate(row.text, contact)
-                if (!isResend && row.status == MessageStatus.DELIVERED) return@owned row
-                val claim = newDirectClaim(claimID, row, contact, isResend)
-                val wireTimestamp = synchronized(lock) { claim.timestamp } ?: (
-                    if (preserveTimestamp) row.timestamp else timestamp().also {
-                        dataStore.updateMessageTimestamp(key(id), it)
-                        ownership.check("queuedDirectMessage.timestamp")
+            return withFreshNotificationAction("queuedDirectMessage") {
+                owned("queuedDirectMessage") {
+                    val row = fetchSaved(id)
+                    if (row.contactID != contact.id || contact.radioId != token.radioId) {
+                        throw MessageServiceException(MessageServiceError.ContactNotFound)
                     }
-                ).also { synchronized(lock) { claim.timestamp = it } }
-                sendBoundary(id, false) {
-                    val info = if (synchronized(lock) { claim.wireFinished }) synchronized(lock) { claim.lastSentInfo }
-                        else retryLoop(claim, contact, wireTimestamp, null).also {
+                    validate(row.text, contact)
+                    if (!isResend && row.status == MessageStatus.DELIVERED) {
+                        return@withFreshNotificationAction row
+                    }
+                    val claim = newDirectClaim(claimID, row, contact, isResend)
+                    val wireTimestamp = synchronized(lock) { claim.timestamp } ?: (
+                        if (preserveTimestamp) row.timestamp else timestamp().also {
+                            dataStore.updateMessageTimestamp(key(id), it)
+                            ownership.check("queuedDirectMessage.timestamp")
+                        }
+                    ).also { synchronized(lock) { claim.timestamp = it } }
+                    sendBoundary(id, false) {
+                        val info = if (synchronized(lock) { claim.wireFinished }) {
+                            synchronized(lock) { claim.lastSentInfo }
+                        } else retryLoop(claim, contact, wireTimestamp, null).also {
                             synchronized(lock) { claim.lastSentInfo = it; claim.wireFinished = true }
                         }
-                    if (isResend && info != null && !synchronized(lock) { claim.sendCountCommitted }) {
-                        try {
-                            dataStore.incrementMessageSendCount(key(id))
-                            synchronized(lock) { claim.sendCountCommitted = true }
-                            ownership.check("queuedDirectMessage.sendCount")
-                            recovered("dmSendCount.$id")
-                        } catch (failure: PersistenceStoreException) {
-                            remember("dmSendCount.$id", failure)
-                            throw failure
+                        if (isResend && info != null && !synchronized(lock) { claim.sendCountCommitted }) {
+                            try {
+                                dataStore.incrementMessageSendCount(key(id))
+                                synchronized(lock) { claim.sendCountCommitted = true }
+                                ownership.check("queuedDirectMessage.sendCount")
+                                recovered("dmSendCount.$id")
+                            } catch (failure: PersistenceStoreException) {
+                                remember("dmSendCount.$id", failure)
+                                throw failure
+                            }
                         }
+                        val result = finalizeSend(id, contact.id, contact.publicKey, info, contact.outPathLength)
+                        if (isResend && info != null && synchronized(lock) { !claim.resentPublished }) {
+                            events.yield(MessageStatusEvent.Resent(id))
+                            synchronized(lock) { claim.resentPublished = true }
+                        }
+                        result
                     }
-                    val result = finalizeSend(id, contact.id, contact.publicKey, info, contact.outPathLength)
-                    if (isResend && info != null && synchronized(lock) { !claim.resentPublished }) {
-                        events.yield(MessageStatusEvent.Resent(id))
-                        synchronized(lock) { claim.resentPublished = true }
-                    }
-                    result
                 }
             }
         } finally { synchronized(lock) { inFlightRetries.remove(id) } }
@@ -844,29 +862,30 @@ class MessageService(
         }
 
     override suspend fun sendChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): ChannelSendReceipt =
-        owned("sendChannelMessage", channelOperations) {
-            requireFreshNotificationAction("sendChannelMessage")
-            val dto = outgoingChannel(text, channelIndex, radioId, textType)
-            sendBoundary(dto.id, true) {
-                dataStore.saveMessage(dto)
-                ownership.check("sendChannelMessage.persisted")
-                withPoolBackoff(2u) {
-                    checkIdentity("sendChannelMessage.wire")
-                    inlineWire { dispatch ->
-                        val timestamp = Instant.ofEpochSecond(dto.timestamp.toLong())
-                        if (dispatch == null) session.sendChannelMessage(channelIndex, text, timestamp)
-                        else session.sendChannelMessage(channelIndex, text, timestamp, dispatch = dispatch)
+        withFreshNotificationAction("sendChannelMessage") {
+            owned("sendChannelMessage", channelOperations) {
+                val dto = outgoingChannel(text, channelIndex, radioId, textType)
+                sendBoundary(dto.id, true) {
+                    dataStore.saveMessage(dto)
+                    ownership.check("sendChannelMessage.persisted")
+                    withPoolBackoff(2u) {
+                        checkIdentity("sendChannelMessage.wire")
+                        inlineWire { dispatch ->
+                            val timestamp = Instant.ofEpochSecond(dto.timestamp.toLong())
+                            if (dispatch == null) session.sendChannelMessage(channelIndex, text, timestamp)
+                            else session.sendChannelMessage(channelIndex, text, timestamp, dispatch = dispatch)
+                        }
                     }
                 }
+                ownership.check("sendChannelMessage.accepted")
+                bookkeeping("inlineChannel.${dto.id}") {
+                    dataStore.updateMessageStatus(key(dto.id), MessageStatus.SENT)
+                    ownership.check("sendChannelMessage.saved")
+                    events.yield(MessageStatusEvent.StatusResolved(dto.id, MessageStatus.SENT, null))
+                    updateChannelDate(channelIndex)
+                }
+                ChannelSendReceipt(dto.id, dto.timestamp)
             }
-            ownership.check("sendChannelMessage.accepted")
-            bookkeeping("inlineChannel.${dto.id}") {
-                dataStore.updateMessageStatus(key(dto.id), MessageStatus.SENT)
-                ownership.check("sendChannelMessage.saved")
-                events.yield(MessageStatusEvent.StatusResolved(dto.id, MessageStatus.SENT, null))
-                updateChannelDate(channelIndex)
-            }
-            ChannelSendReceipt(dto.id, dto.timestamp)
         }
 
     override suspend fun sendPendingChannelMessage(messageID: UUID) { queuedChannel(messageID, false, true) }

@@ -78,6 +78,16 @@ internal class FakeDevices : DevicePersisting, DeviceEditPersisting {
     private var authorityRevision = 0L
     var beforeConditionalSave: suspend () -> Unit = {}
     var conditionalSaveFailure: Exception? = null
+    override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean {
+        if (dto.id in rows) return false
+        saveDevice(dto.copy(isActive = false))
+        return true
+    }
+    override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean {
+        if (!isCurrent()) return false
+        setActiveDevice(id)
+        return true
+    }
     override suspend fun saveDevice(dto: DeviceDTO) { calls += "save"; rows[dto.id] = dto; deviceRevision++; authorityRevision++ }
     override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
         rows[id]?.let { DeviceWriteSnapshot(it, deviceRevision, authorityRevision) }

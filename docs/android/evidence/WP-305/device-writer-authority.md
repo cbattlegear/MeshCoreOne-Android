@@ -37,6 +37,10 @@ and invokes real competing writers; it delegates CAS decisions and storage failu
 Cases cover both OCV interleavings, late live publication, delayed OCV versus completed preset,
 ordinary editor serialization, actual successor activation, same-token watermark rebasing and the
 actual Settings region consumer's default/unrelated/concurrent/successor/failure paths.
+Atomic inactive initialization/repeated simulator seeding is also exercised against an existing
+active successor, a committed preset/hash/OCV edit and an attempted CAS activation bypass.
+A held real Room transaction also establishes that connection activation's ownership guard is
+evaluated after the wait, so an already-retired queued activation cannot replace the active successor.
 
 The existing session-bound and original pairing cases are retained. The test-only offline fixture now
 seeds the authoritative device row before requesting a persisted edit; it does not fabricate a

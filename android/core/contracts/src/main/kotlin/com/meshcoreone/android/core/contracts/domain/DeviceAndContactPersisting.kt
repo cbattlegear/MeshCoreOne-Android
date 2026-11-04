@@ -99,9 +99,18 @@ suspend fun DevicePersisting.editDevice(
 }
 
 interface DeviceEditPersisting {
+    /** Initialization only: atomically create an inactive row, never replace an existing device. */
+    suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean
+    /** Evaluate connection ownership inside the serialized activation transaction, not before waiting. */
+    suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean
     suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot?
     suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean
 }
+
+suspend fun DevicePersisting.activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean =
+    (this as? DeviceEditPersisting
+        ?: throw UnsupportedOperationException("Connection activation requires versioned device persistence"))
+        .activateDeviceIfCurrent(id, isCurrent)
 
 interface DevicePersisting {
     suspend fun fetchDevice(id: UUID): DeviceDTO?

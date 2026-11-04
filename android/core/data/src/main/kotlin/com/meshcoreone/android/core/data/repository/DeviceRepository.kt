@@ -36,6 +36,13 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         database.devices().byId(id)?.let { DeviceWriteSnapshot(it.toDTO(), revision, authorityRevision) }
     }
 
+    override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean = write("insertDeviceIfAbsent") {
+        if (database.devices().byId(dto.id) != null) return@write false
+        database.devices().upsert(dto.copy(isActive = false).toEntity())
+        save()
+        true
+    }
+
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean =
         write("saveDeviceIfUnchanged", changesAuthority = false) {
             val existing = database.devices().byId(dto.id) ?: return@write false
@@ -78,13 +85,26 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
     }
 
     override suspend fun setActiveDevice(id: UUID) = write("setActiveDevice") {
+        activate(id)
+        save()
+    }
+
+    override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean =
+        write("activateDeviceIfCurrent") {
+            if (!isCurrent()) return@write false
+            if (database.devices().byId(id) == null) throw PersistenceStoreException(PersistenceStoreError.DeviceNotFound)
+            activate(id)
+            save()
+            true
+        }
+
+    private suspend fun RepositoryTransaction.activate(id: UUID) {
         for (device in database.devices().all()) {
             database.devices().upsert(device.copy(
                 isActive = device.id == id,
                 lastConnected = if (device.id == id) StoredInstant.from(clock.instant()) else device.lastConnected,
             ))
         }
-        save()
     }
 
     override suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt) =

@@ -27,7 +27,7 @@ not WP-205 completion or a new receipt for the historical #529 candidate.
 - Manifest SHA-256:
   `11120a20d04408b3d21fac09180412df0490cabf1dafb8a3c98fe83e0fad31e4`.
 - Trusted policy revision on current main:
-  `f6f9e0850550b7fea570d43701fb89828e121820c3ef2c4fb36d682cf7d17def`.
+  `de026f7de86d91bf86ef26cc98075c2707e3f8e153f06d97ef159c401a7a792e`.
 
 The reviewed source commit `944f87d51da7e8cb1fdc229688910191ecf22337`
 was directly based on `99479711`. Its test blob

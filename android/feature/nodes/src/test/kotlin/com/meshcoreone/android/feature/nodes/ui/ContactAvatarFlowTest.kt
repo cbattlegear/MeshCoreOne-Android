@@ -77,6 +77,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     private val selected = mutableStateOf(contact)
     private val showSelected = mutableStateOf(true)
     private val incoming = mutableStateOf<ContactDTO?>(null)
+    private val testFontScale = mutableStateOf(1f)
     private val uri = Uri.parse("content://avatar-fixture/selected.png")
     private var requestCode: Int? = null
     private var launched: Intent? = null
@@ -110,7 +111,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         mount {
             CompositionLocalProvider(
                 LocalActivityResultRegistryOwner provides registryOwner,
-                LocalDensity provides Density(1f, 1f),
+                LocalDensity provides Density(1f, testFontScale.value),
             ) {
                 if (showSelected.value) {
                     key("outgoing-entry") { ContactDetailScreen(selected.value, harness.dependencies, NodesNavigation.NONE) }
@@ -135,6 +136,54 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     }
 
     private fun action(resource: Int) = click(awaitAction(controller.get().getString(resource)))
+
+    private fun resizeHost(width: Int, height: Int) {
+        ShadowDisplayManager.changeDisplay(Display.DEFAULT_DISPLAY, "+w${width}dp-h${height}dp")
+        controller.get().runOnUiThread {
+            val activity = controller.get()
+            val config = Configuration(activity.resources.configuration).apply {
+                screenWidthDp = width
+                screenHeightDp = height
+                orientation = if (width > height) Configuration.ORIENTATION_LANDSCAPE else Configuration.ORIENTATION_PORTRAIT
+            }
+            activity.resources.updateConfiguration(config, activity.resources.displayMetrics)
+            activity.onConfigurationChanged(config)
+            activity.window.decorView.dispatchConfigurationChanged(config)
+            listOf(activity.window, ShadowDialog.getLatestDialog()?.window).forEach { window ->
+                window?.setLayout(width, height)
+                window?.decorView?.let { view ->
+                    view.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+                    view.layout(0, 0, width, height)
+                }
+            }
+        }
+        advanceFrames()
+    }
+
+    private fun revealCropNode(verticalInset: Float = 0f, find: () -> SemanticsNode?): SemanticsNode {
+        repeat(20) {
+            advanceFrames()
+            val node = assertNotNull(find())
+            val scroll = allSemanticsNodes().single {
+                it.config.getOrElseNullable(SemanticsProperties.TestTag) { null } == "avatar-crop-scroll"
+            }
+            val viewport = scroll.boundsInRoot
+            val top = node.positionInRoot.y + verticalInset
+            val bottom = node.positionInRoot.y + node.size.height - verticalInset
+            if (top >= viewport.top - 1f && bottom <= viewport.bottom + 1f) {
+                assertTrue(node.boundsInRoot.height >= node.size.height - verticalInset * 2 - 1f,
+                    "The crop guide/control must not be clipped")
+                assertTrue(node.boundsInRoot.width >= node.size.width - 1f, "Crop control must not be clipped")
+                return node
+            }
+            val distance = if (top < viewport.top) top - viewport.top else bottom - viewport.bottom
+            controller.get().runOnUiThread {
+                assertTrue(assertNotNull(scroll.config[SemanticsActions.ScrollBy].action).invoke(0f, distance))
+            }
+        }
+        error("Crop element did not become fully visible: ${find()?.boundsInRoot}")
+    }
 
     private fun awaitAvatarState(
         description: String,
@@ -804,27 +853,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         result()
         awaitAction(controller.get().getString(C.contactsDetailAvatarCropChoose))
         for ((width, height) in listOf(600 to 900, 631 to 900, 840 to 900, 840 to 280, 360 to 900)) {
-            ShadowDisplayManager.changeDisplay(Display.DEFAULT_DISPLAY, "+w${width}dp-h${height}dp")
-            controller.get().runOnUiThread {
-                val activity = controller.get()
-                val config = Configuration(activity.resources.configuration).apply {
-                    screenWidthDp = width
-                    screenHeightDp = height
-                    orientation = if (width > height) Configuration.ORIENTATION_LANDSCAPE else Configuration.ORIENTATION_PORTRAIT
-                }
-                activity.resources.updateConfiguration(config, activity.resources.displayMetrics)
-                activity.onConfigurationChanged(config)
-                activity.window.decorView.dispatchConfigurationChanged(config)
-                listOf(activity.window, ShadowDialog.getLatestDialog()?.window).forEach { window ->
-                    window?.setLayout(width, height)
-                    window?.decorView?.let { view ->
-                        view.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                            View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
-                        view.layout(0, 0, width, height)
-                    }
-                }
-            }
-            advanceFrames()
+            resizeHost(width, height)
             val canvas = allSemanticsNodes().single {
                 it.config.getOrElseNullable(SemanticsProperties.TestTag) { null } == "avatar-crop-canvas"
             }
@@ -834,6 +863,88 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         }
         action(C.contactsCommonCancel)
         assertTrue(harness.contactService.avatars.isEmpty())
+    }
+
+    @Test
+    fun resizingAZoomedPannedCropPreservesTheSelectedSourceRegion() {
+        start()
+        pick(file = true)
+        result()
+        awaitAction(controller.get().getString(C.contactsDetailAvatarCropChoose))
+        val zoom = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetProgress) }
+        controller.get().runOnUiThread { assertTrue(assertNotNull(zoom.config[SemanticsActions.SetProgress].action).invoke(2f)) }
+        advanceFrames()
+        action(C.contactsDetailAvatarCropMoveRight)
+        action(C.contactsDetailAvatarCropMoveDown)
+        val detail = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].lifetimes.single()
+        val initial = detail.geometry
+        assertTrue(initial.offset.x > 0 && initial.offset.y > 0)
+        val source = initial.imageDrawRect()
+        for (width in listOf(840, 360)) {
+            resizeHost(width, 900)
+            awaitAvatarState("the crop to resolve the $width dp host") {
+                if (width == 840) detail.geometry.cropSize > 300.0 else detail.geometry.cropSize <= 300.0
+            }
+            val resized = detail.geometry.imageDrawRect()
+            assertEquals(source.x, resized.x, 0.00001)
+            assertEquals(source.y, resized.y, 0.00001)
+            assertEquals(source.width, resized.width, 0.00001)
+            assertEquals(source.height, resized.height, 0.00001)
+            assertEquals(initial.scale, detail.geometry.scale)
+        }
+        action(C.contactsCommonCancel)
+        assertTrue(harness.contactService.avatars.isEmpty())
+        assertNull(harness.store.contacts.single().avatarImageData)
+    }
+
+    @Test
+    fun shortLargeFontCropKeepsAUsablePreviewAndReachableControlsThroughCancelAndSave() {
+        start()
+        for (width in listOf(360, 840)) {
+            pick(file = true)
+            result()
+            awaitAction(controller.get().getString(C.contactsDetailAvatarCropChoose))
+            controller.get().runOnUiThread { testFontScale.value = 2f }
+            resizeHost(width, 220)
+            val canvas = revealCropNode(verticalInset = 32f) {
+                allSemanticsNodes().singleOrNull {
+                    it.config.getOrElseNullable(SemanticsProperties.TestTag) { null } == "avatar-crop-canvas"
+                }
+            }
+            assertTrue(canvas.size.height >= 192 && canvas.size.width >= 192)
+            assertTrue(canvas.boundsInRoot.height >= 128)
+            val detail = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].lifetimes.single()
+            assertTrue(detail.geometry.cropSize >= 128.0, "The selected source must retain a usable preview")
+            val zoom = revealCropNode {
+                allSemanticsNodes().singleOrNull {
+                    it.config.getOrElseNullable(SemanticsProperties.TestTag) { null } == "avatar-crop-zoom"
+                }
+            }
+            assertTrue(zoom.size.height >= 48)
+            controller.get().runOnUiThread { assertTrue(assertNotNull(zoom.config[SemanticsActions.SetProgress].action).invoke(2f)) }
+            advanceFrames()
+            for (resource in listOf(C.contactsDetailAvatarCropMoveUp, C.contactsDetailAvatarCropMoveDown,
+                C.contactsDetailAvatarCropMoveLeft, C.contactsDetailAvatarCropMoveRight,
+                C.contactsCommonCancel, C.contactsDetailAvatarCropChoose)) {
+                val control = revealCropNode { actionNode(controller.get().getString(resource)) }
+                assertTrue(control.size.height >= 48 && control.size.width >= 48)
+                if (resource != C.contactsCommonCancel && resource != C.contactsDetailAvatarCropChoose) click(control)
+            }
+            assertEquals(2.0, detail.geometry.scale)
+            val resource = if (width == 360) C.contactsCommonCancel else C.contactsDetailAvatarCropChoose
+            click(revealCropNode { actionNode(controller.get().getString(resource)) })
+            if (width == 360) {
+                assertTrue(harness.contactService.avatars.isEmpty())
+                assertNull(harness.store.contacts.single().avatarImageData)
+                controller.get().runOnUiThread { testFontScale.value = 1f }
+                resizeHost(360, 900)
+            } else {
+                awaitAvatarState("the short-window confirmed crop to persist") {
+                    harness.contactService.avatars.size == 1 && harness.store.contacts.single().avatarImageData != null
+                }
+                assertEquals(contact.key, harness.contactService.avatars.single().first)
+            }
+        }
     }
 
     @Test

@@ -623,3 +623,17 @@ failure/chooser-recovery and screen-exit/no-mutation controls. These additions
 are authored assertions, not passed test evidence until the exact hosted run
 executes them. Shared crop fixes are assigned to the WP-304 owner; this consumer
 does not edit that owner's files or duplicate geometry logic.
+
+The admitted WP-304 handoff `6ef02462bff41987d5fd065c7809b553ecdc95fa` is
+composed as `a33d8de83` without foreign producer edits. Shared geometry retains
+the selected source region by scaling offsets with the viewport. The short/
+large-font layout scrolls title, actions, preview, zoom and pan with a minimum
+192 dp canvas / 128 dp guide. The outer 32 dp padding may clip in a short
+viewport, but not the selected guide. Shared geometry and mounted tests come
+from the producer; production contact-detail controls additionally exercise
+360-to-840-to-360 width changes after zoom/pan, and 220 dp, 200%-font windows
+at both widths with an actually visible guide and fully reachable 48 dp
+controls. Cancel leaves storage untouched; Choose requires one persisted avatar.
+Late-open cleanup, unchanged security failure identity and close failure controls
+also cover the provider lifetime. These additions still require actual exact-
+candidate execution; none establish physical-device or TalkBack behavior.

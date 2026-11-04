@@ -85,4 +85,57 @@ class ContactAvatarMediaTest {
         assertContentEquals(bytes, result)
         assertEquals(1, closes.get())
     }
+
+    @Test fun cancelledOpenClosesALateStreamBeforeReadingIt() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val released = CountDownLatch(1)
+        val closes = AtomicInteger()
+        val reads = AtomicInteger()
+        val stream = object : InputStream() {
+            override fun read(): Int { reads.incrementAndGet(); return -1 }
+            override fun close() { closes.incrementAndGet() }
+        }
+        val pending = launch {
+            ContactAvatarMedia.readSelection {
+                entered.complete(Unit)
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (released.count != 0L && System.nanoTime() < deadline) {
+                    try {
+                        released.await(20, TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        // Opening cannot publish an owned stream until this provider returns.
+                    }
+                }
+                check(released.count == 0L) { "Late-open fixture was not released" }
+                stream
+            }
+        }
+        try {
+            withTimeout(2_000) { entered.await() }
+            pending.cancel()
+            released.countDown()
+            withTimeout(2_000) { pending.join() }
+            assertTrue(pending.isCancelled)
+            assertEquals(0, reads.get())
+            assertEquals(1, closes.get())
+        } finally {
+            released.countDown()
+            pending.cancelAndJoin()
+        }
+    }
+
+    @Test fun providerSecurityFailureIsPreservedAndCloseFailureIsNotReportedAsSuccess() = runBlocking {
+        val denied = SecurityException("Grant revoked")
+        assertSame(denied, assertFailsWith<SecurityException> {
+            ContactAvatarMedia.readSelection { throw denied }
+        })
+        val closeFailure = UnsupportedOperationException("Provider close failed")
+        assertSame(closeFailure, assertFailsWith<IOException> {
+            ContactAvatarMedia.readSelection {
+                object : ByteArrayInputStream(byteArrayOf(1)) {
+                    override fun close() { throw closeFailure }
+                }
+            }
+        }.cause)
+    }
 }

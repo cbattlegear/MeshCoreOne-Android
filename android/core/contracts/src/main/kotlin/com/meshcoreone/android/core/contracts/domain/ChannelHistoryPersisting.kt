@@ -23,6 +23,14 @@ class ChannelHistoryRejected(
  * A read scope is not a wire permit; dispatch still needs its independently owned atomic fence.
  */
 interface ChannelHistoryPersisting {
+    /**
+     * Insert caller-stable intent once while the row exists; matching replay returns the current
+     * stored row, including producer timestamps and subsequently updated metadata. Absence after
+     * explicit deletion is not proof that an earlier invocation never committed.
+     */
+    suspend fun createOrReconcileChannelMessage(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO
     // Both arguments carry the initiating proof. This never fills null proof from the current slot.
     suspend fun saveChannelMessage(dto: MessageDTO, origin: ChannelHistoryScope)
     suspend fun validateChannelMessageOrigin(message: EntityKey): ChannelHistoryScope

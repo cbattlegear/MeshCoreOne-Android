@@ -14,6 +14,7 @@ import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -116,6 +117,127 @@ class ChannelHistoryPersistenceTest : RepositoryTest() {
         assertEquals(rows[2], store.findChannelHistoryMessageForReaction(current, reaction, "local", 0u..UInt.MAX_VALUE, 1))
         assertNull(store.findChannelHistoryMessageForReaction(current, reaction, null, 0u..UInt.MAX_VALUE, 1))
         for (row in stale) assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, row.id)))
+    }
+
+    @Test fun genericMessageUpsertCannotEraseOrRebindKnownOriginAfterReopen() = runTest {
+        val name = "channel-origin-upsert-${UUID.randomUUID()}.db"
+        var disk = MeshCoreDatabase.open(context, name)
+        var persisted = RoomPersistenceStore(disk, owner, clock)
+        try {
+            persisted.saveChannel(RADIO_A, info())
+            val original = origin(persisted)
+            val row = bound(original, 1, MessageStatus.PENDING)
+            persisted.saveChannelMessage(row, original)
+            persisted.close()
+            disk.close()
+            disk = MeshCoreDatabase.open(context, name)
+            persisted = RoomPersistenceStore(disk, owner, clock)
+
+            val mismatches = listOf(
+                row.copy(channelOccupantID = null) to ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN,
+                row.copy(channelOccupantID = UUID.randomUUID()) to ChannelHistoryConflict.ORIGIN_MISMATCH,
+                row.copy(channelIndex = 6u) to ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH,
+                row.copy(contactID = UUID.randomUUID(), channelIndex = null) to
+                    ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH,
+            )
+            for ((changed, reason) in mismatches) {
+                rejected(reason) { persisted.saveMessage(changed) }
+                assertEquals(row, persisted.fetchMessage(EntityKey(RADIO_A, row.id)))
+            }
+            val metadata = row.copy(status = MessageStatus.SENT, isRead = true)
+            persisted.saveMessage(metadata)
+            assertEquals(metadata, persisted.fetchMessage(EntityKey(RADIO_A, row.id)))
+            assertEquals(original, persisted.validateChannelMessageOrigin(EntityKey(RADIO_A, row.id)))
+
+            val foreign = row.copy(radioId = RADIO_B, channelOccupantID = null)
+            persisted.saveMessage(foreign)
+            assertEquals(foreign, persisted.fetchMessage(EntityKey(RADIO_B, row.id)))
+            assertEquals(metadata, persisted.fetchMessage(EntityKey(RADIO_A, row.id)))
+        } finally {
+            persisted.close()
+            disk.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test fun callerStableCreationReplaysAfterReplacementAndReopenWithoutOverwritingMetadata() = runTest {
+        val name = "channel-creation-${UUID.randomUUID()}.db"
+        var disk = MeshCoreDatabase.open(context, name)
+        var persisted = RoomPersistenceStore(disk, owner, clock)
+        try {
+            persisted.saveChannel(RADIO_A, info())
+            val original = origin(persisted)
+            val creation = ChannelMessageCreation(UUID.randomUUID(), original, "preserve original\n")
+            persisted.saveChannel(RADIO_A, info(2))
+            val replacement = origin(persisted)
+            val first = persisted.createOrReconcileChannelMessage(creation, 42u, AT.plusNanos(123))
+            assertEquals(creation.messageID, first.id)
+            assertEquals(original.expectedOccupantID, first.channelOccupantID)
+            assertEquals(42u, first.timestamp)
+            assertEquals(AT.plusNanos(123), first.createdAt)
+            assertNotEquals(replacement.expectedOccupantID, first.channelOccupantID)
+            val updated = first.copy(status = MessageStatus.DELIVERED, isRead = true, reactionSummary = "ok:1")
+            persisted.saveMessage(updated)
+            persisted.close()
+            disk.close()
+            disk = MeshCoreDatabase.open(context, name)
+            persisted = RoomPersistenceStore(disk, owner, clock)
+
+            assertEquals(updated, persisted.createOrReconcileChannelMessage(creation, 99u, AT.plusSeconds(50)))
+            for (changed in listOf(
+                creation.copy(text = "different"),
+                creation.copy(textType = TextType.CLI_DATA),
+                creation.copy(origin = replacement),
+            )) {
+                rejected(ChannelHistoryConflict.ORIGIN_MISMATCH) {
+                    persisted.createOrReconcileChannelMessage(changed, 100u, AT.plusSeconds(100))
+                }
+                assertEquals(updated, persisted.fetchMessage(EntityKey(RADIO_A, first.id)))
+            }
+            rejected(ChannelHistoryConflict.STALE_OCCUPANT) {
+                persisted.validateChannelMessageOrigin(EntityKey(RADIO_A, first.id))
+            }
+            val foreign = creation.copy(origin = original.copy(radioId = RADIO_B))
+            val foreignRow = persisted.createOrReconcileChannelMessage(foreign, 55u, AT)
+            assertEquals(RADIO_B, foreignRow.radioId)
+            assertEquals(updated, persisted.fetchMessage(EntityKey(RADIO_A, first.id)))
+        } finally {
+            persisted.close()
+            disk.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test fun independentStoresCompeteForOneCreationAndRejectLegacyOrOtherDestinationWithoutMutation() = runTest {
+        store.saveChannel(RADIO_A, info())
+        val current = origin()
+        val creation = ChannelMessageCreation(UUID.randomUUID(), current, "same caller intent")
+        val other = newStore()
+        try {
+            val results = listOf(
+                async { store.createOrReconcileChannelMessage(creation, 10u, AT) },
+                async { other.createOrReconcileChannelMessage(creation, 20u, AT.plusSeconds(1)) },
+            ).awaitAll()
+            assertEquals(results[0], results[1])
+            assertEquals(listOf(results[0]), store.fetchMessages(RADIO_A, 5u).toList())
+            val row = results[0]
+            assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, creation.messageID)))
+            for (legacy in listOf(
+                row.copy(id = UUID.randomUUID(), channelOccupantID = null),
+                row.copy(id = UUID.randomUUID(), direction = MessageDirection.INCOMING),
+                row.copy(id = UUID.randomUUID(), contactID = UUID.randomUUID(), channelIndex = null),
+            )) {
+                store.saveMessage(legacy)
+                val reason = if (legacy.channelOccupantID == null) ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN
+                    else ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH
+                rejected(reason) {
+                    other.createOrReconcileChannelMessage(creation.copy(messageID = legacy.id), 30u, AT)
+                }
+                assertEquals(legacy, store.fetchMessage(EntityKey(RADIO_A, legacy.id)))
+            }
+        } finally {
+            other.close()
+        }
     }
 
     @Test fun unchangedOccupantMetadataAndForeignRadioOrSlotDoNotChangeTheKnownHistory() = runTest {

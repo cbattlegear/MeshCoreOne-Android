@@ -25,12 +25,55 @@ internal class MessageRepository(
         }
 
     override suspend fun saveMessage(dto: MessageDTO) = context.write("saveMessage") {
+        database.messages().byId(dto.radioId.value, dto.id)?.let { existing ->
+            val occupant = existing.channelOccupantID
+            if (occupant != null) {
+                val key = EntityKey(dto.radioId, dto.id)
+                if (dto.contactID != existing.contactID || dto.channelIndex?.toLong() != existing.channelIndex) {
+                    rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, message = key)
+                }
+                if (dto.channelOccupantID == null) {
+                    rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, message = key)
+                }
+                if (dto.channelOccupantID != occupant) {
+                    rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, message = key)
+                }
+            }
+        }
         database.messages().upsert(dto.toEntity())
         save()
     }
 
     override suspend fun fetchMessage(key: EntityKey): MessageDTO? = context.read("fetchMessage") {
         database.messages().byId(key.radioId.value, key.id)?.toDTO()
+    }
+
+    override suspend fun createOrReconcileChannelMessage(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO = context.write("createOrReconcileChannelMessage") {
+        val origin = creation.origin
+        val key = EntityKey(origin.radioId, creation.messageID)
+        val existing = database.messages().byId(origin.radioId.value, creation.messageID)
+        if (existing != null) {
+            if (existing.contactID != null || existing.channelIndex != origin.channelIndex.toLong() ||
+                existing.directionRawValue != MessageDirection.OUTGOING.rawValue
+            ) rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, key)
+            if (existing.channelOccupantID == null) {
+                rejectHistory(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, origin, key)
+            }
+            if (existing.channelOccupantID != origin.expectedOccupantID ||
+                existing.text != creation.text || existing.textTypeRawValue != creation.textType.rawValue.toLong()
+            ) rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, key)
+            return@write existing.toDTO()
+        }
+        val row = MessageDTO(
+            id = creation.messageID, radioId = origin.radioId, channelIndex = origin.channelIndex,
+            text = creation.text, timestamp = timestamp, createdAt = createdAt, textType = creation.textType,
+            channelOccupantID = origin.expectedOccupantID,
+        )
+        database.messages().insert(row.toEntity())
+        save()
+        row
     }
 
     override suspend fun saveChannelMessage(dto: MessageDTO, origin: ChannelHistoryScope) =

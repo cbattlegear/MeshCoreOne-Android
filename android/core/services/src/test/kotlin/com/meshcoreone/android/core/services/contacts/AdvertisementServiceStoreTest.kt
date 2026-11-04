@@ -1,6 +1,7 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/AdvertisementServiceTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.services.contacts
 
+import com.meshcoreone.android.core.contracts.domain.LocalDirectContactResolution
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
@@ -13,6 +14,7 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -183,7 +185,9 @@ class AdvertisementServiceStoreTest {
             assertNull(store.fetchContact(radioId, key))
 
             val prefix = key.prefix(6)
-            val contact = assertNotNull(service.materializeContactForPendingAdvert(prefix, radioId))
+            val contact = assertIs<LocalDirectContactResolution.Unique>(
+                service.materializeContactForPendingAdvert(prefix, radioId),
+            ).contact
             assertEquals(key, contact.publicKey)
             assertEquals("DebounceNode", contact.name)
             assertTrue(key in service.pendingAdvertKeys, "key must stay pending for delta reconcile")
@@ -200,7 +204,10 @@ class AdvertisementServiceStoreTest {
             session.setStubbedContact(advertMeshContact(key, name = "NoPending"), key)
 
             startMonitoring(service)
-            assertNull(service.materializeContactForPendingAdvert(key.prefix(6), radioId))
+            assertEquals(
+                LocalDirectContactResolution.NotFound,
+                service.materializeContactForPendingAdvert(key.prefix(6), radioId),
+            )
             assertTrue(session.getContactPublicKeys.isEmpty())
             service.stopEventMonitoring()
         },
@@ -208,14 +215,17 @@ class AdvertisementServiceStoreTest {
         advertCase("materializeContactForPendingAdvert returns nil on multi-match prefix") {
             val store = makeStore()
             val service = makeService(store)
-            // Two 32-byte keys that share the 1-byte prefix used for the query.
-            val keyA = Bytes(advertPublicKey(0x8F).toByteArray().also { it[0] = 0xAB.toByte() })
-            val keyB = Bytes(advertPublicKey(0x90).toByteArray().also { it[0] = 0xAB.toByte() })
+            val prefix = Bytes.fromHex("abababababab")
+            val keyA = prefix + Bytes(ByteArray(26) { 0x8F.toByte() })
+            val keyB = prefix + Bytes(ByteArray(26) { 0x90.toByte() })
             assertNotEquals(keyA, keyB)
 
             service.recordPendingAdvertKey(keyA)
             service.recordPendingAdvertKey(keyB)
-            assertNull(service.materializeContactForPendingAdvert(Bytes.of(0xAB), radioId))
+            assertEquals(
+                LocalDirectContactResolution.Ambiguous,
+                service.materializeContactForPendingAdvert(prefix, radioId),
+            )
             assertTrue(session.getContactPublicKeys.isEmpty())
         },
 

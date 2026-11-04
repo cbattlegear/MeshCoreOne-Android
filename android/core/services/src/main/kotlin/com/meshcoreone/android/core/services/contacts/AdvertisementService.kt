@@ -3,10 +3,12 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.AppStateProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.LocalDirectContactAdmission
+import com.meshcoreone.android.core.contracts.domain.LocalDirectContactPersisting
+import com.meshcoreone.android.core.contracts.domain.LocalDirectContactResolution
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.errors.AdvertisementFault
 import com.meshcoreone.android.core.contracts.domain.errors.SourceServiceFaultCarrier
-import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.ContactFrame
 import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.model.RadioId
@@ -42,6 +44,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 // MARK: - Errors and outcomes
@@ -178,6 +182,11 @@ class AdvertisementService(
     private val logSink: AdvertisementLogSink = AdvertisementLogSink.None,
 ) {
     private val lock = Any()
+    private val pendingAdvertGate = Mutex()
+    private val localDirectContacts: LocalDirectContactPersisting
+        get() = checkNotNull(dataStore as? LocalDirectContactPersisting) {
+            "Advertisement contact attribution requires LocalDirectContactPersisting"
+        }
     private val state = AdvertisementServiceState()
     /** Keys revived while a deferred-delete flush is off-actor in `deleteContacts`; read per key by the store. */
     private val revivedLock = Any()
@@ -201,6 +210,12 @@ class AdvertisementService(
         starts.forEach(Job::start)
         return result
     }
+
+    internal suspend fun <T> withPendingAdvertGate(block: suspend () -> T): T =
+        pendingAdvertGate.withLock { block() }
+
+    internal suspend fun <T> pendingLocked(block: AdvertisementServiceState.() -> T): T =
+        withPendingAdvertGate { locked(block) }
 
     internal fun logger(level: DebugLogLevel, message: String) = logSink.log(AdvertisementLogSink.CATEGORY, level, message)
     internal fun discoverTrace(level: DebugLogLevel, message: String) =
@@ -287,7 +302,7 @@ class AdvertisementService(
         flushPendingDeletedKeys()
         val (receiveTimes, radioId) = locked { pendingAdvertReceiveTimes.toMap() to currentRadioId }
         stampAdvertReceiveTimes(receiveTimes, radioId)
-        locked {
+        pendingLocked {
             currentRadioId = null
             deltaSyncJob = null
             pendingAdvertKeys.clear()
@@ -385,8 +400,8 @@ class AdvertisementService(
      * Records a 0x80 key for the next delta sync. A re-advert for a radio-deleted key means the radio
      * re-added it after 0x8F, so both tombstones clear. [receivedAt] is the phone clock at the 0x80.
      */
-    internal fun recordPendingAdvertKey(key: Bytes, receivedAt: Instant = clock.wallNow()) =
-        locked { recordPendingAdvertKeyLocked(key, receivedAt) }
+    internal suspend fun recordPendingAdvertKey(key: Bytes, receivedAt: Instant = clock.wallNow()) =
+        pendingLocked { recordPendingAdvertKeyLocked(key, receivedAt) }
 
     internal fun AdvertisementServiceState.recordPendingAdvertKeyLocked(key: Bytes, receivedAt: Instant) {
         pendingAdvertKeys += key
@@ -421,37 +436,90 @@ class AdvertisementService(
     /**
      * Creates a local contact from a pending 0x80 key so a DM that arrives inside the debounce window
      * can notify and list normally. Exactly one pending key must match [prefix]; the key stays pending
-     * so the debounced round still reconciles Discover and may announce the contact.
+     * so the debounced round still reconciles Discover and may announce the contact. Storage failures
+     * and cancellation propagate. NotFound means genuine absence, not ambiguity or a failed lookup.
      */
-    suspend fun materializeContactForPendingAdvert(prefix: Bytes, radioId: RadioId): ContactDTO? {
-        if (prefix.isEmpty) return null
-        val publicKey = locked { pendingAdvertKeys.filter { it.advertStartsWith(prefix) } }.singleOrNull() ?: return null
-        val pubKeyHex = publicKey.uppercaseHexString()
-        return try {
-            val meshContact = advertising.getContact(publicKey)
+    suspend fun materializeContactForPendingAdvert(prefix: Bytes, radioId: RadioId): LocalDirectContactResolution {
+        require(prefix.size == 6) { "Pending advert materialization requires a six-byte receive prefix" }
+        val initial = withPendingAdvertGate {
+            val local = localDirectContacts.classifyLocalDirectContact(radioId, prefix)
+            unionPendingResolution(prefix, local)
+        }
+        if (initial != LocalDirectContactResolution.NotFound) return initial
+        val pending = pendingLocked {
+            if (currentRadioId != radioId) return@pendingLocked null
+            val keys = pendingAdvertKeys.filter { it.advertStartsWith(prefix) }
+            if (keys.size != 1) return@pendingLocked null
+            Triple(keys.single(), pendingAdvertReceiveTimes[keys.single()], eventMonitorJob)
+        } ?: return withPendingAdvertGate {
+            unionPendingResolution(prefix, LocalDirectContactResolution.NotFound)
+        }
+        val meshContact = advertising.getContact(pending.first)
+        return withPendingAdvertGate {
+            val keys = locked { pendingAdvertKeys.filter { it.advertStartsWith(prefix) } }
+            if (keys.size > 1) return@withPendingAdvertGate LocalDirectContactResolution.Ambiguous
+            val stillCurrent = locked {
+                currentRadioId == radioId && eventMonitorJob === pending.third &&
+                    !isRadioDeleted(pending.first)
+            }
+            if (!stillCurrent || keys.singleOrNull() != pending.first) {
+                return@withPendingAdvertGate LocalDirectContactResolution.Stale
+            }
+            val local = localDirectContacts.classifyLocalDirectContact(radioId, prefix)
+            val resolution = unionPendingResolution(prefix, local)
+            if (resolution != LocalDirectContactResolution.NotFound) return@withPendingAdvertGate resolution
             if (meshContact == null) {
-                logger(DebugLogLevel.INFO, "materialize pending advert: getContact nil key=$pubKeyHex")
-                return null
+                logger(DebugLogLevel.INFO, "materialize pending advert: radio contact unavailable")
+                return@withPendingAdvertGate LocalDirectContactResolution.Stale
             }
-            val frame = meshContact.advertContactFrame()
-            val saveResult = dataStore.saveContact(radioId, frame)
-            // Stamp phone recency before the returned DTO is read so the insert is not prune-eligible.
-            val receivedAt = locked { pendingAdvertReceiveTimes[publicKey] } ?: clock.wallNow()
-            bestEffort("materialize pending advert lastHeard stamp failed key=$pubKeyHex") {
-                dataStore.touchContactHeard(radioId, publicKey, receivedAt)
+            if (meshContact.publicKey != pending.first) {
+                logger(DebugLogLevel.WARNING, "materialize pending advert: radio returned a different full key")
+                return@withPendingAdvertGate LocalDirectContactResolution.Stale
             }
-            bestEffort("materialize pending advert Discover upsert failed key=$pubKeyHex") {
-                dataStore.upsertDiscoveredNode(radioId, frame)
+            val receivedAt = locked { pendingAdvertReceiveTimes[pending.first] } ?: pending.second
+                ?: clock.wallNow()
+            val materialized = unionPendingResolution(
+                prefix, localDirectContacts.materializeLocalDirectContactIfAbsent(
+                    radioId, prefix, meshContact.advertContactFrame(), receivedAt,
+                ),
+            )
+            if (materialized is LocalDirectContactResolution.Unique) {
+                eventBroadcaster.yield(AdvertisementEvent.ContactUpdated)
             }
-            eventBroadcaster.yield(AdvertisementEvent.ContactUpdated)
-            dataStore.fetchContact(EntityKey(radioId, saveResult.id))
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Exception) {
-            logger(DebugLogLevel.ERROR, "materialize pending advert failed key=$pubKeyHex: ${failure.message}")
-            null
+            materialized
         }
     }
+
+    /**
+     * Keeps pending-prefix ambiguity stable through the producer's roster admission and consumer
+     * effects. Lock order is pending, local roster, then Room. The callback must not mutate adverts,
+     * roster or channels, reenter this gate, or perform hardware/platform notification work.
+     * A unique local result is not proof of the RF sender; unresolved observations are never upgraded.
+     */
+    suspend fun <T> withPendingAdvertContactOperation(
+        radioId: RadioId,
+        prefix: Bytes,
+        observed: LocalDirectContactResolution,
+        block: suspend (LocalDirectContactAdmission) -> T,
+    ): T = withPendingAdvertGate {
+        require(prefix.size == 6) { "Pending advert admission requires a six-byte receive prefix" }
+        val current = localDirectContacts.classifyLocalDirectContact(radioId, prefix)
+        val combined = when {
+            observed == LocalDirectContactResolution.Ambiguous || observed == LocalDirectContactResolution.Stale -> observed
+            unionPendingResolution(prefix, current) == LocalDirectContactResolution.Ambiguous ->
+                LocalDirectContactResolution.Ambiguous
+            else -> unionPendingResolution(prefix, observed)
+        }
+        localDirectContacts.withLocalDirectContactOperation(radioId, prefix, combined, block)
+    }
+
+    private fun unionPendingResolution(prefix: Bytes, local: LocalDirectContactResolution): LocalDirectContactResolution =
+        locked {
+            val keys = pendingAdvertKeys.filter { it.advertStartsWith(prefix) }
+            if (keys.size > 1 || local is LocalDirectContactResolution.Unique &&
+                keys.any { it != local.contact.publicKey }
+            ) LocalDirectContactResolution.Ambiguous else local
+        }
 
     private suspend fun bestEffort(message: String, block: suspend () -> Unit) {
         try {
@@ -555,7 +623,7 @@ class AdvertisementService(
             }
         }
         if (known == true) eventBroadcaster.yield(AdvertisementEvent.ContactUpdated)
-        locked {
+        pendingLocked {
             if (known == false) {
                 discoverTrace(DebugLogLevel.DEBUG, "B2 0x80 no local contact key=$pubKeyHex syncing=$isSyncingContacts")
                 logger(DebugLogLevel.DEBUG, "ADVERT received for unknown contact - scheduling delta sync")
@@ -613,24 +681,27 @@ class AdvertisementService(
                 "($outDisplay), In: ${inHops.size} hops ($inDisplay)",
         )
         try {
-            val contact = dataStore.fetchContactByPrefix(radioId, result.publicKeyPrefix)
-            if (contact != null) {
-                // The response's self-describing length byte is authoritative for this path.
-                val frame = ContactFrame(
-                    contact.publicKey, contact.type, contact.flags, result.outPathLength, result.outPath, contact.name,
-                    contact.lastAdvertTimestamp, contact.latitude, contact.longitude, contact.lastModified,
+            val observed = localDirectContacts.classifyLocalDirectContact(radioId, result.publicKeyPrefix)
+            val applied = if (observed is LocalDirectContactResolution.Unique) {
+                localDirectContacts.applyLocalDirectPathIfCurrent(
+                    radioId, result.publicKeyPrefix, observed, result.outPathLength, result.outPath, clock.wallNow(),
                 )
-                dataStore.saveContact(radioId, frame)
-                bestEffort("Path response lastHeard stamp failed") {
-                    dataStore.touchContactHeard(radioId, contact.publicKey, clock.wallNow())
-                }
+            } else observed
+            when (applied) {
+                is LocalDirectContactResolution.Unique -> Unit
+                LocalDirectContactResolution.NotFound ->
+                    logger(DebugLogLevel.INFO, "Path response has no matching local contact")
+                LocalDirectContactResolution.Ambiguous ->
+                    logger(DebugLogLevel.WARNING, "Path response has an ambiguous local contact prefix; no path or recency changed")
+                LocalDirectContactResolution.Stale ->
+                    logger(DebugLogLevel.WARNING, "Path response local contact changed before mutation; no path or recency changed")
             }
-            eventBroadcaster.yield(AdvertisementEvent.PathDiscoveryResponse(result))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             logger(DebugLogLevel.ERROR, "Error handling path discovery response: ${failure.message}")
         }
+        eventBroadcaster.yield(AdvertisementEvent.PathDiscoveryResponse(result))
     }
 
     private fun handleTraceData(traceInfo: TraceInfo, radioId: RadioId) {
@@ -657,7 +728,7 @@ class AdvertisementService(
             )
             return
         }
-        locked {
+        pendingLocked {
             // Drop pending reconcile/path keys so a deleted contact is not re-notified or escalated.
             pendingAdvertKeys -= publicKey
             pendingPathKeys -= publicKey

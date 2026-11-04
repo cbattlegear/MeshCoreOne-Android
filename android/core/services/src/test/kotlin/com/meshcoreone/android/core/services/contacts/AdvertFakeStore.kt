@@ -5,6 +5,8 @@ import com.meshcoreone.android.core.contracts.domain.ContactIdentity
 import com.meshcoreone.android.core.contracts.domain.ContactSaveResult
 import com.meshcoreone.android.core.contracts.domain.DiscoveredNodeSaveResult
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.LocalDirectContactPersisting
+import com.meshcoreone.android.core.contracts.domain.LocalDirectContactResolution
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.ContactFrame
@@ -35,11 +37,18 @@ private fun rejectingStore(): PersistenceStoreProtocol = PersistenceStoreProtoco
     ) { _, method, _ -> throw AssertionError("Unexpected store invocation: ${method.name}") },
 )
 
+private fun rejectingLocalDirectStore(): LocalDirectContactPersisting = LocalDirectContactPersisting::class.java.cast(
+    Proxy.newProxyInstance(
+        LocalDirectContactPersisting::class.java.classLoader, arrayOf(LocalDirectContactPersisting::class.java),
+    ) { _, method, _ -> throw AssertionError("Unexpected local contact invocation: ${method.name}") },
+)
+
 /**
  * Store fake with the real store's frame-save (update-in-place), touch (stamp + Discover upsert) and
  * cascade-delete semantics, plus the Swift mock's stubbed errors, call recording and delete hold gate.
  */
-internal class AdvertFakeStore : PersistenceStoreProtocol by rejectingStore() {
+internal class AdvertFakeStore :
+    PersistenceStoreProtocol by rejectingStore(), LocalDirectContactPersisting by rejectingLocalDirectStore() {
     private val lock = Any()
     private val devices = LinkedHashMap<RadioId, DeviceDTO>()
     private val contacts = LinkedHashMap<UUID, ContactDTO>()
@@ -50,6 +59,7 @@ internal class AdvertFakeStore : PersistenceStoreProtocol by rejectingStore() {
     private var deleteContactsCalls = 0
     private var deleteHoldRequested = false
     private var deleteHold: Continuation<Unit>? = null
+    private var rosterRevision = UUID.randomUUID()
 
     @Volatile var touchContactHeardError: Exception? = null
     @Volatile var fetchContactError: Exception? = null
@@ -99,6 +109,65 @@ internal class AdvertFakeStore : PersistenceStoreProtocol by rejectingStore() {
         }
     }
 
+    private fun classifyLocked(radioId: RadioId, prefix: Bytes): LocalDirectContactResolution {
+        val matches = contacts.values.filter { it.radioId == radioId && it.publicKey.advertStartsWith(prefix) }
+        return when (matches.size) {
+            0 -> LocalDirectContactResolution.NotFound
+            1 -> LocalDirectContactResolution.Unique(matches.single(), rosterRevision)
+            else -> LocalDirectContactResolution.Ambiguous
+        }
+    }
+
+    override suspend fun classifyLocalDirectContact(radioId: RadioId, prefix: Bytes): LocalDirectContactResolution {
+        failFetch()
+        return synchronized(lock) { classifyLocked(radioId, prefix) }
+    }
+
+    override suspend fun applyLocalDirectPathIfCurrent(
+        radioId: RadioId, prefix: Bytes, observed: LocalDirectContactResolution,
+        outPathLength: UByte, outPath: Bytes, heardAt: Instant,
+    ): LocalDirectContactResolution {
+        failFetch()
+        touchContactHeardError?.let { throw it }
+        return synchronized(lock) {
+            val current = classifyLocked(radioId, prefix)
+            if (current == LocalDirectContactResolution.Ambiguous) return@synchronized current
+            if (current !is LocalDirectContactResolution.Unique || observed !is LocalDirectContactResolution.Unique ||
+                current.rosterRevision != observed.rosterRevision ||
+                current.contact.id != observed.contact.id || current.contact.publicKey != observed.contact.publicKey
+            ) return@synchronized LocalDirectContactResolution.Stale
+            val row = current.contact.copy(outPathLength = outPathLength, outPath = outPath)
+            contacts[row.id] = row
+            stampLocked(row, heardAt)
+            LocalDirectContactResolution.Unique(contacts.getValue(row.id), rosterRevision)
+        }
+    }
+
+    override suspend fun materializeLocalDirectContactIfAbsent(
+        radioId: RadioId, prefix: Bytes, frame: ContactFrame, heardAt: Instant,
+    ): LocalDirectContactResolution {
+        failFetch()
+        touchContactHeardError?.let { throw it }
+        return synchronized(lock) {
+            val current = classifyLocked(radioId, prefix)
+            if (current != LocalDirectContactResolution.NotFound) return@synchronized current
+            check(frame.publicKey.advertStartsWith(prefix))
+            val row = ContactDTO.fromFrame(radioId, frame)
+            contacts[row.id] = row
+            rosterRevision = UUID.randomUUID()
+            stampLocked(row, heardAt)
+            LocalDirectContactResolution.Unique(contacts.getValue(row.id), rosterRevision)
+        }
+    }
+
+    private fun stampLocked(contact: ContactDTO, date: Instant) {
+        val stamp = minOf(date.epochSecond, Instant.now().epochSecond + 300).toUInt()
+        contacts[contact.id] = contact.copy(lastHeardTimestamp = maxOf(contact.lastHeardTimestamp ?: 0u, stamp))
+        val node = nodeFor(contact.radioId, contact.publicKey)
+            ?: upsertNodeLocked(contact.radioId, contact.toContactFrame()).node
+        nodes[node.id] = node.copy(lastHeard = date)
+    }
+
     override suspend fun fetchContactPublicKeys(radioId: RadioId): SnapshotSet<Bytes> {
         fetchContactPublicKeysError?.let { throw it }
         failFetch()
@@ -109,16 +178,21 @@ internal class AdvertFakeStore : PersistenceStoreProtocol by rejectingStore() {
         val existing = contactFor(radioId, frame.publicKey)
         val dto = existing?.updating(frame) ?: ContactDTO.fromFrame(radioId, frame)
         contacts[dto.id] = dto
+        rosterRevision = UUID.randomUUID()
         ContactSaveResult(dto.id, existing == null)
     }
 
-    override suspend fun saveContact(dto: ContactDTO) = synchronized(lock) { contacts[dto.id] = dto }
+    override suspend fun saveContact(dto: ContactDTO) = synchronized(lock) {
+        contacts[dto.id] = dto
+        rosterRevision = UUID.randomUUID()
+    }
 
     override suspend fun deleteContact(key: EntityKey) = synchronized(lock) {
         deletedIds += key.id
         deleteContactError?.let { throw it }
         messages.values.removeAll { it.contactID == key.id }
         contacts.remove(key.id)
+        rosterRevision = UUID.randomUUID()
         Unit
     }
 

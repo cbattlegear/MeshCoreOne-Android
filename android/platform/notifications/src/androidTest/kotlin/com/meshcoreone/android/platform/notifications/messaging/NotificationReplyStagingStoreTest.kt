@@ -315,6 +315,43 @@ class NotificationReplyStagingStoreTest {
     }
 
     @Test
+    fun storedVersionCannotMasqueradeAsSupportedVersionThroughIntegerNarrowing() = runTest {
+        store.stage(post, payload, "retained")
+        listOf(4_294_967_297L, -4_294_967_295L, Long.MAX_VALUE, Long.MIN_VALUE).forEach { version ->
+            exec("UPDATE reply_records SET version=$version WHERE sequence=1")
+            assertEquals(
+                NotificationReplyStagingStore.ReadResult.Failed(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+                store.read(),
+            )
+            assertEquals(
+                NotificationReplyStagingStore.StageResult.Rejected(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+                store.stage(post, payload, "retained"),
+            )
+        }
+        exec("UPDATE reply_records SET version=1 WHERE sequence=1")
+        assertEquals("retained", inventory().single().exactText)
+    }
+
+    @Test
+    fun storedCapacityCannotMasqueradeAsConfiguredPolicyThroughIntegerNarrowing() = runTest {
+        store.stage(post, payload, "retained")
+        listOf(4_294_967_296L + limits.maxRecords, -4_294_967_296L + limits.maxRecords,
+            Long.MAX_VALUE, Long.MIN_VALUE).forEach { capacity ->
+            exec("UPDATE reply_metadata SET max_records=$capacity")
+            assertEquals(
+                NotificationReplyStagingStore.ReadResult.Failed(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+                store.read(),
+            )
+            assertEquals(
+                NotificationReplyStagingStore.InitializeResult.Failed(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+                store.initializeNew(),
+            )
+        }
+        exec("UPDATE reply_metadata SET max_records=${limits.maxRecords}")
+        assertEquals("retained", inventory().single().exactText)
+    }
+
+    @Test
     fun onlyExplicitFreshBootstrapCanRetryRolledBackInitialization() = runTest {
         cleanup()
         SQLiteDatabase.openOrCreateDatabase(file, null).use {

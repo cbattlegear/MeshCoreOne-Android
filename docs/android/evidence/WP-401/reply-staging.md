@@ -71,7 +71,23 @@ text, stable identities/reopen, fresh-token identical sends, differing text/targ
 concurrent independent handles, both capacity budgets and exact thresholds, replay while full,
 transaction-trigger rollback, invalid kind/version/payload/text/limits, policy mismatch,
 missing/corrupt/unavailable storage, tampered/gapped rows and unknown schema preservation.
-Authorship is not execution evidence. Execution status is recorded after the immutable candidate check.
+Authorship is not execution evidence.
+
+The immutable local check on `e04dca12eb1e3f0371c6fc1f5922f89794731fdb`:
+`python tools\android-port\local\check.py --commit e04dca12eb1e3f0371c6fc1f5922f89794731fdb --affected-base <trusted-origin-default-SHA> --scope module:platform/notifications`
+refused `Installed execution runtime is old or mismatched: controller/authority.py`.
+No product tests executed locally; the interlock was not bypassed or redeployed.
+That candidate was published explicitly unverified and the existing supported
+`gh workflow run android-ci.yml --repo cbattlegear/MeshCoreOne-Android --ref cbattlegear-notification-reply-staging`
+created run [41878818155](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41878818155).
+The run API confirmed its exact head was `e04dca12eb1e3f0371c6fc1f5922f89794731fdb`;
+it cannot verify later corrections.
+
+Coordinator source review found a 64-bit SQLite INTEGER narrowing hole in the initial candidate.
+Stored action version and `max_records` now undergo explicit Long-to-Int range checks before
+conversion. Real SQLite tampering regressions include positive/negative 2^32 aliases and both
+Long extrema, retaining the original digest/policy and proving rejection rather than truncation.
+A corrected exact successor requires its own hosted result.
 
 ## Outstanding integration prerequisites
 

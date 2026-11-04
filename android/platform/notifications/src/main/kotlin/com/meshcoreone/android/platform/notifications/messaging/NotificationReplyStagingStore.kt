@@ -300,7 +300,7 @@ class NotificationReplyStagingStore internal constructor(
             val storeId = uuid(cursor.getString(1))
             val count = cursor.getLong(2)
             val bytes = cursor.getLong(3)
-            val storedLimits = NotificationReplyLimits(cursor.getInt(4), cursor.getLong(5), cursor.getLong(6))
+            val storedLimits = NotificationReplyLimits(exactInt(cursor, 4), cursor.getLong(5), cursor.getLong(6))
             if (!storedLimits.isValid() || count !in 0L..storedLimits.maxRecords.toLong() ||
                 bytes !in 0L..storedLimits.maxTotalRecordBytes || cursor.moveToNext()
             ) corrupt()
@@ -322,7 +322,7 @@ class NotificationReplyStagingStore internal constructor(
                 ) corrupt()
                 val row = Row(
                     cursor.getLong(0), uuid(cursor.getString(1)),
-                    NotificationReplyPost(cursor.getInt(3), uuid(cursor.getString(2)), cursor.getString(4)),
+                    NotificationReplyPost(exactInt(cursor, 3), uuid(cursor.getString(2)), cursor.getString(4)),
                     if (cursor.isNull(5)) null else uuid(cursor.getString(5)),
                     if (cursor.isNull(6)) null else uuid(cursor.getString(6)),
                     cursor.getBlob(7), cursor.getBlob(8),
@@ -403,6 +403,12 @@ class NotificationReplyStagingStore internal constructor(
 
     private class StoreFailure(val reason: Failure) : RuntimeException()
     private fun corrupt(): Nothing = throw StoreFailure(Failure.CORRUPT_STORAGE)
+    private fun exactInt(cursor: Cursor, column: Int): Int {
+        val value = cursor.getLong(column)
+        if (value !in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) corrupt()
+        return value.toInt()
+    }
+
     private fun uuid(value: String): UUID = try {
         UUID.fromString(value).also { if (it.toString() != value) corrupt() }
     } catch (_: IllegalArgumentException) {

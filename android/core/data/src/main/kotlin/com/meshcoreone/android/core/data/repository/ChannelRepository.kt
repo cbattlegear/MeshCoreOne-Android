@@ -13,7 +13,7 @@ internal class ChannelRepository(
     private val context: RoomRepositoryContext,
     private val rooms: RoomRepository,
     private val identityScope: ChannelIdentityWriteScope? = null,
-) : ChannelPersisting {
+) : ChannelPersisting, ChannelOccupantMetadataPersisting {
     override suspend fun <T> withChannelOperation(block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T): T {
         check(identityScope == null) { "A scoped channel repository cannot start another channel operation" }
         return context.channelOperation { scope -> block(ChannelRepository(context, rooms, scope), scope) }

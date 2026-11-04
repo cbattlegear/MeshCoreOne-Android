@@ -14,7 +14,9 @@ import com.meshcoreone.android.core.model.VContactIdentity
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.protocol.model.MeshContact
 import com.meshcoreone.android.core.protocol.parser.Parsers
+import com.meshcoreone.android.core.protocol.session.ContactSessionOps
 import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.session.SessionClock
@@ -56,6 +58,135 @@ import org.junit.jupiter.api.Test
 class ContactWriteRecoveryTests {
     private val radioA = RadioId(UUID.fromString("00000000-0000-0000-0000-000000000209"))
     private val radioB = RadioId(UUID.fromString("00000000-0000-0000-0000-000000000210"))
+
+    @Test
+    fun stoppedDuringPreviousFrameLookupIsUnsentAndReplacementCanProceed() = runTest {
+        withFixture {
+            val lookup = SuspensionGate()
+            val paused = object : ContactPersisting by store {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    lookup.pause()
+                    return store.fetchContact(radioId, publicKey)
+                }
+            }
+            var originalFailure: MeshCoreException? = null
+            var observedDispatch: ContactWriteDispatch? = null
+            val observedSession = object : ContactSessionOps by session {
+                override suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+                    observedDispatch = dispatch
+                    try {
+                        session.addContact(contact, dispatch, onCommitted)
+                    } catch (failure: MeshCoreException) {
+                        originalFailure = failure
+                        throw failure
+                    }
+                }
+            }
+            val flags = PendingMarkerFlags()
+            val logs = mutableListOf<Pair<ContactLogLevel, String>>()
+            val producer = service(
+                connection = observedSession, persistence = paused, flags = flags,
+                logger = ContactServiceLogger { level, message -> logs += level to message },
+            )
+            val result = async {
+                assertFailsWith<ContactServiceError.SessionError> {
+                    producer.addOrUpdateContact(radioA, frame(1, "Unsent"))
+                }
+            }
+            runCurrent()
+            assertTrue(lookup.entered.isCompleted)
+            assertNull(observedDispatch, "The previous-frame read precedes write registration")
+            session.stop()
+            lookup.release.complete(Unit)
+            runCurrent()
+            val failure = result.await()
+            assertIs<MeshCoreException.SessionNotStarted>(failure.error)
+            assertSame(assertNotNull(originalFailure), failure.error)
+            assertSame(failure.error, failure.cause)
+            assertTrue(assertNotNull(observedDispatch).definitelyUnsent)
+            assertTrue(radio.writes.isEmpty())
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
+            assertTrue(flags.attempts.isEmpty(), "A pre-generation failure must not create durable uncertainty")
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            assertFalse(flags.durableView().bool("contactWriteReconciliation.${radioA.value}"))
+            assertTrue(logs.isEmpty())
+
+            val replacementRadio = radio.replacementView()
+            val replacement = service(newSession(replacementRadio), flags = flags)
+            assertEquals(0L, replacement.syncContacts(radioA).contactsReceived)
+            val accepted = async { replacement.addOrUpdateContact(radioA, frame(2, "Replacement")) }
+            runCurrent()
+            assertEquals(1, replacementRadio.writes.size)
+            replacementRadio.accept()
+            runCurrent()
+            accepted.await()
+            assertEquals("Replacement", store.fetchContact(radioA, contactsKey(2))?.name)
+            assertFalse(replacement.needsContactWriteReconciliation(radioA))
+            assertTrue(flags.attempts.isEmpty())
+        }
+    }
+
+    @Test
+    fun stoppedLookupCannotEraseEarlierOnWireUncertainty() = runTest {
+        withFixture {
+            val flags = PendingMarkerFlags()
+            val producer = service(flags = flags)
+            val first = async { producer.addOrUpdateContact(radioA, frame(1, "On wire")) }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+            val lookup = SuspensionGate()
+            val paused = object : ContactPersisting by store {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    lookup.pause()
+                    return store.fetchContact(radioId, publicKey)
+                }
+            }
+            val unsent = async {
+                assertFailsWith<ContactWriteAdmissionBlocked> {
+                    service(persistence = paused, flags = flags).addOrUpdateContact(radioA, frame(2, "Unsent"))
+                }
+            }
+            runCurrent()
+            assertTrue(lookup.entered.isCompleted)
+            first.cancelAndJoin()
+            val epoch = assertNotNull(ContactWriteRecovery.snapshot(flags, radioA))
+            session.stop()
+            lookup.release.complete(Unit)
+            runCurrent()
+            assertEquals(ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED, unsent.await().reason)
+            assertSame(epoch, ContactWriteRecovery.snapshot(flags, radioA))
+            val marker = "contactWriteReconciliation.${radioA.value}"
+            assertEquals(listOf(marker to true), flags.attempts)
+            assertTrue(flags.durableView().bool(marker))
+            assertNull(store.fetchContact(radioA, contactsKey(2)))
+            val replacementRadio = radio.replacementView()
+            val replacement = service(newSession(replacementRadio), flags = flags)
+            assertRecoveryRemainsBlocked(replacement)
+            assertEquals(1, radio.writes.size)
+            assertTrue(replacementRadio.contactRequests.isEmpty())
+            assertEquals(listOf(marker to true), flags.attempts)
+        }
+    }
+
+    @Test
+    fun sessionNotStartedWithoutUnsentProofStillRequiresReconciliation() = runTest {
+        withFixture {
+            val failure = MeshCoreException.SessionNotStarted()
+            val legacy = ContactsFakeSession().apply { addContactFailure = failure }
+            val flags = PendingMarkerFlags()
+            val producer = service(connection = legacy, flags = flags)
+            val error = assertFailsWith<ContactServiceError.SessionError> {
+                producer.addOrUpdateContact(radioA, frame(1, "Unknown"))
+            }
+            assertSame(failure, error.error)
+            assertSame(failure, error.cause)
+            assertEquals(1, legacy.addContactInvocations.size)
+            assertEquals(listOf("contactWriteReconciliation.${radioA.value}" to true), flags.attempts)
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+            assertRecoveryRemainsBlocked(service(flags = flags))
+            assertTrue(radio.writes.isEmpty())
+        }
+    }
 
     @Test
     fun cancellationQueuedBehindAnActualExchangeIsDefinitelyUnsent() = runTest {
@@ -2135,7 +2266,7 @@ class ContactWriteRecoveryTests {
         }
 
         fun service(
-            connection: MeshCoreSession = session,
+            connection: ContactSessionOps = session,
             persistence: ContactPersisting = store,
             coordinator: ContactSyncCoordinating? = null,
             cleanup: ContactCleanupHandling? = null,

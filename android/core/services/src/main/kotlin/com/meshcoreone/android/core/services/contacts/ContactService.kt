@@ -271,7 +271,9 @@ class ContactService(
             ContactWriteRecovery.abandonWrite(preferences, radioId, dispatch)
             throw blocked
         } catch (error: MeshCoreException) {
-            if (error !is MeshCoreException.DeviceError && error !is MeshCoreException.InvalidInput) {
+            if (dispatch.definitelyUnsent) {
+                ContactWriteRecovery.abandonDefinitelyUnsent(preferences, radioId, dispatch)
+            } else if (error !is MeshCoreException.DeviceError && error !is MeshCoreException.InvalidInput) {
                 requireContactReconciliation(radioId, error, dispatch)
             } else {
                 ContactWriteRecovery.abandonWrite(preferences, radioId, dispatch)

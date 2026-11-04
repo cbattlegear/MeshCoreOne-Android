@@ -680,3 +680,35 @@ null`. Both controls retain strict `assertSame` and exact suppression assertions
 the default test JVM assertions and stacktrace-recovery settings are unchanged.
 The production identity guard is unchanged. Exact-head hosted CI, rather than
 the superseded ordinary-exception controls, must establish execution results.
+
+### Pre-generation definitely-unsent accounting
+
+Independent full-series review of `2e722901ffe51f70547d07a25040575825ba2bbb`
+identified a distinct clean-unsent failure: Add can suspend while reading the
+previous contact frame, then resume after its old session stops. Registration
+still succeeds, but `SessionCore.generation()` fails before serializer admission.
+The previous service catch incorrectly recorded uncertainty for this attempt.
+
+The dispatch-aware core exchange now records `DEFINITELY_UNSENT` specifically
+when generation lookup throws `SessionNotStarted`, before any owned task exists.
+It rethrows the same failure. ContactService abandons only that proven-unsent
+dispatch while retaining its public `SessionError` wrapper and original cause.
+It neither clears nor overwrites another epoch. Other session failures without
+unsent proof retain fail-closed uncertainty; exception type alone is not proof.
+The queued marker-error identity guard and recording retry behavior are unchanged.
+
+New actual-caller controls hold the previous-frame lookup, stop the real session,
+then release the lookup. The clean case asserts the observed original session
+failure identity, public wrapper/cause, unsent dispatch status, no command/row/
+warning/marker, then a replacement session using the same preferences successfully
+syncs and completes an acknowledged Add. A second schedule creates real on-wire
+uncertainty while the other lookup is held; registration remains blocked after
+stop, the same earlier epoch/durable marker survives, and replacement sync/Add
+remain blocked without additional commands. A legacy-role typed-failure control
+has no unsent proof and still records reconciliation, preventing a broad
+`SessionNotStarted` exemption. A real protocol channel control also verifies
+the shared pre-generation dispatch accounting before serializer admission.
+
+`git diff --check` and `python .\tools\android-port\controller\validate.py`
+passed for the authored correction. These new assertions require fresh exact-head
+hosted execution and do not claim device acceptance or a production-device failure.

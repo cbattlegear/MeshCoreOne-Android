@@ -32,6 +32,16 @@ import org.junit.jupiter.api.TestFactory
 class ChannelWriteDispatchTest {
     @TestFactory
     fun realSessionCases() = listOf(
+        nativeCase("missing generation proves dispatch unsent before serializer admission") {
+            val f = fixture(); start(f)
+            f.session.stop()
+            val dispatch = ChannelWriteDispatch()
+            assertFailsWith<MeshCoreException.SessionNotStarted> {
+                f.session.setChannel(3u, "unsent", filled(0x33, 16), dispatch)
+            }
+            assertEquals(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT, dispatch.cancellationDisposition)
+            assertEquals(listOf(1), f.transport.sent.map { it[0].toInt() })
+        },
         nativeCase("an already cancelled caller is definitely unsent before any serializer task exists") {
             val f = fixture(); start(f)
             val dispatch = ChannelWriteDispatch()

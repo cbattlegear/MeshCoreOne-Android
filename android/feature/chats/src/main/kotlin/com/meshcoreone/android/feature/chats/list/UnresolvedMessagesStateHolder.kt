@@ -27,6 +27,7 @@ class UnresolvedMessagesStateHolder(
     private val mutableState = MutableStateFlow(UnresolvedMessagesState(radioId))
     val state: StateFlow<UnresolvedMessagesState> = mutableState
     private val reads = Mutex()
+    private var nextOffset = 0L
 
     suspend fun refresh() = load(append = false)
     suspend fun loadMore() {
@@ -38,12 +39,13 @@ class UnresolvedMessagesStateHolder(
         val radio = before.radioId ?: return@withLock
         mutableState.update { it.copy(isLoading = true, loadFailed = false) }
         try {
-            val offset = if (append) before.messages.size.toLong() else 0L
+            val offset = if (append) nextOffset else 0L
             val rows = data.fetchUnprovedDirectMessages(radio, PAGE_SIZE + 1, offset)
             check(rows.size <= PAGE_SIZE + 1 && rows.all { it.radioId == radio }) {
                 "Unproved direct-message read violated its radio/page contract"
             }
             val page = rows.take(PAGE_SIZE.toInt())
+            nextOffset = offset + page.size
             mutableState.update {
                 it.copy(
                     messages = (if (append) before.messages + page else page).distinctBy { row -> row.occurrenceID },

@@ -123,4 +123,24 @@ class UnresolvedMessagesStateHolderTest {
         assertTrue(holder.state.value.messages.isEmpty())
         assertIs<IllegalStateException>(failures.single())
     }
+
+    @Test fun overlappingPagesAdvanceStoredOffsetRatherThanUniqueVisibleCount() = runBlocking {
+        var stored = (1L..103).map { row(it) }
+        val offsets = mutableListOf<Long>()
+        val data = FakeData().apply {
+            unprovedRead = { _, limit, offset ->
+                offsets += offset
+                stored.drop(offset.toInt()).take(limit.toInt())
+            }
+        }
+        val holder = UnresolvedMessagesStateHolder(radio, data, diagnostics)
+        holder.refresh()
+        stored = listOf(row(104)) + stored
+        holder.loadMore(); holder.loadMore()
+        assertEquals(listOf(0L, 50L, 100L), offsets)
+        assertEquals((1L..103).map { row(it) }, holder.state.value.messages)
+        assertFalse(holder.state.value.hasMore)
+        holder.refresh()
+        assertEquals(UUID(0, 104), holder.state.value.messages.first().occurrenceID)
+    }
 }

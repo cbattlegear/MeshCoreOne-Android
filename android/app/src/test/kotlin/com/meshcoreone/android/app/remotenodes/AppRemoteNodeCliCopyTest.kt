@@ -15,6 +15,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.InputModeManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.semantics.SemanticsActions
@@ -106,7 +109,9 @@ class AppRemoteNodeCliCopyTest {
             val fixture = RemoteNodesFixture()
             val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val holder = NodeCliStateHolder(scope, ResourcesDiagnosticsText(host.get().resources))
+            lateinit var inputMode: InputModeManager
             host.get().setContent {
+                inputMode = LocalInputModeManager.current
                 CompositionLocalProvider(
                     LocalDensity provides Density(1f, 2f),
                 ) {
@@ -161,8 +166,10 @@ class AppRemoteNodeCliCopyTest {
             compose.runOnIdle {
                 assertEquals("alpha\nbeta", clipboard.primaryClip!!.getItemAt(0).text.toString())
             }
+            compose.runOnIdle { assertTrue(inputMode.requestInputMode(InputMode.Keyboard)) }
             compose.onNodeWithTag("remote-cli-copy").assertHeightIsAtLeast(48.dp)
-                .performSemanticsAction(SemanticsActions.RequestFocus) { it() }
+                .performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
+            compose.onNodeWithTag("remote-cli-copy").assertIsFocused()
             compose.onNodeWithTag("remote-cli-copy").performKeyInput { pressKey(Key.Enter) }
             compose.onNode(isDialog()).assertExists()
         } finally {
@@ -188,10 +195,10 @@ class AppRemoteNodeCliCopyTest {
             }
             compose.waitForIdle()
             compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex) and !hasAnyAncestor(isDialog()))
-                .performScrollToIndex(990)
-            compose.onNodeWithText("> response-990").assertIsDisplayed()
+                .performScrollToIndex(900)
+            compose.onNodeWithText("> response-900").assertIsDisplayed()
             compose.onNodeWithTag("remote-cli-copy").performClick()
-            compose.onNode(hasText("> response-990") and hasAnyAncestor(isDialog()))
+            compose.onNode(hasText("> response-900") and hasAnyAncestor(isDialog()))
                 .assertIsDisplayed().performClick()
             compose.runOnIdle {
                 val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

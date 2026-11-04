@@ -32,7 +32,7 @@ keyboard activation of the 48dp chooser control. These cases are authored,
 not claimed as executed while hosted CI is queued.
 The chooser opens at the reading log's first visible item rather than restarting
 at the oldest line. A 1,000-line mounted control scrolls the reading log near its
-end and requires the recent response to be immediately visible in the chooser.
+end (index 900) and requires the recent response to be immediately visible in the chooser.
 Large-font height is compared with equivalent Text-only content at the same
 font scale, not a fixed pixel limit.
 
@@ -43,6 +43,15 @@ Cross-row and 1,000-record tests instead inject a real node holder and append
 distinct output records through its existing API; production splitting rules
 are unchanged. Blank chooser rows show the existing localized `empty` label
 without changing clipboard bytes, with a corresponding mounted control.
+
+Run 41882934868 compiled the App tests and executed all six SDK31/37 copy
+cases. Both sender-boundary block-copy cases passed; keyboard-dialog and
+long-history visibility cases failed on both SDKs. The keyboard fixture now
+explicitly enters keyboard input mode before requesting focus and asserts focus
+before Enter. The long-history fixture scrolls to index 900, leaving sufficient
+trailing records that the reading viewport is not end-clamped to an earlier
+first-visible index. This checks the same visible-position handoff without
+incorrectly assuming index 990 must be the first visible reading row.
 
 Typed admissions on the base: renderer `modify-related-consumer` uses
 `reviewed-support-consumer`; separate mounted test `add-or-update-related-test`

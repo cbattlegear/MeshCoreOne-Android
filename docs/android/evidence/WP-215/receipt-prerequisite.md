@@ -3,9 +3,9 @@
 ## Scope and provenance
 
 Repository: `cbattlegear/MeshCoreOne-Android`.
-Current refreshed candidate base: `ab570ebbf5e8d3402343f5ccf8a8450791f472b0`.
+Current refreshed candidate base: `cf1ee845b3d6022990d7d699cd5bb2a373c8e456`.
 Current-main merge commit before the evidence refresh:
-`d262416484b1651b3579e30162711f139ec7ac91`.
+`14ed733b5bf25487617c22c72a5cb2d2d109a9e4`.
 Swift specification remains `db14559b39d32322b06477c6ae676112f583db50`;
 this contract and its additional assertions are Android-only.
 This is the existing open PR #537 prerequisite, not a WP-215 completion claim.
@@ -106,9 +106,14 @@ The prior exact head `795a8d6299ad4a5a8d14a6a003639d02d35eb774` on base
 `41864822492` and an approval bound to that head. Its Android build, controller,
 scope classification, checklist and aggregate passed; the Swift lanes were
 skipped by scope. Those results do not verify or approve the refreshed
-candidate based on `ab570ebbf5e8d3402343f5ccf8a8450791f472b0`; its exact head
+candidate based on `cf1ee845b3d6022990d7d699cd5bb2a373c8e456`; its exact head
 is bound in the refreshed authenticated scope and must receive its own hosted
 verification and independent review. Those are pending. Until both finish
 successfully, this remains an unverified implementation candidate, not WP-215
 acceptance or notification integration completion. No second CI-result bundle
 is retained, hashed or revalidated here.
+
+An intermediate candidate based on `ab570ebbf5e8d3402343f5ccf8a8450791f472b0`
+was published at `213e64d9b2939ea9aee0659d111b91613e7f497c` with run
+`41869354821`; it was still in progress when main advanced to `cf1ee845`. Its
+results are not evidence for the current-base candidate.

@@ -14,6 +14,8 @@ import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.PayloadType
+import com.meshcoreone.android.core.protocol.event.RouteType
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
@@ -192,6 +194,63 @@ class SyncLocalDirectCandidateTest {
             assertEquals(0L, coordinator.conversationsVersion)
             assertTrue(received.values.isEmpty())
             collector.cancel()
+        },
+        nativeCase("candidate does not infer a route from a colliding RX log") {
+            for (timestampMatches in listOf(true, false)) {
+                val radioId = newRadio()
+                val polling = CandidatePolling()
+                val store = SyncInMemoryStore.createTestDataStore(radioId)
+                val services = SyncTestServices(store, polling = polling)
+                val adverts = CandidateAdverts()
+                val session = candidateSession(radioId)
+                val prefix = key(0x36).prefix(6)
+                val stamp = clock.now().epochSecond.toUInt()
+                val unrelated = groupTextRX(
+                    radioId, 0u, if (timestampMatches) stamp else stamp - 1u,
+                    Bytes.of(0x11, 0x22), clock.now(), regionScope = "unrelated",
+                ).copy(
+                    channelIndex = null,
+                    payloadType = PayloadType.TEXT_MESSAGE,
+                    routeType = RouteType.DIRECT,
+                    packetPayload = Bytes.of(0x99, prefix[0].toInt()),
+                )
+                store.saveRxLogEntry(unrelated)
+                val legacyMatch = if (timestampMatches) {
+                    store.findRxLogEntry(radioId, null, stamp)
+                } else {
+                    store.findRxLogEntryBySenderPrefix(radioId, prefix[0], clock.now().minusSeconds(30))
+                }
+                assertEquals(unrelated.id, legacyMatch?.id)
+                store.calls.clear()
+                coordinator().wireLocalDirectCandidateForTest(
+                    services.dependencies().copy(advertisementService = adverts), session,
+                )
+                val message = contactMessage(prefix, "keep wire metadata", clock.now())
+                    .copy(pathLength = 255u, snr = -9.25)
+                checkNotNull(polling.candidateHandler)(
+                    LocalDirectMessageEnvelope(
+                        UUID(0, if (timestampMatches) 31 else 32), session, message,
+                        DeliveryContext.Live, LocalDirectContactResolution.Ambiguous,
+                    ),
+                )
+
+                val saved = adverts.saved.single()
+                assertEquals("keep wire metadata", saved.text)
+                assertEquals(prefix, saved.senderKeyPrefix)
+                assertEquals(255u.toUByte(), saved.pathLength)
+                assertEquals(message.snr, saved.snr)
+                assertNull(saved.pathNodes)
+                assertNull(saved.routeType)
+                assertNull(saved.regionScope)
+                assertTrue(saved.regionScopeMatches.isEmpty())
+                assertFalse("findRxLogEntry" in store.calls)
+                assertFalse("findRxLogEntryBySenderPrefix" in store.calls)
+                assertFalse("touchContactHeard" in store.calls)
+                assertTrue(adverts.materializations.isEmpty())
+                assertTrue(services.notifications.posts.isEmpty())
+                assertTrue(services.reactions.indexed.isEmpty())
+                assertTrue(services.reactions.queued.isEmpty())
+            }
         },
         nativeCase("the same occurrence can retry but distinct equal messages reach admission separately") {
             val radioId = newRadio()

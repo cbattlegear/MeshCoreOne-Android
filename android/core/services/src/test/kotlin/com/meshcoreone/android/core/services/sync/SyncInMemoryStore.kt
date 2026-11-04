@@ -193,13 +193,6 @@ internal class SyncInMemoryStore : PersistenceStoreProtocol by unsupportedStore(
         Unit
     }
 
-    /** Replaces only the slot projection; this fake does not model storage cascades. */
-    fun replaceChannelSlotForTest(dto: ChannelDTO) = locked("replaceChannelSlotForTest") {
-        channels.removeAll { it.radioId == dto.radioId && it.index == dto.index }
-        channels += dto
-        Unit
-    }
-
     override suspend fun updateChannelLastMessage(key: EntityKey, date: Instant?) =
         updateChannel("updateChannelLastMessage", key) { it.copy(lastMessageDate = date) }
 

@@ -4,7 +4,6 @@ package com.meshcoreone.android.core.services.sync
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
-import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.NotificationLevel
@@ -44,7 +43,6 @@ interface SyncNotificationServicing {
     suspend fun postChannelMessageNotification(
         channelName: String, channelIndex: UByte, radioId: RadioId, senderName: String?, messageText: String,
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
-        displayTarget: ChannelNotificationTarget,
     )
 
     suspend fun postRoomMessageNotification(

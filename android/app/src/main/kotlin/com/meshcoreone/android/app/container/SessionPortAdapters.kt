@@ -4,7 +4,6 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
-import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.datastore.SecretStore
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
@@ -160,10 +159,8 @@ internal class SyncNotificationsAdapter(private val notifications: NotificationS
     override suspend fun postChannelMessageNotification(
         channelName: String, channelIndex: UByte, radioId: RadioId, senderName: String?, messageText: String,
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
-        displayTarget: ChannelNotificationTarget,
     ) = notifications.postChannelMessageNotification(
         channelName, channelIndex, radioId, senderName, messageText, messageID, notificationLevel, hasSelfMention,
-        displayTarget,
     )
     override suspend fun postRoomMessageNotification(
         roomName: String, sessionID: UUID, senderName: String?, messageText: String, messageID: UUID,

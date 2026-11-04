@@ -320,9 +320,25 @@ abstract class NodesScreensComposeTestBase {
         }
 
         private fun assertVisibleOrder(first: String, second: String) {
-            val firstRow = awaitText(first)
-            val secondRow = awaitText(second)
-            assertTrue(firstRow.boundsInRoot.top < secondRow.boundsInRoot.top, "$first must appear above $second")
+            var lastBounds: Pair<Rect?, Rect?> = null to null
+            repeat(100) {
+                Thread.sleep(10)
+                advanceFrames()
+                val nodes = allSemanticsNodes()
+                fun visibleBounds(text: String): Rect? =
+                    nodes.firstOrNull {
+                        it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { value -> value.text == text } &&
+                            isDisplayed(it)
+                    }?.boundsInRoot
+                val firstBounds = visibleBounds(first)
+                val secondBounds = visibleBounds(second)
+                lastBounds = firstBounds to secondBounds
+                if (firstBounds != null && secondBounds != null && firstBounds.top < secondBounds.top) return
+            }
+            error(
+                "$first must appear above $second after refresh; $first=${lastBounds.first}, $second=${lastBounds.second}; " +
+                    "nodes=${allSemanticsNodes().joinToString { "${it.config}@${it.boundsInRoot}" }}",
+            )
         }
     }
 

@@ -40,6 +40,14 @@ interface ContactPersisting {
     suspend fun findContactNameByKeyPrefix(prefix: Bytes): String?
     suspend fun findContactByPublicKey(publicKey: Bytes): ContactDTO?
     suspend fun saveContact(radioId: RadioId, frame: ContactFrame): ContactSaveResult
+    /**
+     * Atomic accepted-write upsert preserving newer timestamps and equal-timestamp frames changed
+     * since [expectedFrame] was read. Returns null when a newer frame was retained rather than
+     * applying this one. Local preferences/activity are retained even when applying.
+     */
+    suspend fun saveContactPreservingNewer(
+        radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame? = null,
+    ): ContactSaveResult?
     suspend fun saveContact(dto: ContactDTO)
     /** Atomically changes only the avatar of an existing matching identity; null clears it. Never inserts. */
     suspend fun updateContactAvatar(

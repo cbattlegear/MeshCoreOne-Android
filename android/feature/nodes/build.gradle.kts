@@ -68,6 +68,7 @@ tasks.withType<Test>().configureEach {
         }
     })
     dependsOn(prepareRobolectricSdks)
+    testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     jvmArgumentProviders.add(NodesRobolectricSdkArguments(robolectricSdkDirectory))
 }

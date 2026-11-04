@@ -627,3 +627,27 @@ Git-archive export of `tools/android-port`; result `valid`. `git diff --check`
 passed. These are source checks, not Kotlin compilation, test discovery or
 execution. No Gradle/CI/device work, publication, schema/Room/graph edit,
 claim change or hold release occurred.
+
+### Queued marker retry error identity
+
+The bounded repair starts from reviewed candidate
+`30ef44447d143f0555aded3865412e823a78027f`. Marker recording failure is added
+as a suppressed exception only when it is a different instance from the primary
+failure. Reusing the primary exception no longer invokes forbidden
+`Throwable.addSuppressed(this)`, so the original error and both recovery warnings
+survive. Marker retry, pending state, epochs and dispatch fences are unchanged.
+
+Two real-session regressions queue a service Add behind another service Add,
+cancel the first caller while marker recording fails, then deliver its late ACK.
+The terminal callback retries recording before the queued dispatch retries it
+again. The queued service catch retries a fourth time, either throwing the same
+exception instance or a distinct recording exception. Assertions cover primary
+identity, empty versus distinct suppression, both warning counts, no second
+transport write or queued-row persistence, the first accepted local completion,
+memory-versus-durable marker state, and successful later marker recording without
+clearing recovery or admitting writes/sync.
+
+This is an injected stable-identity regression for a source-level defect, not
+a reproduced production-device failure. The current Android adapter creates
+fresh recording exceptions. Device acceptance is a separate later run, not a
+prerequisite for this repair. Other owners' worktrees and held drafts are unchanged.

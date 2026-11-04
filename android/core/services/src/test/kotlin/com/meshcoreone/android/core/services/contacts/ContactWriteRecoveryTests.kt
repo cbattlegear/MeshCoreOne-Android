@@ -1683,6 +1683,75 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
+    fun queuedMarkerRetryPreservesIdenticalRecordingFailure() = queuedMarkerRetryFailure(distinctFailure = false)
+
+    @Test
+    fun queuedMarkerRetrySuppressesDistinctRecordingFailure() = queuedMarkerRetryFailure(distinctFailure = true)
+
+    private fun queuedMarkerRetryFailure(distinctFailure: Boolean) = runTest {
+        withFixture {
+            val markerFailure = IOException("Pending marker retry failed")
+            val recordingFailure = if (distinctFailure) IOException("Service marker retry failed") else markerFailure
+            val backing = PendingMarkerFlags()
+            var failMarker = true
+            val flags = object : ContactPreferenceFlags by backing {
+                override fun set(key: String, value: Boolean) {
+                    // Cancellation and its terminal callback precede the queued dispatch and catch.
+                    backing.failure = if (!failMarker) null
+                        else if (backing.attempts.size < 3) markerFailure else recordingFailure
+                    backing.set(key, value)
+                }
+            }
+            val logs = mutableListOf<Pair<ContactLogLevel, String>>()
+            val coordinator = ContactsFakeSyncCoordinator()
+            val producer = service(
+                flags = flags,
+                coordinator = coordinator,
+                logger = ContactServiceLogger { level, message -> logs += level to message },
+            )
+            val first = async { producer.addOrUpdateContact(radioA, frame(1, "First")) }
+            runCurrent()
+            val queued = async {
+                assertFailsWith<IOException> { producer.addOrUpdateContact(radioA, frame(2, "Queued")) }
+            }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+            assertTrue(backing.attempts.isEmpty(), "Both writes registered before recovery became pending")
+
+            first.cancelAndJoin()
+            assertEquals(1, backing.attempts.size)
+            radio.accept()
+            runCurrent()
+
+            assertSame(markerFailure, queued.await())
+            assertEquals(
+                if (distinctFailure) listOf(recordingFailure) else emptyList(),
+                markerFailure.suppressed.toList(),
+            )
+            val marker = "contactWriteReconciliation.${radioA.value}"
+            assertEquals(List(4) { marker to true }, backing.attempts)
+            assertTrue(backing.bool(marker))
+            assertFalse(backing.durableView().bool(marker))
+            assertEquals(3, logs.count { it == (ContactLogLevel.WARNING to "Contact recovery marker could not be persisted") })
+            assertEquals(3, logs.count { it == (ContactLogLevel.WARNING to "Contact state requires a complete radio contact sync") })
+            assertEquals(1, radio.writes.size, "The queued write never reaches the transport")
+            assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertNull(store.fetchContact(radioA, contactsKey(2)))
+            assertEquals(listOf("contactsChanged"), coordinator.notifications)
+
+            failMarker = false
+            val recovered = service(flags = flags)
+            assertTrue(recovered.needsContactWriteReconciliation(radioA))
+            assertEquals(List(5) { marker to true }, backing.attempts)
+            assertTrue(backing.durableView().bool(marker))
+            assertRecoveryRemainsBlocked(recovered)
+            assertEquals(List(5) { marker to true }, backing.attempts, "Successful retry ends recording, not recovery")
+            assertEquals(1, radio.writes.size)
+            assertTrue(radio.contactRequests.isEmpty())
+        }
+    }
+
+    @Test
     fun continuedNextAccessFailurePropagatesAndIsIsolatedFromOtherRadio() = runTest {
         withFixture {
             val row = ContactDTO.fromFrame(radioA, frame(2, "Retained"))

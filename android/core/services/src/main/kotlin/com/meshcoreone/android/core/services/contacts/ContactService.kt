@@ -298,7 +298,7 @@ class ContactService(
         try {
             ContactWriteRecovery.require(preferences, radioId, dispatch)
         } catch (recordingFailure: Exception) {
-            failure.addSuppressed(recordingFailure)
+            if (recordingFailure !== failure) failure.addSuppressed(recordingFailure)
             logger.log(ContactLogLevel.WARNING, "Contact recovery marker could not be persisted")
         }
         logger.log(ContactLogLevel.WARNING, "Contact state requires a complete radio contact sync")

@@ -482,14 +482,19 @@ class NotificationOpenHandoffStore internal constructor(private val databaseFile
 
     private fun readMetadata(database: SQLiteDatabase): Metadata? =
         database.rawQuery(
-            "SELECT store_id, next_sequence, revision FROM $TABLE_METADATA WHERE singleton = 1",
+            """SELECT store_id, next_sequence, revision,
+                      (SELECT COALESCE(MAX(sequence), 0) FROM $TABLE_OPENS)
+               FROM $TABLE_METADATA WHERE singleton = 1""",
             null,
         ).use { cursor ->
             if (!cursor.moveToFirst()) null else {
                 val storeId = parseUuid(cursor.getString(0)) ?: return@use null
                 val nextSequence = cursor.getLong(1)
                 val revision = cursor.getLong(2)
-                if (nextSequence <= 0L || revision < 0L) null
+                val maximumSequence = cursor.getLong(3)
+                if (nextSequence <= 0L || revision < nextSequence - 1L ||
+                    maximumSequence != nextSequence - 1L
+                ) null
                 else Metadata(storeId, nextSequence, revision)
             }
         }

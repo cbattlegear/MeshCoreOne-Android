@@ -124,7 +124,7 @@ class NotificationReplyStagingStore internal constructor(
                         db.execSQL("CREATE INDEX reply_post ON reply_records(post_id)")
                         db.execSQL(
                             "INSERT INTO reply_metadata VALUES(1, ?, 0, 0, ?, ?, ?)",
-                            arrayOf(UUID.randomUUID().toString(), limits.maxRecords, limits.maxRecordBytes,
+                            arrayOf<Any>(UUID.randomUUID().toString(), limits.maxRecords, limits.maxRecordBytes,
                                 limits.maxTotalRecordBytes),
                         )
                         db.version = 1
@@ -199,8 +199,16 @@ class NotificationReplyStagingStore internal constructor(
                     )
                     db.execSQL(
                         "UPDATE reply_metadata SET record_count=?, content_bytes=? WHERE singleton=1",
-                        arrayOf(state.rows.size + 1, state.contentBytes + row.contentBytes),
+                        arrayOf<Any>(state.rows.size + 1, state.contentBytes + row.contentBytes),
                     )
+                    val retained = load(db)
+                    val actual = retained.rows.lastOrNull() ?: corrupt()
+                    if (retained.storeId != state.storeId || retained.rows.size != state.rows.size + 1 ||
+                        actual.sequence != row.sequence || actual.recordId != row.recordId ||
+                        actual.post != row.post || actual.parentId != row.parentId ||
+                        actual.outgoingId != row.outgoingId || !actual.payload.contentEquals(row.payload) ||
+                        !actual.text.contentEquals(row.text)
+                    ) corrupt()
                     commitAttempted = true
                     result(state.storeId, row, replay = false)
                 }

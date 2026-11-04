@@ -189,6 +189,62 @@ class NotificationReplyStagingStoreTest {
     }
 
     @Test
+    fun ignoredRecordInsertRollsBackMetadataAndNeverReportsRetention() = runTest {
+        store.stage(post, payload, "first")
+        exec(
+            """CREATE TRIGGER ignore_reply BEFORE INSERT ON reply_records
+               BEGIN SELECT RAISE(IGNORE); END""",
+        )
+        assertEquals(
+            NotificationReplyStagingStore.StageResult.Rejected(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+            store.stage(post, payload, "not retained"),
+        )
+        assertEquals(listOf("first"), inventory().map { it.exactText })
+        assertEquals(1L, sqlLong("SELECT record_count FROM reply_metadata"))
+        exec("DROP TRIGGER ignore_reply")
+        val retry = store.stage(post, payload, "not retained") as
+            NotificationReplyStagingStore.StageResult.ConflictRetained
+        assertEquals(2L, retry.identity.sequence)
+    }
+
+    @Test
+    fun ignoredMetadataUpdateRollsBackInsertedTextAndNeverReportsRetention() = runTest {
+        store.stage(post, payload, "first")
+        exec(
+            """CREATE TRIGGER ignore_metadata BEFORE UPDATE ON reply_metadata
+               BEGIN SELECT RAISE(IGNORE); END""",
+        )
+        assertEquals(
+            NotificationReplyStagingStore.StageResult.Rejected(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+            store.stage(post, payload, "not retained"),
+        )
+        assertEquals(listOf("first"), inventory().map { it.exactText })
+        assertEquals(1L, sqlLong("SELECT count(*) FROM reply_records"))
+        exec("DROP TRIGGER ignore_metadata")
+        val retry = store.stage(post, payload, "not retained") as
+            NotificationReplyStagingStore.StageResult.ConflictRetained
+        assertEquals(2L, retry.identity.sequence)
+    }
+
+    @Test
+    fun ignoredRecordAndMetadataTogetherCannotMasqueradeAsSuccessfulNoOp() = runTest {
+        exec(
+            """CREATE TRIGGER ignore_reply BEFORE INSERT ON reply_records
+               BEGIN SELECT RAISE(IGNORE); END""",
+        )
+        exec(
+            """CREATE TRIGGER ignore_metadata BEFORE UPDATE ON reply_metadata
+               BEGIN SELECT RAISE(IGNORE); END""",
+        )
+        assertEquals(
+            NotificationReplyStagingStore.StageResult.Rejected(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+            store.stage(post, payload, "not retained"),
+        )
+        assertTrue(inventory().isEmpty())
+        assertEquals(0L, sqlLong("SELECT record_count FROM reply_metadata"))
+    }
+
+    @Test
     fun invalidPostKindVersionPayloadAndEmptyTextNeverRetainAnything() = runTest {
         listOf(post.copy(version = 0), post.copy(version = 2), post.copy(action = "OPEN"),
             post.copy(action = "reply")).forEach {

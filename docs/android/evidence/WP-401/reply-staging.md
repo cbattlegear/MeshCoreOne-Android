@@ -91,6 +91,17 @@ The row integrity digest also binds the producer-store UUID so a changed valid m
 silently rebind previously retained record identities. A real SQLite mutation/restore regression
 covers this binding. A corrected exact successor requires its own hosted result.
 
+Run [41879330567](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41879330567)
+bound exactly to `9aa08c93b7768b1b699e95a997d482f76059f336` failed notification Kotlin
+compilation on inferred intersection array types (warnings-as-errors); explicit `arrayOf<Any>`
+SQL arguments correct those two sites. Notification tests did not execute on that head.
+
+Coordinator review also supplied real SQLite `RAISE(IGNORE)` controls: a trigger can silently
+discard an INSERT or metadata UPDATE without throwing. Before accepting a new record, stage now
+reloads/validates the actual retained rows and metadata inside the same transaction, checking the
+exact proposed identity, payload, text and total count. Any mismatch rolls back. Regression controls
+ignore each mutation separately and both together, preserving the existing explicit-ABORT test.
+
 ## Outstanding integration prerequisites
 
 No claim CAS/revision, settlement, send, durable receipt, recovery presentation, retention decision,

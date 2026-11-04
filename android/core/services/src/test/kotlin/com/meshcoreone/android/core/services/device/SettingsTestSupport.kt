@@ -208,6 +208,12 @@ internal class DeviceRows : DevicePersisting, DeviceEditPersisting {
     var saveFailure: PersistenceStoreException? = null
     var beforeSave: suspend () -> Unit = {}
     private var revision = 0L
+    override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean {
+        if (dto.id in rows) return false
+        saveDevice(dto.copy(isActive = false))
+        return true
+    }
+    override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean = unsupported()
     override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
         fetchDevice(id)?.let { DeviceWriteSnapshot(it, revision) }
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {

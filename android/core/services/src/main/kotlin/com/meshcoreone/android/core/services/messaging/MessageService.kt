@@ -227,9 +227,23 @@ class MessageService(
         reconcileAcknowledgement(tracking.messageID)
     }
 
-    private suspend fun reconcileAcknowledgement(messageID: UUID, cleanup: Boolean = false) = mutation(messageID).withLock {
-        val tracking = pendingAck(messageID) ?: return@withLock
-        val ack = tracking.acknowledgement ?: return@withLock
+    private suspend fun reconcileAcknowledgement(
+        messageID: UUID,
+        cleanup: Boolean = false,
+        failureOperation: String? = null,
+    ) = mutation(messageID).withLock {
+        try {
+            reconcileAcknowledgementLocked(messageID, cleanup)
+        } catch (failure: PersistenceStoreException) {
+            if (!cleanup && !ownership.isCurrent) throw failure
+            if (failureOperation != null) remember(failureOperation, failure)
+            throw failure
+        }
+    }
+
+    private suspend fun reconcileAcknowledgementLocked(messageID: UUID, cleanup: Boolean) {
+        val tracking = pendingAck(messageID) ?: return
+        val ack = tracking.acknowledgement ?: return
         if (!cleanup) checkIdentity("commitAcknowledgement")
         val row = dataStore.fetchMessage(key(messageID))
         if (!cleanup) ownership.check("commitAcknowledgement.read")
@@ -358,10 +372,9 @@ class MessageService(
                 }
             }
             if (acknowledgementArrived) {
-                try { reconcileAcknowledgement(id) }
+                try { reconcileAcknowledgement(id, failureOperation = "failPending.$id") }
                 catch (failure: PersistenceStoreException) {
                     if (!ownership.isCurrent) throw failure
-                    remember("failPending.$id", failure)
                     val first = firstFailure
                     if (first == null) firstFailure = failure
                     else if (first !== failure) first.addSuppressed(failure)

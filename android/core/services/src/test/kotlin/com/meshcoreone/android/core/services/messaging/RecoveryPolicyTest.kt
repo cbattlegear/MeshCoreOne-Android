@@ -126,6 +126,56 @@ class RecoveryPolicyTest {
             assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(message.id)), observed)
             assertTrue(h.service.close().isComplete); h.close()
         },
+        native("overlapping ACK recovery observes fail-all ACK-write accounting before mutation unlock") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            val message = h.message()
+            val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
+            h.service.installPendingAck(h.tracking(message, code))
+            val failureEntered = CompletableDeferred<Unit>()
+            val releaseFailure = CompletableDeferred<Unit>()
+            val ackEntered = CompletableDeferred<Unit>()
+            val releaseAck = CompletableDeferred<Unit>()
+            val fault = storageFailure()
+            var statusWrites = 0
+            var ackWrites = 0
+            h.store.before = {
+                if (it == "updateMessageStatusUnlessDelivered" && statusWrites++ == 0) {
+                    failureEntered.complete(Unit); releaseFailure.await()
+                }
+                if (it == "updateMessageAck") {
+                    if (ackWrites++ == 0) {
+                        ackEntered.complete(Unit); releaseAck.await(); throw fault
+                    }
+                    assertTrue(h.diagnostics.any { diagnostic -> diagnostic is MessagingDiagnostic.Failure &&
+                        diagnostic.operation == "failPending.${message.id}" && diagnostic.cause === fault })
+                }
+            }
+            val observed = mutableListOf<MessageStatusEvent>()
+            observe(h, observed)
+            val failing = backgroundScope.async {
+                assertFailsWith<PersistenceStoreException> { h.service.failAllPendingMessages() }
+            }
+            failureEntered.await()
+            h.transport.pushAck(code, 123u); runCurrent()
+            assertEquals(code, h.service.pendingAck(message.id)?.acknowledgement?.code)
+            h.service.stopEventMonitoring()
+            releaseFailure.complete(Unit)
+            ackEntered.await()
+            val retry = backgroundScope.async(UnconfinedTestDispatcher(testScheduler)) {
+                h.service.checkExpiredAcks()
+            }
+            try { assertFalse(retry.isCompleted) } finally { releaseAck.complete(Unit) }
+            assertSame(fault, failing.await())
+            retry.await(); runCurrent()
+            assertEquals(2, ackWrites)
+            assertEquals(MessageStatus.DELIVERED, h.stored(message.id).status)
+            assertNull(h.service.pendingAck(message.id))
+            assertEquals(listOf<MessageStatusEvent>(
+                MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u),
+            ), observed)
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            assertTrue(h.service.close().isComplete); h.close()
+        },
         native("ACK during cleanup preserves recorded delivery without resurrecting terminal rows") {
             for (cleanupPath in listOf("inline", "expiry", "fail-all")) for (alreadyFailed in listOf(false, true)) {
                 val h = Harness(this); h.start(); h.service.startEventMonitoring()

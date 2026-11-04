@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.LocalDirectContactAdmission
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DebugLogLevel
@@ -30,6 +31,11 @@ internal sealed interface IncomingMessageKind {
     /** Log noun distinguishing the two paths in shared diagnostics. */
     val logLabel: String get() = if (this is Direct) "direct" else "channel"
 }
+
+internal data class LocalDirectCandidateReceipt(
+    val occurrenceID: UUID,
+    val admission: LocalDirectContactAdmission,
+)
 
 // MARK: - Message handler wiring
 
@@ -137,8 +143,10 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     dependencies: SyncDependencies,
     radioId: RadioId,
     selfNodeName: String,
+    localCandidate: LocalDirectCandidateReceipt? = null,
 ) {
-    val resolvedKind = resolveDirectContactIfNeeded(kind, dependencies, radioId)
+    require(localCandidate == null || kind is IncomingMessageKind.Direct)
+    val resolvedKind = if (localCandidate == null) resolveDirectContactIfNeeded(kind, dependencies, radioId) else kind
     val wire = wireFields(resolvedKind)
     val codecs = dependencies.codecs
     val timestamp = wire.senderTimestamp.uint32Seconds()
@@ -153,10 +161,10 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
     }
     val sortDate = SyncCoordinator.sortDate(context, receiveTime)
 
-    // Content-based key (stable across retries); the RX packet hash differs per retry attempt.
-    val deduplicationKey = codecs.deduplicationKey.contentBased(
-        wire.contactID, wire.channelIndex, wire.senderNodeName, timestamp, wire.text,
-    )
+    // Legacy delivery uses content-based dedup; local candidates retain occurrence identity.
+    val deduplicationKey = if (localCandidate == null) {
+        codecs.deduplicationKey.contentBased(wire.contactID, wire.channelIndex, wire.senderNodeName, timestamp, wire.text)
+    } else null
     val rxResult = lookupRxLogEntry(
         dependencies, radioId, wire.channelIndex, timestamp, wire.senderKeyPrefix, wire.reportedPathLength,
         if (wire.channelIndex != null) deduplicationKey else null,
@@ -186,7 +194,15 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
         regionScopeMatches = rxResult.regionScopeMatches,
     )
 
-    if (recordArrivalAndSkipDuplicate(resolvedKind, deduplicationKey, radioId, rxResult, wire.snr, receiveTime, dependencies)) {
+    if (localCandidate != null) {
+        localCandidate.admission.saveIncomingDirectMessage(messageDTO.copy(id = localCandidate.occurrenceID))
+        return
+    }
+
+    if (recordArrivalAndSkipDuplicate(
+            resolvedKind, checkNotNull(deduplicationKey), radioId, rxResult, wire.snr, receiveTime, dependencies,
+        )
+    ) {
         return
     }
 

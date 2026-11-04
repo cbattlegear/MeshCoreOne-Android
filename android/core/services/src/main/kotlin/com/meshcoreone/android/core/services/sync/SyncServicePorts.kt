@@ -2,6 +2,8 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.LocalDirectContactAdmission
+import com.meshcoreone.android.core.contracts.domain.LocalDirectContactResolution
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
 import com.meshcoreone.android.core.model.ContactDTO
@@ -120,6 +122,21 @@ interface SyncAdvertisementServicing {
 
     /** Registers the subscriber when called (not when collected), like WP-209's broadcaster. */
     fun events(): Flow<SyncDiscoveryEvent>
+}
+
+/** Opt-in local-only admission; neither the result nor the scope proves an RF sender. */
+interface SyncLocalDirectAdvertisementServicing {
+    suspend fun materializeLocalDirectContactForPendingAdvert(
+        prefix: Bytes,
+        radioId: RadioId,
+    ): LocalDirectContactResolution
+
+    suspend fun <T> withPendingAdvertContactOperation(
+        radioId: RadioId,
+        prefix: Bytes,
+        observed: LocalDirectContactResolution,
+        block: suspend (LocalDirectContactAdmission) -> T,
+    ): T
 }
 
 /** `RxLogService` (WP-212). Future implementer: `diagnostics.RxLogService`. */

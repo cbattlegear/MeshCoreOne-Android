@@ -5,6 +5,7 @@
 plugins { id("mesh.android.feature") }
 
 dependencies {
+    implementation(libs.androidx.activity.compose)
     implementation(project(":core:model"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:maps"))

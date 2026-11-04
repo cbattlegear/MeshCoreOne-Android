@@ -17,6 +17,7 @@ data class ChannelQuery(val radioId: RadioId, val channelIndex: UByte, val id: U
 data class ContactIdentity(val id: UUID, val publicKey: Bytes)
 data class ContactSaveResult(val id: UUID, val isNew: Boolean)
 enum class ContactAvatarUpdateResult { UPDATED, CONTACT_NOT_FOUND, IDENTITY_MISMATCH }
+enum class ContactFavoriteUpdateResult { UPDATED, CONTACT_NOT_FOUND, IDENTITY_MISMATCH }
 data class DiscoveredNodeSaveResult(val node: DiscoveredNodeDTO, val isNew: Boolean)
 data class ParsedReaction(val emoji: String, val targetSender: String, val messageHash: String)
 data class NeighborBaseline(val previous: NodeStatusSnapshotDTO?, val seenPrefixes: SnapshotSet<Bytes>)

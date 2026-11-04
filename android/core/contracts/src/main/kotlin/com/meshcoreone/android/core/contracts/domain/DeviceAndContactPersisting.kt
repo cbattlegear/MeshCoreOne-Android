@@ -45,6 +45,10 @@ interface ContactPersisting {
     suspend fun updateContactAvatar(
         key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
     ): ContactAvatarUpdateResult
+    /** Changes only the favorite preference and flag bit on an existing matching identity. */
+    suspend fun updateContactFavorite(
+        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+    ): ContactFavoriteUpdateResult
     suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long
     suspend fun deleteContact(key: EntityKey)
     suspend fun deleteContacts(

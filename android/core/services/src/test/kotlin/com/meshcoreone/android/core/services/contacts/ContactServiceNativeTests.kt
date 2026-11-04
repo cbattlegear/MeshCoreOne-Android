@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactFavoriteUpdateResult
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -410,6 +411,55 @@ class ContactServiceNativeTests {
 
     @TestFactory
     fun flagAndPreferenceCases(): List<DynamicTest> = listOf(
+        contactsNative("favorite acknowledgement uses only the atomic identity-aware preference write") {
+            for (result in ContactFavoriteUpdateResult.entries) {
+                val backing = ContactsFakeStore()
+                val original = stored(0x95, "Favorite").also(backing::seed)
+                val key = EntityKey(radioId, original.id)
+                var writes = 0
+                val session = ContactsFakeSession()
+                val contacts = object : ContactPersisting by backing {
+                    override suspend fun saveContact(dto: ContactDTO): Unit =
+                        error("Favorite acknowledgement must not save a stale DTO")
+                    override suspend fun updateContactFavorite(
+                        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+                    ): ContactFavoriteUpdateResult {
+                        assertEquals(listOf(0x01u.toUByte()), session.changeContactFlagsInvocations.map { it.flags.rawValue })
+                        assertEquals(EntityKey(radioId, original.id), key)
+                        assertEquals(original.publicKey, expectedPublicKey)
+                        assertTrue(isFavorite)
+                        writes++
+                        return result
+                    }
+                }
+                val service = ContactService(session, backing, contacts, null, null, ContactsFakePreferences())
+                if (result == ContactFavoriteUpdateResult.UPDATED) {
+                    service.setContactFavorite(key, true)
+                } else {
+                    assertFailsWith<ContactServiceError.ContactNotFound> { service.setContactFavorite(key, true) }
+                }
+                assertEquals(1, writes)
+            }
+        },
+        contactsNative("favorite persistence failure and cancellation propagate unchanged after acknowledgement") {
+            for (failure in listOf(
+                PersistenceStoreException(PersistenceStoreError.SaveFailed("disk full")),
+                CancellationException("favorite cancelled"),
+            )) {
+                val backing = ContactsFakeStore()
+                val original = stored(0x96, "Favorite").also(backing::seed)
+                val contacts = object : ContactPersisting by backing {
+                    override suspend fun updateContactFavorite(
+                        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+                    ): ContactFavoriteUpdateResult = throw failure
+                }
+                val service = ContactService(ContactsFakeSession(), backing, contacts, null, null, ContactsFakePreferences())
+                assertSame(failure, assertFailsWith<Exception> {
+                    service.setContactFavorite(EntityKey(radioId, original.id), true)
+                })
+                assertEquals(original, backing.fetchContact(EntityKey(radioId, original.id)))
+            }
+        },
         contactsNative("setTelemetryPermissions sets and clears bits 1-3 preserving the favourite bit") {
             val store = ContactsFakeStore()
             val contact = stored(0x66, "Fay", flags = 0x01u).also(store::seed)

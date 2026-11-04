@@ -336,6 +336,11 @@ class AuthenticatedCompilerTests(unittest.TestCase):
 
 
 class CompilerWorkflowTests(unittest.TestCase):
+    def test_report_requires_an_explicit_output_directory(self):
+        with patch("sys.stderr", new_callable=io.StringIO) as errors:
+            self.assertEqual(compiler.main(["report"]), 2)
+        self.assertIn("requires an explicit output directory", errors.getvalue())
+
     def test_workflow_is_manual_nonrequired_default_branch_with_no_publisher_or_candidate_checkout(self):
         text = (REPO / compiler.WORKFLOW).read_text()
         value = parse_yaml(text)

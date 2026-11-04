@@ -446,6 +446,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "report":
+            if args.output is None:
+                raise PortError("Independent compiler report requires an explicit output directory")
             report = load_json(args.output / "result.json", 65536)
             print(json.dumps(report))
             return 0

@@ -1,6 +1,8 @@
 // AndroidOnly: WP-218 exercise BitmapFactory with Robolectric native graphics, not legacy shadows.
 package com.meshcoreone.android.app.content
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.CachedDecodedImage
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
@@ -9,6 +11,7 @@ import com.meshcoreone.android.core.services.content.InlineImageCache
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import org.junit.runner.RunWith
@@ -33,7 +36,7 @@ class BitmapImageDecoderNativeTest {
             try {
                 assertEquals(expectedWidth, handle.width)
                 assertEquals(expectedHeight, handle.height)
-                assertEquals(handle.bitmap.rowBytes * handle.height, handle.costBytes)
+                assertEquals(handle.bitmap.allocationByteCount, handle.costBytes)
             } finally {
                 handle.bitmap.recycle()
             }
@@ -57,6 +60,26 @@ class BitmapImageDecoderNativeTest {
         } finally {
             cache.clearDecodedMirror()
             handle.bitmap.recycle()
+        }
+    }
+
+    @Test
+    fun `cache charges retained native allocation rather than reduced bitmap dimensions`() {
+        val encoded = NativeImageFixtures.png(64, 32)
+        val bitmap = requireNotNull(BitmapFactory.decodeByteArray(
+            encoded, 0, encoded.size, BitmapFactory.Options().apply { inMutable = true },
+        ))
+        try {
+            val allocation = bitmap.allocationByteCount
+            bitmap.reconfigure(8, 4, Bitmap.Config.ARGB_8888)
+            assertEquals(allocation, bitmap.allocationByteCount)
+            assertTrue(allocation > bitmap.rowBytes * bitmap.height)
+            val handle = BitmapDecodedImageHandle(bitmap)
+            assertEquals(allocation, handle.costBytes)
+            val entry = CachedDecodedImage(handle, isGif = false, data = encoded)
+            assertEquals(allocation.toLong() + encoded.size, entry.cost)
+        } finally {
+            bitmap.recycle()
         }
     }
 }

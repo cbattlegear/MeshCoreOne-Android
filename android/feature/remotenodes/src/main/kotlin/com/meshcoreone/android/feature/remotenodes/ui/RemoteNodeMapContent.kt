@@ -55,13 +55,12 @@ internal fun RemoteMapPreferencesContent(
     var refresh by remember(store, host) { mutableIntStateOf(0) }
     LaunchedEffect(store, host, refresh) {
         preferences = null
-        observationError = null
-        writeError = null
         if (store != null) {
             try {
                 store.observe(host).collect {
                     preferences = it
                     observationError = null
+                    writeError = null
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled

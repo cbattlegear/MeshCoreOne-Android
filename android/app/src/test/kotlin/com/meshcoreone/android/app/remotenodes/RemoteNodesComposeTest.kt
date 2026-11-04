@@ -190,23 +190,37 @@ class RemoteNodesComposeTest {
         compose.onAllNodesWithText(text(L.remoteNodesSettingsNoService)).onFirst().assertExists()
     }
 
-    @Test fun remoteMapSurfacesRealStoreObservationFailureAndRetryRestoresTheSameConsumer() {
+    @Test fun remoteMapKeepsRetryUntilReplacementObservationDeliversPreferences() {
         val real = requireNotNull(fixture.mapPreferences)
-        var failed = false
+        val initialObservationFailed = CompletableDeferred<Unit>()
+        val retryObservationStarted = CompletableDeferred<Unit>()
+        val releaseRetryObservation = CompletableDeferred<Unit>()
+        var failFirstObservation = true
         fixture.mapPreferences = object : MapPreferenceStore by real {
             override fun observe(host: MapFilterHost) = kotlinx.coroutines.flow.flow {
-                if (!failed) {
-                    failed = true
+                if (failFirstObservation) {
+                    failFirstObservation = false
+                    initialObservationFailed.complete(Unit)
                     throw IOException("Fixture observation failure")
                 }
+                retryObservationStarted.complete(Unit)
+                releaseRetryObservation.await()
                 real.observe(host).collect { emit(it) }
             }
         }
         show(RemoteNodeLaunch(fixture.contact, RemoteNodeLaunchAction.SAVED_HISTORY))
-        compose.waitUntil(5_000) { failed }
+        compose.waitUntil(5_000) { initialObservationFailed.isCompleted }
         compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
         compose.onNodeWithTag("remote-error").performScrollTo().assertExists()
         compose.onNodeWithTag("remote-map:retry").performScrollTo().performClick()
+        compose.waitUntil(5_000) { retryObservationStarted.isCompleted }
+        compose.onNodeWithTag("remote-error").performScrollTo().assertExists()
+        compose.onNodeWithTag("remote-map:retry").performScrollTo().assertExists()
+        compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
+        releaseRetryObservation.complete(Unit)
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("synthetic-map").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithTag("synthetic-map").performScrollTo().assertExists()
         compose.onNodeWithTag("remote-map:retry").assertDoesNotExist()
     }

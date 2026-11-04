@@ -734,8 +734,40 @@ passed (valid manifest; 64 work packages), `C:\Python312\python.exe -B tools\and
 exited 0, and `git diff --check` passed for both the worktree and merge commit.
 The predecessor hosted run
 [41926857045](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41926857045)
-for `b5e2fd6c65a26782598ca5ad49c0e6695b8fd4d1` remains in progress and is not
-acceptance evidence for this merged candidate. Android/Gradle tests were not
-run locally because the supported execution runtime is still held; exact-head
-hosted verification is required. No physical-device, TalkBack or iOS
-verification is claimed.
+for `b5e2fd6c65a26782598ca5ad49c0e6695b8fd4d1` was cancelled when the branch
+advanced; it is not acceptance evidence. Android/Gradle tests were not run
+locally because the supported execution runtime is still held. No
+physical-device, TalkBack or iOS verification is claimed.
+
+## Exact-head review and corrective handoffs
+
+Independent Copilot review `5776995551` examined exact candidate
+`0ada8535df5e4cf1523a1ae2f51735424385f14a` and reported three open threads.
+Two were new defects. The held-open Android `CancellationSignal` tests blocked
+`runBlocking` on a `CountDownLatch` while their default child launch was queued
+on that same event loop; both children now start `CoroutineStart.UNDISPATCHED`,
+so the IO open can reach the test-controlled provider before the readiness
+wait. The short-window crop canvas consumed one-finger vertical drags as pan,
+preventing users from scrolling to controls even when image pan was clamped.
+The WP-304 owner supplied immutable commit
+`d11e4fa6f6311cde08492610e5817d24070ddef7`, cherry-picked here as
+`de219e2ea`; it leaves one-finger drags available to the parent scroll, keeps
+two-pointer pan/zoom, preserves tall-layout gestures, and adds a mounted
+pointer-input test that scrolls from the preview to controls and verifies
+two-finger transform behavior. No shared source was edited outside that patch.
+
+The third open thread, `4472524286`, concerned cancellation being replaced by
+provider cleanup errors. The current consumer implementation already performs
+cleanup in `NonCancellable` IO, retains close/cancel failures as suppressed
+diagnostics, and uses `rethrowWithCancellation` to give parent cancellation
+precedence. Tests cover throwing cancel, close, both together, and a throwing
+Android cancellation listener with late-stream cleanup. This source-level
+correction was not newly changed for the 0ada review; reply/resolve remains
+pending exact hosted execution.
+
+On the corrected local source candidate `de219e2ea`, the trusted controller
+validator passed (64 WPs), `semantic.py --check` passed (58 groups, 5,133
+families, 1,498 candidate comparisons; mapping check only), `portmap.py`
+exited 0, and `git diff --check origin/main...HEAD` passed. No Android tests
+were run locally. Exact-head hosted execution of the corrected candidate is
+required; the 0ada hosted run is superseded and is not counted as a pass.

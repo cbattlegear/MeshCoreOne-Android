@@ -90,7 +90,7 @@ internal class AppShortcutRadio(private val container: AppContainer) : ShortcutR
                             ),
                         ),
                     )
-                )
+                }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {

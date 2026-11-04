@@ -162,6 +162,46 @@ producer-first gate. The source pin remains unchanged. Shared callback path
 admissions were reconfirmed against current trusted rules; production changes
 must still reconcile the actual producer and consumer owners.
 
+### Concrete prerequisites and fail-closed admission
+
+The caller-ID persistence owner published
+`eace2cfc9895958f77c56bf05e24e2d1f80bd1c3` with
+`PendingDirectMessageIntent` and atomic
+`createOrReconcilePendingDirectMessage(intent, timestamp, createdAt)`. This
+preserves an identical current row without resetting delivery state and rejects
+conflicting identity. It contains no original contact public key or dispatch
+eligibility proof. Its reported CI `41876834427` was pending at handoff.
+
+WP-208 persisted pending-direct receipt instrumentation at
+`904b9211aa6b1689bd36667e0219f664fce80a46`, with five authored real-session
+acceptance/rejection/proven-unsent/uncertain/internal-retry cases. No execution
+result was supplied for that commit. It is not integrated here. The owner
+confirmed that a staged full contact key and authoritative dispatch guard
+serialized against contact mutation are still absent; fetching a replacement
+contact cannot establish the original action's identity.
+
+The channel queue owner confirmed that the inspected Room identity mutex does
+not establish a radio-slot mutation/dispatch fence or origin-bound unread clear.
+A current-slot check followed by asynchronous sending can race ChannelService
+mutation. Additionally, WP-214 found that ChannelRepository preserves
+`ChannelDTO.id` when replacing a slot's secret, with an existing persistence
+test asserting that behavior. The proposed display UUID is therefore not a
+nonreused occupant fence, including for same-key ABA. Neither display proof,
+message ID alone nor a post-send check can authorize channel transmission or
+clearing unread state.
+
+An isolated, unapplied WP-215 admission patch was supplied to WP-302 against
+its exact `96c254331b588922ae50bddd1956af5a73010f7d` response API. It adds
+`ACTION_REQUIRES_RECOVERY` before the existing exception-containment fallback,
+rejects unproved channel REPLY/MARK_READ without invoking slot callbacks, and
+preserves unaffected direct callbacks in authored regressions. An isolated Git
+index apply check passed; no product execution is claimed. Its caller must map
+that result explicitly to retention, not success. The bounded in-memory FIFO
+is not durable recovery and can block subsequent actions; activation therefore
+still requires the separate WP-401 exact-text journal, user-visible recovery and
+coordinated original-case adaptation. No reply is silently attached to the
+current replacement slot.
+
 ## Actual local verification
 
 Native Windows used `C:\Python312\python.exe`, Python `3.12.4`, and the inherited

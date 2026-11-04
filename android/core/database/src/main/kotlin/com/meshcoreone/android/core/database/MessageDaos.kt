@@ -23,6 +23,9 @@ routeTypeRawValue, regionScope, regionScopeMatches FROM messages
 
 @Dao
 interface MessageDao : RowWriter<MessageEntity> {
+    // Reject caller-ID reuse on a different radio without exposing that radio's DTO.
+    @Query("SELECT * FROM messages WHERE id = :id")
+    suspend fun forIdentity(id: UUID): List<MessageEntity>
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND id = :id") suspend fun byId(radioId: UUID, id: UUID): MessageEntity?
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND deduplicationKey = :key")
     suspend fun forDeduplicationKey(radioId: UUID, key: String): List<MessageEntity>

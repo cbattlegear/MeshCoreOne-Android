@@ -16,6 +16,32 @@ internal class MessageRepository(
     private val context: RoomRepositoryContext,
     pending: PendingSendRepository,
 ) : MessagePersisting, PendingSendPersisting by pending, ChannelHistoryPersisting, HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting {
+    override suspend fun createOrReconcilePendingDirectMessage(
+        intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO = context.write("createOrReconcilePendingDirectMessage") {
+        val rows = database.messages().forIdentity(intent.messageID)
+        if (rows.isNotEmpty()) {
+            val row = rows.singleOrNull()
+                ?: invalidData("Direct-message identity is occupied on multiple radios")
+            if (row.radioId != intent.radioId.value || row.contactID != intent.contactID ||
+                row.channelIndex != null || row.directionRawValue != MessageDirection.OUTGOING.rawValue ||
+                row.text != intent.text || row.textTypeRawValue != intent.textType.rawValue.toLong() ||
+                row.replyToID != intent.replyToID
+            ) invalidData("Direct-message identity conflicts with the stored intent")
+            return@write row.toDTO()
+        }
+        val row = MessageDTO(
+            id = intent.messageID, radioId = intent.radioId, contactID = intent.contactID,
+            text = intent.text, textType = intent.textType, replyToID = intent.replyToID,
+            timestamp = timestamp, createdAt = createdAt,
+        ).toEntity().copy(timestamp = timestamp.toLong())
+        // The general DTO mapper repairs zero timestamps; this producer preserves the supplied wire value.
+        database.messages().insert(row)
+        save()
+        database.messages().byId(intent.radioId.value, intent.messageID)?.toDTO()
+            ?: invalidData("Inserted direct message is missing")
+    }
+
     override suspend fun isDuplicateMessage(deduplicationKey: String, radioId: RadioId): Boolean =
         context.read("isDuplicateMessage") { database.messages().forDeduplicationKey(radioId.value, deduplicationKey).isNotEmpty() }
 

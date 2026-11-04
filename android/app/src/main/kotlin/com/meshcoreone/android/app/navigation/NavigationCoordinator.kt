@@ -964,7 +964,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 current.selectedTab != source.value.selectedTab ||
                 current.activeStack.last() != source.value.activeStack.last()
             ) return false
-            if (current.failure != null) return true
+            if (current.failure != null) return false
             if (mutableState.compareAndSet(snapshot, current.copy(failure = NavigationFailure.StaleGeneration))) {
                 return true
             }

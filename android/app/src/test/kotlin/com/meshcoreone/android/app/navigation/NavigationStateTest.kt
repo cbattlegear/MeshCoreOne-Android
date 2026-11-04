@@ -457,8 +457,11 @@ class NavigationStateTest {
         assertEquals(NavigationFailure.WrongTarget(NavigationTarget.ROOM), before.failure)
 
         assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice))
-        assertTrue(n.reportMountedOnboardingFailure(completion))
+        assertFalse(n.reportMountedOnboardingFailure(completion))
         assertEquals(before, n.currentState)
+        n.clearFailure()
+        assertTrue(n.reportMountedOnboardingFailure(completion))
+        assertEquals(NavigationFailure.StaleGeneration, n.currentState.failure)
     }
 
     @Test fun onboardingCompletionRechecksSourceAfterCompetingLifecycleCommit() {

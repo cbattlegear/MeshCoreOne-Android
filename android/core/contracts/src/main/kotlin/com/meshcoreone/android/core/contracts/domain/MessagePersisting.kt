@@ -11,6 +11,15 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Instant
 import java.util.UUID
 
+data class PendingDirectMessageIntent(
+    val messageID: UUID,
+    val radioId: RadioId,
+    val contactID: UUID,
+    val text: String,
+    val textType: TextType,
+    val replyToID: UUID?,
+)
+
 interface PendingSendPersisting {
     suspend fun upsertPendingSend(dto: PendingSendDTO)
     suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long
@@ -23,9 +32,26 @@ interface PendingSendPersisting {
     suspend fun incrementPendingSendAttemptCount(key: EntityKey): Long?
     suspend fun purgeOrphanPendingSends(): Long
     suspend fun purgeLegacyAttemptCountRows(): Long
+    suspend fun beginQueuedChannelAttempt(
+        key: QueuedChannelAttemptKey, expectedOccupantID: UUID, wireTimestamp: UInt,
+    ): QueuedChannelAttempt
+    suspend fun settleQueuedChannelAttempt(key: QueuedChannelAttemptKey, outcome: QueuedChannelAttemptOutcome): QueuedChannelAttempt
+    suspend fun completeAcceptedQueuedChannelAttempt(key: QueuedChannelAttemptKey)
+    suspend fun fetchQueuedChannelAttempt(key: QueuedChannelAttemptKey): QueuedChannelAttempt?
+    suspend fun fetchQueuedChannelAttempts(pending: EntityKey): SnapshotList<QueuedChannelAttempt>
 }
 
 interface MessagePersisting : PendingSendPersisting {
+    /**
+     * Atomically inserts the caller's outgoing DM or returns its matching current row, without resetting
+     * delivery state. Timestamp and createdAt apply only on insert; they are not replay identity fields.
+     * Conflicting intent or an ID occupied on another radio throws PersistenceStoreException(InvalidData).
+     * The durable action/dispatch guard must separately bind the contact's public key: MessageDTO stores
+     * only contactID. This operation neither transmits nor guarantees exactly-once transmission.
+     */
+    suspend fun createOrReconcilePendingDirectMessage(
+        intent: PendingDirectMessageIntent, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO
     suspend fun isDuplicateMessage(deduplicationKey: String, radioId: RadioId): Boolean
     suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO?
     suspend fun saveMessage(dto: MessageDTO)

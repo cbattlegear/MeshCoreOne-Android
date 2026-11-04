@@ -62,9 +62,25 @@ internal class ContactRepository(
         }
 
     override suspend fun saveContact(radioId: RadioId, frame: ContactFrame): ContactSaveResult =
+        checkNotNull(saveContactFrame(radioId, frame, preserveNewer = false))
+
+    override suspend fun saveContactPreservingNewer(
+        radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
+    ): ContactSaveResult? = saveContactFrame(radioId, frame, preserveNewer = true, expectedFrame = expectedFrame)
+
+    private suspend fun saveContactFrame(
+        radioId: RadioId, frame: ContactFrame, preserveNewer: Boolean, expectedFrame: ContactFrame? = null,
+    ): ContactSaveResult? =
         context.write("saveContactFrame") {
             val existing = database.contacts().forPublicKey(radioId.value, frame.publicKey).firstOrNull()
-            val dto = existing?.toDTO()?.updating(frame) ?: ContactDTO.fromFrame(radioId, frame)
+            val stored = existing?.toDTO()
+            if (preserveNewer && stored != null &&
+                (stored.lastModified > frame.lastModified ||
+                    (stored.lastModified == frame.lastModified && stored.toContactFrame() != expectedFrame &&
+                        stored.toContactFrame() != frame))) {
+                return@write null
+            }
+            val dto = stored?.updating(frame) ?: ContactDTO.fromFrame(radioId, frame)
             database.contacts().upsert(dto.toEntity())
             save()
             ContactSaveResult(dto.id, existing == null)
@@ -139,9 +155,14 @@ internal class ContactRepository(
     ): SnapshotMap<UUID, Long> {
         if (contacts.isEmpty()) return emptyMap<UUID, Long>().snapshotMap()
         return context.write("adoptOrphanedDirectMessages") {
+            // AndroidOnly: WP-202 A delta subset must not hide another persisted prefix match.
+            val allContacts = database.contacts().forRadio(radioId.value)
+            val persistedById = allContacts.associateBy { it.id }
             val byId = LinkedHashMap<UUID, ContactEntity>()
             for (candidate in contacts) {
-                database.contacts().byId(radioId.value, candidate.id)?.let { byId[it.id] = it }
+                persistedById[candidate.id]
+                    ?.takeIf { it.publicKey == candidate.publicKey }
+                    ?.let { byId[it.id] = it }
             }
             val counts = LinkedHashMap<UUID, Long>()
             val newest = LinkedHashMap<UUID, Instant>()
@@ -151,7 +172,7 @@ internal class ContactRepository(
                 if (message.directionRawValue != MessageDirection.INCOMING.rawValue) continue
                 val prefix = message.senderKeyPrefix ?: continue
                 if (prefix.isEmpty || RepositoryReactionPolicy.isDirectReaction(message.text)) continue
-                val matches = contacts.filter { it.publicKey.startsWith(prefix) }
+                val matches = allContacts.filter { it.publicKey.startsWith(prefix) }
                 if (matches.size != 1) continue
                 val match = matches.single()
                 if (match.id !in byId) continue

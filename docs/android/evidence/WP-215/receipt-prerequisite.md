@@ -3,9 +3,9 @@
 ## Scope and provenance
 
 Repository: `cbattlegear/MeshCoreOne-Android`.
-Current refreshed candidate base: `cf1ee845b3d6022990d7d699cd5bb2a373c8e456`.
+Current refreshed candidate base: `d933cc8d08f8d9cb19fab14236535065871ec642`.
 Current-main merge commit before the evidence refresh:
-`14ed733b5bf25487617c22c72a5cb2d2d109a9e4`.
+`b50e430afb897795aab772489c419fafdfe983aa`.
 Swift specification remains `db14559b39d32322b06477c6ae676112f583db50`;
 this contract and its additional assertions are Android-only.
 This is the existing open PR #537 prerequisite, not a WP-215 completion claim.
@@ -106,7 +106,7 @@ The prior exact head `795a8d6299ad4a5a8d14a6a003639d02d35eb774` on base
 `41864822492` and an approval bound to that head. Its Android build, controller,
 scope classification, checklist and aggregate passed; the Swift lanes were
 skipped by scope. Those results do not verify or approve the refreshed
-candidate based on `cf1ee845b3d6022990d7d699cd5bb2a373c8e456`; its exact head
+candidate based on `d933cc8d08f8d9cb19fab14236535065871ec642`; its exact head
 is bound in the refreshed authenticated scope and must receive its own hosted
 verification and independent review. Those are pending. Until both finish
 successfully, this remains an unverified implementation candidate, not WP-215
@@ -117,3 +117,12 @@ An intermediate candidate based on `ab570ebbf5e8d3402343f5ccf8a8450791f472b0`
 was published at `213e64d9b2939ea9aee0659d111b91613e7f497c` with run
 `41869354821`; it was still in progress when main advanced to `cf1ee845`. Its
 results are not evidence for the current-base candidate.
+
+The next candidate based on `cf1ee845b3d6022990d7d699cd5bb2a373c8e456`,
+head `cfd1a8527fa77b9fa7a97f255a4095d67b421421`, completed exact-head run
+`41870514899` successfully: the Android build, controller/policy, and scope
+classification checks passed; Swift lanes were skipped by scope. The 10 receipt
+test methods were included in the hosted contracts test results. The exact-head
+review was approved by `copilot-pull-request-reviewer[bot]`; the independent
+source-review comment found no new issue. This tuple is superseded by the
+current-main refresh above and does not verify its new merge commit.

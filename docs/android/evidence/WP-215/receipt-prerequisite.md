@@ -3,11 +3,15 @@
 ## Scope and provenance
 
 Repository: `cbattlegear/MeshCoreOne-Android`.
-Base: `796a872a3565a66c74f782b738a9ecb3c273fb25` (live main when prepared).
+Current refreshed candidate base: `ab570ebbf5e8d3402343f5ccf8a8450791f472b0`.
+Current-main merge commit before the evidence refresh:
+`d262416484b1651b3579e30162711f139ec7ac91`.
 Swift specification remains `db14559b39d32322b06477c6ae676112f583db50`;
 this contract and its additional assertions are Android-only.
-The exact candidate is the Git commit containing this document, not a mutable
-branch name. No PR or merge is authorized by this prerequisite.
+This is the existing open PR #537 prerequisite, not a WP-215 completion claim.
+The exact candidate is the Git head bound by the authenticated scope and hosted
+checks, not a mutable branch name. The user authorized progressing #537 through
+normal review and merge gates before separate device acceptance.
 
 `NotificationActionReceipt.kt` is the existing contract agreed with the WP-215
 notification owner, taken from candidate `70e1fe464` and identical to #535 head
@@ -32,7 +36,9 @@ Actual trusted-base `tools/android-port/local/reserve.py admit` evaluations:
 Plain `create` is not used to admit the contracts test. The tests are directly
 necessary to the extracted receipt, preserve all existing cases, and require
 actual affected hosted test execution with positive discovery before acceptance.
-The main policy revision is
+The trusted manifest SHA-256 is
+`11120a20d04408b3d21fac09180412df0490cabf1dafb8a3c98fe83e0fad31e4`;
+the trusted policy revision is
 `de026f7de86d91bf86ef26cc98075c2707e3f8e153f06d97ef159c401a7a792e`.
 
 The existing WP-215 historical advisory row remains session/attempt
@@ -95,8 +101,14 @@ python .\android\parity-tests\semantic.py --check
 
 `git hash-object` also confirmed the required production blob. These are source,
 provenance and accounting checks, not execution of the 10 Kotlin test methods.
-The existing normal Android candidate CI is the authority
-for an exact candidate's hosted execution and discovered test methods. No second
-CI-result bundle is retained, hashed or revalidated here. Until that hosted run
-passes, this is explicitly an unverified implementation candidate, not WP-215
-acceptance or notification integration completion.
+The prior exact head `795a8d6299ad4a5a8d14a6a003639d02d35eb774` on base
+`cb4a79ab906db851800bcf93f7c2ebfb5aa34571` had successful hosted run
+`41864822492` and an approval bound to that head. Its Android build, controller,
+scope classification, checklist and aggregate passed; the Swift lanes were
+skipped by scope. Those results do not verify or approve the refreshed
+candidate based on `ab570ebbf5e8d3402343f5ccf8a8450791f472b0`; its exact head
+is bound in the refreshed authenticated scope and must receive its own hosted
+verification and independent review. Those are pending. Until both finish
+successfully, this remains an unverified implementation candidate, not WP-215
+acceptance or notification integration completion. No second CI-result bundle
+is retained, hashed or revalidated here.

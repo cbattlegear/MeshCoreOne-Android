@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.contracts.domain.LocalDirectContactResolutio
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.errors.AdvertisementFault
 import com.meshcoreone.android.core.contracts.domain.errors.SourceServiceFaultCarrier
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.ContactFrame
 import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.model.RadioId
@@ -434,12 +435,47 @@ class AdvertisementService(
     }
 
     /**
+     * Creates a local contact from a pending 0x80 key so a DM that arrives inside the debounce window
+     * can notify and list normally. Exactly one pending key must match [prefix]; the key stays pending
+     * so the debounced round still reconciles Discover and may announce the contact.
+     */
+    suspend fun materializeContactForPendingAdvert(prefix: Bytes, radioId: RadioId): ContactDTO? {
+        if (prefix.isEmpty) return null
+        val publicKey = locked { pendingAdvertKeys.filter { it.advertStartsWith(prefix) } }.singleOrNull() ?: return null
+        val pubKeyHex = publicKey.uppercaseHexString()
+        return try {
+            val meshContact = advertising.getContact(publicKey)
+            if (meshContact == null) {
+                logger(DebugLogLevel.INFO, "materialize pending advert: getContact nil key=$pubKeyHex")
+                return null
+            }
+            val frame = meshContact.advertContactFrame()
+            val saveResult = dataStore.saveContact(radioId, frame)
+            // Stamp phone recency before the returned DTO is read so the insert is not prune-eligible.
+            val receivedAt = locked { pendingAdvertReceiveTimes[publicKey] } ?: clock.wallNow()
+            bestEffort("materialize pending advert lastHeard stamp failed key=$pubKeyHex") {
+                dataStore.touchContactHeard(radioId, publicKey, receivedAt)
+            }
+            bestEffort("materialize pending advert Discover upsert failed key=$pubKeyHex") {
+                dataStore.upsertDiscoveredNode(radioId, frame)
+            }
+            eventBroadcaster.yield(AdvertisementEvent.ContactUpdated)
+            dataStore.fetchContact(EntityKey(radioId, saveResult.id))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger(DebugLogLevel.ERROR, "materialize pending advert failed key=$pubKeyHex: ${failure.message}")
+            null
+        }
+    }
+
+    /**
      * Materializes a local cache candidate from a pending 0x80 key inside the debounce window.
      * This does not authorize sender attribution or notification. Exactly one pending key must match
      * [prefix]; the key stays pending so the debounced round still reconciles Discover. Storage failures
      * and cancellation propagate. NotFound means genuine absence, not ambiguity or a failed lookup.
      */
-    suspend fun materializeContactForPendingAdvert(prefix: Bytes, radioId: RadioId): LocalDirectContactResolution {
+    suspend fun materializeLocalDirectContactForPendingAdvert(prefix: Bytes, radioId: RadioId): LocalDirectContactResolution {
         require(prefix.size == 6) { "Pending advert materialization requires a six-byte receive prefix" }
         val initial = withPendingAdvertGate {
             if (!isCurrentPendingRadio(radioId)) return@withPendingAdvertGate LocalDirectContactResolution.Stale

@@ -17,6 +17,8 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelAttemptRecoveryTest {
+    private class FencedCancellation(val identity: Any) : CancellationException("cancel actual messaging request")
+
     @TestFactory fun cancellationProvenance() = listOf(false to false, true to false, false to true).map { (written, settlementFails) ->
         native("real-fenced-channel-cancellation-written-$written-settlement-fails-$settlementFails") {
             val h = Harness(this); h.start()
@@ -59,7 +61,7 @@ class ChannelAttemptRecoveryTest {
                 }
                 runCurrent()
                 assertTrue(queued.isCompleted)
-                val cancellation = CancellationException("cancel actual messaging request")
+                val cancellation = FencedCancellation(Any())
                 queued.await().cancel(cancellation)
                 runCurrent()
                 assertSame(cancellation, sending.await())

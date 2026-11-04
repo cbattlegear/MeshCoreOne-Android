@@ -214,7 +214,7 @@ fun NativeNavigationShell(
         modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
     ) {
         val width = maxWidth.value
-        LaunchedEffect(width) { coordinator.measureWindow(width) }
+        LaunchedEffect(coordinator, width) { coordinator.measureWindow(width) }
         val useRail = NavigationLayout.usesRail(width)
         val hideNavigation = if (useRail) {
             state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true

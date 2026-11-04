@@ -135,6 +135,40 @@ class NavigationComposeTest {
             capture("width-$value")
         }
     }
+
+    @Test fun replacingCoordinatorAtTheSameWidthMeasuresOnlyTheNewOwner() {
+        for (windowWidth in listOf(390, 834)) {
+            val first = NavigationCoordinator()
+            val replacement = NavigationCoordinator()
+            val owner = mutableStateOf(first)
+            compose.runOnUiThread {
+                width.value = windowWidth.dp
+                host.get().setContent {
+                    Box(Modifier.width(width.value).height(900.dp)) {
+                        MeshCoreTheme(motionScale = 0f) {
+                            NativeNavigationShell(owner.value) { destination, _ -> FixtureContent(destination) }
+                        }
+                    }
+                }
+            }
+            compose.onNodeWithTag(if (windowWidth < 600) "bottom-navigation" else "navigation-rail")
+                .assertIsDisplayed()
+            compose.waitForIdle()
+            assertEquals(windowWidth.toFloat(), first.state.value.widthDp, 0f)
+            val retired = first.state.value
+
+            compose.runOnIdle { owner.value = replacement }
+            compose.waitForIdle()
+            assertEquals(windowWidth.toFloat(), replacement.state.value.widthDp, 0f)
+            assertEquals(retired, first.state.value)
+
+            compose.runOnIdle { width.value = (windowWidth + 1).dp }
+            compose.waitForIdle()
+            assertEquals((windowWidth + 1).toFloat(), replacement.state.value.widthDp, 0f)
+            assertEquals(retired, first.state.value)
+        }
+    }
+
     @Test fun fiveNativeTabsExposeSelectionHeadingUnreadAndFortyEightDpTargets() {
         for (tab in AppTab.entries) {
             compose.onNodeWithTag("tab:${tab.name}").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick()

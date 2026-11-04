@@ -251,6 +251,7 @@ sealed interface NavigationFailure {
     data class WrongTarget(val kind: NavigationTarget) : NavigationFailure
     data class WrongRadio(val expected: RadioId, val actual: RadioId) : NavigationFailure
     data object StaleGeneration : NavigationFailure
+    data class StaleOnboarding(val id: Long) : NavigationFailure
     data class Repository(val cause: com.meshcoreone.android.core.contracts.domain.PersistenceStoreError) : NavigationFailure
     data object UnsupportedNotification : NavigationFailure
     data object InvalidSavedState : NavigationFailure

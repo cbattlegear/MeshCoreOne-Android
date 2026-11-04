@@ -437,7 +437,8 @@ class NavigationStateTest {
             assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice))
             if (replacement == "none") {
                 assertTrue(n.reportMountedOnboardingFailure(completion))
-                assertEquals(before.copy(failure = NavigationFailure.StaleGeneration), n.currentState)
+                assertTrue(n.currentState.failure is NavigationFailure.StaleOnboarding)
+                assertEquals(before.copy(failure = n.currentState.failure), n.currentState)
             } else {
                 assertFalse(n.reportMountedOnboardingFailure(completion))
                 assertEquals(before, n.currentState)
@@ -461,7 +462,15 @@ class NavigationStateTest {
         assertEquals(before, n.currentState)
         n.clearFailure()
         assertTrue(n.reportMountedOnboardingFailure(completion))
-        assertEquals(NavigationFailure.StaleGeneration, n.currentState.failure)
+        val first = n.currentState.failure
+        assertTrue(first is NavigationFailure.StaleOnboarding)
+        n.clearFailure(first)
+        assertTrue(n.reportMountedOnboardingFailure(completion))
+        val second = n.currentState.failure
+        assertTrue(second is NavigationFailure.StaleOnboarding)
+        assertNotEquals(first, second)
+        n.clearFailure(first)
+        assertEquals(second, n.currentState.failure)
     }
 
     @Test fun onboardingCompletionRechecksSourceAfterCompetingLifecycleCommit() {

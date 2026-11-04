@@ -195,7 +195,8 @@ fun NativeNavigationShell(
             NavigationTarget.REACTION -> L.commonErrorFailedToLoad
         })
         is NavigationFailure.WrongTarget -> stringResource(L.errorPersistenceInvalidData)
-        is NavigationFailure.WrongRadio, NavigationFailure.StaleGeneration -> stringResource(L.errorConnectionNotConnected)
+        is NavigationFailure.WrongRadio, NavigationFailure.StaleGeneration,
+        is NavigationFailure.StaleOnboarding -> stringResource(L.errorConnectionNotConnected)
         NavigationFailure.UnsupportedNotification -> stringResource(L.errorMeshCoreFeatureDisabled)
         NavigationFailure.InvalidSavedState -> stringResource(L.errorPersistenceInvalidData)
         is NavigationFailure.PrivateSelectionNotRestored -> stringResource(L.commonErrorFailedToLoad)

@@ -965,7 +965,8 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 current.activeStack.last() != source.value.activeStack.last()
             ) return false
             if (current.failure != null) return false
-            if (mutableState.compareAndSet(snapshot, current.copy(failure = NavigationFailure.StaleGeneration))) {
+            val failure = NavigationFailure.StaleOnboarding(Math.incrementExact(snapshot.revision))
+            if (mutableState.compareAndSet(snapshot, current.copy(failure = failure))) {
                 return true
             }
         }

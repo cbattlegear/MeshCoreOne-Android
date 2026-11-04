@@ -2,6 +2,8 @@
 package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
+import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactAvatarTarget
 import com.meshcoreone.android.core.contracts.domain.ContactServiceProtocol
 import com.meshcoreone.android.core.contracts.domain.ContactSyncResult
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
@@ -451,7 +453,22 @@ class ContactService(
     /** Updates a contact's locally stored profile picture; `null` removes it. */
     suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) {
         val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
-        contacts.saveContact(existing.withAvatar(imageData))
+        updateContactAvatar(ContactAvatarTarget(contact, existing.publicKey), imageData)
+    }
+
+    /** Captures the expected identity before a chooser; it is not an incarnation token. */
+    suspend fun contactAvatarTarget(contact: EntityKey, expectedPublicKey: Bytes): ContactAvatarTarget {
+        val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
+        if (existing.publicKey != expectedPublicKey) throw ContactServiceError.ContactNotFound()
+        return ContactAvatarTarget(contact, expectedPublicKey)
+    }
+
+    suspend fun updateContactAvatar(target: ContactAvatarTarget, imageData: Bytes?) {
+        when (contacts.updateContactAvatar(target.contact, target.publicKey, imageData)) {
+            ContactAvatarUpdateResult.UPDATED -> Unit
+            ContactAvatarUpdateResult.CONTACT_NOT_FOUND,
+            ContactAvatarUpdateResult.IDENTITY_MISMATCH -> throw ContactServiceError.ContactNotFound()
+        }
         syncCoordinator?.notifyContactsChanged()
     }
 

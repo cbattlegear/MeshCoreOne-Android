@@ -22,6 +22,9 @@ internal class ContactRows(var rows: List<ContactDTO> = emptyList()) : ContactPe
     override suspend fun findContactByPublicKey(publicKey: Bytes): ContactDTO? = unsupported()
     override suspend fun saveContact(radioId: RadioId, frame: ContactFrame): ContactSaveResult = unsupported()
     override suspend fun saveContact(dto: ContactDTO): Unit = unsupported()
+    override suspend fun updateContactAvatar(
+        key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
+    ): ContactAvatarUpdateResult = unsupported()
     override suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long = unsupported()
     override suspend fun deleteContact(key: EntityKey): Unit = unsupported()
     override suspend fun deleteContacts(

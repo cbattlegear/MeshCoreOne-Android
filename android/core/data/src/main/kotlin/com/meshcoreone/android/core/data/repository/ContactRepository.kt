@@ -76,6 +76,19 @@ internal class ContactRepository(
         save()
     }
 
+    override suspend fun updateContactAvatar(
+        key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
+    ): ContactAvatarUpdateResult = context.write("updateContactAvatar") {
+        val row = database.contacts().byId(key.radioId.value, key.id)
+            ?: return@write ContactAvatarUpdateResult.CONTACT_NOT_FOUND
+        if (row.publicKey != expectedPublicKey) return@write ContactAvatarUpdateResult.IDENTITY_MISMATCH
+        if (database.contacts().updateAvatar(key.radioId.value, key.id, expectedPublicKey, imageData) != 1) {
+            invalidData("Avatar identity changed inside the write transaction")
+        }
+        save()
+        ContactAvatarUpdateResult.UPDATED
+    }
+
     override suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long {
         if (frames.isEmpty()) return 0
         return context.write("batchSaveContacts") {

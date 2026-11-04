@@ -56,10 +56,12 @@ import com.meshcoreone.android.feature.nodes.detail.AvatarProcessing
 import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import java.io.ByteArrayOutputStream
+import java.io.Closeable
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
@@ -192,10 +194,17 @@ internal object ContactAvatarMedia {
                 awaitCancellation()
             } finally {
                 withContext(NonCancellable + Dispatchers.IO) {
+                    val cleanup = owned.getAndSet(null)?.let { input ->
+                        Closeable { providerCall { input.close() } }
+                    }
                     try {
-                        if (!context.isActive) providerCall(cancelOpen)
-                    } finally {
-                        owned.getAndSet(null)?.let { input -> providerCall { input.close() } }
+                        cleanup.use {
+                            if (!context.isActive) providerCall(cancelOpen)
+                        }
+                    } catch (failure: IOException) {
+                        rethrowWithCancellation(context, failure)
+                    } catch (failure: SecurityException) {
+                        rethrowWithCancellation(context, failure)
                     }
                 }
             }
@@ -211,14 +220,22 @@ internal object ContactAvatarMedia {
                 }
             }
         } catch (failure: IOException) {
-            context.ensureActive()
-            throw failure
+            rethrowWithCancellation(context, failure)
         } catch (failure: SecurityException) {
-            context.ensureActive()
-            throw failure
+            rethrowWithCancellation(context, failure)
         } finally {
             withContext(NonCancellable) { closer.cancelAndJoin() }
         }
+    }
+
+    private fun rethrowWithCancellation(context: CoroutineContext, failure: Exception): Nothing {
+        try {
+            context.ensureActive()
+        } catch (cancelled: CancellationException) {
+            cancelled.addSuppressed(failure)
+            throw cancelled
+        }
+        throw failure
     }
 
     private inline fun <T> providerCall(action: () -> T): T = try {

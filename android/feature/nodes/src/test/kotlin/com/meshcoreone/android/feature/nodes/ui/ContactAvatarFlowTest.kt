@@ -368,6 +368,8 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             override fun onCreate() = true
             override fun getType(uri: Uri) = "image/png"
             override fun openAssetFile(uri: Uri, mode: String, signal: CancellationSignal?) = open(signal)
+            override fun openTypedAssetFile(uri: Uri, mimeTypeFilter: String, opts: Bundle?,
+                signal: CancellationSignal?) = open(signal)
             override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
                 selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = error("No query expected")
             override fun insert(uri: Uri, values: ContentValues?): Uri? = error("No insert expected")
@@ -406,6 +408,13 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             bitmap.recycle()
             it.toByteArray()
         }
+    }
+
+    @Test
+    fun descriptorBackedSelectionActuallyDecodesThroughTheSignalAwareResolver() = runBlocking {
+        registerMedia(png())
+        val image = ContactAvatarMedia.decode(controller.get().contentResolver, uri)
+        assertTrue(image.width > 0 && image.height > 0)
     }
 
     @Test
@@ -523,7 +532,11 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
     @Test
     fun leavingContactClosesADescriptorReturnedAfterProviderOpenCancellation() = assertLeavingDuringHeldOpen(lateReturn = true)
 
-    private fun assertLeavingDuringHeldOpen(lateReturn: Boolean) {
+    @Test
+    fun throwingProviderCancellationStillClosesALateDescriptorWithoutPublishingAMediaError() =
+        assertLeavingDuringHeldOpen(lateReturn = true, throwsDuringCancel = true)
+
+    private fun assertLeavingDuringHeldOpen(lateReturn: Boolean, throwsDuringCancel: Boolean = false) {
         start()
         pick(file = true)
         val detail = ViewModelProvider(controller.get())[ContactDetailRetainedState::class.java].lifetimes.single()
@@ -538,6 +551,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             cancellation.setOnCancelListener {
                 cancelled.set(true)
                 released.countDown()
+                if (throwsDuringCancel) throw IllegalStateException("Provider cancellation failed")
             }
             entered.countDown()
             val deadline = System.nanoTime() + 10_000_000_000L

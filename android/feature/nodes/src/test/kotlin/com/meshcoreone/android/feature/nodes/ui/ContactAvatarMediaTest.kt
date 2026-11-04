@@ -10,8 +10,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -20,22 +20,27 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 class ContactAvatarMediaTest {
+    private fun assertCauseChainContains(expected: Throwable, actual: Throwable) {
+        assertTrue(generateSequence(actual) { it.cause }.take(16).any { it === expected },
+            "The original provider failure must survive coroutine stack-trace recovery: $actual")
+    }
+
     @Test fun providerRuntimeFailuresBecomeVisibleMediaFailuresAndCloseOwnedStreams() = runBlocking {
         val openFailure = IllegalArgumentException("Provider unavailable")
         val failure = assertFailsWith<IOException> {
             ContactAvatarMedia.readSelection { throw openFailure }
         }
-        assertSame(openFailure, failure.cause)
+        assertCauseChainContains(openFailure, failure)
         val closes = AtomicInteger()
         val readFailure = IllegalStateException("Provider disconnected")
-        assertSame(readFailure, assertFailsWith<IOException> {
+        assertCauseChainContains(readFailure, assertFailsWith<IOException> {
             ContactAvatarMedia.readSelection {
                 object : InputStream() {
                     override fun read(): Int = throw readFailure
                     override fun close() { closes.incrementAndGet() }
                 }
             }
-        }.cause)
+        })
         assertEquals(1, closes.get())
     }
 
@@ -132,16 +137,69 @@ class ContactAvatarMediaTest {
 
     @Test fun providerSecurityFailureIsPreservedAndCloseFailureIsNotReportedAsSuccess() = runBlocking {
         val denied = SecurityException("Grant revoked")
-        assertSame(denied, assertFailsWith<SecurityException> {
+        val securityFailure = assertFailsWith<SecurityException> {
             ContactAvatarMedia.readSelection { throw denied }
-        })
+        }
+        assertEquals(denied.message, securityFailure.message)
+        assertCauseChainContains(denied, securityFailure)
         val closeFailure = UnsupportedOperationException("Provider close failed")
-        assertSame(closeFailure, assertFailsWith<IOException> {
+        assertCauseChainContains(closeFailure, assertFailsWith<IOException> {
             ContactAvatarMedia.readSelection {
                 object : ByteArrayInputStream(byteArrayOf(1)) {
                     override fun close() { throw closeFailure }
                 }
             }
-        }.cause)
+        })
+    }
+
+    @Test fun cancellationWinsOverThrowingCancelAndCloseCallbacksAndStillClosesOnce() = runBlocking {
+        for ((throwCancel, throwClose) in listOf(true to false, false to true, true to true)) {
+            val entered = CompletableDeferred<Unit>()
+            val cancelled = CompletableDeferred<CancellationException>()
+            val released = CountDownLatch(1)
+            val closes = AtomicInteger()
+            val cancellations = AtomicInteger()
+            val stream = object : InputStream() {
+                override fun read(): Int {
+                    entered.complete(Unit)
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    while (released.count != 0L && System.nanoTime() < deadline) {
+                        try {
+                            released.await(20, TimeUnit.MILLISECONDS)
+                        } catch (_: InterruptedException) {
+                            // The close callback must still run if provider cancellation fails.
+                        }
+                    }
+                    check(released.count == 0L) { "Throwing cleanup did not release its stream" }
+                    return -1
+                }
+                override fun close() {
+                    closes.incrementAndGet()
+                    released.countDown()
+                    if (throwClose) throw IOException("Provider close failed")
+                }
+            }
+            val pending = launch {
+                try {
+                    ContactAvatarMedia.readSelection(cancelOpen = {
+                        cancellations.incrementAndGet()
+                        if (throwCancel) throw IllegalStateException("Provider cancel failed")
+                    }) { stream }
+                } catch (failure: CancellationException) {
+                    cancelled.complete(failure)
+                }
+            }
+            try {
+                withTimeout(2_000) { entered.await() }
+                withTimeout(2_000) { pending.cancelAndJoin() }
+                assertTrue(pending.isCancelled)
+                assertTrue(cancelled.isCompleted, "Cleanup failure must not replace coroutine cancellation")
+                assertEquals(1, cancellations.get())
+                assertEquals(1, closes.get())
+            } finally {
+                released.countDown()
+                pending.cancelAndJoin()
+            }
+        }
     }
 }

@@ -661,3 +661,27 @@ An existing-avatar mounted case at 220 dp / 200% font requires full reachable
 photo/file/remove/cancel targets, unchanged bytes on picker/cancel returns and
 one actual removal. These final assertions remain unexecuted until their exact
 candidate's hosted checks run.
+
+Comment 4472524286 found that a throwing cancellation/close callback in the cleanup
+child could still override coroutine cancellation. Cleanup now takes stream ownership
+once, uses standard close/suppression handling even if signal cancellation throws,
+and applies the same parent-context cancellation precedence as the read/open path.
+Expected provider cleanup failures are retained as suppressed cancellation diagnostics,
+not published as a new media error on a closed editor. Added pure held-read controls
+for throwing cancel, throwing close and both together, plus an actual held-open
+provider whose cancellation listener throws after releasing a late descriptor.
+These controls require exactly-once cleanup/cancellation and no post-exit media error;
+normal close failures still surface when the operation has not been cancelled.
+
+Hosted candidate `91614d8e6`, run `41899043987`, failed
+`:feature:nodes:testDebugUnitTest` (279 tests completed, 40 failed).
+Most new-flow failures occurred before crop presentation: the fixture overrode
+the signal-aware untyped asset method, while read-mode resolver opening actually
+dispatches to the typed-asset provider method. The fixture now implements that
+real callback and includes a direct resolver/decode control. Two pure failure
+assertions also incorrectly assumed immediate exception identity across coroutine
+stack-trace recovery; they now require the exact original failure in the cause
+chain, preserve security failure type/message, and still reject successful reads.
+The failed command lacked the mandatory App test report and is not aggregate
+acceptance. No positive discovery/execution of the new shared crop methods is
+inferred from this failed run.

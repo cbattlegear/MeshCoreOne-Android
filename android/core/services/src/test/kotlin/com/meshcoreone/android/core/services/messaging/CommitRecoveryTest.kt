@@ -494,7 +494,9 @@ class CommitRecoveryTest {
             withService(h, h.store, session) { service ->
                 val receipt = NotificationActionReceipt()
                 val call = backgroundScope.async(receipt) {
-                    service.sendPendingDirectMessage(message.id, h.contact)
+                    assertFailsWith<MessageServiceException> {
+                        service.sendPendingDirectMessage(message.id, h.contact)
+                    }
                 }
                 runCurrent()
                 assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
@@ -503,7 +505,7 @@ class CommitRecoveryTest {
 
                 advanceTimeBy(20)
                 runCurrent()
-                assertFailsWith<MessageServiceException> { call.await() }
+                call.await()
                 assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
                 assertEquals(2, dispatches.size)
                 assertNotSame(dispatches[0], dispatches[1])

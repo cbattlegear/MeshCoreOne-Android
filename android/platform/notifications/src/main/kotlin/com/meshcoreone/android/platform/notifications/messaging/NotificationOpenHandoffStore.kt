@@ -427,7 +427,7 @@ class NotificationOpenHandoffStore internal constructor(private val databaseFile
         try {
             database.execSQL("PRAGMA synchronous=FULL")
             synchronized(openLock) {
-                ensureSchema(database, existed)
+                ensureSchema(database, allowCreate)
             }
             return block(database)
         } finally {
@@ -435,12 +435,17 @@ class NotificationOpenHandoffStore internal constructor(private val databaseFile
         }
     }
 
-    private fun ensureSchema(database: SQLiteDatabase, existed: Boolean) {
+    private fun ensureSchema(database: SQLiteDatabase, allowInitialization: Boolean) {
         database.beginTransaction()
         try {
             val metadataExists = tableExists(database, TABLE_METADATA)
             val opensExists = tableExists(database, TABLE_OPENS)
-            if (!metadataExists && !opensExists && !existed) {
+            val hasUserSchema = database.rawQuery(
+                "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1", null,
+            ).use { it.moveToFirst() }
+            if (!metadataExists && !opensExists && allowInitialization &&
+                database.version == 0 && !hasUserSchema
+            ) {
                 database.execSQL(
                     """CREATE TABLE $TABLE_METADATA (
                         singleton INTEGER PRIMARY KEY CHECK(singleton = 1),

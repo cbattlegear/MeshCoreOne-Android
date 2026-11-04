@@ -30,6 +30,7 @@ import java.time.Clock
 import java.time.Instant
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
 /**
@@ -230,6 +231,9 @@ class ContactService(
         val previousFrame = contacts.fetchContact(radioId, contact.publicKey)?.toContactFrame()
         val dispatch = ContactWriteDispatch(
             beforeDispatchAction = { handle -> ContactWriteRecovery.beforeDispatch(preferences, radioId, handle) },
+            onOutcomeChangedAction = { handle ->
+                ContactWriteRecovery.outcomeChanged(preferences, radioId, handle)
+            },
             onExchangeFinishedAction = { handle ->
                 ContactWriteRecovery.finishWrite(preferences, radioId, handle) { failure ->
                     requireContactReconciliation(radioId, failure, handle)
@@ -293,6 +297,17 @@ class ContactService(
     /** Survives replacement of this service through the injected process-persistent preferences. */
     fun needsContactWriteReconciliation(radioId: RadioId): Boolean =
         ContactWriteRecovery.snapshot(preferences, radioId) != null
+
+    /** Read-only recovery view; a preference-read failure propagates to the caller. */
+    fun contactWriteRecoveryState(radioId: RadioId): ContactWriteRecoveryState =
+        ContactWriteRecovery.observe(preferences, radioId)
+
+    /**
+     * Emits an atomic initial snapshot followed by effective changes for this process preference
+     * role and radio. Collection does not retry marker writes or access the network.
+     */
+    fun observeContactWriteRecoveryState(radioId: RadioId): Flow<ContactWriteRecoveryState> =
+        ContactWriteRecovery.updates(preferences, radioId)
 
     private fun requireContactReconciliation(
         radioId: RadioId,

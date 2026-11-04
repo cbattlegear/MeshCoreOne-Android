@@ -36,6 +36,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -50,6 +51,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -444,13 +446,20 @@ class ContactWriteRecoveryTests {
             runCurrent()
             val queued = async { service().addOrUpdateContact(radioA, frame(2, "Unsent")) }
             runCurrent()
+            ContactWriteRecovery.require(preferences, radioA)
+            val producer = service()
+            val unrelatedState = producer.contactWriteRecoveryState(radioA)
+            assertEquals(ContactWriteRecoveryReason.OPERATION_OUTCOME_UNAVAILABLE,
+                assertIs<ContactWriteRecoveryState.Required>(unrelatedState).reason)
             queued.cancelAndJoin()
+            assertEquals(unrelatedState, producer.contactWriteRecoveryState(radioA))
             radio.accept()
             runCurrent()
             blocking.await()
             assertEquals(1, radio.writes.size)
             assertNull(store.fetchContact(radioA, contactsKey(2)))
-            assertFalse(service().needsContactWriteReconciliation(radioA))
+            assertTrue(service().needsContactWriteReconciliation(radioA))
+            assertRecoveryRemainsBlocked(service())
         }
     }
 
@@ -478,12 +487,21 @@ class ContactWriteRecoveryTests {
             assertEquals(listOf("contactsChanged"), coordinator.notifications)
             assertFalse(navigated)
             assertTrue(delivery.isCancelled)
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
             assertFalse(producer.needsContactWriteReconciliation(radioB))
+
+            val retry = async { producer.addOrUpdateContact(radioA, frame(2, "Retry")) }
+            runCurrent()
+            assertEquals(2, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            retry.await()
+            assertEquals("Retry", store.fetchContact(radioA, contactsKey(2))?.name)
         }
     }
 
     @Test
-    fun queuedSameRadioWriteRechecksRecoveryAtTheSerializedDispatchBoundary() = runTest {
+    fun queuedSameRadioWriteResumesAfterExactCancelledWriteCompletion() = runTest {
         withFixture {
             val producer = service()
             val first = async { producer.addOrUpdateContact(radioA, frame(1, "First")) }
@@ -504,14 +522,15 @@ class ContactWriteRecoveryTests {
             radio.accept()
             runCurrent()
 
-            assertEquals(ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED, assertNotNull(queued.await()).reason)
-            assertEquals(1, radio.writes.size, "A queued retry cannot dispatch after the first write becomes uncertain")
+            assertEquals(2, radio.writes.size, "Exact ACK and local completion release the serialized retry")
             assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
             assertNull(store.fetchContact(radioA, contactsKey(2)))
-
-            assertRecoveryRemainsBlocked(producer)
-            assertEquals(1, radio.writes.size)
-            assertNull(store.fetchContact(radioA, contactsKey(2)))
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            radio.accept()
+            runCurrent()
+            assertNull(queued.await())
+            assertEquals("Queued", store.fetchContact(radioA, contactsKey(2))?.name)
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
         }
     }
 
@@ -566,9 +585,17 @@ class ContactWriteRecoveryTests {
             assertEquals(1, radio.writes.size)
             assertFalse(oldAcknowledged)
 
-            assertRecoveryRemainsBlocked(producer)
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
             assertEquals(1, radio.writes.size)
             assertEquals("Old", store.fetchContact(radioA, contactsKey(1))?.name)
+
+            val retry = async { producer.addOrUpdateContact(radioA, frame(3, "Retry")) }
+            runCurrent()
+            assertEquals(2, radio.writes.size, "A fresh write may follow the exact completed ACK")
+            radio.accept()
+            runCurrent()
+            retry.await()
+            assertEquals("Retry", store.fetchContact(radioA, contactsKey(3))?.name)
         }
     }
 
@@ -595,19 +622,213 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
-    fun lateRejectionAfterCancellationRemainsRecoverableWithoutSuccess() = runTest {
+    fun lateRejectionAfterCancellationSettlesItsOwnRecoveryWithoutInventingPersistence() = runTest {
         withFixture {
             val producer = service()
+            val observed = mutableListOf<ContactWriteRecoveryState>()
+            val collector = backgroundScope.launch {
+                producer.observeContactWriteRecoveryState(radioA).collect { observed += it }
+            }
+            runCurrent()
             val result = async { producer.addOrUpdateContact(radioA, frame(1, "Rejected")) }
             runCurrent()
             result.cancelAndJoin()
+            runCurrent()
+            assertEquals(
+                ContactWriteRecoveryReason.RADIO_OUTCOME_UNCERTAIN,
+                assertIs<ContactWriteRecoveryState.Required>(observed.last()).reason,
+            )
             radio.reject(3)
             runCurrent()
-            assertTrue(producer.needsContactWriteReconciliation(radioA))
+            assertTrue(observed.any {
+                it is ContactWriteRecoveryState.Required &&
+                    it.reason == ContactWriteRecoveryReason.RADIO_REJECTION_SETTLEMENT_PENDING
+            })
+            assertIs<ContactWriteRecoveryState.Clear>(observed.last())
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
             assertTrue(store.fetchContacts(radioA).isEmpty())
-            val replacement = service()
-            assertRecoveryRemainsBlocked(replacement)
+            val retry = async { producer.addOrUpdateContact(radioA, frame(1, "Retry after rejection")) }
+            runCurrent()
+            assertEquals(2, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            retry.await()
+            assertEquals("Retry after rejection", store.fetchContact(radioA, contactsKey(1))?.name)
             assertTrue(radio.contactRequests.isEmpty())
+            collector.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun recoveryFlowTracksLateAcceptanceAcrossHeldTailAndReplacementGraph() = runTest {
+        withFixture {
+            val saveGate = CompletableDeferred<Unit>()
+            val entered = CompletableDeferred<Unit>()
+            val flags = PendingMarkerFlags()
+            val held = object : ContactPersisting by store {
+                override suspend fun saveContactPreservingNewer(
+                    radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
+                ): ContactSaveResult? {
+                    entered.complete(Unit)
+                    saveGate.await()
+                    return store.saveContactPreservingNewer(radioId, frame, expectedFrame)
+                }
+            }
+            val producer = service(persistence = held, flags = flags)
+            val originalStates = mutableListOf<ContactWriteRecoveryState>()
+            val originalCollector = backgroundScope.launch {
+                producer.observeContactWriteRecoveryState(radioA).collect { originalStates += it }
+            }
+            runCurrent()
+            assertEquals(ContactWriteRecoveryState.Clear(radioA), originalStates.single())
+
+            val first = async { producer.addOrUpdateContact(radioA, frame(1, "First")) }
+            runCurrent()
+            first.cancelAndJoin()
+            runCurrent()
+            val recorded = assertIs<ContactWriteRecoveryState.Required>(originalStates.last())
+            assertEquals(ContactWriteRecoveryReason.RADIO_OUTCOME_UNCERTAIN, recorded.reason)
+            assertEquals(ContactWriteMarkerRecording.SET_SUCCEEDED, recorded.markerRecording)
+
+            producer.finishEvents()
+            val replacement = service(persistence = held, flags = flags)
+            val replacementStates = mutableListOf<ContactWriteRecoveryState>()
+            val replacementCollector = backgroundScope.launch {
+                replacement.observeContactWriteRecoveryState(radioA).collect { replacementStates += it }
+            }
+            runCurrent()
+            assertEquals(originalStates.last(), replacementStates.single())
+
+            val extraStates = mutableListOf<ContactWriteRecoveryState>()
+            val extraCollector = backgroundScope.launch {
+                replacement.observeContactWriteRecoveryState(radioA).collect { extraStates += it }
+            }
+            runCurrent()
+            assertEquals(replacementStates.single(), extraStates.single())
+            extraCollector.cancelAndJoin()
+            assertTrue(replacement.needsContactWriteReconciliation(radioA))
+
+            radio.accept()
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            for (states in listOf(originalStates, replacementStates)) {
+                val heldTail = assertIs<ContactWriteRecoveryState.Required>(states.last())
+                assertEquals(ContactWriteRecoveryReason.RADIO_ACCEPTED_RECONCILIATION_REQUIRED, heldTail.reason)
+                assertEquals(ContactWriteLocalCompletion.PENDING, heldTail.localCompletion)
+            }
+
+            saveGate.complete(Unit)
+            runCurrent()
+            for (states in listOf(originalStates, replacementStates)) {
+                assertIs<ContactWriteRecoveryState.Clear>(states.last())
+                assertTrue(states.any {
+                    it is ContactWriteRecoveryState.Required &&
+                        it.reason == ContactWriteRecoveryReason.RADIO_ACCEPTED_RECONCILIATION_REQUIRED &&
+                        it.localCompletion == ContactWriteLocalCompletion.COMPLETE
+                })
+            }
+            assertEquals(
+                ContactWriteRecoveryReason.RADIO_OUTCOME_UNCERTAIN,
+                assertIs<ContactWriteRecoveryState.Required>(extraStates.last()).reason,
+                "Unsubscribing one holder neither clears state nor ends other subscriptions",
+            )
+            assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertFalse(flags.durableView().bool("contactWriteReconciliation.${radioA.value}"))
+            originalCollector.cancelAndJoin()
+            replacementCollector.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun recoveryObservationDoesNotRetryFailedMarkerWrites() = runTest {
+        withFixture {
+            val initialFailure = IOException("marker write failed")
+            val flags = PendingMarkerFlags().apply { failure = initialFailure }
+            val producer = service(flags = flags)
+            val observed = mutableListOf<ContactWriteRecoveryState>()
+            val collector = backgroundScope.launch {
+                producer.observeContactWriteRecoveryState(radioA).collect { observed += it }
+            }
+            runCurrent()
+
+            val first = async { producer.addOrUpdateContact(radioA, frame(1, "Retry marker")) }
+            runCurrent()
+            first.cancelAndJoin()
+            runCurrent()
+            val pendingMarker = assertIs<ContactWriteRecoveryState.Required>(observed.last())
+            assertEquals(ContactWriteMarkerRecording.RETRY_PENDING, pendingMarker.markerRecording)
+            assertEquals(
+                listOf("contactWriteReconciliation.${radioA.value}" to true),
+                flags.attempts,
+            )
+            assertEquals(pendingMarker, producer.contactWriteRecoveryState(radioA))
+            assertEquals(1, flags.attempts.size, "A snapshot must not retry a failed true-marker write")
+
+            flags.failure = null
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+            runCurrent()
+            assertEquals(
+                ContactWriteMarkerRecording.SET_SUCCEEDED,
+                assertIs<ContactWriteRecoveryState.Required>(observed.last()).markerRecording,
+            )
+
+            val clearFailure = IOException("marker clear failed")
+            flags.failure = clearFailure
+            radio.accept()
+            runCurrent()
+            val pendingClear = assertIs<ContactWriteRecoveryState.Required>(observed.last())
+            assertEquals(ContactWriteRecoveryReason.MARKER_CLEAR_PENDING, pendingClear.reason)
+            assertEquals(ContactWriteMarkerRecording.CLEAR_RETRY_PENDING, pendingClear.markerRecording)
+            val attemptsBeforeObservation = flags.attempts.size
+            assertEquals(pendingClear, producer.contactWriteRecoveryState(radioA))
+            assertEquals(attemptsBeforeObservation, flags.attempts.size, "Observation must not retry a failed false-marker write")
+
+            flags.failure = null
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            runCurrent()
+            assertIs<ContactWriteRecoveryState.Clear>(observed.last())
+            collector.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun persistedUnknownMarkerIsReadOnlyAndPreferenceReadFailuresPropagate() = runTest {
+        withFixture {
+            val flags = PendingMarkerFlags()
+            flags.set("contactWriteReconciliation.${radioA.value}", true)
+            val attemptsBeforeObservation = flags.attempts.toList()
+            val producer = service(flags = flags)
+            val stored = assertIs<ContactWriteRecoveryState.Required>(
+                producer.contactWriteRecoveryState(radioA),
+            )
+            assertEquals(ContactWriteRecoveryReason.STORED_MARKER_WITHOUT_PROVENANCE, stored.reason)
+            assertEquals(ContactWriteMarkerRecording.LOADED_FLAG_UNVERIFIED, stored.markerRecording)
+            assertEquals(attemptsBeforeObservation, flags.attempts)
+
+            val observed = mutableListOf<ContactWriteRecoveryState>()
+            val collector = backgroundScope.launch {
+                producer.observeContactWriteRecoveryState(radioA).collect { observed += it }
+            }
+            runCurrent()
+            assertEquals(stored, observed.single())
+            collector.cancelAndJoin()
+
+            val readFailure = IOException("preference read failed")
+            val unreadable = object : ContactPreferenceFlags {
+                override fun bool(key: String): Boolean = throw readFailure
+                override fun set(key: String, value: Boolean): Unit = error("No write expected")
+            }
+            val unreadableService = service(flags = unreadable)
+            assertSame(readFailure, assertFailsWith<IOException> {
+                unreadableService.contactWriteRecoveryState(radioB)
+            })
+            var flowFailure: IOException? = null
+            try {
+                unreadableService.observeContactWriteRecoveryState(radioB).collect {}
+            } catch (failure: IOException) {
+                flowFailure = failure
+            }
+            assertSame(readFailure, flowFailure)
         }
     }
 
@@ -713,18 +934,25 @@ class ContactWriteRecoveryTests {
             radio.accept()
             runCurrent()
             assertNull(store.fetchContact(radioA, contactsKey(1)))
-            assertTrue(service().needsContactWriteReconciliation(radioA))
+            val replacement = service()
+            assertTrue(replacement.needsContactWriteReconciliation(radioA))
+            val recovery = assertIs<ContactWriteRecoveryState.Required>(
+                replacement.contactWriteRecoveryState(radioA),
+            )
+            assertEquals(ContactWriteRecoveryReason.RADIO_ACCEPTED_RECONCILIATION_REQUIRED, recovery.reason)
+            assertEquals(ContactWriteLocalCompletion.PENDING, recovery.localCompletion)
             assertTrue(diagnostics.any { it is com.meshcoreone.android.core.protocol.session.SessionDiagnostic.BackgroundFailure })
-            assertRecoveryRemainsBlocked(service())
+            assertRecoveryRemainsBlocked(replacement)
             assertNull(store.fetchContact(radioA, contactsKey(1)))
         }
     }
 
     @Test
-    fun cancelledAcceptedPersistenceTailBlocksAnotherWriteUntilReconciliation() = runTest {
+    fun cancelledAcceptedPersistenceTailBlocksUntilExactLocalCompletionThenAllowsRetry() = runTest {
         withFixture {
             val saveGate = CompletableDeferred<Unit>()
             val entered = CompletableDeferred<Unit>()
+            val flags = PendingMarkerFlags()
             val held = object : ContactPersisting by store {
                 override suspend fun saveContactPreservingNewer(
                     radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
@@ -734,7 +962,7 @@ class ContactWriteRecoveryTests {
                     return store.saveContactPreservingNewer(radioId, frame, expectedFrame)
                 }
             }
-            val first = async { service(persistence = held).addOrUpdateContact(radioA, frame(1, "First")) }
+            val first = async { service(persistence = held, flags = flags).addOrUpdateContact(radioA, frame(1, "First")) }
             runCurrent()
             radio.accept()
             runCurrent()
@@ -742,7 +970,7 @@ class ContactWriteRecoveryTests {
             first.cancelAndJoin()
             val second = async {
                 try {
-                    service().addOrUpdateContact(radioA, frame(1, "Second", 2u))
+                    service(flags = flags).addOrUpdateContact(radioA, frame(1, "Second", 2u))
                     null
                 } catch (blocked: ContactWriteAdmissionBlocked) {
                     blocked
@@ -755,15 +983,119 @@ class ContactWriteRecoveryTests {
                 assertNotNull(second.await()).reason,
             )
             assertFailsWith<ContactServiceError.SyncInterrupted> {
-                service().syncContacts(radioA, null)
+                service(flags = flags).syncContacts(radioA, null)
             }
             assertTrue(radio.contactRequests.isEmpty(), "A sync cannot start during the accepted write's local tail")
+            assertTrue(flags.durableView().bool("contactWriteReconciliation.${radioA.value}"))
             saveGate.complete(Unit)
             runCurrent()
             assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
-            assertRecoveryRemainsBlocked(service())
-            assertEquals(1, radio.writes.size)
+            assertFalse(service(flags = flags).needsContactWriteReconciliation(radioA))
+            assertEquals(listOf(
+                "contactWriteReconciliation.${radioA.value}" to true,
+                "contactWriteReconciliation.${radioA.value}" to false,
+            ), flags.attempts)
+            assertFalse(flags.durableView().bool("contactWriteReconciliation.${radioA.value}"))
+
+            val retry = async { service(flags = flags).addOrUpdateContact(radioA, frame(1, "Second", 2u)) }
+            runCurrent()
+            assertEquals(2, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            retry.await()
+            assertEquals("Second", store.fetchContact(radioA, contactsKey(1))?.name)
+        }
+    }
+
+    @Test
+    fun exactCompletionDoesNotClearAConcurrentNewerOrUnownedRecoveryEpoch() = runTest {
+        for (newerDispatch in listOf<ContactWriteDispatch?>(null, ContactWriteDispatch())) {
+            withFixture {
+                val saveGate = CompletableDeferred<Unit>()
+                val entered = CompletableDeferred<Unit>()
+                val flags = PendingMarkerFlags()
+                val held = object : ContactPersisting by store {
+                    override suspend fun saveContactPreservingNewer(
+                        radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
+                    ): ContactSaveResult? {
+                        entered.complete(Unit)
+                        saveGate.await()
+                        return store.saveContactPreservingNewer(radioId, frame, expectedFrame)
+                    }
+                }
+                val first = async {
+                    service(persistence = held, flags = flags).addOrUpdateContact(radioA, frame(1, "First"))
+                }
+                runCurrent()
+                radio.accept()
+                runCurrent()
+                assertTrue(entered.isCompleted)
+                first.cancelAndJoin()
+                assertTrue(service(flags = flags).needsContactWriteReconciliation(radioA))
+                val priorEpoch = ContactWriteRecovery.snapshot(flags, radioA)
+
+                ContactWriteRecovery.require(flags, radioA, newerDispatch)
+                val newerEpoch = ContactWriteRecovery.snapshot(flags, radioA)
+                assertNotNull(newerEpoch)
+                assertNotSame(priorEpoch, newerEpoch, "The newer marker advances the recovery epoch")
+                saveGate.complete(Unit)
+                runCurrent()
+
+                assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
+                assertSame(newerEpoch, ContactWriteRecovery.snapshot(flags, radioA))
+                val replacement = service(flags = flags)
+                assertTrue(replacement.needsContactWriteReconciliation(radioA))
+                val observed = assertIs<ContactWriteRecoveryState.Required>(
+                    replacement.contactWriteRecoveryState(radioA),
+                )
+                assertEquals(
+                    if (newerDispatch == null) ContactWriteRecoveryReason.OPERATION_OUTCOME_UNAVAILABLE
+                    else ContactWriteRecoveryReason.RADIO_OUTCOME_UNCERTAIN,
+                    observed.reason,
+                )
+                assertEquals(ContactWriteLocalCompletion.PARTIAL, observed.localCompletion)
+                assertEquals(
+                    listOf(
+                        "contactWriteReconciliation.${radioA.value}" to true,
+                        "contactWriteReconciliation.${radioA.value}" to true,
+                    ),
+                    flags.attempts,
+                )
+                assertRecoveryRemainsBlocked(service(flags = flags))
+                assertEquals(1, radio.writes.size)
+            }
+        }
+    }
+
+    @Test
+    fun failedDurableClearRetainsRecoveryUntilTheFalseMarkerCanBeCommitted() = runTest {
+        withFixture {
+            val flags = PendingMarkerFlags()
+            val producer = service(flags = flags)
+            val first = async { producer.addOrUpdateContact(radioA, frame(1, "First")) }
+            runCurrent()
+            first.cancelAndJoin()
+            assertTrue(flags.durableView().bool("contactWriteReconciliation.${radioA.value}"))
+
+            val clearFailure = IOException("recovery marker clear failed")
+            flags.failure = clearFailure
+            radio.accept()
+            runCurrent()
             assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertTrue(flags.durableView().bool("contactWriteReconciliation.${radioA.value}"))
+            assertTrue(flags.attempts.contains("contactWriteReconciliation.${radioA.value}" to false))
+            assertSame(clearFailure, assertFailsWith<IOException> {
+                ContactWriteRecovery.snapshot(flags, radioA)
+            })
+
+            flags.failure = null
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            assertFalse(flags.durableView().bool("contactWriteReconciliation.${radioA.value}"))
+            assertEquals(
+                "contactWriteReconciliation.${radioA.value}" to false,
+                flags.attempts.last(),
+            )
+            assertEquals(1, radio.writes.size)
         }
     }
 
@@ -859,7 +1191,7 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
-    fun lateTerminalCallbackRetriesTrueMarkerAfterStorageRecovers() = runTest {
+    fun lateTerminalCallbackRecordsTrueBeforeClearingSettledMarkerAfterStorageRecovers() = runTest {
         withFixture {
             val diskFailure = IOException("first true-marker commit failed")
             var failCommits = true
@@ -890,15 +1222,15 @@ class ContactWriteRecoveryTests {
             failCommits = false
             radio.accept()
             runCurrent()
-            assertEquals(listOf(true, true, true), markerAttempts)
+            assertEquals(listOf(true, true, true, false), markerAttempts)
             val freshViewAfterCommit = object : ContactPreferenceFlags by preferences {}
-            assertTrue(freshViewAfterCommit.bool("contactWriteReconciliation.${radioA.value}"))
+            assertFalse(freshViewAfterCommit.bool("contactWriteReconciliation.${radioA.value}"))
             assertEquals("Accepted after recovery", store.fetchContact(radioA, contactsKey(1))?.name)
             assertTrue(write.isCancelled)
             assertEquals(1, logs.count { it == (ContactLogLevel.WARNING to "Contact recovery marker could not be persisted") })
-            assertRecoveryRemainsBlocked(service(flags = flags))
-            assertRecoveryRemainsBlocked(service(flags = freshViewAfterCommit))
-            assertEquals(listOf(true, true, true), markerAttempts)
+            assertFalse(service(flags = flags).needsContactWriteReconciliation(radioA))
+            assertFalse(service(flags = freshViewAfterCommit).needsContactWriteReconciliation(radioA))
+            assertEquals(listOf(true, true, true, false), markerAttempts)
             assertEquals(1, radio.writes.size)
             assertTrue(radio.contactRequests.isEmpty())
         }
@@ -1775,7 +2107,7 @@ class ContactWriteRecoveryTests {
     }
 
     @Test
-    fun unresolvedWriteRejectsReplacementSyncBeforeSnapshotAndKeepsQueuedWriteBlocked() = runTest {
+    fun unresolvedWriteRejectsSyncUntilAckThenReleasesQueuedWrite() = runTest {
         withFixture {
             val producer = service()
             val first = async { producer.addOrUpdateContact(radioA, frame(1, "First")) }
@@ -1797,17 +2129,14 @@ class ContactWriteRecoveryTests {
             radio.accept()
             runCurrent()
 
-            assertEquals(
-                ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED,
-                assertNotNull(queued.await()).reason,
-            )
-            assertTrue(producer.needsContactWriteReconciliation(radioA))
-            assertEquals(1, radio.writes.size)
+            assertEquals(2, radio.writes.size, "The queued write resumes after exact ACK and local completion")
             assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
 
-            assertRecoveryRemainsBlocked(producer)
-            assertEquals(1, radio.writes.size)
-            assertNull(store.fetchContact(radioA, contactsKey(2)))
+            radio.accept()
+            runCurrent()
+            assertNull(queued.await())
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            assertEquals("Queued", store.fetchContact(radioA, contactsKey(2))?.name)
         }
     }
 

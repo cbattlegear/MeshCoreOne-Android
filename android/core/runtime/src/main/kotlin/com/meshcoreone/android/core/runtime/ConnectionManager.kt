@@ -606,7 +606,9 @@ class ConnectionManager(
         }
         requireCurrent(owner)
         if (existing == null) {
-            devices.saveDevice(device)
+            val persistence = devices as? DeviceEditPersisting
+                ?: throw UnsupportedOperationException("Connection initialization requires versioned device persistence")
+            if (!persistence.insertDeviceIfAbsent(device)) throw DeviceWriteConflict()
         } else {
             devices.editDevice(deviceId, isCurrent = { isCurrent(owner) }) { latest ->
                 DeviceDTO.fromConnection(deviceId, radioId, info, capabilities, autoAdd, latest, methods, clock.instant)
@@ -614,7 +616,10 @@ class ConnectionManager(
             } ?: throw ConnectionError.DeviceNotFound()
         }
         requireCurrent(owner)
-        devices.setActiveDevice(device.id)
+        if (!devices.activateDeviceIfCurrent(device.id) { isCurrent(owner) }) {
+            requireCurrent(owner)
+            throw DeviceWriteConflict()
+        }
         requireCurrent(owner)
         val activatedDevice = devices.fetchDevice(device.id) ?: throw ConnectionError.DeviceNotFound()
         requireCurrent(owner)
@@ -716,7 +721,10 @@ class ConnectionManager(
         requireCurrent(owner)
         simulator.seedSimulator()
         requireCurrent(owner)
-        devices.setActiveDevice(device.id)
+        if (!devices.activateDeviceIfCurrent(device.id) { isCurrent(owner) }) {
+            requireCurrent(owner)
+            throw DeviceWriteConflict()
+        }
         requireCurrent(owner)
         val activatedDevice = devices.fetchDevice(device.id) ?: throw ConnectionError.DeviceNotFound()
         requireCurrent(owner)

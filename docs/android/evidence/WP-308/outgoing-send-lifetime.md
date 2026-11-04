@@ -13,6 +13,13 @@ The only textual merge conflict was a duplicate
 merge-tree check isolated that conflict; deterministic `-Xours` retained
 the identical existing import. The resulting tree matched the checked
 merge tree exactly. No service logic was manually authored or removed.
+The producer's follow-up `1ccad6d104565dd7b0134180033d6090d90f02db`
+is composed unchanged as `b23a022fbaaaa5dd866f8d1e5450b299365b0acb`.
+Its pending-evidence predicate additionally requires CHANNEL kind, NULL
+contact and the exact channel index in the same radio. Malformed direct
+pending rows cannot qualify a channel message for recovery. The independent
+API and consumer policy are unchanged. Source validators and whitespace
+checks returned 0 after this composition; Android execution remains unclaimed.
 
 The separately assigned R1 consumer fix includes known-old-occupant and
 unbound outgoing recovery text in a separate list with explicit copy into a

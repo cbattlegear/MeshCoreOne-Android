@@ -214,6 +214,8 @@ regional, RTL and unsupported-locale fallback, and copy-only/uncertain-delivery
 wording remains explicit. These are resource assertions, not UI integration,
 TalkBack, 200% font, disk-reopen, delivery or device acceptance.
 
+### Generated source declarations
+
 Use `com.meshcoreone.android.core.l10n.generated.App*Strings`,
 `WidgetLocalizableStrings` and `ShortcutAppShortcutsStrings`. Plain members are
 shared resource IDs; formatted/plural members are typed functions accepting the

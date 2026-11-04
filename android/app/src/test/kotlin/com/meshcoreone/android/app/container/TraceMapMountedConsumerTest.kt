@@ -140,6 +140,8 @@ class TraceMapMountedConsumerTest {
         mount()
         val initialRevision = latest!!.cameraCommandRevision
         compose.onNodeWithTag("pan").performClick()
+        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        compose.waitForIdle()
         compose.waitUntil(5_000) { latest?.camera == panned }
         assertEquals(initialRevision, latest!!.cameraCommandRevision)
 

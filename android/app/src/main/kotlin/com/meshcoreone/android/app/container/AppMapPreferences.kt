@@ -76,12 +76,13 @@ internal class AppMapPreferences(
         val labels = if (legacy.contains("labels-v1")) legacy.getBoolean("labels-v1", true) else null
         if (raw == null && clustering == null && labels == null) return
         store.update {
-            if (!snapshot.contains(AppStorageKey.mapFilterMainMap) &&
-                !snapshot.contains(AppStorageKey.showDiscoveredNodesOnMap) && raw != null
-            ) {
-                this[AppStorageKey.mapFilterMainMap] = MapFilterPreferences.migrate(
-                    raw, null, MapFilterHost.MAIN_MAP,
-                ).state.encode()
+            if (!snapshot.contains(AppStorageKey.mapFilterMainMap) && raw != null) {
+                val migrated = MapFilterPreferences.migrate(raw, null, MapFilterHost.MAIN_MAP).state
+                val resolved = snapshot.stored(AppStorageKey.showDiscoveredNodesOnMap)
+                    ?.let { migrated.copy(showDiscovered = it) }
+                    ?: migrated
+                this[AppStorageKey.mapFilterMainMap] =
+                    MapFilterPreferences.encode(resolved, MapFilterHost.MAIN_MAP)
             }
             if (!snapshot.contains(AppStorageKey.mapClusteringEnabled) && clustering != null) {
                 this[AppStorageKey.mapClusteringEnabled] = clustering

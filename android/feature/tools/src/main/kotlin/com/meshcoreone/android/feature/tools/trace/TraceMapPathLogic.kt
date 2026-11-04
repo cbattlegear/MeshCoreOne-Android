@@ -142,10 +142,14 @@ class TraceMapPathLogic(private val trace: TracePathStateHolder) {
         var previous = userLocation?.geoPoint()
         val rebuiltLines = mutableListOf<MapLine>()
         val rebuiltBadges = mutableListOf<TraceMapBadge>()
-        trace.current.outboundPath.forEachIndexed { index, hop ->
+        val current = trace.current
+        val result = current.result?.takeIf {
+            it.success && it.tracedPathBytes == current.fullPathData
+        }
+        current.outboundPath.forEachIndexed { index, hop ->
             val coordinate = locatedPathCoordinate(hop) ?: return@forEachIndexed
             previous?.let { from ->
-                val snr = trace.current.result?.takeIf { it.success }?.hops?.getOrNull(index + 1)?.snr
+                val snr = result?.hops?.getOrNull(index + 1)?.snr
                 rebuiltLines += MapLine(
                     id = "trace-$index", points = listOf(from, coordinate),
                     style = when (traceLineQuality(snr)) {

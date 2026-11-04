@@ -251,21 +251,6 @@ class MapMountedConsumerTest {
             )))
         }
 
-        @Test fun systemMapAppearanceFollowsEffectiveAppThemeAndKeepsExplicitMapOverrides() {
-            var latest: MapPresentationState? = null
-            mount(
-                MapFeatureDependencies(source { content() }, offline()),
-                onPresentation = { latest = it },
-                appColorSchemePreference = AppColorSchemePreference.DARK,
-            )
-            compose.waitUntil(5_000) { latest?.isDark == true }
-
-            val preferences = MeshCoreStorage.get(host.get()).preferences
-            runBlocking { preferences.set(AppStorageKey.mapColorSchemePreference, "light") }
-            compose.waitUntil(5_000) { latest?.isDark == false }
-            runBlocking { preferences.set(AppStorageKey.mapColorSchemePreference, "dark") }
-            compose.waitUntil(5_000) { latest?.isDark == true }
-        }
         compose.waitUntil(5_000) {
             requireNotNull(latest).isDark && requireNotNull(latest).points.any { it.id == node.id }
         }
@@ -284,6 +269,22 @@ class MapMountedConsumerTest {
         assertFalse(host.get().getSharedPreferences("shared-map", 0).contains("cluster-v1"))
         assertEquals(PreferenceValue.BooleanValue(false),
             runBlocking { storage.backupPreferences.snapshotForBackup() }.presentValues["mapClusteringEnabled"])
+    }
+
+    @Test fun systemMapAppearanceFollowsEffectiveAppThemeAndKeepsExplicitMapOverrides() {
+        var latest: MapPresentationState? = null
+        mount(
+            MapFeatureDependencies(source { content() }, offline()),
+            onPresentation = { latest = it },
+            appColorSchemePreference = AppColorSchemePreference.DARK,
+        )
+        compose.waitUntil(5_000) { latest?.isDark == true }
+
+        val preferences = MeshCoreStorage.get(host.get()).preferences
+        runBlocking { preferences.set(AppStorageKey.mapColorSchemePreference, "light") }
+        compose.waitUntil(5_000) { latest?.isDark == false }
+        runBlocking { preferences.set(AppStorageKey.mapColorSchemePreference, "dark") }
+        compose.waitUntil(5_000) { latest?.isDark == true }
     }
 
     private fun mount(

@@ -122,6 +122,29 @@ class AppMapPreferencesTest {
         assertEquals(adapter.observe(MapFilterHost.MAIN_MAP).first(), replacement.observe(MapFilterHost.MAIN_MAP).first())
     }
 
+    @Test fun privateFilterMigrationPreservesOtherFieldsWhenLegacyDiscoveredValueIsPresent() = runBlocking {
+        val privateFilter = MapFilterState(
+            favoritesOnly = true, showChat = false, showRepeater = true, showRoom = false,
+        )
+        for (legacyDiscovered in listOf(false, true)) {
+            storage.preferences.resetAppPreferences()
+            assertTrue(legacy.edit().clear().putString("filter-v1", privateFilter.encode()).commit())
+            storage.preferences.set(AppStorageKey.showDiscoveredNodesOnMap, legacyDiscovered)
+
+            val expected = privateFilter.copy(showDiscovered = legacyDiscovered)
+            assertEquals(expected, adapter.observe(MapFilterHost.MAIN_MAP).first().filter)
+            val persisted = storage.preferences.snapshot().stored(AppStorageKey.mapFilterMainMap)
+            assertEquals(expected, MapFilterState.decode(requireNotNull(persisted)))
+            assertEquals(
+                PreferenceValue.StringValue(requireNotNull(persisted)),
+                storage.backupPreferences.snapshotForBackup().presentValues["mapFilterMainMap"],
+            )
+            assertFalse(legacy.contains("filter-v1"))
+            assertEquals(expected, AppMapPreferences(storage.preferences, legacy)
+                .observe(MapFilterHost.MAIN_MAP).first().filter)
+        }
+    }
+
     @Test fun hostWritesStayIndependentAndAppearanceUsesTheExistingProcessKey() = runBlocking {
         val trace = MapFilterState(favoritesOnly = true, showDiscovered = true)
         adapter.setFilter(MapFilterHost.TRACE_PATH, trace)

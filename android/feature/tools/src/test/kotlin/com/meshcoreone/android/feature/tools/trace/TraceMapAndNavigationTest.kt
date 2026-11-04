@@ -76,6 +76,29 @@ class TraceMapAndNavigationTest {
     }
 
     @Test
+    fun `late matching-tag response after path edit leaves new geometry untraced`() {
+        map.configure(Coordinate(37.0, -123.0))
+        val sender = FakeTraceSender()
+        harness.deps.device = device()
+        harness.deps.sender = sender
+        trace.configure(harness.deps)
+        trace.addNode(north)
+        harness.start { trace.runTrace() }
+        val pendingTag = sender.sent.single().tag
+        trace.addNode(south)
+        harness.respond(pendingTag, listOf(node(0x3F, -6.0), node(null, 3.0)), RADIO)
+        val lateResult = checkNotNull(trace.current.result)
+        assertTrue(lateResult.success)
+        assertTrue(lateResult.tracedPathBytes.isEmpty)
+        assertFalse(lateResult.tracedPathBytes == trace.current.fullPathData)
+
+        map.rebuildPathState()
+
+        assertEquals(listOf(MapLineStyle.TRACE_UNTRACED, MapLineStyle.TRACE_UNTRACED), map.lines.map { it.style })
+        assertTrue(map.badges.isEmpty())
+    }
+
+    @Test
     fun `initial camera uses path or filtered candidates and empty candidates have no camera`() {
         map.applyFilter(TraceMapPinFilter(favoritesOnly = true))
         assertEquals(GeoPoint(37.0, -122.0), map.initialCamera()?.center)

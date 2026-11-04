@@ -87,7 +87,9 @@ Coordinator source review found a 64-bit SQLite INTEGER narrowing hole in the in
 Stored action version and `max_records` now undergo explicit Long-to-Int range checks before
 conversion. Real SQLite tampering regressions include positive/negative 2^32 aliases and both
 Long extrema, retaining the original digest/policy and proving rejection rather than truncation.
-A corrected exact successor requires its own hosted result.
+The row integrity digest also binds the producer-store UUID so a changed valid metadata UUID cannot
+silently rebind previously retained record identities. A real SQLite mutation/restore regression
+covers this binding. A corrected exact successor requires its own hosted result.
 
 ## Outstanding integration prerequisites
 

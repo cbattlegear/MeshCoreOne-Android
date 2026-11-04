@@ -352,6 +352,19 @@ class NotificationReplyStagingStoreTest {
     }
 
     @Test
+    fun storeIdentityMutationCannotRebindPreviouslyRetainedRecords() = runTest {
+        store.stage(post, payload, "retained")
+        val originalId = inventory().single().identity.storeId
+        exec("UPDATE reply_metadata SET store_id='${UUID.randomUUID()}'")
+        assertEquals(
+            NotificationReplyStagingStore.ReadResult.Failed(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+            store.read(),
+        )
+        exec("UPDATE reply_metadata SET store_id='$originalId'")
+        assertEquals(originalId, inventory().single().identity.storeId)
+    }
+
+    @Test
     fun onlyExplicitFreshBootstrapCanRetryRolledBackInitialization() = runTest {
         cleanup()
         SQLiteDatabase.openOrCreateDatabase(file, null).use {

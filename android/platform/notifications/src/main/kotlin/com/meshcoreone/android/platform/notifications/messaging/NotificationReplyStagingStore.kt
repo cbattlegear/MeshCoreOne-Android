@@ -195,7 +195,7 @@ class NotificationReplyStagingStore internal constructor(
                         "INSERT INTO reply_records VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         arrayOf(row.sequence, row.recordId.toString(), post.postId.toString(), post.version,
                             post.action, row.parentId?.toString(), row.outgoingId?.toString(),
-                            row.payload, row.text, row.contentBytes, row.digest()),
+                            row.payload, row.text, row.contentBytes, row.digest(state.storeId)),
                     )
                     db.execSQL(
                         "UPDATE reply_metadata SET record_count=?, content_bytes=? WHERE singleton=1",
@@ -331,7 +331,7 @@ class NotificationReplyStagingStore internal constructor(
                     !recordIds.add(row.recordId) || row.text.isEmpty() || row.text.size % 2 != 0 ||
                     row.contentBytes != cursor.getLong(9) || row.contentBytes > limits.maxRecordBytes ||
                     row.contentBytes > limits.maxTotalRecordBytes - totalBytes ||
-                    !row.digest().contentEquals(cursor.getBlob(10))
+                    !row.digest(state.storeId).contentEquals(cursor.getBlob(10))
                 ) corrupt()
                 decodePayload(row.payload)
                 val root = roots[row.post]
@@ -430,7 +430,8 @@ class NotificationReplyStagingStore internal constructor(
             "$sequence|$recordId|${post.version}|${post.postId}|${post.action}|$parentId|$outgoingId",
         )
         val contentBytes: Long get() = header().size.toLong() + payload.size + text.size
-        fun digest(): ByteArray = MessageDigest.getInstance("SHA-256").run {
+        fun digest(storeId: UUID): ByteArray = MessageDigest.getInstance("SHA-256").run {
+            update(textBytes(storeId.toString()))
             update(header())
             update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(payload.size.toLong()).array())
             update(payload)

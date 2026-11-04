@@ -2226,7 +2226,6 @@ class ContactWriteRecoveryTests {
             }
             runCurrent()
             caller.cancelAndJoin()
-            store.seed(ContactDTO.fromFrame(radioA, frame(1, "Local newer", 200u)))
             radio.accept()
             runCurrent()
             assertTrue(saveGate.entered.isCompleted, "The ACK precedes the held local completion")
@@ -2393,12 +2392,11 @@ class ContactWriteRecoveryTests {
             val caller = async { producer.addOrUpdateContact(radioA, frame(1, "Radio older", 1u)) }
             runCurrent()
             caller.cancelAndJoin()
+            val newer = ContactDTO.fromFrame(radioA, frame(1, "Local newer", 200u))
+            store.seed(newer)
             radio.accept()
             runCurrent()
-            val newer = assertNotNull(store.fetchContact(radioA, contactsKey(1)))
-                .updating(frame(1, "Local newer", 200u))
             val orphan = ContactDTO.fromFrame(radioA, frame(2, "Must not prune", 200u))
-            store.seed(newer)
             store.seed(orphan)
 
             val unproved = session.getContactsReportingTotal(null)

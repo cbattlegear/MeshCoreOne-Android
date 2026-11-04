@@ -870,3 +870,15 @@ false marker commits succeed.
 This repair requires fresh exact-head hosted CI and source review. No local
 Gradle result or older-head check is a pass, and no duplicate CI-result bundle
 is retained.
+
+Successor `cdba785e3cb9f4184d49c8b7c1b496f56fb4ad02`, hosted
+[41889202757](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41889202757),
+executed 2,904 services tests with one failure in the equal-count snapshot-safety
+control. Its newer-row setup had been applied to a different held-tail test,
+so successful ACK/local completion still cleared the equal-count test's marker.
+The correction places the newer row before ACK in that exact control and restores
+the other held-tail test's original setup. All four new schedule controls executed
+without failures in this run, but this failed run is not an overall pass.
+Exact-head source review `41889214020` marked all six prior findings resolved
+and identified this test-setup correction; the corrected head still requires
+fresh hosted verification and review.

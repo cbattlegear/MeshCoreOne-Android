@@ -134,6 +134,7 @@ class WorkflowScopeTests(unittest.TestCase):
                 self.assertTrue(benchmark_consumer_input(path))
         for path in (
             "android/app/src/test/kotlin/AppTest.kt",
+            "android/core/data/src/testDebug/kotlin/RepositoryTest.kt",
             "android/feature/chats/src/androidTest/kotlin/TimelineTest.kt",
             "android/core/data/src/debug/kotlin/DebugOnly.kt",
             "android/feature/chats/README.md",
@@ -161,6 +162,7 @@ class WorkflowScopeTests(unittest.TestCase):
     def test_test_only_and_documentation_diffs_do_not_compile_benchmark_consumer(self):
         for path in (
             "android/feature/chats/src/test/kotlin/TimelineTest.kt",
+            "android/core/data/src/testDebug/kotlin/RepositoryTest.kt",
             "android/app/src/debug/kotlin/DebugOnly.kt",
             "docs/android/deviations/WP-307.md",
         ):
@@ -169,6 +171,15 @@ class WorkflowScopeTests(unittest.TestCase):
                 self.assertFalse(result["benchmark_consumer"])
                 self.assertFalse(result["scopes"]["benchmark"])
                 self.assertFalse(result["fail_safe"])
+
+    def test_debug_unit_test_diff_keeps_ordinary_module_verification(self):
+        path = "android/core/data/src/testDebug/kotlin/RepositoryTest.kt"
+        with patch("oracle.workflow_scope.changed_paths", return_value=[path]):
+            result = evaluate(Path.cwd(), "push", {"before": BASE, "after": HEAD})
+        self.assertTrue(result["scopes"]["scaffold"])
+        self.assertFalse(result["benchmark_consumer"])
+        self.assertFalse(result["scopes"]["benchmark"])
+        self.assertFalse(result["fail_safe"])
 
     def test_compiler_observation_guard_selects_consumer_without_full_benchmark(self):
         path = "tools/android-port/controller/verify_candidate_task_graph.gradle"

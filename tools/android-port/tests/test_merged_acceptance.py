@@ -1175,6 +1175,52 @@ class MergedAcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(PortError, "scope does not match"):
                 reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
 
+    def test_debug_unit_test_only_diff_requires_ordinary_build_not_consumer_evidence(self):
+        from oracle.workflow_scope import classify
+
+        reader, _, _, _, _ = self.fixture()
+        paths = ["android/core/data/src/testDebug/kotlin/RepositoryTest.kt"]
+        report = {
+            "base": BASE, "head": HEAD, "diff_base": BASE, "fail_safe": False,
+            "paths": paths, "scopes": classify(paths), "benchmark_consumer": False,
+        }
+        native = {
+            "suite": "android/accessibility-tests", "base": BASE, "head": HEAD,
+            "selected": False, "result": "NOT SELECTED", "committed_files": 0,
+        }
+        log = "".join(
+            "job\tClassify changed inputs with fail-safe defaults\t"
+            f"2026-10-10T11:00:00Z {json.dumps(value)}\n" for value in (report, native)
+        )
+        jobs = [
+            {"id": index, "name": name, "run_id": 1, "head_sha": HEAD,
+             "status": "completed", "conclusion": conclusion}
+            for index, (name, conclusion) in enumerate((
+                ("Classify candidate scopes", "success"), ("Controller and workflow policy", "success"),
+                ("One Linux Android build", "success"), ("Swift codec oracle", "skipped"),
+                ("SwiftData restore and export oracle", "skipped"),
+            ), 1)
+        ]
+        with patch("controller.repair_acceptance.read_job_log", return_value=log), \
+                patch("oracle.workflow_scope.merge_base", return_value=BASE), \
+                patch("oracle.workflow_scope.changed_paths", return_value=paths), \
+                patch("controller.merged_acceptance.tree", return_value={}), \
+                patch("controller.merged_acceptance.declares_benchmark_consumer", return_value=True), \
+                patch("controller.local_scope.candidate_plan", return_value={
+                    "scopes": ["module:core/data"], "tasks": [":core:data:testDebugUnitTest"],
+                }), \
+                patch("controller.repair_acceptance.validate_build_log") as ordinary, \
+                patch("controller.merged_acceptance.validate_benchmark_consumer_build_log") as consumer:
+            reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            self.assertEqual(ordinary.call_args.args[1], ["core/data"])
+            consumer.assert_not_called()
+            ordinary.side_effect = PortError("fixture ordinary build failure")
+            with self.assertRaisesRegex(PortError, "ordinary build failure"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+            jobs[2]["conclusion"] = "skipped"
+            with self.assertRaisesRegex(PortError, "missing, skipped or failed"):
+                reader.verify_scoped_run(jobs, 1, BASE, HEAD, jobs[:1])
+
     def test_scoped_product_changes_cannot_pass_without_runnable_module_tests(self):
         reader, _, _, _, _ = self.fixture()
         scopes = {"controller": False, "scaffold": True, "protocol": False,

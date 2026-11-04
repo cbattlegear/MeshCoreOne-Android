@@ -232,7 +232,7 @@ def benchmark_consumer_input(path):
     else:
         return False
     if source is not None:
-        return source.group(1) not in {"debug", "test", "androidTest"}
+        return source.group(1) not in {"debug", "test", "testDebug", "androidTest"}
     return not documentation
 
 

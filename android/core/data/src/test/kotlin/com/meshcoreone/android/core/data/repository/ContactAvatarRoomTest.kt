@@ -54,7 +54,8 @@ class ContactAvatarRoomTest : RepositoryTest() {
         store.saveContact(contact())
         val stale = assertNotNull(store.fetchContact(entity()))
         store.deleteContact(entity())
-        val replacement = contact(publicKey = key(0x55), name = "Replacement").withAvatar(Bytes.of(3))
+        val differentFullKey = Bytes(ByteArray(32) { if (it == 31) 0x55.toByte() else 0x44.toByte() })
+        val replacement = contact(publicKey = differentFullKey, name = "Replacement").withAvatar(Bytes.of(3))
         store.saveContact(replacement)
         val before = db.contacts().backupAll()
         for (image in listOf(Bytes.of(2), null)) {

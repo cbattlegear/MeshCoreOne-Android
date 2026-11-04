@@ -3,7 +3,6 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
-import com.meshcoreone.android.core.contracts.domain.ContactAvatarTarget
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -57,7 +56,7 @@ class ContactServiceNativeTests {
 
     @TestFactory
     fun atomicAvatarCases(): List<DynamicTest> = listOf(
-        contactsNative("chooser target retains the captured public key and commit never re-queries a replacement") {
+        contactsNative("explicit avatar identity never re-queries and substitutes a replacement public key") {
             val backing = ContactsFakeStore()
             val original = stored(0x90, "Original").also(backing::seed)
             val key = EntityKey(radioId, original.id)
@@ -72,20 +71,20 @@ class ContactServiceNativeTests {
             val service = ContactService(
                 ContactsFakeSession(), backing, contacts, coordinator, null, ContactsFakePreferences(),
             )
-            val target = service.contactAvatarTarget(key, original.publicKey)
-            assertEquals(ContactAvatarTarget(key, original.publicKey), target)
-            assertEquals(1, fetches)
             val replacement = original.copy(publicKey = contactsKey(0xA0), name = "Replacement")
             backing.seed(replacement)
             for (image in listOf(Bytes.of(1), null)) {
-                assertFailsWith<ContactServiceError.ContactNotFound> { service.updateContactAvatar(target, image) }
-                assertEquals(1, fetches)
+                assertFailsWith<ContactServiceError.ContactNotFound> {
+                    service.updateContactAvatar(key, original.publicKey, image)
+                }
+                assertEquals(0, fetches)
                 assertEquals(replacement, backing.fetchContact(key))
             }
-            assertFailsWith<ContactServiceError.ContactNotFound> {
-                service.contactAvatarTarget(key, original.publicKey)
-            }
             assertTrue(coordinator.notifications.isEmpty())
+            service.updateContactAvatar(key, replacement.publicKey, Bytes.of(2))
+            assertEquals(replacement.withAvatar(Bytes.of(2)), backing.fetchContact(key))
+            assertEquals(0, fetches)
+            assertEquals(listOf("contactsChanged"), coordinator.notifications)
         },
         contactsNative("avatar set and clear pass the fetched identity to the atomic operation and notify only on success") {
             for (result in ContactAvatarUpdateResult.entries) {

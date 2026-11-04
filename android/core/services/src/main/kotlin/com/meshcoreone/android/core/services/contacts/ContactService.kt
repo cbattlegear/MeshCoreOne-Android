@@ -3,7 +3,6 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
-import com.meshcoreone.android.core.contracts.domain.ContactAvatarTarget
 import com.meshcoreone.android.core.contracts.domain.ContactServiceProtocol
 import com.meshcoreone.android.core.contracts.domain.ContactSyncResult
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
@@ -453,18 +452,12 @@ class ContactService(
     /** Updates a contact's locally stored profile picture; `null` removes it. */
     suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) {
         val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
-        updateContactAvatar(ContactAvatarTarget(contact, existing.publicKey), imageData)
+        updateContactAvatar(contact, existing.publicKey, imageData)
     }
 
-    /** Captures the expected identity before a chooser; it is not an incarnation token. */
-    suspend fun contactAvatarTarget(contact: EntityKey, expectedPublicKey: Bytes): ContactAvatarTarget {
-        val existing = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
-        if (existing.publicKey != expectedPublicKey) throw ContactServiceError.ContactNotFound()
-        return ContactAvatarTarget(contact, expectedPublicKey)
-    }
-
-    suspend fun updateContactAvatar(target: ContactAvatarTarget, imageData: Bytes?) {
-        when (contacts.updateContactAvatar(target.contact, target.publicKey, imageData)) {
+    /** Uses the identity captured before an asynchronous chooser without substituting a newer contact. */
+    suspend fun updateContactAvatar(contact: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?) {
+        when (contacts.updateContactAvatar(contact, expectedPublicKey, imageData)) {
             ContactAvatarUpdateResult.UPDATED -> Unit
             ContactAvatarUpdateResult.CONTACT_NOT_FOUND,
             ContactAvatarUpdateResult.IDENTITY_MISMATCH -> throw ContactServiceError.ContactNotFound()

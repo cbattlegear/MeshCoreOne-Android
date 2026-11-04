@@ -16,6 +16,10 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             rejectSubmission(EntityKey(dto.radioId, dto.id), ChannelSubmissionConflict.IDENTITY_CONFLICT)
         }
         val candidate = dto.toEntity()
+        if (existing != null && PendingSendKind.fromRawValue(existing.kindRawValue) == null) {
+            reject(existing, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        }
+        rejectConflictingSibling(candidate)
         if (existing != null && (existing.isChannel || candidate.isChannel)) {
             if (candidate.copy(
                     channelDispatchStateRawValue = existing.channelDispatchStateRawValue,
@@ -48,6 +52,14 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
                 reject(dto.toEntity(), QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
             }
             val previous = database.pendingSends().forMessage(dto.radioId.value, messageID)
+            if (previous.any { PendingSendKind.fromRawValue(it.kindRawValue) == null }) {
+                reject(previous.first { PendingSendKind.fromRawValue(it.kindRawValue) == null },
+                    QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+            }
+            if (previous.any { it.isChannel != (dto.kind == PendingSendKind.CHANNEL) }) {
+                reject(previous.first { it.isChannel != (dto.kind == PendingSendKind.CHANNEL) },
+                    QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+            }
             previous.forEach(::requireRemovable)
             if (previous.any { it.id == dto.id && it.isChannel }) {
                 reject(dto.toEntity(), QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
@@ -184,8 +196,17 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         context.write("incrementPendingSendAttemptCount") {
             val row = database.pendingSends().forMessage(key.radioId.value, key.id).firstOrNull()
                 ?: return@write null
+            if (row.isChannel) {
+                requireReadyQueuedChannelSubmission(row, key.id)
+            } else if (row.isDirect) {
+                rejectConflictingSibling(row)
+            } else {
+                reject(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
+            }
             val next = checkedIncrement(row.attemptCount ?: 0)
-            database.pendingSends().setAttemptCount(key.radioId.value, row.id, next)
+            if (database.pendingSends().setAttemptCount(row.radioId, row.id, next) != 1) {
+                reject(row, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
+            }
             save()
             next
         }
@@ -196,15 +217,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
                 ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
                     QueuedChannelAttemptRejected(pending, QueuedChannelAttemptConflict.MISSING_SUBMISSION))
             if (!row.isChannel || row.messageID != messageID) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
-            if (row.channelDispatchStateRawValue == null) reject(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
-            requireRemovable(row)
-            val message = database.messages().byId(row.radioId, messageID)
-            if (row.channelIndex == null || row.contactID != null || row.channelOccupantID == null ||
-                message == null || message.contactID != null || message.directionRawValue != MessageDirection.OUTGOING.rawValue ||
-                message.channelIndex != row.channelIndex || message.channelOccupantID != row.channelOccupantID ||
-                message.text != row.messageText
-            ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
-            database.pendingSends().forMessage(row.radioId, messageID).filterNot { it.id == row.id }.forEach(::requireRemovable)
+            requireReadyQueuedChannelSubmission(row, messageID)
             val next = checkedIncrement(row.attemptCount ?: 0)
             if (database.pendingSends().setAttemptCount(row.radioId, row.id, next) != 1) {
                 reject(row, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
@@ -212,6 +225,21 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             save()
             next
         }
+
+    private suspend fun RepositoryTransaction.requireReadyQueuedChannelSubmission(
+        row: PendingSendEntity, messageID: UUID,
+    ) {
+        if (!row.isChannel || row.messageID != messageID) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        if (row.channelDispatchStateRawValue == null) reject(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
+        requireRemovable(row)
+        val message = database.messages().byId(row.radioId, messageID)
+        if (row.channelIndex == null || row.contactID != null || row.channelOccupantID == null ||
+            message == null || message.contactID != null || message.directionRawValue != MessageDirection.OUTGOING.rawValue ||
+            message.channelIndex != row.channelIndex || message.channelOccupantID != row.channelOccupantID ||
+            message.text != row.messageText
+        ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        rejectConflictingSibling(row)
+    }
 
     override suspend fun purgeOrphanPendingSends(): Long = context.write("purgeOrphanPendingSends") {
         val rows = database.pendingSends().orphanedRadioRows().filterNot { it.isChannel }
@@ -235,9 +263,7 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         if (pending.channelDispatchStateRawValue != QueuedChannelDispatchState.READY.rawValue || pending.channelAttemptID != null) {
             reject(pending, QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)
         }
-        database.pendingSends().forMessage(key.radioId.value, key.messageID)
-            .firstOrNull { it.id != key.pendingID && it.isChannel }
-            ?.let { reject(it, QueuedChannelAttemptConflict.RETAINED_SUBMISSION) }
+        rejectConflictingSibling(pending)
         val index = pending.channelIndex
         val message = database.messages().byId(key.radioId.value, key.messageID)
         if (!pending.isChannel || pending.contactID != null || index == null || pending.channelOccupantID != expectedOccupantID ||
@@ -371,16 +397,18 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         if (database.channelSubmissions().byId(row.id) != null) {
             rejectSubmission(EntityKey(dto.radioId, dto.id), ChannelSubmissionConflict.IDENTITY_CONFLICT)
         }
+        if (existing != null && PendingSendKind.fromRawValue(existing.kindRawValue) == null) {
+            reject(existing, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        }
         if (!row.isChannel) {
             if (existing?.isChannel == true) reject(existing, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+            rejectConflictingSibling(row, replacing + row.id)
             return row
         }
         if (existing != null ||
             database.queuedChannelAttempts().forPending(row.radioId, row.id).isNotEmpty()
         ) reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
-        database.pendingSends().forMessage(row.radioId, row.messageID)
-            .firstOrNull { it.id !in replacing && it.isChannel }
-            ?.let { reject(it, QueuedChannelAttemptConflict.RETAINED_SUBMISSION) }
+        rejectConflictingSibling(row, replacing + row.id)
         if (dto.channelDispatchState != null || dto.channelAttemptID != null) {
             reject(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
         }
@@ -404,6 +432,16 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
     }
 
     private val PendingSendEntity.isChannel: Boolean get() = kindRawValue == PendingSendKind.CHANNEL.rawValue
+    private val PendingSendEntity.isDirect: Boolean get() = kindRawValue == PendingSendKind.DM.rawValue
+
+    private suspend fun RepositoryTransaction.rejectConflictingSibling(
+        row: PendingSendEntity, excludedIDs: Set<UUID> = setOf(row.id),
+    ) {
+        val conflict = database.pendingSends().forMessage(row.radioId, row.messageID).firstOrNull {
+            it.id !in excludedIDs && (row.isChannel || !it.isDirect)
+        } ?: return
+        reject(conflict, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+    }
 
     private fun requireRemovable(row: PendingSendEntity) {
         if (row.isChannel && (row.channelDispatchStateRawValue != QueuedChannelDispatchState.READY.rawValue || row.channelAttemptID != null)) {

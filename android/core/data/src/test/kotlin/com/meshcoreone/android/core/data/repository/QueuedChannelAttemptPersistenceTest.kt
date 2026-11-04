@@ -134,6 +134,223 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         assertTrue(store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, pending.id)).isEmpty())
     }
 
+    @Test fun channelEnqueueAndUpsertRejectPreexistingDirectSiblingsWithoutChangingEitherRow() = runTest {
+        val row = channelMessage()
+        val direct = pending(messageID = row.id, sequence = 7)
+        store.saveMessage(row)
+        store.upsertPendingSend(direct)
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.insertPendingSendAssigningSequence(queued(row))
+        }
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.upsertPendingSend(queued(row).copy(sequence = 8))
+        }
+
+        assertEquals(listOf(direct), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)))
+    }
+
+    @Test fun directInsertAndUpsertRejectChannelSiblingsBeforeAndAfterBegin() = runTest {
+        val row = channelMessage()
+        val channel = queued(row)
+        seed(row, channel)
+        val ready = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single()
+        assertEquals(channel.id, ready.id)
+        assertEquals(1L, ready.sequence)
+        assertEquals(QueuedChannelDispatchState.READY, ready.channelDispatchState)
+        assertNull(ready.channelAttemptID)
+        assertEquals(0L, ready.attemptCount)
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.insertPendingSendAssigningSequence(pending(messageID = row.id))
+        }
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.upsertPendingSend(pending(messageID = row.id))
+        }
+        assertEquals(ready, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single())
+
+        val key = attempt(channel)
+        store.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 11u)
+        val dispatching = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single()
+        assertEquals(channel.id, dispatching.id)
+        assertEquals(ready.sequence, dispatching.sequence)
+        assertEquals(QueuedChannelDispatchState.DISPATCHING, dispatching.channelDispatchState)
+        assertEquals(key.attemptID, dispatching.channelAttemptID)
+        assertEquals(0L, dispatching.attemptCount)
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.insertPendingSendAssigningSequence(pending(messageID = row.id))
+        }
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.upsertPendingSend(pending(messageID = row.id))
+        }
+        assertEquals(dispatching, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single())
+        assertEquals(key, assertNotNull(store.fetchQueuedChannelAttempt(key)).key)
+    }
+
+    @Test fun directOnlyUpsertRemainsReplaceableForTheSameIdentity() = runTest {
+        val first = pending(sequence = 1)
+        val updated = first.copy(messageText = "updated direct payload", attemptCount = 4)
+
+        store.upsertPendingSend(first)
+        store.upsertPendingSend(updated)
+
+        assertEquals(listOf(updated), store.fetchPendingSends(RADIO_A))
+    }
+
+    @Test fun directRetryCannotDeleteOrReclassifyUnknownSiblingRows() = runTest {
+        val row = channelMessage()
+        val unknownDTO = pending(messageID = row.id, sequence = 1)
+        val unknown = unknownDTO.toEntity()
+            .copy(kindRawValue = 99, contactID = null)
+        db.pendingSends().insert(unknown)
+        val retry = pending(messageID = row.id, sequence = 2)
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.upsertPendingSend(unknownDTO)
+        }
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.replacePendingSendForRetry(row.id, retry)
+        }
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.upsertPendingSend(retry)
+        }
+
+        assertEquals(listOf(unknown), db.pendingSends().forMessage(RADIO_A.value, row.id))
+    }
+
+    @Test fun channelRetryCannotDeleteDirectSiblingRows() = runTest {
+        val row = channelMessage().copy(status = MessageStatus.FAILED)
+        val channel = queued(row)
+        store.saveMessage(row)
+        store.insertPendingSendAssigningSequence(channel)
+        val direct = pending(messageID = row.id, sequence = 2).toEntity()
+        db.pendingSends().insert(direct)
+        val before = db.pendingSends().forMessage(RADIO_A.value, row.id)
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.replacePendingSendForRetry(row.id, queued(row, resend = true))
+        }
+
+        assertEquals(before, db.pendingSends().forMessage(RADIO_A.value, row.id))
+        assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(RADIO_A, row.id))?.status)
+    }
+
+    @Test fun readyCountAndBeginRejectDirectSiblingAppearingAfterPreflight() = runTest {
+        val row = channelMessage()
+        val channel = queued(row)
+        seed(row, channel)
+        val ready = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single()
+        assertEquals(channel.id, ready.id)
+        assertEquals(1L, ready.sequence)
+        assertEquals(QueuedChannelDispatchState.READY, ready.channelDispatchState)
+        assertNull(ready.channelAttemptID)
+        assertEquals(0L, ready.attemptCount)
+        val direct = pending(messageID = row.id, sequence = 2)
+        db.pendingSends().insert(direct.toEntity())
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(RADIO_A, channel.id), row.id)
+        }
+        val afterRejectedCount = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single { it.id == channel.id }
+        assertEquals(ready, afterRejectedCount)
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.beginQueuedChannelAttempt(attempt(channel), assertNotNull(row.channelOccupantID), 12u)
+        }
+
+        assertEquals(ready, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single { it.id == channel.id })
+        assertEquals(setOf(channel.id, direct.id),
+            store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).map { it.id }.toSet())
+        assertTrue(store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channel.id)).isEmpty())
+    }
+
+    @Test fun genericQueueCountRejectsMixedSiblingsAfterPreflightWithoutBumpingEitherRow() = runTest {
+        val row = channelMessage()
+        val channel = queued(row)
+        seed(row, channel)
+        assertEquals(1, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).size)
+        val direct = pending(messageID = row.id, sequence = 2).toEntity()
+        db.pendingSends().insert(direct)
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.incrementPendingSendAttemptCount(EntityKey(RADIO_A, row.id))
+        }
+
+        assertEquals(setOf(channel.id, direct.id),
+            store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).map { it.id }.toSet())
+        assertTrue(store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).all { it.attemptCount == 0L })
+    }
+
+    @Test fun genericQueueCountRejectsMixedSiblingsWhenDirectRowWouldBeFirst() = runTest {
+        val row = channelMessage()
+        val channel = queued(row)
+        seed(row, channel)
+        val direct = pending(messageID = row.id, sequence = 0).toEntity()
+        db.pendingSends().insert(direct)
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.incrementPendingSendAttemptCount(EntityKey(RADIO_A, row.id))
+        }
+
+        assertEquals(0L, db.pendingSends().byId(RADIO_A.value, direct.id)?.attemptCount)
+        assertEquals(0L, db.pendingSends().byId(RADIO_A.value, channel.id)?.attemptCount)
+    }
+
+    @Test fun genericQueueCountPreservesTheFirstDirectOnlyRowBehavior() = runTest {
+        val first = pending(sequence = 1, attempt = 2)
+        val second = pending(messageID = first.messageID, sequence = 2, attempt = 5)
+        store.upsertPendingSend(first)
+        store.upsertPendingSend(second)
+
+        assertEquals(3L, store.incrementPendingSendAttemptCount(EntityKey(RADIO_A, first.messageID)))
+
+        assertEquals(3L, store.fetchPendingSends(RADIO_A).single { it.id == first.id }.attemptCount)
+        assertEquals(5L, store.fetchPendingSends(RADIO_A).single { it.id == second.id }.attemptCount)
+    }
+
+    @Test fun genericQueueCountDoesNotMutateLegacyOrInFlightChannelRows() = runTest {
+        val legacyRow = channelMessage().copy(channelOccupantID = null)
+        val legacyPending = queued(legacyRow)
+        seed(legacyRow, legacyPending)
+        rejection(QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION) {
+            store.incrementPendingSendAttemptCount(EntityKey(RADIO_A, legacyRow.id))
+        }
+        assertEquals(0L, store.fetchPendingSends(RADIO_A).single { it.id == legacyPending.id }.attemptCount)
+
+        val activeRow = channelMessage()
+        val active = queued(activeRow)
+        seed(activeRow, active)
+        val key = attempt(active)
+        store.beginQueuedChannelAttempt(key, assertNotNull(activeRow.channelOccupantID), 14u)
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.incrementPendingSendAttemptCount(EntityKey(RADIO_A, activeRow.id))
+        }
+        assertEquals(0L, store.fetchPendingSends(RADIO_A).single { it.id == active.id }.attemptCount)
+        assertEquals(QueuedChannelDispatchState.DISPATCHING,
+            store.fetchPendingSends(RADIO_A).single { it.id == active.id }.channelDispatchState)
+    }
+
+    @Test fun acceptedCompletionPreservesAcceptedEvidenceAndDirectSiblingWithoutCompleting() = runTest {
+        val row = channelMessage()
+        val channel = queued(row)
+        seed(row, channel)
+        val key = attempt(channel)
+        store.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 13u)
+        store.settleQueuedChannelAttempt(key, QueuedChannelAttemptOutcome.ACCEPTED)
+        val direct = pending(messageID = row.id, sequence = 2).toEntity()
+        db.pendingSends().insert(direct)
+
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.completeAcceptedQueuedChannelAttempt(key)
+        }
+
+        assertEquals(QueuedChannelDispatchState.ACCEPTED,
+            store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single { it.id == channel.id }.channelDispatchState)
+        assertEquals(QueuedChannelAttemptPhase.ACCEPTED, assertNotNull(store.fetchQueuedChannelAttempt(key)).phase)
+        assertFalse(assertNotNull(store.fetchQueuedChannelAttempt(key)).isCompleted)
+        assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, row.id)))
+        assertEquals(direct, db.pendingSends().byId(RADIO_A.value, direct.id))
+    }
+
     @Test fun explicitRetryReplacesHistoricalReadySiblingsWithoutTouchingOtherMessage() = runTest {
         val row = channelMessage().copy(status = MessageStatus.FAILED)
         val original = queued(row)

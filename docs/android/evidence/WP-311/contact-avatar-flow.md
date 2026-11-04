@@ -646,21 +646,54 @@ without reading/decoding; failed stream creation closes its descriptor. Signal
 cancellation is not invoked on normal completion, and concurrent platform
 IO/security failures do not replace genuine coroutine cancellation.
 
-All mounted avatar media fixtures now register actual local ContentProviders and
+All mounted avatar media fixtures register actual local ContentProviders and
 descriptor-backed synthetic images rather than shadowing `openInputStream`.
-Two mounted controls hold the provider's open while ignoring thread interruption:
-one exits through the actual signal; the other deliberately returns a descriptor
-after cancellation and requires it to be closed. Both require no avatar/error/
-crop mutation after exit. The separate pure held-read control still requires
-close-responsive cleanup and exactly one close.
+Mounted controls hold provider open while ignoring thread interruption, then
+assert editor-lifetime cancellation, no mutation and cleanup when a descriptor
+returns after the canceled operation is released. The exact predecessor run
+showed Robolectric's provider transport did not trigger the registered provider
+cancellation listener, so these mounted controls do not claim to verify that
+transport. New API31 Robolectric media controls exercise the actual Android
+`CancellationSignal` boundary directly: an open that ignores thread interruption
+is released by the signal, a late stream is closed without reading, and a
+throwing cancellation listener cannot replace coroutine cancellation or leak
+the stream. A separate held-read control still requires close-responsive cleanup
+and exactly one close.
 
 Copilot comment 4472191328 also found the source chooser, unlike the repaired
 crop, had no short-window scrolling. Its whole content now scrolls, including the
 title and Cancel, rather than allowing fixed chrome to starve the action viewport.
 An existing-avatar mounted case at 220 dp / 200% font requires full reachable
 photo/file/remove/cancel targets, unchanged bytes on picker/cancel returns and
-one actual removal. These final assertions remain unexecuted until their exact
-candidate's hosted checks run.
+one actual removal. Exact hosted run [41915483387](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41915483387)
+for candidate `68442bb62e0d7344bcca659874ba4f0d823e35c7` failed. It reported the
+shared `cropDialogFitsTheMeasuredCanvasInAShortLandscapeWindow` assertion at
+`SharedUiComposeTest.kt:595`, and the consumer's short/large-font crop test at
+`ContactAvatarFlowTest.kt:1023` on both API31 and API37 (the zoom Slider target
+was short of 48 dp). These independent failures are addressed by the WP-304
+owner's immutable patch `3cbbc9deebd837cefb6c2668c01116979d7c43ba`, now
+composed as `89ee9f663fb3f17a8f4a389588442d3ac3b8e866`: the shared test scrolls
+before measuring the actual canvas node and verifies the visible crop guide,
+and the Slider uses `sharedTouchTarget()`.
+
+The same run timed out in the mounted held-open provider cases on API31/API37.
+The screen lifetime was not required to wait for an uninterruptible framework
+transport; the mounted control now asserts screen-lifetime cancellation and,
+after test-controlled release, checks late descriptor cleanup and no mutation.
+Signal cancellation and late stream cleanup are separately exercised at the
+direct signal-aware provider boundary, including a throwing listener. Three
+gated save-error controls reached the holder's expected failed state with
+`isSavingAvatar=false`, but the mounted tree still showed "Saving photo" and no
+new Activity-owned error dialog. Gate release is now dispatched on the UI
+thread, and test diagnostics retain the save-stage sequence and distinguish
+holder state from dialog semantics.
+
+The App `ContactAvatarMountedStoreTest` suite completed successfully in that
+run; this is not a pass for all App tests or the affected closure. The failed
+command also reported missing mandatory JUnit directories for some modules, so
+its available-report totals are incomplete and do not establish aggregate
+acceptance. The successor candidate is `b5e2fd6c65a26782598ca5ad49c0e6695b8fd4d1`;
+exact hosted run `41926857045` is pending. No candidate pass is claimed yet.
 
 Comment 4472524286 found that a throwing cancellation/close callback in the cleanup
 child could still override coroutine cancellation. Cleanup now takes stream ownership
@@ -685,3 +718,24 @@ chain, preserve security failure type/message, and still reject successful reads
 The failed command lacked the mandatory App test report and is not aggregate
 acceptance. No positive discovery/execution of the new shared crop methods is
 inferred from this failed run.
+
+## Current-main integration and successor candidate
+
+The producer dependency is now merged: current `origin/main` is
+`eea2a1c23f9e5a7927a22795946fdf5ced79a823`, including #552 merge
+`43341865f923d439ace1f22edac81f7fb642355c`. This worktree merged that exact
+main tip cleanly as `ab0cae413`; no avatar/shared-crop path conflicted. The
+current local candidate therefore includes the merged identity-checked
+preferences/OCV/telemetry writes and block-transition behavior without editing
+the #552 producer branch.
+
+On the merged tree, `C:\Python312\python.exe -B tools\android-port\controller\validate.py`
+passed (valid manifest; 64 work packages), `C:\Python312\python.exe -B tools\android-port\portmap.py`
+exited 0, and `git diff --check` passed for both the worktree and merge commit.
+The predecessor hosted run
+[41926857045](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41926857045)
+for `b5e2fd6c65a26782598ca5ad49c0e6695b8fd4d1` remains in progress and is not
+acceptance evidence for this merged candidate. Android/Gradle tests were not
+run locally because the supported execution runtime is still held; exact-head
+hosted verification is required. No physical-device, TalkBack or iOS
+verification is claimed.

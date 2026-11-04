@@ -658,6 +658,49 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
             store.fetchPendingSendsForMessage(EntityKey(RADIO_A, channelMessage.id)).single().channelDispatchState)
     }
 
+    @Test fun replayRejectsPendingSequenceOrEnqueueTimeThatDisagreesWithReceipt() = runTest {
+        val channelMessage = channelMessage()
+        store.saveMessage(channelMessage)
+        val pending = queued(channelMessage)
+        val submission = ChannelSubmission(
+            pending.id,
+            ChannelHistoryScope(RADIO_A, 5u, assertNotNull(channelMessage.channelOccupantID)),
+            ChannelMessageEnvelope(
+                channelMessage.id, 5u, false, channelMessage.text, channelMessage.timestamp,
+                "receipt node", channelMessage.channelOccupantID,
+            ),
+        )
+        val evidence = store.admitChannelSubmission(submission, AT.plusNanos(123))
+        val originalPending = assertNotNull(evidence.pending)
+        val receipt = assertNotNull(db.channelSubmissions().byId(pending.id))
+        val originalEntity = assertNotNull(db.pendingSends().byId(RADIO_A.value, pending.id))
+
+        val inconsistentRows = listOf(
+            originalEntity.copy(sequence = originalEntity.sequence + 1),
+            originalEntity.copy(
+                enqueuedSeconds = originalEntity.enqueuedSeconds + 1,
+                enqueuedNanos = originalEntity.enqueuedNanos,
+            ),
+        )
+        for (inconsistent in inconsistentRows) {
+            db.pendingSends().upsert(inconsistent)
+
+            submissionRejection(ChannelSubmissionConflict.IDENTITY_CONFLICT) {
+                store.admitChannelSubmission(submission, AT.plusSeconds(10))
+            }
+            submissionRejection(ChannelSubmissionConflict.IDENTITY_CONFLICT) {
+                store.reconcileChannelSubmission(submission)
+            }
+
+            assertEquals(inconsistent, db.pendingSends().byId(RADIO_A.value, pending.id))
+            assertEquals(receipt, db.channelSubmissions().byId(pending.id))
+            assertEquals(channelMessage, store.fetchMessage(EntityKey(RADIO_A, channelMessage.id)))
+            assertTrue(store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, pending.id)).isEmpty())
+        }
+        assertEquals(originalPending.sequence, evidence.sequence)
+        assertEquals(AT.plusNanos(123), evidence.enqueuedAt)
+    }
+
     @Test fun contactCascadePreservesDirectRowAndMessageWhenAttemptIdentityConflicts() = runTest {
         val contactRow = contact()
         store.saveContact(contactRow)
@@ -699,8 +742,9 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         store.beginQueuedChannelAttempt(key, assertNotNull(channelMessage.channelOccupantID), 27u)
         store.settleQueuedChannelAttempt(key, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
         store.retireDefinitelyUnsentQueuedChannelAttempt(key)
-        val failed = assertNotNull(store.fetchMessage(EntityKey(RADIO_A, channelMessage.id)))
-        assertEquals(MessageStatus.FAILED, failed.status)
+        store.updateMessageStatus(EntityKey(RADIO_A, channelMessage.id), MessageStatus.PENDING)
+        val unresolved = assertNotNull(store.fetchMessage(EntityKey(RADIO_A, channelMessage.id)))
+        assertEquals(MessageStatus.PENDING, unresolved.status)
         val retained = store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id))
         val direct = pending(messageID = channelMessage.id).copy(id = channelPending.id)
         val directEntity = direct.toEntity()
@@ -711,7 +755,7 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         }
 
         assertNotNull(store.fetchChannel(EntityKey(RADIO_A, channelID)))
-        assertEquals(failed, store.fetchMessage(EntityKey(RADIO_A, channelMessage.id)))
+        assertEquals(unresolved, store.fetchMessage(EntityKey(RADIO_A, channelMessage.id)))
         assertEquals(directEntity, db.pendingSends().byId(RADIO_A.value, direct.id))
         assertEquals(retained, store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id)))
     }
@@ -737,6 +781,12 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         store.retireDefinitelyUnsentQueuedChannelAttempt(key)
         val foreign = pending(RADIO_B)
         store.insertPendingSendAssigningSequence(foreign)
+        val persistedForeign = assertNotNull(
+            store.fetchPendingSendsForMessage(EntityKey(RADIO_B, foreign.messageID)).singleOrNull(),
+        )
+        assertEquals(foreign.id, persistedForeign.id)
+        assertEquals(1L, persistedForeign.sequence)
+        assertEquals(foreign.copy(sequence = persistedForeign.sequence), persistedForeign)
         val directMessage = message(text = "radio-owned direct", status = MessageStatus.FAILED)
         store.saveMessage(directMessage)
         val collision = pending(messageID = directMessage.id).copy(id = channelPending.id)
@@ -747,7 +797,8 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
         assertTrue(store.fetchPendingSends(RADIO_A).isEmpty())
         assertTrue(store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, channelPending.id)).isEmpty())
         assertNull(store.fetchMessage(EntityKey(RADIO_A, directMessage.id)))
-        assertEquals(foreign, store.fetchPendingSendsForMessage(EntityKey(RADIO_B, foreign.messageID)).single())
+        assertEquals(persistedForeign,
+            store.fetchPendingSendsForMessage(EntityKey(RADIO_B, foreign.messageID)).single())
         val redacted = assertNotNull(db.channelSubmissions().byId(channelPending.id))
         assertEquals(3L, redacted.phaseRawValue)
         assertNull(redacted.messageText)

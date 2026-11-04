@@ -145,6 +145,10 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
             assertEquals(ChannelSubmissionPhase.ADMITTED, replay.phase)
             assertEquals(before, replay.pending)
             assertEquals(key, replay.attempts.single().key)
+            assertEquals(
+                replay,
+                assertIs<ChannelSubmissionReconciliation.Known>(store.reconcileChannelSubmission(input)).evidence,
+            )
         }
     }
 
@@ -173,6 +177,10 @@ class ChannelSubmissionPersistenceTest : RepositoryTest() {
                 assertNull(evidence.pending)
                 assertEquals(key, evidence.attempts.single().key)
                 assertEquals(accepted, evidence.attempts.single().isCompleted)
+                assertEquals(
+                    evidence,
+                    assertIs<ChannelSubmissionReconciliation.Known>(persisted.reconcileChannelSubmission(input)).evidence,
+                )
                 assertTrue(persisted.fetchPendingSends(RADIO_A).isEmpty())
             } finally {
                 persisted.close()

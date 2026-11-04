@@ -194,7 +194,11 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         val submission = ChannelSubmission(row.pendingID, origin, ChannelMessageEnvelope(row.messageID, origin.channelIndex,
             row.isResend, text, row.validatedTimestamp(), row.localNodeName, row.channelOccupantID))
         val pending = database.pendingSends().byId(row.radioId, row.pendingID)?.toDTO()
-        if (pending != null && (pending.radioId != origin.radioId || pending.channelMessageEnvelope() != submission.envelope)) {
+        if (pending != null && (
+            pending.radioId != origin.radioId || pending.channelMessageEnvelope() != submission.envelope ||
+                pending.sequence != row.sequence || pending.enqueuedAt != row.enqueuedAt()
+            )
+        ) {
             rejectSubmission(EntityKey(origin.radioId, row.pendingID), ChannelSubmissionConflict.IDENTITY_CONFLICT)
         }
         return ChannelSubmissionEvidence(submission, row.enqueuedAt(),

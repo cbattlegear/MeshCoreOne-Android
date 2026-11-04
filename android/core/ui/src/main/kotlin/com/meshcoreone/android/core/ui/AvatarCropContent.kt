@@ -8,6 +8,10 @@ import android.graphics.RectF
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -40,6 +44,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
@@ -121,12 +126,28 @@ fun AvatarCropView(
                                 if (resolved != geometry) latestChange(resolved)
                             }
                             val pan = size * AvatarCropGeometry.PAN_STEP_FRACTION
-                            Canvas(Modifier.fillMaxSize().testTag("avatar-crop-canvas").pointerInput(image) {
+                            Canvas(Modifier.fillMaxSize().testTag("avatar-crop-canvas").pointerInput(image, scrollControls) {
                                 val accumulator = CropGestureAccumulator(latestGeometry)
-                                detectTransformGestures { _, translation, zoom, _ ->
+                                val transform: (Offset, Float) -> Unit = { translation, zoom ->
                                     latestChange(accumulator.transform(latestGeometry, zoom.toDouble(), CropOffset(
                                         translation.x.toDouble() / density, translation.y.toDouble() / density,
                                     )))
+                                }
+                                if (scrollControls) {
+                                    // Leave one-finger drags to the surrounding scroll container.
+                                    awaitEachGesture {
+                                        awaitFirstDown(requireUnconsumed = false)
+                                        do {
+                                            val event = awaitPointerEvent()
+                                            if (event.changes.any { it.isConsumed }) break
+                                            if (event.changes.count { it.pressed && it.previousPressed } >= 2) {
+                                                transform(event.calculatePan(), event.calculateZoom())
+                                                event.changes.filter { it.positionChanged() }.forEach { it.consume() }
+                                            }
+                                        } while (event.changes.any { it.pressed })
+                                    }
+                                } else {
+                                    detectTransformGestures { _, translation, zoom, _ -> transform(translation, zoom) }
                                 }
                             }.semantics {
                                 contentDescription = preview

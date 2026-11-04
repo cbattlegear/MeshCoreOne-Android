@@ -257,6 +257,18 @@ class NotificationOpenHandoffStoreTest {
     }
 
     @Test
+    fun shortenedHighWaterCannotHideRetainedRecordsFromRecovery() = runTest {
+        assertTrue(store.stage(UUID.randomUUID().toString(), direct) is NotificationOpenHandoffStore.StageResult.Staged)
+        SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL("UPDATE notification_open_metadata SET next_sequence = 1")
+        }
+        assertEquals(
+            NotificationOpenHandoffStore.InventoryResult.Failed(NotificationOpenHandoffStore.Failure.CORRUPT_STORAGE),
+            store.beginInventory(),
+        )
+    }
+
+    @Test
     fun failedStageTransactionRollsBackIdentityAndSequenceBeforeRetry() = runTest {
         SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE).use {
             it.execSQL(

@@ -313,6 +313,7 @@ class ContactService(
      *
      * ZephCore V-contact remove is disabled: no `CMD_REMOVE` (which would turn `v.contact` off), no
      * local wipe, and no `NodeDeleted` storage-full clear.
+     * Identity lookup failures propagate; missing or invalid keys interrupt before any mutation.
      */
     suspend fun removeContact(radioId: RadioId, publicKey: Bytes) {
         if (isProtectedVContact(radioId, publicKey)) {
@@ -377,10 +378,10 @@ class ContactService(
      * Use when the device reports the contact doesn't exist but local data remains. The per-radio
      * mutation fence orders this deletion with a fetched contact snapshot.
      * ZephCore V-contact remove is disabled (same policy as [removeContact]).
+     * The stored row must exist and match both the scoped ID and supplied key at each admission check.
      */
     suspend fun removeLocalContact(contact: EntityKey, publicKey: Bytes) {
-        val stored = contactTryOptional { contacts.fetchContact(contact) }
-        if (stored != null && isProtectedVContact(stored.radioId, publicKey)) {
+        if (isProtectedLocalContact(contact, publicKey)) {
             logger.log(ContactLogLevel.INFO, "removeLocalContact ignored for ZephCore V-contact (remove disabled)")
             return
         }
@@ -389,8 +390,7 @@ class ContactService(
             preferences,
             contact.radioId,
             shouldMutate = {
-                val current = contactTryOptional { contacts.fetchContact(contact) }
-                if (current != null && isProtectedVContact(current.radioId, publicKey)) {
+                if (isProtectedLocalContact(contact, publicKey)) {
                     logger.log(ContactLogLevel.INFO, "removeLocalContact ignored for ZephCore V-contact (remove disabled)")
                     false
                 } else true
@@ -403,10 +403,25 @@ class ContactService(
         }
     }
 
+    private suspend fun isProtectedLocalContact(contact: EntityKey, publicKey: Bytes): Boolean {
+        val stored = contacts.fetchContact(contact) ?: throw ContactServiceError.ContactNotFound()
+        if (stored.id != contact.id || stored.radioId != contact.radioId || stored.publicKey != publicKey) {
+            logger.log(ContactLogLevel.WARNING, "Contact removal blocked: stored contact identity changed")
+            throw ContactServiceError.SyncInterrupted()
+        }
+        return isProtectedVContact(stored.radioId, stored.publicKey)
+    }
+
     /** Whether [publicKey] is the ZephCore V-contact for this radio (remove/prune protected). */
     private suspend fun isProtectedVContact(radioId: RadioId, publicKey: Bytes): Boolean {
-        val selfPublicKey = contactTryOptional { devices.fetchDevice(radioId) }?.publicKey ?: return false
-        return VContactIdentity.isVContact(publicKey, selfPublicKey)
+        val device = devices.fetchDevice(radioId)
+        if (device == null || device.radioId != radioId ||
+            device.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE || publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE
+        ) {
+            logger.log(ContactLogLevel.WARNING, "Contact removal blocked: self or contact public key unavailable or invalid")
+            throw ContactServiceError.SyncInterrupted()
+        }
+        return VContactIdentity.isVContact(publicKey, device.publicKey)
     }
 
     /**

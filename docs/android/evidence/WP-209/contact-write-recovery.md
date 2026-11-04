@@ -490,3 +490,71 @@ WP-209 source/test/evidence modify admissions passed. `git diff --check` and
 result `valid`). Kotlin controls remain uncompiled/unexecuted. No protocol,
 persistence/schema/graph changes or genuine reconciliation authority are added;
 all existing execution, publication, claim and acceptance holds remain.
+
+### Fail-closed deletion identity
+
+This bounded successor has exact parent
+`3969ee63a16d3720ceb91dd319e7de9cd9a52825`. Trusted source/policy revision
+`cb4a79ab906db851800bcf93f7c2ebfb5aa34571` admits `modify` as `wp-owned` for
+`ContactService.kt`, `ContactWriteRecoveryTests.kt`, and this document.
+The same trusted `wp-owned` modify admission also covers the directly coupled
+`ContactServiceNativeTests.kt`, `ContactServiceSessionTests.kt`, and
+`ContactServiceTests.kt`. Those previously clean test paths belong to the
+assigned contact slice, not paused cleanup/notification hunks.
+The current coordinator assignment delegates only this session's deletion
+identity slice; the held manual-refresh and evidence-lineage drafts are disjoint
+and excluded. No WP-215 notification or cleanup API hunk is changed.
+
+The pinned Swift helper treats missing/failed self lookup as nonprotected, and
+its local removal suppresses contact lookup failure. This user-directed safety
+adaptation instead propagates lookup failures, including cancellation, unchanged.
+Missing, wrong-radio or invalid-length self identity, or an invalid-length target
+key, throws the existing `SyncInterrupted` with a key-free warning before any
+mutation. A local row must exist and match the supplied radio, ID and public key;
+absence throws existing `ContactNotFound`, and mismatch warns and interrupts.
+Local protection is evaluated against the verified stored key, never just a
+stale caller key. Both removal paths repeat their checks inside the existing
+mutation fence before write invalidation or recovery admission. A verified
+protected V-contact remains an immediate no-op outside that fence.
+
+The existing consumer handles real remote `NOT_FOUND` with a separate local
+fallback; it exposes other failures and propagates cancellation. That contract
+is unchanged: an unknown self identity is not `ContactNotFound`, and a known
+orphan with matching local identity can still be removed locally after actual
+protocol `NOT_FOUND`. No identity refusal creates or clears a recovery marker.
+Storage recovery permits a fresh call; there is no automatic retry or fabricated
+radio outcome.
+
+Eight additional authored methods bring `ContactWriteRecoveryTests.kt` to 50
+methods, not discovery/execution. They cover missing/wrong-radio/0-, 31-, and
+33-byte self identity and malformed target keys; ordinary and protected target
+rows; identical lookup exceptions; absent/stale/mismatched local identity
+(including a supplied V-key for a different row); second-read row/self failure;
+actual caller cancellation while self lookup is suspended; storage recovery
+followed by a normal ACK removal; actual MeshCoreSession error-code-2 local
+fallback; and active/queued Add survival after identity refusal. Refusal controls
+assert unchanged rows, zero device removals/local deletes/cleanup/notifications,
+no marker and no event. Positive controls observe real protocol response handling
+in the simulated transport and the expected local cleanup/event, not hardware.
+Existing protected-contact and marker-admission controls remain unchanged.
+The existing native lookup-failure deletion case now asserts refusal/no effects
+and a verified retry instead of the unsafe best-effort success. Three existing
+normal deletion/NOT_FOUND fixtures now seed a usable self identity so they still
+exercise their original positive/error-mapping behavior. No original case or
+assertion family is removed; unrelated best-effort cleanup cases are unchanged.
+
+Source checks only: `git diff --check` passed. Python 3.12.4 ran the trusted
+`controller\validate.py --repo <this absolute worktree>` from a session-local
+Git-archive export of `cb4a79ab906db851800bcf93f7c2ebfb5aa34571`; result `valid`.
+The first controller-only export lacked `inventory_rules`, so that invocation
+failed before validation; exporting the complete trusted `tools/android-port`
+subtree fixed the staging dependency and the same validator passed. No package
+installation, Gradle, Kotlin compilation/discovery/execution, CI or device work
+occurred.
+
+The service fence does not confer atomic authority over arbitrary external
+device/Room writers between a lookup and deletion. No guarded destructive
+snapshot/Room-marker contract, durable pre-dispatch removal intent, strict
+production cleanup completion or recovery acceptance is implemented here.
+Those cross-owner prerequisites and all execution/publication/claim holds remain
+unchanged; this candidate is local source-only for independent review.

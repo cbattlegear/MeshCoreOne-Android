@@ -3,9 +3,11 @@ package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.ContactSaveResult
+import com.meshcoreone.android.core.contracts.domain.DevicePersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.ContactFrame
+import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.VContactIdentity
@@ -1587,6 +1589,278 @@ class ContactWriteRecoveryTests {
         }
     }
 
+    @Test
+    fun unknownSelfIdentityBlocksBothRemovalPathsWithoutEffects() = runTest {
+        val identities = listOf(
+            null,
+            contactsDevice(radioB),
+            contactsDevice(radioA, Bytes.EMPTY),
+            contactsDevice(radioA, Bytes(ByteArray(31))),
+            contactsDevice(radioA, Bytes(ByteArray(33))),
+        )
+        val vKey = assertNotNull(VContactIdentity.publicKey(contactsKey(1)))
+        val cases = identities.flatMap { identity -> listOf(contactsKey(2), vKey).map { identity to it } } +
+            listOf(0, 31, 33).map { contactsDevice(radioA) to Bytes(ByteArray(it)) }
+        for ((identity, publicKey) in cases) {
+            withFixture {
+                val row = ContactDTO(radioId = radioA, publicKey = publicKey, name = "Retained", lastHeardTimestamp = null)
+                store.seed(row)
+                val deviceRole = object : DevicePersisting by store {
+                    override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? = identity
+                }
+                var markerAttempts = 0
+                val flags = object : ContactPreferenceFlags by preferences {
+                    override fun set(key: String, value: Boolean) {
+                        markerAttempts++
+                        preferences.set(key, value)
+                    }
+                }
+                val cleanup = ContactsRecordingCleanup()
+                val coordinator = ContactsFakeSyncCoordinator()
+                val warnings = mutableListOf<String>()
+                val producer = service(
+                    devices = deviceRole, flags = flags, cleanup = cleanup, coordinator = coordinator,
+                    logger = ContactServiceLogger { level, message ->
+                        if (level == ContactLogLevel.WARNING) warnings += message
+                    },
+                )
+                assertNoDeletionEffects(producer, cleanup, coordinator) {
+                    assertFailsWith<ContactServiceError.SyncInterrupted> { producer.removeContact(radioA, publicKey) }
+                    assertFailsWith<ContactServiceError.SyncInterrupted> {
+                        producer.removeLocalContact(EntityKey(radioA, row.id), publicKey)
+                    }
+                }
+                assertEquals(0, markerAttempts, "An identity refusal is not a radio uncertainty")
+                assertEquals(2, warnings.size)
+            }
+        }
+    }
+
+    @Test
+    fun failedSelfIdentityLookupPropagatesAndAllowsRetry() = runTest {
+        for (failure in listOf(IOException("Identity unavailable"), CancellationException("Lookup cancelled"))) {
+            withFixture {
+                val row = ContactDTO(radioId = radioA, publicKey = contactsKey(2), name = "Retry", lastHeardTimestamp = null)
+                store.seed(row)
+                store.fetchDeviceFailure = failure
+                val cleanup = ContactsRecordingCleanup()
+                val coordinator = ContactsFakeSyncCoordinator()
+                val producer = service(cleanup = cleanup, coordinator = coordinator)
+                assertNoDeletionEffects(producer, cleanup, coordinator) {
+                    assertSame(failure, assertFailsWith<Exception> { producer.removeContact(radioA, row.publicKey) })
+                    assertSame(failure, assertFailsWith<Exception> {
+                        producer.removeLocalContact(EntityKey(radioA, row.id), row.publicKey)
+                    })
+                }
+                store.fetchDeviceFailure = null
+                service(cleanup = cleanup, coordinator = coordinator).removeContact(radioA, row.publicKey)
+                assertEquals(1, radio.completedRemovals)
+                assertNull(store.fetchContact(EntityKey(radioA, row.id)))
+                assertEquals(1, cleanup.invocations.size)
+                assertEquals(listOf("contactsChanged"), coordinator.notifications)
+            }
+        }
+    }
+
+    @Test
+    fun localRemovalRequiresActualMatchingStoredContact() = runTest {
+        for (protected in listOf(false, true)) {
+            withFixture {
+                val publicKey = if (protected) assertNotNull(VContactIdentity.publicKey(contactsKey(1))) else contactsKey(2)
+                val row = ContactDTO(radioId = radioA, publicKey = publicKey, name = "Retained", lastHeardTimestamp = null)
+                store.seed(row)
+                val cleanup = ContactsRecordingCleanup()
+                val coordinator = ContactsFakeSyncCoordinator()
+                val producer = service(cleanup = cleanup, coordinator = coordinator)
+                assertNoDeletionEffects(producer, cleanup, coordinator) {
+                    val vKey = assertNotNull(VContactIdentity.publicKey(contactsKey(1)))
+                    for (supplied in listOf(contactsKey(3), if (protected) contactsKey(2) else vKey)) {
+                        assertFailsWith<ContactServiceError.SyncInterrupted> {
+                            producer.removeLocalContact(EntityKey(radioA, row.id), supplied)
+                        }
+                    }
+                    assertFailsWith<ContactServiceError.ContactNotFound> {
+                        producer.removeLocalContact(EntityKey(radioA, UUID.randomUUID()), publicKey)
+                    }
+                    val failure = IOException("Contact lookup failed")
+                    store.fetchContactByKeyFailure = failure
+                    assertSame(failure, assertFailsWith<IOException> {
+                        producer.removeLocalContact(EntityKey(radioA, row.id), publicKey)
+                    })
+                    val cancelled = CancellationException("Contact lookup cancelled")
+                    store.fetchContactByKeyFailure = cancelled
+                    assertSame(cancelled, assertFailsWith<CancellationException> {
+                        producer.removeLocalContact(EntityKey(radioA, row.id), publicKey)
+                    })
+                    store.fetchContactByKeyFailure = null
+                }
+            }
+        }
+    }
+
+    @Test
+    fun localIdentityIsRecheckedBeforeMutation() = runTest {
+        for (change in listOf("key", "radio", "id", "missing", "failure")) {
+            withFixture {
+                val row = ContactDTO(radioId = radioA, publicKey = contactsKey(2), name = "Retained", lastHeardTimestamp = null)
+                store.seed(row)
+                val failure = IOException("Second contact lookup failed")
+                var reads = 0
+                val persistence = object : ContactPersisting by store {
+                    override suspend fun fetchContact(key: EntityKey): ContactDTO? {
+                        if (++reads == 1) return row
+                        return when (change) {
+                            "key" -> row.copy(publicKey = assertNotNull(VContactIdentity.publicKey(contactsKey(1))))
+                            "radio" -> row.copy(radioId = radioB)
+                            "id" -> row.copy(id = UUID.randomUUID())
+                            "missing" -> null
+                            else -> throw failure
+                        }
+                    }
+                }
+                val cleanup = ContactsRecordingCleanup()
+                val coordinator = ContactsFakeSyncCoordinator()
+                val producer = service(persistence = persistence, cleanup = cleanup, coordinator = coordinator)
+                assertNoDeletionEffects(producer, cleanup, coordinator) {
+                    val error = assertFailsWith<Exception> {
+                        producer.removeLocalContact(EntityKey(radioA, row.id), row.publicKey)
+                    }
+                    when (change) {
+                        "missing" -> assertIs<ContactServiceError.ContactNotFound>(error)
+                        "failure" -> assertSame(failure, error)
+                        else -> assertIs<ContactServiceError.SyncInterrupted>(error)
+                    }
+                }
+                assertEquals(2, reads, "A stale early lookup cannot authorize deletion")
+            }
+        }
+    }
+
+    @Test
+    fun selfIdentityIsRecheckedBeforeRemoteAndLocalMutation() = runTest {
+        for (local in listOf(false, true)) for (change in listOf("missing", "invalid", "failure")) {
+            withFixture {
+                val row = ContactDTO(radioId = radioA, publicKey = contactsKey(2), name = "Retained", lastHeardTimestamp = null)
+                store.seed(row)
+                val failure = IOException("Second identity lookup failed")
+                var reads = 0
+                val deviceRole = object : DevicePersisting by store {
+                    override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? {
+                        if (++reads == 1) return contactsDevice(radioId)
+                        return when (change) {
+                            "missing" -> null
+                            "invalid" -> contactsDevice(radioId, Bytes.EMPTY)
+                            else -> throw failure
+                        }
+                    }
+                }
+                val cleanup = ContactsRecordingCleanup()
+                val coordinator = ContactsFakeSyncCoordinator()
+                val producer = service(devices = deviceRole, cleanup = cleanup, coordinator = coordinator)
+                assertNoDeletionEffects(producer, cleanup, coordinator) {
+                    val error = assertFailsWith<Exception> {
+                        if (local) producer.removeLocalContact(EntityKey(radioA, row.id), row.publicKey)
+                        else producer.removeContact(radioA, row.publicKey)
+                    }
+                    if (change == "failure") assertSame(failure, error)
+                    else assertIs<ContactServiceError.SyncInterrupted>(error)
+                }
+                assertEquals(2, reads)
+            }
+        }
+    }
+
+    @Test
+    fun cancellationWhileResolvingIdentityDoesNotDispatchRemoval() = runTest {
+        for (local in listOf(false, true)) {
+            withFixture {
+                val row = ContactDTO(radioId = radioA, publicKey = contactsKey(2), name = "Retained", lastHeardTimestamp = null)
+                store.seed(row)
+                val gate = SuspensionGate()
+                val deviceRole = object : DevicePersisting by store {
+                    override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? {
+                        gate.pause()
+                        return store.fetchDevice(radioId)
+                    }
+                }
+                val cleanup = ContactsRecordingCleanup()
+                val coordinator = ContactsFakeSyncCoordinator()
+                val producer = service(devices = deviceRole, cleanup = cleanup, coordinator = coordinator)
+                assertNoDeletionEffects(producer, cleanup, coordinator) {
+                    val removal = async {
+                        if (local) producer.removeLocalContact(EntityKey(radioA, row.id), row.publicKey)
+                        else producer.removeContact(radioA, row.publicKey)
+                    }
+                    runCurrent()
+                    assertTrue(gate.entered.isCompleted)
+                    removal.cancelAndJoin()
+                    assertFailsWith<CancellationException> { removal.await() }
+                    gate.release.complete(Unit)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun notFoundStillAllowsVerifiedLocalFallback() = runTest {
+        withFixture {
+            val row = ContactDTO(radioId = radioA, publicKey = contactsKey(2), name = "Orphan", lastHeardTimestamp = null)
+            store.seed(row)
+            radio.removeErrorCode = 2
+            val cleanup = ContactsRecordingCleanup()
+            val coordinator = ContactsFakeSyncCoordinator()
+            val producer = service(cleanup = cleanup, coordinator = coordinator)
+            val subscription = producer.events()
+            val events = async { subscription.events.toList() }
+            assertFailsWith<ContactServiceError.ContactNotFound> { producer.removeContact(radioA, row.publicKey) }
+            assertEquals(row, store.fetchContact(EntityKey(radioA, row.id)))
+            assertTrue(cleanup.invocations.isEmpty())
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            producer.removeLocalContact(EntityKey(radioA, row.id), row.publicKey)
+            assertEquals(1, radio.removeRequests.size, "Local fallback sends no second device command")
+            assertEquals(0, radio.completedRemovals, "NOT_FOUND is not a successful radio deletion")
+            assertNull(store.fetchContact(EntityKey(radioA, row.id)))
+            assertEquals(
+                listOf(ContactsRecordingCleanup.Invocation(EntityKey(radioA, row.id), ContactCleanupReason.DELETED, row.publicKey)),
+                cleanup.invocations,
+            )
+            assertEquals(listOf("contactsChanged"), coordinator.notifications)
+            producer.finishEvents()
+            assertEquals(listOf(ContactServiceEvent.NodeDeleted), events.await())
+        }
+    }
+
+    @Test
+    fun unknownIdentityDoesNotInvalidateActiveOrQueuedWrites() = runTest {
+        withFixture {
+            val producer = service()
+            val row = ContactDTO(radioId = radioA, publicKey = contactsKey(4), name = "Retained", lastHeardTimestamp = null)
+            store.seed(row)
+            val active = async { producer.addOrUpdateContact(radioA, frame(2, "Active")) }
+            runCurrent()
+            val queued = async { producer.addOrUpdateContact(radioA, frame(3, "Queued")) }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+            store.fetchDeviceFailure = IOException("Unknown self")
+            val cleanup = ContactsRecordingCleanup()
+            val coordinator = ContactsFakeSyncCoordinator()
+            val deletion = service(cleanup = cleanup, coordinator = coordinator)
+            assertNoDeletionEffects(deletion, cleanup, coordinator) {
+                assertFailsWith<IOException> { deletion.removeContact(radioA, row.publicKey) }
+                assertFailsWith<IOException> { deletion.removeLocalContact(EntityKey(radioA, row.id), row.publicKey) }
+            }
+            store.fetchDeviceFailure = null
+            radio.accept()
+            runCurrent()
+            active.await()
+            assertEquals(2, radio.writes.size, "Identity refusal must leave the queued Add dispatchable")
+            radio.accept()
+            runCurrent()
+            queued.await()
+            assertEquals(row, store.fetchContact(EntityKey(radioA, row.id)))
+        }
+    }
+
     private fun frame(byte: Int, name: String, modified: UInt = 1u) = ContactFrame(
         contactsKey(byte), ContactType.CHAT, 0u, 255u, Bytes.EMPTY, name, 0u, 0.0, 0.0, modified,
     )
@@ -1627,7 +1901,31 @@ class ContactWriteRecoveryTests {
             coordinator: ContactSyncCoordinating? = null,
             cleanup: ContactCleanupHandling? = null,
             flags: ContactPreferenceFlags = preferences,
-        ) = ContactService(connection, store, persistence, coordinator, cleanup, flags)
+            devices: DevicePersisting = store,
+            logger: ContactServiceLogger = ContactServiceLogger.NONE,
+        ) = ContactService(connection, devices, persistence, coordinator, cleanup, flags, logger = logger)
+
+        suspend fun assertNoDeletionEffects(
+            producer: ContactService,
+            cleanup: ContactsRecordingCleanup,
+            coordinator: ContactsFakeSyncCoordinator,
+            operation: suspend () -> Unit,
+        ) {
+            val before = store.contacts
+            val deleted = store.deletedContactIDs
+            val removeCount = radio.removeRequests.size
+            val subscription = producer.events()
+            val events = scope.async { subscription.events.toList() }
+            operation()
+            assertEquals(before, store.contacts)
+            assertEquals(deleted, store.deletedContactIDs)
+            assertEquals(removeCount, radio.removeRequests.size)
+            assertTrue(cleanup.invocations.isEmpty())
+            assertTrue(coordinator.notifications.isEmpty())
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            producer.finishEvents()
+            assertEquals(emptyList(), events.await())
+        }
 
         suspend fun assertRecoveryRemainsBlocked(producer: ContactService) {
             for (since in listOf(null, Instant.ofEpochSecond(50))) {
@@ -1653,6 +1951,7 @@ class ContactWriteRecoveryTests {
         var snapshotHold: SnapshotHold? = null
         var removeHold: RemoveHold? = null
         var removeFailure: Exception? = null
+        var removeErrorCode: Int? = null
         var completedSnapshots = 0
         var completedRemovals = 0
         var reportedTotal: Int?
@@ -1688,6 +1987,10 @@ class ContactWriteRecoveryTests {
                 0x0F -> {
                     removeRequests += data
                     removeFailure?.let { throw it }
+                    removeErrorCode?.let {
+                        mock.simulateReceive(Bytes.of(0x01, it))
+                        return
+                    }
                     removeHold?.let {
                         it.entered.complete(Unit)
                         it.release.await()

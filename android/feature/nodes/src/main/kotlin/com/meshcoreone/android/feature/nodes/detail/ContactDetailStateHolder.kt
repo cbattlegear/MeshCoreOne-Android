@@ -468,6 +468,7 @@ class ContactDetailStateHolder(
                     AvatarSaveStage.SERVICE_CALL_CANCELLED,
                     { AvatarSaveOutcome.COMPLETED },
                 ) { service.updateContactAvatar(target.key, imageData) }
+                val revision = favoriteRevision
                 val updated = observeAvatarStep(
                     operation,
                     AvatarSaveStage.CONTACT_LOOKUP_STARTED,
@@ -483,7 +484,7 @@ class ContactDetailStateHolder(
                     },
                 ) { store.fetchContact(target.key) } ?: throw NodesContactFailure.ContactNotFound()
                 check(updated.key == target.key && updated.publicKey == target.publicKey)
-                mutableState.update { it.copy(contact = updated) }
+                applyRefreshedContact(updated, revision)
                 operation.observe(AvatarSaveStage.SAVE_SUCCEEDED)
                 true
             }

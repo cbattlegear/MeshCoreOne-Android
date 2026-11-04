@@ -389,6 +389,87 @@ class ContactDetailNativeTest {
     }
 
     @Test
+    fun `avatar post-save refresh reflects external favorite changes in both directions`() = scenario {
+        for (initialFavorite in listOf(false, true)) {
+            val harness = Harness(clock).connect()
+            val initial = contact(radioId = checkNotNull(harness.session.radioId), isFavorite = initialFavorite)
+            harness.store.contacts += initial.copy(isFavorite = !initialFavorite)
+            val observations = mutableListOf<AvatarSaveObservation>()
+            val detail = ContactDetailStateHolder(
+                initial, harness.dependencies, scope,
+                avatarSaveObserver = AvatarSaveObserver { observations.add(it) },
+            )
+            val bytes = Bytes.of(1, 2, 3)
+            val save = detail.launchAvatarSave { bytes }
+            save.join()
+            assertFalse(save.isCancelled)
+            assertEquals(initial.copy(isFavorite = !initialFavorite, avatarImageData = bytes), detail.state.value.contact)
+            assertEquals(!initialFavorite, detail.state.value.isFavorite)
+            assertEquals(harness.store.contacts.single(), detail.state.value.contact)
+            assertEquals(listOf(initial.key to bytes), harness.contactService.avatars)
+            assertFalse(detail.state.value.isSavingAvatar)
+            assertNull(detail.state.value.errorMessage)
+            assertEquals(2, observations.count { it.stage == AvatarSaveStage.CONTACT_LOOKUP_RETURNED })
+            assertTrue(observations.any { it.stage == AvatarSaveStage.SAVE_SUCCEEDED })
+            assertEquals(AvatarSaveOutcome.COMPLETED, observations.last { it.stage == AvatarSaveStage.JOB_COMPLETED }.outcome)
+        }
+    }
+
+    @Test
+    fun `delayed avatar post-save fetch preserves a newer confirmed favorite and saved bytes`() = scenario {
+        for (initialFavorite in listOf(false, true)) {
+            val harness = Harness(clock).connect()
+            val initial = contact(radioId = checkNotNull(harness.session.radioId), isFavorite = initialFavorite)
+            harness.store.contacts += initial
+            val postSaveSnapshot = CompletableDeferred<ContactDTO>()
+            val release = CompletableDeferred<Unit>()
+            var lookups = 0
+            harness.session.servicesStore = object : NodesDataStore by harness.store {
+                override suspend fun fetchContact(key: EntityKey): ContactDTO? {
+                    assertEquals(initial.key, key)
+                    val snapshot = harness.store.fetchContact(key)
+                    if (++lookups == 2) {
+                        postSaveSnapshot.complete(assertNotNull(snapshot))
+                        release.await()
+                    }
+                    return snapshot
+                }
+            }
+            val observations = mutableListOf<AvatarSaveObservation>()
+            val detail = ContactDetailStateHolder(
+                initial, harness.dependencies, scope,
+                avatarSaveObserver = AvatarSaveObserver { observations.add(it) },
+            )
+            val bytes = Bytes.of(4, 5, 6)
+            val save = detail.launchAvatarSave { bytes }
+            val snapshot = postSaveSnapshot.await()
+            assertEquals(initialFavorite, snapshot.isFavorite)
+            assertEquals(bytes, snapshot.avatarImageData)
+            assertTrue(detail.state.value.isSavingAvatar)
+            detail.setFavorite(!initialFavorite)
+            settle()
+            assertFalse(detail.state.value.isSavingFavorite)
+            assertEquals(!initialFavorite, detail.state.value.isFavorite)
+            assertEquals(!initialFavorite, detail.state.value.contact.isFavorite)
+            assertEquals(!initialFavorite, harness.store.contacts.single().isFavorite)
+            release.complete(Unit)
+            save.join()
+            assertFalse(save.isCancelled)
+            assertEquals(2, lookups)
+            assertEquals(!initialFavorite, detail.state.value.isFavorite)
+            assertEquals(harness.store.contacts.single(), detail.state.value.contact)
+            assertEquals(bytes, detail.state.value.contact.avatarImageData)
+            assertEquals(listOf(initial.key to bytes), harness.contactService.avatars)
+            assertFalse(detail.state.value.isSavingAvatar)
+            assertNull(detail.state.value.errorMessage)
+            assertEquals(listOf("avatar:3", "favorite:${!initialFavorite}"), harness.contactService.calls)
+            assertEquals(2, observations.count { it.stage == AvatarSaveStage.CONTACT_LOOKUP_RETURNED })
+            assertTrue(observations.any { it.stage == AvatarSaveStage.SAVE_SUCCEEDED })
+            assertEquals(AvatarSaveOutcome.COMPLETED, observations.last { it.stage == AvatarSaveStage.JOB_COMPLETED }.outcome)
+        }
+    }
+
+    @Test
     fun `avatar save rejects an undecodable image and stores bytes otherwise`() = scenario {
         val harness = Harness(clock).connect()
         val alice = contact(radioId = checkNotNull(harness.session.radioId), name = "Alice")

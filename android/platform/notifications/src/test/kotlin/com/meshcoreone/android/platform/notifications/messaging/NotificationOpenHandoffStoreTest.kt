@@ -367,4 +367,45 @@ class NotificationOpenHandoffStoreTest {
         )
         assertFalse(databaseFile.exists())
     }
+
+    @Test
+    fun explicitFreshBootstrapCanRetryAfterInterruptedSchemaTransaction() = runTest {
+        clearDatabaseFiles()
+        SQLiteDatabase.openDatabase(
+            databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
+        ).use {
+            it.beginTransaction()
+            try {
+                it.execSQL("CREATE TABLE interrupted_initialization(value INTEGER)")
+            } finally {
+                it.endTransaction()
+            }
+        }
+        assertEquals(
+            NotificationOpenHandoffStore.InventoryResult.Failed(NotificationOpenHandoffStore.Failure.CORRUPT_STORAGE),
+            store.beginInventory(),
+        )
+        assertTrue(store.initializeNew() is NotificationOpenHandoffStore.InventoryResult.Snapshot)
+        assertTrue(store.stage(UUID.randomUUID().toString(), direct) is NotificationOpenHandoffStore.StageResult.Staged)
+    }
+
+    @Test
+    fun explicitBootstrapCannotReplaceAnUnknownSchemaOrInitializedVersion() = runTest {
+        clearDatabaseFiles()
+        SQLiteDatabase.openDatabase(
+            databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
+        ).use { it.execSQL("CREATE TABLE foreign_record(value TEXT)") }
+        assertEquals(
+            NotificationOpenHandoffStore.InventoryResult.Failed(NotificationOpenHandoffStore.Failure.CORRUPT_STORAGE),
+            store.initializeNew(),
+        )
+        clearDatabaseFiles()
+        SQLiteDatabase.openDatabase(
+            databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
+        ).use { it.version = 1 }
+        assertEquals(
+            NotificationOpenHandoffStore.InventoryResult.Failed(NotificationOpenHandoffStore.Failure.CORRUPT_STORAGE),
+            store.initializeNew(),
+        )
+    }
 }

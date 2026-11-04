@@ -92,7 +92,7 @@ ContactService/service-test overlap; its UI stays with its existing owner.
 
 ## Behavioral evidence to execute
 
-`ContactWriteRecoveryTests` currently contains 38 authored deterministic methods using an actual
+`ContactWriteRecoveryTests` currently contains 40 authored deterministic methods using an actual
 `MeshCoreSession` and controlled raw frames, not a fake contact session:
 queued-before-send cancellation; retired caller plus late successful ACK;
 identical/different replacement delivery correlation; active and late rejection;
@@ -403,3 +403,49 @@ No local Gradle, CI dispatch, native/device verification,
 publication, claim mutation or hold change is authorized or claimed. WP-107
 protocol authority and WP-202 transaction/marker ordering remain prerequisites;
 this gate prevents unproved recovery, not completes #517.
+
+### Retrying failed true-marker recording
+
+The bounded successor to `e4e1a7a83f7864af9d6128a7979711f88ca16712`
+records a dispatch in `reportedUncertainties` only after
+`preferences.set(recoveryKey, true)` returns successfully. A failed set still
+leaves the in-process epoch blocking writes and sync, propagates its recording
+exception to the existing service diagnostics, and leaves that dispatch eligible
+for another report. Retry creates a fresh epoch before attempting persistence,
+as the previous implementation did for a new report. Successful duplicate reports
+perform neither a new preference write nor an epoch change. No false-marker
+write, timer, background worker or reconciliation authority is introduced.
+
+Two new authored methods bring this file to 40 methods, not discovery/execution:
+the actual canceled Add and late terminal callback retry the true marker after
+the backing store recovers; a fresh preference-role view observes false before
+success and true afterward. The original persistence-failure warning is retained.
+A direct same-dispatch control returns the identical recording exception on two
+failed reports, succeeds on the third, then verifies duplicate reports do not
+write again or rotate the epoch. Continued failure in the existing real-session
+control now expects two true attempts and two persistence warnings, with no
+claimed recorded value. All controls distinguish attempted true writes from
+clears and keep subsequent radio writes and unproved sync blocked.
+
+These fresh views delegate to the in-memory test backing store, not Android
+SharedPreferences, Room, actual disk or process-death evidence. Read-only source
+inspection confirms `SharedPreferencesContactFlags.set` throws when `commit()`
+returns false; its files/tests are not changed or executed here. A successful
+test-role write does not establish actual Android durability.
+
+Removal reports without a dispatch remain a residual limitation: a failed marker
+set leaves same-process recovery but `removeContact` may have no later service
+report or owned completion callback to trigger retry. Repeating `require` with a
+null dispatch already attempts persistence again, but no automatic retry, new
+public API or safe device drain is inferred. This successor guarantees retry
+eligibility when another report arrives, not eventual durability after a lone
+failed removal report or process-death safety before a successful durable write.
+The same limitation applies if every later true-marker attempt continues failing.
+
+WP-209 recovery source/test/evidence modify admissions passed. Static
+`git diff --check` and trusted
+`python .\tools\android-port\controller\validate.py` passed with Python 3.12.4
+and result `valid`; Kotlin controls remain uncompiled/unexecuted. Existing
+Gradle, CI, publication, claim and acceptance holds remain unchanged. The
+no-unproved-recovery service gate is preserved; WP-107/WP-202 guarded destructive
+transaction and matching marker authority remain unavailable.

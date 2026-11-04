@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.protocol.parser.Parsers
+import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.transport.MeshTransport
@@ -437,30 +438,120 @@ class ContactWriteRecoveryTests {
         withFixture {
             val diskFailure = IOException("test recovery flag failure")
             var failCommits = true
-            var recoveryWrites = 0
+            val markerAttempts = mutableListOf<Boolean>()
             val flags = object : ContactPreferenceFlags by preferences {
                 override fun set(key: String, value: Boolean) {
-                    if (key.startsWith("contactWriteReconciliation.")) recoveryWrites++
+                    if (key.startsWith("contactWriteReconciliation.")) markerAttempts += value
                     if (failCommits) throw diskFailure
                     preferences.set(key, value)
                 }
             }
-            val producer = service(flags = flags)
+            val logs = mutableListOf<Pair<ContactLogLevel, String>>()
+            val producer = ContactService(
+                session, store, store, null, null, flags,
+                logger = ContactServiceLogger { level, message -> logs += level to message },
+            )
             val write = async { producer.addOrUpdateContact(radioA, frame(1, "Accepted")) }
             runCurrent()
             assertEquals(1, radio.writes.size)
             write.cancelAndJoin()
             assertTrue(write.isCancelled)
-            assertEquals(1, recoveryWrites)
+            assertEquals(listOf(true), markerAttempts)
             assertFalse(preferences.bool("contactWriteReconciliation.${radioA.value}"))
             assertTrue(producer.needsContactWriteReconciliation(radioA))
             radio.accept()
             runCurrent()
+            assertEquals(listOf(true, true), markerAttempts, "The terminal callback retries the failed true marker")
+            assertFalse(preferences.bool("contactWriteReconciliation.${radioA.value}"))
+            assertEquals(2, logs.count { it == (ContactLogLevel.WARNING to "Contact recovery marker could not be persisted") })
             val replacement = service(flags = flags)
             assertRecoveryRemainsBlocked(replacement)
             failCommits = false
             assertRecoveryRemainsBlocked(replacement)
-            assertEquals(1, recoveryWrites, "Unproved sync never attempts to clear even a failed durable marker")
+            assertEquals(listOf(true, true), markerAttempts, "Unproved sync neither retries a report nor clears a marker")
+            assertFalse(preferences.bool("contactWriteReconciliation.${radioA.value}"))
+        }
+    }
+
+    @Test
+    fun lateTerminalCallbackRetriesTrueMarkerAfterStorageRecovers() = runTest {
+        withFixture {
+            val diskFailure = IOException("first true-marker commit failed")
+            var failCommits = true
+            val markerAttempts = mutableListOf<Boolean>()
+            val flags = object : ContactPreferenceFlags by preferences {
+                override fun set(key: String, value: Boolean) {
+                    if (key.startsWith("contactWriteReconciliation.")) markerAttempts += value
+                    if (failCommits) throw diskFailure
+                    preferences.set(key, value)
+                }
+            }
+            val freshViewBeforeCommit = object : ContactPreferenceFlags by preferences {}
+            val logs = mutableListOf<Pair<ContactLogLevel, String>>()
+            val producer = ContactService(
+                session, store, store, null, null, flags,
+                logger = ContactServiceLogger { level, message -> logs += level to message },
+            )
+            val write = async { producer.addOrUpdateContact(radioA, frame(1, "Accepted after recovery")) }
+            runCurrent()
+            write.cancelAndJoin()
+            assertEquals(listOf(true), markerAttempts)
+            assertFalse(freshViewBeforeCommit.bool("contactWriteReconciliation.${radioA.value}"))
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+            assertEquals(1, logs.count { it == (ContactLogLevel.WARNING to "Contact recovery marker could not be persisted") })
+
+            failCommits = false
+            radio.accept()
+            runCurrent()
+            assertEquals(listOf(true, true), markerAttempts)
+            val freshViewAfterCommit = object : ContactPreferenceFlags by preferences {}
+            assertTrue(freshViewAfterCommit.bool("contactWriteReconciliation.${radioA.value}"))
+            assertEquals("Accepted after recovery", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertTrue(write.isCancelled)
+            assertEquals(1, logs.count { it == (ContactLogLevel.WARNING to "Contact recovery marker could not be persisted") })
+            assertRecoveryRemainsBlocked(service(flags = flags))
+            assertRecoveryRemainsBlocked(service(flags = freshViewAfterCommit))
+            assertEquals(listOf(true, true), markerAttempts)
+            assertEquals(1, radio.writes.size)
+            assertTrue(radio.contactRequests.isEmpty())
+        }
+    }
+
+    @Test
+    fun failedMarkerReportsRetryUntilSuccessThenDeduplicateTheSameDispatch() = runTest {
+        withFixture {
+            val diskFailure = IOException("true-marker commit failed")
+            var failCommits = true
+            val markerAttempts = mutableListOf<Boolean>()
+            val flags = object : ContactPreferenceFlags by preferences {
+                override fun set(key: String, value: Boolean) {
+                    markerAttempts += value
+                    if (failCommits) throw diskFailure
+                    preferences.set(key, value)
+                }
+            }
+            val dispatch = ContactWriteDispatch()
+            repeat(2) {
+                assertSame(diskFailure, assertFailsWith<IOException> {
+                    ContactWriteRecovery.require(flags, radioA, dispatch)
+                })
+                assertTrue(service(flags = flags).needsContactWriteReconciliation(radioA))
+                assertFalse(preferences.bool("contactWriteReconciliation.${radioA.value}"))
+            }
+            assertEquals(listOf(true, true), markerAttempts)
+            failCommits = false
+            ContactWriteRecovery.require(flags, radioA, dispatch)
+            val recordedEpoch = assertNotNull(ContactWriteRecovery.snapshot(flags, radioA))
+            repeat(2) { ContactWriteRecovery.require(flags, radioA, dispatch) }
+            assertSame(recordedEpoch, ContactWriteRecovery.snapshot(flags, radioA))
+            assertEquals(listOf(true, true, true), markerAttempts, "Only successful recording deduplicates reports")
+            val freshView = object : ContactPreferenceFlags by preferences {}
+            assertTrue(freshView.bool("contactWriteReconciliation.${radioA.value}"))
+            assertRecoveryRemainsBlocked(service(flags = flags))
+            assertRecoveryRemainsBlocked(service(flags = freshView))
+            assertEquals(listOf(true, true, true), markerAttempts)
+            assertTrue(radio.writes.isEmpty())
+            assertTrue(radio.contactRequests.isEmpty())
         }
     }
 

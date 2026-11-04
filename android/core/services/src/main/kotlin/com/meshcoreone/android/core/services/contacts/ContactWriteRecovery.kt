@@ -191,9 +191,10 @@ internal object ContactWriteRecovery {
     @Synchronized
     fun require(preferences: ContactPreferenceFlags, radioId: RadioId, dispatch: ContactWriteDispatch? = null) {
         val state = state(preferences, radioId)
-        if (dispatch != null && !state.reportedUncertainties.add(dispatch)) return
+        if (dispatch != null && dispatch in state.reportedUncertainties) return
         state.epoch = Any()
         preferences.set(key(radioId), true)
+        if (dispatch != null) state.reportedUncertainties.add(dispatch)
     }
 
     @Synchronized

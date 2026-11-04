@@ -213,11 +213,13 @@ class RemoteNodesComposeTest {
         compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
         compose.onNodeWithTag("remote-error").performScrollTo().assertExists()
         compose.onNodeWithTag("remote-map:retry").performScrollTo().performClick()
+        settleMapComposition()
         compose.waitUntil(5_000) { retryObservationStarted.isCompleted }
         compose.onNodeWithTag("remote-error").performScrollTo().assertExists()
         compose.onNodeWithTag("remote-map:retry").performScrollTo().assertExists()
         compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
         releaseRetryObservation.complete(Unit)
+        settleMapComposition()
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("synthetic-map").fetchSemanticsNodes().isNotEmpty()
         }
@@ -262,6 +264,7 @@ class RemoteNodesComposeTest {
         compose.onNodeWithTag("remote-map:retry").assertExists()
         compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
         compose.onNodeWithTag("remote-map:retry").performScrollTo().performClick()
+        settleMapComposition()
         compose.onNodeWithTag("synthetic-map").performScrollTo().assertExists()
         compose.onNodeWithTag("remote-map:retry").assertDoesNotExist()
     }

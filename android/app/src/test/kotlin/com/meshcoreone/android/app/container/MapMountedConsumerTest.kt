@@ -312,6 +312,7 @@ class MapMountedConsumerTest {
             store.setFilter(MapFilterHost.MAIN_MAP, MapFilterState(favoritesOnly = true))
         }
         compose.waitUntil(5_000) {
+            advanceFrames()
             compose.onAllNodesWithTag("pick:${contact.id}").fetchSemanticsNodes().isEmpty()
         }
     }
@@ -438,6 +439,7 @@ class MapMountedConsumerTest {
         advanceFrames()
         compose.waitForIdle()
         compose.waitUntil(5_000) {
+            advanceFrames()
             compose.onAllNodesWithText(text(R.string.l10n_app_map_map_controls_centerall))
                 .fetchSemanticsNodes().isNotEmpty()
         }

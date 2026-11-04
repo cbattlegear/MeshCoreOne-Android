@@ -168,20 +168,27 @@ class TraceMapMountedConsumerTest {
         host.get().runOnUiThread { reportCamera(panned) }
         advanceFrames()
         compose.waitForIdle()
-        compose.waitUntil(5_000) { latest?.camera == panned }
+        compose.waitUntil(5_000) {
+            advanceFrames()
+            latest?.camera == panned
+        }
         assertEquals(initialRevision, latest!!.cameraCommandRevision)
 
         compose.onNodeWithTag("trace-map:center-all").performClick()
         advanceFrames()
         compose.waitForIdle()
         compose.waitUntil(5_000) {
+            advanceFrames()
             latest?.camera != panned && latest!!.cameraCommandRevision > initialRevision
         }
         val firstFitRevision = latest!!.cameraCommandRevision
         compose.onNodeWithTag("trace-map:center-all").performClick()
         advanceFrames()
         compose.waitForIdle()
-        compose.waitUntil(5_000) { latest!!.cameraCommandRevision > firstFitRevision }
+        compose.waitUntil(5_000) {
+            advanceFrames()
+            latest!!.cameraCommandRevision > firstFitRevision
+        }
     }
 
     private fun mount(
@@ -249,6 +256,7 @@ class TraceMapMountedConsumerTest {
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_mode_map)).performClick()
         advanceFrames()
         compose.waitUntil(5_000) {
+            advanceFrames()
             latest?.points?.size == 3 &&
                 compose.onAllNodesWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_pathedit_filter_favorites))
                     .fetchSemanticsNodes().isNotEmpty()

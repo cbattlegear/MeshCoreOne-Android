@@ -403,6 +403,14 @@ class NotificationOpenHandoffStoreTest {
         clearDatabaseFiles()
         SQLiteDatabase.openDatabase(
             databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
+        ).use { it.execSQL("CREATE TABLE sqliteXretained_record(value TEXT)") }
+        assertEquals(
+            NotificationOpenHandoffStore.InventoryResult.Failed(NotificationOpenHandoffStore.Failure.CORRUPT_STORAGE),
+            store.initializeNew(),
+        )
+        clearDatabaseFiles()
+        SQLiteDatabase.openDatabase(
+            databaseFile.path, null, SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
         ).use { it.version = 1 }
         assertEquals(
             NotificationOpenHandoffStore.InventoryResult.Failed(NotificationOpenHandoffStore.Failure.CORRUPT_STORAGE),

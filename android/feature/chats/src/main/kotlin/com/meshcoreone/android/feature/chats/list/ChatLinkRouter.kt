@@ -116,13 +116,11 @@ class ChatLinkRouter(
                             diagnostics.report("Contact-link target changed repeatedly", null)
                             return@launchLookup
                         }
-                        is ContactLinkTargetCompletion.Completed -> when (completion.outcome) {
-                            ContactLinkCompletion.StaleContext ->
-                                diagnostics.report("Contact-link lookup context is no longer current", null)
-                            ContactLinkCompletion.WrongTarget ->
-                                diagnostics.report("Contact-link lookup returned the wrong target", null)
-                            ContactLinkCompletion.Navigated, ContactLinkCompletion.ConfirmationStaged,
-                            ContactLinkCompletion.IgnoredSelfContact -> Unit
+                        is ContactLinkTargetCompletion.Completed -> reportContactCompletion(completion.outcome)
+                        is ContactLinkTargetCompletion.Offered -> when (val handoff = completion.receipt.awaitOutcome()) {
+                            is ContactLinkHandoffOutcome.Accepted -> reportContactCompletion(handoff.outcome)
+                            ContactLinkHandoffOutcome.Superseded ->
+                                diagnostics.report("Contact-link delivery was superseded before navigation accepted it", null)
                         }
                     }
                     return@launchLookup
@@ -130,6 +128,17 @@ class ChatLinkRouter(
             } finally {
                 observation.dispose()
             }
+        }
+    }
+
+    private fun reportContactCompletion(outcome: ContactLinkCompletion) {
+        when (outcome) {
+            ContactLinkCompletion.StaleContext ->
+                diagnostics.report("Contact-link lookup context is no longer current", null)
+            ContactLinkCompletion.WrongTarget ->
+                diagnostics.report("Contact-link lookup returned the wrong target", null)
+            ContactLinkCompletion.Navigated, ContactLinkCompletion.ConfirmationStaged,
+            ContactLinkCompletion.IgnoredSelfContact -> Unit
         }
     }
 

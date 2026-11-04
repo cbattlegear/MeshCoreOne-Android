@@ -6,6 +6,7 @@ import com.meshcoreone.android.app.navigation.CapturedContactLinkContext
 import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
+import com.meshcoreone.android.app.navigation.ChatContactMount
 import com.meshcoreone.android.app.navigation.NavigationCleanupOwner
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationDestination
@@ -91,11 +92,13 @@ import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
+import com.meshcoreone.android.feature.chats.list.ContactLinkTargetCompletion
 import java.time.Instant
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -369,6 +372,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
 
     internal fun captureContactLinkContext(
         publicKey: Bytes, publications: ContactLinkPublications,
+        mount: ChatContactMount? = null,
     ): ContactLinkContext = withNavigationCommitBoundary {
         val graph = sessions.current
         val lifecycle = connectionManager.captureNavigationLifecycle()
@@ -383,7 +387,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                     connectionManager.isInitialNavigationSession(
                         lifecycle, graph.token, sessions.publicationIdentity, graph,
                     ),
-                publications,
+                publications, mount,
             ),
             graph, lifecycle,
         )
@@ -436,6 +440,67 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                 lookup, current?.token, lookup.allowsInitialBinding,
                 current?.navigationPublicKey.takeIf { lookup.allowsInitialBinding },
             )
+        }
+    }
+
+    internal fun registerChatContactMount(mount: ChatContactMount) {
+        val publication = navigation.registerChatContactMount(mount)
+        releaseChatContactPublication(publication)
+    }
+
+    internal fun sealChatContactMount(mount: ChatContactMount) {
+        val publication = navigation.sealChatContactMount(mount)
+        releaseChatContactPublication(publication)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun releaseChatContactPublication(publication: com.meshcoreone.android.feature.chats.list.ContactLinkPublication) {
+        // This non-suspending cleanup must start even if process cancellation races disposal.
+        processScope.launch(Dispatchers.Default, start = CoroutineStart.ATOMIC) { publication.release() }
+    }
+
+    internal fun offerChatContact(
+        mount: ChatContactMount, context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
+        link: ContactLinkRequest, contact: ContactDTO?, publications: ContactLinkPublications,
+    ): ContactLinkTargetCompletion {
+        val offered = ContactLinkPublications()
+        publications.defer(object : com.meshcoreone.android.feature.chats.list.ContactLinkPublication {
+            override fun release() = releaseChatContactPublication(object :
+                com.meshcoreone.android.feature.chats.list.ContactLinkPublication {
+                override fun release() = offered.release()
+            })
+        })
+        return withNavigationCommitBoundary {
+            val resolved = resolveContactLinkContext(context, link.publicKey)
+            if (resolved is ContactLinkLookupResolution.Current &&
+                (resolved.radioId != target.radioId || resolved.selfPublicKey != target.selfPublicKey)
+            ) return@withNavigationCommitBoundary ContactLinkTargetCompletion.TargetChanged
+            navigation.offerChatContact(mount, context, target, link, contact, offered) {
+                val current = resolveContactLinkContext(context, link.publicKey)
+                current is ContactLinkLookupResolution.Current &&
+                    current.radioId == target.radioId && current.selfPublicKey == target.selfPublicKey
+            }
+        }
+    }
+
+    /** The shell, not the originating conversation or lookup task, owns acceptance. */
+    internal fun acceptChatContactOffers() {
+        navigation.pendingChatContactOffers().forEach { offer ->
+            val accepted = ContactLinkPublications()
+            try {
+                withNavigationCommitBoundary {
+                    val captured = offer.context as? CapturedContactLinkContext
+                    val current = sessions.current
+                    navigation.acceptChatContact(
+                        offer, accepted, current?.token, captured?.lookup?.allowsInitialBinding == true,
+                        current?.navigationPublicKey,
+                    ) { captured != null && isCapturedContactGraphCurrent(captured, sessions.current) }
+                }
+            } finally {
+                releaseChatContactPublication(object : com.meshcoreone.android.feature.chats.list.ContactLinkPublication {
+                    override fun release() = accepted.release()
+                })
+            }
         }
     }
 

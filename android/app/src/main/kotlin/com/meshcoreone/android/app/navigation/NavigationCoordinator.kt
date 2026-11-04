@@ -22,6 +22,9 @@ import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublication
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
+import com.meshcoreone.android.feature.chats.list.ContactLinkHandoffOutcome
+import com.meshcoreone.android.feature.chats.list.ContactLinkTargetCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkContext
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -47,6 +50,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private val mutableState = NavigationStateStore(initial)
     val state: StateFlow<NavigationState> = mutableState.state
     internal val currentState: NavigationState get() = mutableState.value
+    internal val contactHandoffUpdates get() = mutableState.publishedSnapshots
     private val notificationMutex = Mutex()
     private val drainMutex = Mutex()
     private val localCommitLock = Any()
@@ -301,6 +305,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     internal fun captureContactLinkLookup(
         publicKey: Bytes, radioId: RadioId?, selfPublicKey: Bytes?, graphToken: SessionToken?,
         runtimeToken: SessionToken?, graphCurrent: Boolean, publications: ContactLinkPublications,
+        mount: ChatContactMount? = null,
     ): ContactLinkLookup {
         var publication: NavigationStateStore.Publication? = null
         while (true) {
@@ -313,6 +318,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             val offline = graphToken == null && graphCurrent && runtimeToken == null && current.boundSessionToken == null &&
                 (current.radioId == null || current.radioId == radioId)
             val disposition = when {
+                mount != null && snapshot.handoffs.mounts[mount.id] != true -> ContactLinkCaptureDisposition.StaleContext
                 !boundGraph && !initialGraph && !offline -> ContactLinkCaptureDisposition.StaleContext
                 publicKey == selfPublicKey -> ContactLinkCaptureDisposition.IgnoredSelfContact
                 else -> ContactLinkCaptureDisposition.Lookup
@@ -335,6 +341,140 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             override fun release() = mutableState.release(publication)
         })
         return publication
+    }
+
+    internal fun registerChatContactMount(mount: ChatContactMount): ContactLinkPublication {
+        val publication = NavigationStateStore.Publication()
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val mounts = snapshot.handoffs.mounts
+            if (mount.registrationSealed.get() || mount.id in mounts) break
+            if (mutableState.compareAndSet(
+                    snapshot, snapshot.value, publication,
+                    handoffs = snapshot.handoffs.copy(mounts = mounts + (mount.id to true)),
+                )) break
+        }
+        return handoffPublication(publication)
+    }
+
+    /** Lock-free, not wait-free: no suspension, callbacks or publication on the disposing thread. */
+    internal fun sealChatContactMount(mount: ChatContactMount): ContactLinkPublication {
+        mount.registrationSealed.set(true)
+        val publication = NavigationStateStore.Publication()
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val handoffs = snapshot.handoffs
+            val next = handoffs.copy(
+                mounts = handoffs.mounts + (mount.id to false),
+                offers = handoffs.offers.mapValues { (_, offer) ->
+                    if (offer.mount === mount && offer.terminal == null) {
+                        offer.copy(terminal = ContactLinkHandoffOutcome.Superseded)
+                    } else offer
+                },
+            )
+            if (mutableState.compareAndSet(snapshot, snapshot.value, publication, handoffs = next)) break
+        }
+        return handoffPublication(publication)
+    }
+
+    private fun handoffPublication(publication: NavigationStateStore.Publication) = object : ContactLinkPublication {
+        override fun release() {
+            mutableState.release(publication)
+            settleChatContactReceipts()
+        }
+    }
+
+    internal fun pendingChatContactOffers(): List<ChatContactOffer> =
+        mutableState.snapshot().handoffs.offers.values.filter { it.terminal == null }
+
+    internal fun offerChatContact(
+        mount: ChatContactMount, context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
+        link: ContactLinkRequest, contact: ContactDTO?, publications: ContactLinkPublications,
+        isCurrent: () -> Boolean,
+    ): ContactLinkTargetCompletion {
+        val offer = ChatContactOffer(UUID.randomUUID(), mount, context, target, link, contact, ChatContactReceipt())
+        val publication = NavigationStateStore.Publication()
+        publications.defer(handoffPublication(publication))
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            if (snapshot.handoffs.mounts[mount.id] != true || !isCurrent()) {
+                return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
+            }
+            if (mutableState.compareAndSet(
+                    snapshot, snapshot.value, publication,
+                    handoffs = snapshot.handoffs.copy(offers = snapshot.handoffs.offers + (offer.id to offer)),
+                )) return ContactLinkTargetCompletion.Offered(offer.receipt)
+        }
+    }
+
+    internal fun acceptChatContact(
+        offered: ChatContactOffer, publications: ContactLinkPublications,
+        currentToken: SessionToken?, allowInitialBinding: Boolean, selfPublicKey: Bytes?,
+        isCurrent: () -> Boolean,
+    ) {
+        val publication = NavigationStateStore.Publication()
+        publications.defer(handoffPublication(publication))
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val offer = snapshot.handoffs.offers[offered.id] ?: return
+            if (offer !== offered || offer.terminal != null) return
+            val lookup = (offer.context as? CapturedContactLinkContext)?.lookup
+            val matched = lookup?.let {
+                currentContactLookup(it, snapshot.value, currentToken, allowInitialBinding, selfPublicKey)
+            }
+            val eligible = snapshot.handoffs.mounts[offer.mount.id] == true && isCurrent() &&
+                matched != null && matched.radioId == offer.target.radioId &&
+                matched.selfPublicKey == offer.target.selfPublicKey && offer.target.origin === lookup
+            val outcome = if (!eligible) null else when {
+                offer.link.publicKey != lookup?.publicKey || offer.contact != null &&
+                    (offer.contact.radioId != matched?.radioId || offer.contact.publicKey != lookup?.publicKey) ->
+                    ContactLinkCompletion.WrongTarget
+                lookup?.publicKey == matched?.selfPublicKey -> ContactLinkCompletion.IgnoredSelfContact
+                offer.contact == null -> ContactLinkCompletion.ConfirmationStaged
+                else -> ContactLinkCompletion.Navigated
+            }
+            val next = if (outcome == null) snapshot.value else {
+                contactLookupDestination(snapshot.value, offer.link, offer.contact, matched?.radioId, outcome, false)
+                    .copy(contactLookupRevision = Math.incrementExact(snapshot.value.contactLookupRevision))
+            }
+            val terminal = if (outcome == null) ContactLinkHandoffOutcome.Superseded
+                else ContactLinkHandoffOutcome.Accepted(outcome)
+            if (mutableState.compareAndSet(
+                    snapshot, next, publication,
+                    handoffs = snapshot.handoffs.copy(offers = snapshot.handoffs.offers +
+                        (offer.id to offer.copy(terminal = terminal))),
+                )) return
+        }
+    }
+
+    private fun settleChatContactReceipts() {
+        // Completing a deferred can run arbitrary continuations. Only process-owned publication calls this.
+        val terminals = mutableState.snapshot().handoffs.offers.values.filter { it.terminal != null }
+        terminals.forEach { it.receipt.settle(checkNotNull(it.terminal)) }
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val handoffs = snapshot.handoffs
+            val settled = terminals.map { it.id }.toSet()
+            val offers = handoffs.offers - settled
+            val mounts = handoffs.mounts.filter { (id, open) -> open || offers.values.any { it.mount.id == id } }
+            if (mutableState.compareAndSet(
+                    snapshot, snapshot.value, handoffs = ChatContactHandoffs(mounts, offers),
+                )) return
+        }
+    }
+
+    private fun contactLookupDestination(
+        current: NavigationState, link: ContactLinkRequest, contact: ContactDTO?, radio: RadioId?,
+        outcome: ContactLinkCompletion, selectChats: Boolean,
+    ): NavigationState = when (outcome) {
+        ContactLinkCompletion.WrongTarget -> current.copy(failure = NavigationFailure.WrongTarget(NavigationTarget.CONTACT))
+        ContactLinkCompletion.IgnoredSelfContact -> if (selectChats) current.select(AppTab.CHATS) else current
+        ContactLinkCompletion.ConfirmationStaged ->
+            (if (selectChats) current.select(AppTab.CHATS) else current).stageContactLink(link, radio)
+        ContactLinkCompletion.Navigated -> current.push(
+            AppTab.NODES, NavigationDestination.ContactDetail(checkNotNull(contact)),
+        ).copy(pendingContactLink = null, pendingContactDetail = contact, selectedContact = contact, nodesShowingDiscovery = false)
+        ContactLinkCompletion.StaleContext -> current
     }
 
     private fun currentContactLookup(
@@ -416,15 +556,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
                 contact == null -> ContactLinkCompletion.ConfirmationStaged
                 else -> ContactLinkCompletion.Navigated
             }
-            val destination = when {
-                wrongTarget -> current.copy(failure = NavigationFailure.WrongTarget(NavigationTarget.CONTACT))
-                selfContact -> if (selectChats) current.select(AppTab.CHATS) else current
-                contact == null -> (if (selectChats) current.select(AppTab.CHATS) else current).stageContactLink(link, radio)
-                else -> current.push(AppTab.NODES, NavigationDestination.ContactDetail(contact)).copy(
-                    pendingContactLink = null, pendingContactDetail = contact, selectedContact = contact,
-                    nodesShowingDiscovery = false,
-                )
-            }
+            val destination = contactLookupDestination(current, link, contact, radio, outcome, selectChats)
             val next = destination.copy(contactLookupRevision = Math.incrementExact(current.contactLookupRevision))
             val deferred = publication ?: contactLinkPublication(publications).also { publication = it }
             val committed = cancellation?.commitIfActive {

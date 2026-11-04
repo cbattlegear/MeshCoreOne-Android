@@ -70,6 +70,7 @@ import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.collect
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavEntryDecorator
 import androidx.navigation3.scene.Scene
@@ -153,6 +154,9 @@ fun NativeNavigationShell(
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
     val state by coordinator.state.collectAsStateWithLifecycle()
+    LaunchedEffect(coordinator, chats) {
+        if (chats != null) coordinator.contactHandoffUpdates.collect { chats.acceptContactOffers() }
+    }
     val holders = AppTab.entries.associateWith { rememberSaveableStateHolder() }
     val owners = state.stacks.flatMap { (tab, stack) -> stack.map { it.id to tab } }.toMap()
     val liveContentKeys by rememberUpdatedState(owners.keys.map { "entry-$it" }.toSet())

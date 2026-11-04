@@ -67,6 +67,30 @@ class NavigationStateTest {
         override suspend fun room(key: EntityKey) = room
     }
 
+    @Test fun metadataOnlyHandoffCommitsRetainEveryUnreleasedPredecessorGate() {
+        val initial = NavigationState()
+        val store = NavigationStateStore(initial)
+        val first = NavigationStateStore.Publication()
+        val second = NavigationStateStore.Publication()
+        val mount = ChatContactMount()
+        assertTrue(store.compareAndSet(store.snapshot(), initial.copy(selectedTab = AppTab.MAP), first))
+        val captured = store.snapshot()
+        assertTrue(store.compareAndSet(
+            captured, captured.value, second, handoffs = ChatContactHandoffs(mapOf(mount.id to true)),
+        ))
+        store.release(second)
+        assertSame(initial, store.state.value)
+        val registered = store.snapshot()
+        assertTrue(store.compareAndSet(
+            registered, registered.value, handoffs = registered.handoffs.copy(mounts = mapOf(mount.id to false)),
+        ))
+        assertSame(initial, store.state.value)
+        store.release(first)
+        assertEquals(AppTab.MAP, store.state.value.selectedTab)
+        assertEquals(false, store.snapshot().handoffs.mounts[mount.id])
+        assertEquals(store.snapshot().revision, store.publishedSnapshots.value.revision)
+    }
+
     @Test fun delayedPublicationNeverRegressesTheNewestCommittedState() {
         val initial = NavigationState()
         val store = NavigationStateStore(initial)

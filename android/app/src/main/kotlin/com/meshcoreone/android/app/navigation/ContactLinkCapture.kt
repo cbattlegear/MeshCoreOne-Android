@@ -10,6 +10,40 @@ import com.meshcoreone.android.feature.chats.list.ContactLinkCaptureDisposition
 import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
 import com.meshcoreone.android.feature.chats.list.ContactLinkResolvedTarget
+import com.meshcoreone.android.feature.chats.list.ContactLinkHandoffOutcome
+import com.meshcoreone.android.feature.chats.list.ContactLinkHandoffReceipt
+import com.meshcoreone.android.core.model.ContactDTO
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
+
+internal class ChatContactMount {
+    val id: UUID = UUID.randomUUID()
+    // Prevent delayed effect registration from reviving a retired incarnation after its store row is collected.
+    val registrationSealed = AtomicBoolean(false)
+}
+
+internal class ChatContactReceipt : ContactLinkHandoffReceipt {
+    private val outcome = CompletableDeferred<ContactLinkHandoffOutcome>()
+    override suspend fun awaitOutcome(): ContactLinkHandoffOutcome = outcome.await()
+    fun settle(terminal: ContactLinkHandoffOutcome) { outcome.complete(terminal) }
+}
+
+internal data class ChatContactOffer(
+    val id: UUID,
+    val mount: ChatContactMount,
+    val context: ContactLinkContext,
+    val target: ContactLinkLookupResolution.Current,
+    val link: ContactLinkRequest,
+    val contact: ContactDTO?,
+    val receipt: ChatContactReceipt,
+    val terminal: ContactLinkHandoffOutcome? = null,
+)
+
+internal data class ChatContactHandoffs(
+    val mounts: Map<UUID, Boolean> = emptyMap(),
+    val offers: Map<UUID, ChatContactOffer> = emptyMap(),
+)
 
 sealed interface ContactLinkLookupResolution {
     data object Stale : ContactLinkLookupResolution

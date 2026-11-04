@@ -110,6 +110,12 @@ private fun AppChatConversation(
     entryId: Long?,
 ) {
         val scope = rememberCoroutineScope()
+        val contactMount = remember(feature, selected, entryId) { ChatContactMount() }
+        DisposableEffect(feature, contactMount) {
+            feature.registerContactMount(contactMount)
+            onDispose { feature.sealContactMount(contactMount) }
+        }
+        val linkEnvironment = remember(feature, contactMount) { feature.linksForMount(contactMount) }
         val connection by feature.connectionState.collectAsState()
         LifecycleResumeEffect(feature, selected, connection) {
             val deactivate = feature.activate(selected)
@@ -135,7 +141,9 @@ private fun AppChatConversation(
             }
             val device = remember(feature, radio, scope) { feature.pathDevice(radio, scope) }
             val uriHandler = LocalUriHandler.current
-            val router = remember(feature, scope) { ChatLinkRouter(feature.list.links, scope, feature.list.diagnostics) }
+            val router = remember(feature, linkEnvironment, scope) {
+                ChatLinkRouter(linkEnvironment, scope, feature.list.diagnostics)
+            }
             val links = remember(contacts, device, radio, router, coordinator, uriHandler) {
                 ConversationLinkActions(
                     contacts = { contacts.value },
@@ -260,7 +268,9 @@ private fun AppChatConversation(
                 onDismiss = { actionMessage = null })
         }
         val uriHandler = LocalUriHandler.current
-        val router = remember(feature, scope) { ChatLinkRouter(feature.list.links, scope, feature.list.diagnostics) }
+        val router = remember(feature, linkEnvironment, scope) {
+            ChatLinkRouter(linkEnvironment, scope, feature.list.diagnostics)
+        }
         val links = remember(feature, router, coordinator, uriHandler) {
             ConversationLinkActions(
                 contacts = { environment.mentionContacts.value },

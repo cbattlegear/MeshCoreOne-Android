@@ -10,6 +10,7 @@ import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
+import com.meshcoreone.android.app.navigation.ChatContactMount
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.AppTab
@@ -68,6 +69,32 @@ import kotlinx.coroutines.launch
 import java.time.ZoneId
 
 class AppChatsFeature internal constructor(private val container: AppContainer) {
+    internal fun registerContactMount(mount: ChatContactMount) = container.registerChatContactMount(mount)
+    internal fun sealContactMount(mount: ChatContactMount) = container.sealChatContactMount(mount)
+    internal fun acceptContactOffers() = container.acceptChatContactOffers()
+
+    internal fun linksForMount(mount: ChatContactMount): ChatLinkEnvironment {
+        val underlying = list.links
+        return object : ChatLinkEnvironment by underlying {
+            override fun captureContactLinkContext(publicKey: Bytes, publications: ContactLinkPublications) =
+                container.captureContactLinkContext(publicKey, publications, mount)
+
+            override fun completeResolvedContactLookup(
+                context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+            ): ContactLinkTargetCompletion {
+                cancellation.ensureActive()
+                if (target !is ContactLinkLookupResolution.Current) {
+                    return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
+                }
+                return container.offerChatContact(
+                    mount, context, target, ContactLinkRequest(link.name, link.publicKey, link.contactType),
+                    existing, publications,
+                )
+            }
+        }
+    }
+
     private data class PushedFloodScope(
         val session: SessionToken,
         val preference: ChannelFloodScope,

@@ -18,6 +18,7 @@ internal class NavigationStateStore(initial: NavigationState) {
         val revision: Long,
         val value: NavigationState,
         internal val pending: List<Publication>,
+        internal val handoffs: ChatContactHandoffs = ChatContactHandoffs(),
     )
 
     // Flow publication does not prove that a UI frame rendered this revision.
@@ -69,12 +70,14 @@ internal class NavigationStateStore(initial: NavigationState) {
         next: NavigationState,
         deferred: Publication? = null,
         forceRevision: Boolean = false,
+        handoffs: ChatContactHandoffs = expected.handoffs,
     ): Boolean {
-        val updated = if (!forceRevision && expected.value == next) expected else Snapshot(
+        val updated = if (!forceRevision && expected.value == next && expected.handoffs == handoffs) expected else Snapshot(
             revision = Math.incrementExact(expected.revision),
             value = next,
             // Later commits must not expose a guarded commit before its lifecycle boundary exits.
             pending = expected.pending.filterNot { it.released.get() } + listOfNotNull(deferred),
+            handoffs = handoffs,
         )
         if (!current.compareAndSet(expected, updated)) return false
         if (deferred == null) publish()

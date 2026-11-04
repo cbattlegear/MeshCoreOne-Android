@@ -128,6 +128,16 @@ sealed interface ContactLinkTargetResolution {
 sealed interface ContactLinkTargetCompletion {
     data object TargetChanged : ContactLinkTargetCompletion
     data class Completed(val outcome: ContactLinkCompletion) : ContactLinkTargetCompletion
+    data class Offered(val receipt: ContactLinkHandoffReceipt) : ContactLinkTargetCompletion
+}
+
+sealed interface ContactLinkHandoffOutcome {
+    data class Accepted(val outcome: ContactLinkCompletion) : ContactLinkHandoffOutcome
+    data object Superseded : ContactLinkHandoffOutcome
+}
+
+interface ContactLinkHandoffReceipt {
+    suspend fun awaitOutcome(): ContactLinkHandoffOutcome
 }
 
 class ContactLinkCancellation private constructor() {

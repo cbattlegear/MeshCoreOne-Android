@@ -126,11 +126,6 @@ interface SyncAdvertisementServicing {
 
 /** Opt-in local-only admission; neither the result nor the scope proves an RF sender. */
 interface SyncLocalDirectAdvertisementServicing {
-    suspend fun materializeLocalDirectContactForPendingAdvert(
-        prefix: Bytes,
-        radioId: RadioId,
-    ): LocalDirectContactResolution
-
     suspend fun <T> withPendingAdvertContactOperation(
         radioId: RadioId,
         prefix: Bytes,

@@ -11,7 +11,7 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:
@@ -70,14 +70,18 @@ jobs:
           import json
           import os
           from pathlib import Path
+          import sys
 
           state = json.loads(Path(os.environ["ANDROID_CI_STATE"]).read_text())
-          private = Path(state["private_root"])
-          print(f"JAVA_HOME={state['java_home']}")
-          print(f"ANDROID_HOME={state['android_home']}")
-          print(f"ANDROID_SDK_ROOT={state['android_home']}")
-          print(f"GRADLE_USER_HOME={private / 'gradle-root'}")
-          print(f"ANDROID_USER_HOME={private / 'android-user'}")
+          sys.path.insert(0, "tools/android-port")
+          from controller.ci_environment import candidate_environment
+
+          environment = candidate_environment(state)
+          for name in (
+              "JAVA_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT", "GRADLE_USER_HOME",
+              "ANDROID_USER_HOME", "JAVA_OPTS", "GRADLE_OPTS", "PYTHONDONTWRITEBYTECODE",
+          ):
+              print(f"{name}={environment[name]}")
           PY
           state="$(python -c 'import json,os; print(json.load(open(os.environ["ANDROID_CI_STATE"]))["java_home"])')"
           echo "$state/bin" >> "$GITHUB_PATH"
@@ -96,7 +100,7 @@ jobs:
             :app:assembleDebug :app:compileDebugAndroidTestKotlin lintScaffold \
             --write-locks --write-verification-metadata sha256 \
             --no-daemon --console=plain --no-build-cache --no-parallel --max-workers=2 \
-            -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=512m
+            --stacktrace -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=512m
 
       - id: strict
         name: Strict non-generation verification of the generated graph
@@ -193,6 +197,9 @@ jobs:
                   "runtimeDependencyInventory", "resolveScaffoldDependencies",
                   ":app:assembleDebug", ":app:compileDebugAndroidTestKotlin", "lintScaffold",
                   "--write-locks", "--write-verification-metadata", "sha256",
+                  "--no-daemon", "--console=plain", "--no-build-cache", "--no-parallel",
+                  "--max-workers=2", "--stacktrace",
+                  "-Pkotlin.compiler.execution.strategy=in-process", "-PscaffoldTestHeap=512m",
               ],
               "strict_command": "python tools/android-port/controller/ci.py run --stage scaffold",
               "strict_exit_code": int(os.environ["STRICT_EXIT"]),

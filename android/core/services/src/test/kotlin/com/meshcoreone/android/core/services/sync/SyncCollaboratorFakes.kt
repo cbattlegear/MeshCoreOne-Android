@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DecryptStatus
 import com.meshcoreone.android.core.model.MessageDTO
@@ -39,7 +40,11 @@ internal fun NotificationService.syncSuppressionPort(): SyncNotificationServicin
 
 /** Records every NotificationService call sync makes. */
 internal class FakeNotificationService : SyncNotificationServicing {
-    data class Post(val kind: String, val title: String, val id: UUID?, val text: String)
+    data class Post(
+        val kind: String, val title: String, val id: UUID?, val text: String,
+        val displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
+        val notificationLevel: NotificationLevel? = null,
+    )
 
     @Volatile var isSuppressing = false
     @Volatile var activeContact: UUID? = null
@@ -65,8 +70,9 @@ internal class FakeNotificationService : SyncNotificationServicing {
     override suspend fun postChannelMessageNotification(
         channelName: String, channelIndex: UByte, radioId: RadioId, senderName: String?, messageText: String,
         messageID: UUID, notificationLevel: NotificationLevel, hasSelfMention: Boolean,
+        displayTarget: ChannelNotificationTarget,
     ) {
-        posts += Post("channel", channelName, messageID, messageText)
+        posts += Post("channel", channelName, messageID, messageText, displayTarget, notificationLevel)
     }
 
     override suspend fun postRoomMessageNotification(

@@ -341,7 +341,7 @@ class RemoteNodesComposeTest {
         compose.onNodeWithText(text(L.remoteNodesHistoryOverviewTitle)).performClick()
         compose.onNodeWithTag("remote-history-content").assertExists()
         compose.onNodeWithText("3.9 V", substring = true).assertExists()
-        compose.onNodeWithTag("synthetic-map", useUnmergedTree = true).performScrollTo().assertExists()
+        compose.onNodeWithTag("synthetic-map").performScrollTo().assertExists()
         compose.onNodeWithText("Select fixture report").performClick()
         compose.onAllNodesWithText("37.7000", substring = true).onFirst().assertExists()
         compose.onNodeWithText("OpenFreeMap").assertExists()

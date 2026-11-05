@@ -82,6 +82,16 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         test: suspend (ContainerHarness, AppSettingsFeature) -> Unit,
     ) {
         DemoModeManager.installStandardDefaults(demoDefaults)
+        val androidPermissions = shadowOf(compose.activity.application)
+        androidPermissions.grantPermissions(*permissionFacts.granted.map { it.manifestName }.toTypedArray())
+        androidPermissions.denyPermissions(*(ConnectivityPermission.entries.toSet() - permissionFacts.granted)
+            .map { it.manifestName }.toTypedArray())
+        ConnectivityPermission.entries.filter { permissionFacts.sdk >= it.minimumSdk }.forEach { permission ->
+            assertEquals(permission.manifestName,
+                if (permission in permissionFacts.granted) android.content.pm.PackageManager.PERMISSION_GRANTED
+                else android.content.pm.PackageManager.PERMISSION_DENIED,
+                compose.activity.checkSelfPermission(permission.manifestName))
+        }
         val platform = OnboardingPlatform(
             WriteBehindOnboardingFlags(emptyMap(), backgroundScope, { _, _ -> }),
             permissionFacts, requests = requests, scans = scans, openAppSettings = openSettings, sdkInt = permissionFacts.sdk,
@@ -149,6 +159,16 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     private fun selectionTitle() =
         compose.onNode(hasText(compose.activity.getString(S.deviceSelectionTitle)) and !hasClickAction())
 
+    private fun permissionSettingsButton() = compose.onNode(
+        hasText(compose.activity.getString(O.permissionsOpenSettings)) and hasClickAction() and hasAnyAncestor(isDialog()),
+    )
+
+    private fun ContainerHarness.eventuallyMounted(message: String, condition: () -> Boolean) =
+        eventually(message) {
+            compose.waitForIdle()
+            condition()
+        }
+
     private fun openManualWifi(h: ContainerHarness) {
         open(h)
         compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectViaWifi)).performClick()
@@ -166,7 +186,12 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     ) {
         val request = requireNotNull(shadowOf(compose.activity).lastRequestedPermission)
         assertArrayEquals(permissions.map { it.manifestName }.sorted().toTypedArray(), request.requestedPermissions)
-        if (granted) facts.granted = facts.granted + permissions
+        if (granted) {
+            facts.granted = facts.granted + permissions
+            shadowOf(compose.activity.application).grantPermissions(*permissions.map { it.manifestName }.toTypedArray())
+        } else {
+            shadowOf(compose.activity.application).denyPermissions(*permissions.map { it.manifestName }.toTypedArray())
+        }
         compose.runOnUiThread {
             compose.activity.onRequestPermissionsResult(
                 request.requestCode, request.requestedPermissions,
@@ -210,13 +235,14 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 assertEquals(0, starts)
                 assertFalse(service.isPresenting.value)
                 compose.onNodeWithText(compose.activity.getString(O.deviceScannerBluetoothUnauthorizedTitle)).assertIsDisplayed()
-                compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).performClick()
+                permissionSettingsButton().performClick()
                 assertEquals(1, openedSettings)
                 facts.granted = bluetoothPermissions
+                shadowOf(compose.activity.application).grantPermissions(*bluetoothPermissions.map { it.manifestName }.toTypedArray())
                 compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
                 compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
             }
-            h.eventually("Bluetooth grant starts exactly one fallback scan") { service.isPresenting.value && starts == 1 }
+            h.eventuallyMounted("Bluetooth grant starts exactly one fallback scan") { service.isPresenting.value && starts == 1 }
             compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertIsDisplayed()
             assertNull(feature.selectionAction.value)
             compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
@@ -254,7 +280,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.waitForIdle()
             h.settle()
             compose.onNodeWithText(compose.activity.getString(O.deviceScannerBluetoothUnauthorizedTitle)).assertIsDisplayed()
-            compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).assertIsDisplayed()
+            permissionSettingsButton().assertIsDisplayed()
             assertSame(beforeRequest, shadowOf(compose.activity).lastRequestedPermission)
             assertEquals(0, starts)
             assertFalse(service.isPresenting.value)
@@ -288,12 +314,12 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertSame(beforeRequest, shadowOf(compose.activity).lastRequestedPermission)
             assertEquals(0, starts)
             assertFalse(service.isPresenting.value)
-            compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).performClick()
+            permissionSettingsButton().performClick()
             assertEquals(1, openedSettings)
             facts.bluetoothEnabled = true
             compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
             compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-            h.eventually("adapter recovery starts one scan") { service.isPresenting.value && starts == 1 }
+            h.eventuallyMounted("adapter recovery starts one scan") { service.isPresenting.value && starts == 1 }
             compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
             compose.waitForIdle()
             h.eventually("adapter recovery scan cancelled") { !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive }
@@ -318,8 +344,9 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             open(h)
             compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
             compose.waitForIdle()
-            h.eventually("initial authorized scan") { starts == 1 }
+            h.eventuallyMounted("initial authorized scan") { starts == 1 }
             facts.granted = emptySet()
+            shadowOf(compose.activity.application).denyPermissions(*bluetoothPermissions.map { it.manifestName }.toTypedArray())
             compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
             compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
             compose.waitForIdle()
@@ -327,11 +354,12 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertTrue(service.isPresenting.value)
             permissionResult(facts, false, bluetoothPermissions)
             assertEquals(1, starts)
-            compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).performClick()
+            permissionSettingsButton().performClick()
             facts.granted = bluetoothPermissions
+            shadowOf(compose.activity.application).grantPermissions(*bluetoothPermissions.map { it.manifestName }.toTypedArray())
             compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
             compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-            h.eventually("restored permission resumes the existing picker") { starts == 2 }
+            h.eventuallyMounted("restored permission resumes the existing picker") { starts == 2 }
             assertEquals(1, stops)
             assertTrue(service.isPresenting.value)
             compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
@@ -354,7 +382,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             open(h)
             compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
             compose.waitForIdle()
-            h.eventually("picker visible before tab transition") { service.isPresenting.value && starts == 1 }
+            h.eventuallyMounted("picker visible before tab transition") { service.isPresenting.value && starts == 1 }
             compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
             compose.waitForIdle()
             compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertDoesNotExist()
@@ -417,7 +445,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 open(h)
                 compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
                 compose.waitForIdle()
-                h.eventually("first scan awaiting discovery") { service.isPresenting.value && starts == 1 }
+                h.eventuallyMounted("first scan awaiting discovery") { service.isPresenting.value && starts == 1 }
                 val oldJob = requireNotNull(feature.selectionScanJob)
                 val cleanupChild = backgroundScope.launch(oldJob) {
                     try {
@@ -462,7 +490,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                     return@withSettings
                 }
                 releaseCleanup.complete(Unit)
-                h.eventually("new scan starts only after old job finishes") {
+                h.eventuallyMounted("new scan starts only after old job finishes") {
                     oldJob.isCompleted && nextJob.isActive && service.isPresenting.value && starts == 2
                 }
                 compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertIsDisplayed()
@@ -506,7 +534,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.waitForIdle()
             h.eventually("chosen radio rendered") { compose.onAllNodesWithText("Chosen radio").fetchSemanticsNodes().size == 1 }
             compose.onNodeWithText("Chosen radio").performClick()
-            h.eventually("chosen radio connection entered") { h.links.links.size == 1 }
+            h.eventually("chosen radio connection entered", virtualBudgetMillis = 3_000) { h.links.links.size == 1 }
             assertFalse(service.isPresenting.value)
             compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
             compose.waitForIdle()
@@ -534,10 +562,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             open(h)
             compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
             compose.waitForIdle()
-            h.eventually("picker pending before recreation") { service.isPresenting.value && starts == 1 }
+            h.eventuallyMounted("picker pending before recreation") { service.isPresenting.value && starts == 1 }
             compose.activityRule.scenario.recreate()
             mount(h, feature)
-            h.eventually("new Activity owns the sole scan collector") { starts == 2 && stops == 1 }
+            h.eventuallyMounted("new Activity owns the sole scan collector") { starts == 2 && stops == 1 }
             assertTrue(service.isPresenting.value)
             assertTrue(h.container.connectionPort.isPairingFlowActive)
             compose.onAllNodesWithText(compose.activity.getString(O.deviceScannerTitle)).assertCountEquals(1)
@@ -577,6 +605,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertFalse(service.isPresenting.value)
             assertEquals(0, starts)
             facts.granted = bluetoothPermissions
+            shadowOf(compose.activity.application).grantPermissions(*bluetoothPermissions.map { it.manifestName }.toTypedArray())
             compose.runOnUiThread {
                 compose.activity.onRequestPermissionsResult(
                     request.requestCode, request.requestedPermissions,
@@ -584,7 +613,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 )
             }
             compose.waitForIdle()
-            h.eventually("recreated permission result starts one pairing") { service.isPresenting.value && starts == 1 }
+            h.eventuallyMounted("recreated permission result starts one pairing") { service.isPresenting.value && starts == 1 }
             assertNull(feature.selectionRequestedPermission.value)
             assertNull(feature.selectionAction.value)
             compose.onAllNodesWithText(compose.activity.getString(O.deviceScannerTitle)).assertCountEquals(1)
@@ -642,7 +671,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 compose.onAllNodesWithText("Fallback radio").fetchSemanticsNodes().size == 1
             }
             compose.onNodeWithText("Fallback radio").performClick()
-            h.eventually("fallback selected radio ready") {
+            h.eventually("fallback selected radio ready", virtualBudgetMillis = 3_000) {
                 h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             }
             assertEquals(id, (h.links.links.single().target as ConnectionTarget.Bluetooth).deviceId)
@@ -741,12 +770,18 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.settle()
             assertEquals(before, h.links.links.size)
             assertNotNull(feature.selectionAction.value)
+            assertEquals(OnboardingPermissionKind.LOCAL_NETWORK, feature.selectionRequestedPermission.value)
             permissionResult(facts, grant)
+            assertNull(feature.selectionRequestedPermission.value)
+            assertEquals(if (grant) com.meshcoreone.android.feature.onboarding.PermissionStatus.GRANTED
+                else com.meshcoreone.android.feature.onboarding.PermissionStatus.DENIED,
+                requireNotNull(h.container.onboarding).permissions.snapshot.value.localNetwork)
             if (!grant) {
                 assertEquals(before, h.links.links.size)
-                compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).assertIsDisplayed().performClick()
+                permissionSettingsButton().assertIsDisplayed().performClick()
                 assertEquals(1, openedSettings)
                 facts.granted = facts.granted + ConnectivityPermission.ACCESS_LOCAL_NETWORK
+                shadowOf(compose.activity.application).grantPermissions(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName)
                 compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
                 compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
             }
@@ -808,10 +843,11 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.onNodeWithTag("tab:SETTINGS").assertIsSelected()
             compose.waitForIdle()
             if (!grant) {
-                compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).assertIsDisplayed().performClick()
+                permissionSettingsButton().assertIsDisplayed().performClick()
                 assertEquals(1, openedSettings)
                 assertEquals(before, h.links.links.size)
                 facts.granted = facts.granted + ConnectivityPermission.ACCESS_LOCAL_NETWORK
+                shadowOf(compose.activity.application).grantPermissions(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName)
                 compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
                 compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
             }
@@ -870,7 +906,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             open(h)
             compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
             compose.waitForIdle()
-            h.eventually("only the user's new scan action starts a picker") { service.isPresenting.value && starts == 1 }
+            h.eventuallyMounted("only the user's new scan action starts a picker") { service.isPresenting.value && starts == 1 }
             compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
             compose.waitForIdle()
             h.eventually("new explicitly requested scan completes") {

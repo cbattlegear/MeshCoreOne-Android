@@ -28,6 +28,15 @@ data class ChannelSendAttemptEntity(
     val failed: Boolean,
     val pendingDeleted: Boolean,
     val current: Boolean,
+    val pendingLifecycleIncarnation: String? = null,
+)
+
+@Entity(tableName = "channel_pending_lifecycles", primaryKeys = ["radioId", "pendingId"])
+data class ChannelPendingLifecycleEntity(
+    val radioId: UUID,
+    val pendingId: UUID,
+    val messageId: UUID,
+    val incarnation: String,
 )
 
 @Entity(tableName = "channel_send_operations", primaryKeys = ["radioId", "captureRequestId", "requestId"])
@@ -54,6 +63,18 @@ data class ChannelSendCompletionEntity(
 
 @Dao
 interface ChannelSendDao {
+    @Query("SELECT * FROM channel_pending_lifecycles WHERE radioId = :radio AND pendingId = :pending")
+    suspend fun pendingLifecycle(radio: UUID, pending: UUID): ChannelPendingLifecycleEntity?
+
+    @Query("""
+        SELECT a.* FROM channel_send_attempts a
+        JOIN channel_send_completions c ON c.radioId = a.radioId AND c.captureRequestId = a.captureRequestId
+        WHERE a.radioId = :radio AND a.messageId = :message AND a.messageIncarnation = :incarnation
+          AND a.pendingId IS NOT NULL
+        ORDER BY a.captureRequestId
+    """)
+    suspend fun completedCaptures(radio: UUID, message: UUID, incarnation: String): List<ChannelSendAttemptEntity>
+
     @Query("SELECT * FROM pending_sends WHERE radioId = :radio AND id = :id")
     suspend fun pending(radio: UUID, id: UUID): PendingSendEntity?
 
@@ -110,6 +131,20 @@ interface ChannelSendDao {
     suspend fun deleteCompletionRepeats(radio: UUID, message: UUID, incarnation: String, revision: Long): Int
 
     @Query("""
+        UPDATE pending_sends SET attemptCount = :count
+        WHERE radioId = :radio AND id = :pending AND messageID = :message AND kindRawValue = 1
+          AND EXISTS(SELECT 1 FROM direct_ack_incarnations i
+                     WHERE i.radioId = :radio AND i.id = :pending AND i.kind = 'pending'
+                       AND i.incarnation = :incarnation AND i.revision = :revision)
+          AND EXISTS(SELECT 1 FROM channel_pending_lifecycles l
+                     WHERE l.radioId = :radio AND l.pendingId = :pending AND l.messageId = :message
+                       AND l.incarnation = :lifecycle)
+    """)
+    suspend fun bumpPending(
+        radio: UUID, message: UUID, pending: UUID, incarnation: String, revision: Long, lifecycle: String, count: Long,
+    ): Int
+
+    @Query("""
         UPDATE messages SET timestamp = :timestamp
         WHERE radioId = :radio AND id = :message
           AND channelIndex BETWEEN 0 AND 255 AND contactID IS NULL AND directionRawValue = 1
@@ -156,6 +191,7 @@ object ChannelSendStorage {
                 "messageIncarnation TEXT NOT NULL,messageRevision INTEGER NOT NULL," +
                 "pendingId TEXT,pendingIncarnation TEXT,pendingRevision INTEGER," +
                 "version INTEGER NOT NULL,failed INTEGER NOT NULL,pendingDeleted INTEGER NOT NULL,current INTEGER NOT NULL," +
+                "pendingLifecycleIncarnation TEXT," +
                 "PRIMARY KEY(radioId,captureRequestId))",
         )
         db.execSQL(
@@ -171,6 +207,69 @@ object ChannelSendStorage {
                 "inputVersion INTEGER NOT NULL,outputVersion INTEGER NOT NULL,pendingCompletionRequestId TEXT," +
                 "PRIMARY KEY(radioId,captureRequestId))",
         )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS channel_pending_lifecycles (" +
+                "radioId TEXT NOT NULL,pendingId TEXT NOT NULL,messageId TEXT NOT NULL,incarnation TEXT NOT NULL," +
+                "PRIMARY KEY(radioId,pendingId))",
+        )
+        installPendingLifecycles(db)
+    }
+
+    private val lifecycleTriggers: Map<String, String> = linkedMapOf(
+        "channel_pending_lifecycle_insert" to
+            "CREATE TRIGGER channel_pending_lifecycle_insert AFTER INSERT ON pending_sends BEGIN " +
+            "INSERT OR REPLACE INTO channel_pending_lifecycles (radioId,pendingId,messageId,incarnation) " +
+            "VALUES (NEW.radioId,NEW.id,NEW.messageID,lower(hex(randomblob(32)))); END",
+        "channel_pending_lifecycle_delete" to
+            "CREATE TRIGGER channel_pending_lifecycle_delete AFTER DELETE ON pending_sends BEGIN " +
+            "DELETE FROM channel_pending_lifecycles WHERE radioId = OLD.radioId AND pendingId = OLD.id; END",
+        "channel_pending_lifecycle_update" to
+            "CREATE TRIGGER channel_pending_lifecycle_update AFTER UPDATE ON pending_sends BEGIN " +
+            "UPDATE channel_pending_lifecycles SET radioId = NEW.radioId,pendingId = NEW.id,messageId = NEW.messageID," +
+            "incarnation = CASE WHEN OLD.radioId = NEW.radioId AND OLD.id = NEW.id AND OLD.messageID = NEW.messageID " +
+            "THEN incarnation ELSE lower(hex(randomblob(32))) END " +
+            "WHERE radioId = OLD.radioId AND pendingId = OLD.id; END",
+    )
+
+    /** Only fresh creation / the sole migration may bootstrap live row births, never historical captures. */
+    fun installPendingLifecycles(db: SupportSQLiteDatabase) {
+        val existing = lifecycleTriggerMap(db)
+        if (existing.isNotEmpty()) {
+            verifyPendingLifecycles(db)
+            return
+        }
+        lifecycleTriggers.values.forEach(db::execSQL)
+        db.execSQL(
+            "INSERT INTO channel_pending_lifecycles (radioId,pendingId,messageId,incarnation) " +
+                "SELECT radioId,id,messageID,lower(hex(randomblob(32))) FROM pending_sends",
+        )
+        verifyPendingLifecycles(db)
+    }
+
+    fun verifyPendingLifecycles(db: SupportSQLiteDatabase) {
+        check(lifecycleTriggerMap(db) == lifecycleTriggers) { "Channel pending lifecycle triggers are missing or changed" }
+        db.query(
+            "SELECT COUNT(*) FROM pending_sends p LEFT JOIN channel_pending_lifecycles l " +
+                "ON l.radioId = p.radioId AND l.pendingId = p.id " +
+                "WHERE l.incarnation IS NULL OR l.messageId != p.messageID OR length(l.incarnation) != 64 " +
+                "OR l.incarnation GLOB '*[^0-9a-f]*'",
+        ).use { cursor ->
+            check(cursor.moveToFirst() && cursor.getLong(0) == 0L) { "Channel pending lifecycle coverage is invalid" }
+        }
+        db.query(
+            "SELECT COUNT(*) FROM channel_pending_lifecycles l WHERE NOT EXISTS " +
+                "(SELECT 1 FROM pending_sends p WHERE p.radioId = l.radioId AND p.id = l.pendingId)",
+        ).use { cursor ->
+            check(cursor.moveToFirst() && cursor.getLong(0) == 0L) { "Orphaned channel pending lifecycle" }
+        }
+    }
+
+    private fun lifecycleTriggerMap(db: SupportSQLiteDatabase): Map<String, String> {
+        val actual = linkedMapOf<String, String>()
+        db.query(
+            "SELECT name,sql FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'channel_pending_lifecycle_*'",
+        ).use { cursor -> while (cursor.moveToNext()) actual[cursor.getString(0)] = cursor.getString(1) }
+        return actual
     }
 
     fun invalidateRestore(db: SupportSQLiteDatabase) {

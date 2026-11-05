@@ -346,6 +346,73 @@ class ChannelSuccessReplacementRoomTest {
         assertEquals(1, g.firmware.channelSent().size)
     }
 
+    @Test fun committedAcceptedPendingSurvivesFailedIndexAndRetirementWithoutReplacementGenerationWireSend() =
+        runTest(scheduler) {
+            val row = original()
+            val first = GenerationFixture(indexer = OutgoingChannelReactionIndexer { _, _, _, _, _ ->
+                throw PersistenceStoreException(PersistenceStoreError.SaveFailed("index unavailable"))
+            })
+            first.start()
+            first.queue.enqueueChannel(envelope(row)); first.drain()
+            assertEquals(1, first.firmware.channelSent().size)
+            assertEquals(MessageStatus.SENT, store.fetchMessage(key(row.id))?.status)
+            val before = store.fetchPendingSendsForMessage(key(row.id))
+            assertEquals(1L, before.single().attemptCount)
+            first.stop()
+            val second = GenerationFixture()
+            second.start(); second.drain()
+            assertTrue(second.firmware.channelSent().isEmpty())
+            assertEquals(before, store.fetchPendingSendsForMessage(key(row.id)))
+            assertEquals(row.copy(status = MessageStatus.SENT), store.fetchMessage(key(row.id)))
+        }
+
+    @Test fun genuineAcceptedButUncommittedReturnRetainsSuppressionAcrossOrdinaryGenerationReplacement() =
+        runTest(scheduler) {
+            val row = original()
+            val unavailable = object : PersistenceStoreProtocol by store, ChannelSendCompletionAuthority by store {
+                override suspend fun recordChannelSendCompleted(
+                    attempt: ChannelFailureAttempt, completionRequestId: UUID,
+                    mode: ChannelSendCompletionMode, acceptedTimestamp: UInt,
+                ): ChannelSendCompletionResult =
+                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("completion unavailable"))
+            }
+            val first = GenerationFixture(persistence = unavailable)
+            first.start()
+            first.queue.enqueueChannel(envelope(row)); first.drain()
+            assertEquals(1, first.firmware.channelSent().size)
+            val before = store.fetchPendingSendsForMessage(key(row.id))
+            val beforeMessage = store.fetchMessage(key(row.id))
+            assertEquals(1L, before.single().attemptCount)
+            assertEquals(MessageStatus.PENDING, beforeMessage?.status)
+            first.stop()
+            val second = GenerationFixture()
+            second.start(); second.drain()
+            assertTrue(second.firmware.channelSent().isEmpty())
+            assertEquals(before, store.fetchPendingSendsForMessage(key(row.id)))
+            assertEquals(beforeMessage, store.fetchMessage(key(row.id)))
+        }
+
+    @Test fun genuineNewPendingLifecycleAfterRetirementCanSendSameMessageWithoutInheritingOldCompletion() =
+        runTest(scheduler) {
+            val row = original()
+            val first = GenerationFixture(indexer = OutgoingChannelReactionIndexer { _, _, _, _, _ ->
+                throw PersistenceStoreException(PersistenceStoreError.SaveFailed("index unavailable"))
+            })
+            first.start()
+            first.queue.enqueueChannel(envelope(row)); first.drain()
+            val oldPending = store.fetchPendingSendsForMessage(key(row.id)).single()
+            assertEquals(1, first.firmware.channelSent().size)
+            first.stop()
+            store.deletePendingSend(key(oldPending.id))
+            store.upsertPendingSend(oldPending.copy(isResend = true, attemptCount = 0))
+            val second = GenerationFixture()
+            second.start(); second.drain()
+            assertEquals(1, second.firmware.channelSent().size)
+            assertEquals(row.copy(status = MessageStatus.SENT, sendCount = 5, heardRepeats = 0),
+                store.fetchMessage(key(row.id)))
+            assertTrue(store.fetchPendingSendsForMessage(key(row.id)).isEmpty())
+        }
+
     private inner class CommitFault(private val afterCommit: Boolean = false) :
         PersistenceStoreProtocol by store, ChannelSendCompletionAuthority by store {
         var failures = 0
@@ -401,7 +468,8 @@ class ChannelSuccessReplacementRoomTest {
             reporter = MessagingIssueReporter { diagnostics += it }, directAckAuthority = store,
             directPendingCompletionAuthority = store, directAckRadioExclusionAuthority = store,
             directAckRadioFailureAuthority = store, channelFailureAuthority = store,
-            channelSendCompletionAuthority = persistence as? ChannelSendCompletionAuthority ?: store)
+            channelSendCompletionAuthority = persistence as? ChannelSendCompletionAuthority ?: store,
+            channelQueueAdmissionAuthority = persistence as? ChannelQueueAdmissionAuthority ?: store)
         val queue = ChatSendQueueService(token, persistence, service, MessagingChannelQuery { null }, indexer,
             signals, scope, clock = clock, reporter = MessagingIssueReporter { diagnostics += it })
         init { generations += this }

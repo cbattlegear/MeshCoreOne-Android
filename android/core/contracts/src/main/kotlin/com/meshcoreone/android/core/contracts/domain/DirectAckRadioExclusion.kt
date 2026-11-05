@@ -380,6 +380,11 @@ interface DirectAckRadioExclusionAuthority {
         resolution: DirectAckEmissionResolution,
     ): DirectAckEmissionMutationResult
 
+    /**
+     * Bounded diagnostics cannot represent tracked-wire acceptance without matching valid physical
+     * acceptance. Surface existing typed invalid-data/unavailable failure for that inconsistency,
+     * never fabricate a legacy/physical row, omit it or report an apparently COMPLETE empty history.
+     */
     suspend fun inspectDirectAckRadioEvidence(
         radioId: RadioId,
     ): DirectAckRadioEvidenceObservation
@@ -395,6 +400,10 @@ interface DirectAckRadioExclusionAuthority {
      * requested radio, including radios with no surviving rows or deleted/readded identities.
      * PREAUTHORITY_HISTORY_UNKNOWN blocks new settlement without inventing a wire or saturation.
      * Preserve genuine committed delivery and exact historical replay precedence.
+     * A tracked registered-wire accepted code without a matching valid ACCEPTED physical row
+     * for that exact wire/code is unresolved cross-table evidence. Target inconsistency yields
+     * TARGET_ACCEPTANCE_UNRESOLVED even if another target wire has a valid accepted emission;
+     * foreign inconsistency yields UNRESOLVED_OTHER_CLAIM_EMISSION. No generic behavior changes.
      */
     suspend fun settleDirectAckExcludingRadioHistory(
         attempt: DirectAckAttempt,
@@ -465,6 +474,8 @@ interface DirectAckRadioConfirmationEvidenceInspecting {
      * Include PREAUTHORITY_HISTORY_UNKNOWN from durable DB-wide metadata for every requested
      * radio, even without any radio/message/wire rows. It is not a synthetic legacy emission or
      * sticky radio saturation and may coexist with all other reasons.
+     * A tracked wire's accepted binding without a matching valid physical ACCEPTED wire/code
+     * contributes CONFLICTING_PHYSICAL_EVIDENCE; do not omit it as tracked-but-unmarked.
      *
      * No sample, diagnostic row cap, synthetic excluded claim, lease/grant, generation filter or
      * TTL may narrow this query. The read never creates/clears evidence or saturation. Absence of
@@ -597,6 +608,15 @@ sealed interface DirectAckRadioFailureResult {
  * provenance proving no physical invocation, or every target emission DefinitelyUnsent, permits
  * the known-safe no-write failure path regardless of unrelated foreign radio history. A later
  * unsent retry cannot clear an older possible emission; a transport error alone is not proof.
+ * The proof must reconcile registered-wire acceptance with physical ancestry, not inspect only
+ * emission rows. A tracked wire's retained accepted code requires at least one valid ACCEPTED
+ * physical row for the same wire and actual code. No marker, only UNSENT/MAY rows, or only
+ * mismatched actuals is contradictory/unresolved ancestry, not an uninvoked or definitely-unsent
+ * target. Classify target/foreign inconsistency with the corresponding conflicting reason.
+ * Generic recordDirectSendAccepted can create such a binding; its existing behavior is unchanged.
+ * Do not fabricate a marker or legacy ancestry, silently discard the accepted binding, or repair
+ * rows during assessment. Distinct genuine accepted and unsent physical invocations sharing one
+ * logical wire are valid: an unsent retry does not contradict or erase an earlier accepted send.
  *
  * Otherwise, foreign wildcard ancestry/emissions block failure. For
  * accepted target emissions, ANY accepted actual code colliding with any other claim's known

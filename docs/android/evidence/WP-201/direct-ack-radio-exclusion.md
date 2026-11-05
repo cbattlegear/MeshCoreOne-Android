@@ -705,3 +705,50 @@ exists. Storage/UI owners were asked for a real identical-key/identical-DTO
 delete/recreate and delayed-response rejection control; value equality tests
 are not that race evidence. No timeline-binding API or UI integration is
 claimed here.
+
+## Tracked-wire cross-table consistency clarification
+
+Coordinator review of storage candidate 751 identified a reachable public-API
+case: generic `recordDirectSendAccepted` may bind an actual code on a tracked
+registered wire without any physical marker. If guarded failure considers
+only accepted physical-emission rows, it can misclassify that target as never
+invoked and bypass foreign uncertainty. A retained wire actual versus only
+UNSENT physical rows creates the same no-write-proof contradiction.
+
+The failure capability now explicitly requires reconciliation of registered
+wire acceptance and complete physical ancestry before the known-safe
+exception. Neither accepted-without-marker nor accepted-versus-only-UNSENT is
+proof that the target never emitted. Preserve generic acceptance behavior;
+do not manufacture a physical marker, reclassify tracked provenance as legacy,
+ignore the accepted binding or repair rows during a read.
+
+This is not a blanket rejection of mixed outcomes on a logical wire. Separate
+genuine accepted and definitely-unsent invocations sharing one wire are valid;
+an unsent retry neither erases nor contradicts an earlier accepted physical
+emission. Raw field decoding and semantic cross-table assessment must remain
+distinct, with existing typed failure paths preserved.
+
+This KDoc/evidence-only clarification changes no declarations, result enums,
+classifier implementation, schema, generic API or test assertions. Actual
+public-API Room controls for generic acceptance without a marker, generic
+acceptance after UNSENT, foreign MAY/known-code collision, and the valid
+accepted-plus-unsent-retry case belong to storage. They have been requested;
+no execution or producer integration is claimed by this clarification.
+
+Storage confirmed the precise consistency rule: a valid tracked wire accepted
+binding needs any valid physical ACCEPTED row for the same wire and actual
+code. No marker, only UNSENT/MAY rows, or only mismatched physical actual codes
+are inconsistent. A matching genuine physical resolution can subsequently
+establish consistency without repair or an automatically fabricated marker.
+
+New failure and full message diagnostics use corresponding target/foreign
+conflicting reasons. Full radio confirmation uses
+`CONFLICTING_PHYSICAL_EVIDENCE`. Strict settlement uses
+`TARGET_ACCEPTANCE_UNRESOLVED` even if another target wire has a valid accepted
+emission, or `UNRESOLVED_OTHER_CLAIM_EMISSION` for a foreign inconsistent wire.
+The bounded diagnostic DTO cannot truthfully encode a tracked markerless
+accepted binding: it must surface existing typed invalid-data/unavailable
+failure instead of dropping the row or inventing a legacy/physical emission.
+Structurally malformed physical fields retain their existing typed read/
+settlement failure behavior, distinct from valid-but-inconsistent cross-table
+values. No policy permits a generic API change.

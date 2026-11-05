@@ -72,6 +72,10 @@ sealed interface DirectMessageConfirmationEvidence {
  * target/foreign unresolved, conflicting, legacy and sticky-saturation reasons. Retired leases,
  * erased claim payloads and noncurrent grants must not hide retained positive collision evidence.
  * Use bounded SQL EXISTS/indexed aggregates, not capped samples or unbounded materialized histories.
+ * A tracked wire's accepted binding without a valid matching physical ACCEPTED row for that exact
+ * wire/code contributes the corresponding target/foreign conflicting reason. It is not discarded
+ * as an uninvoked wire or blessed by a different valid target wire. Preserve the actual binding
+ * as diagnostic code evidence, without upgrading settlement eligibility or repairing any rows.
  *
  * Current storage has no genuine birth/no-write proof. Every Present therefore includes
  * TARGET_PROVENANCE_UNPROVEN, even when other known reasons exist or status is DELIVERED. Empty

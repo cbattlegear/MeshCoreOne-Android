@@ -621,7 +621,7 @@ class DirectAckAuthorityPersistenceTest {
     }
 
     @Test fun acceptedWireBindingPreservesPendingUntilExactWireSendCompletion() = runTest {
-        val claim = begin()
+        val claim = begin(row = message(status = MessageStatus.PENDING))
         val accepted = assertIs<DirectAckMutationResult.Applied>(
             store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u),
         )
@@ -657,7 +657,7 @@ class DirectAckAuthorityPersistenceTest {
     }
 
     @Test fun sendCompletionRequiresAnAcceptedClaimWireAndCannotPromoteRetryingStatus() = runTest {
-        val claim = begin()
+        val claim = begin(row = message(status = MessageStatus.PENDING))
         val missing = assertIs<DirectAckMutationResult.Rejected>(
             store.applyDirectAckBookkeeping(
                 claim.attempt, UUID.randomUUID(), DirectAckBookkeeping.SendCompleted(UUID.randomUUID()),
@@ -687,7 +687,7 @@ class DirectAckAuthorityPersistenceTest {
     }
 
     @Test fun resendCannotUseInlineSendCompletionToPromotePendingRow() = runTest {
-        val claim = begin(mode = DirectAckMode.RESEND)
+        val claim = begin(row = message(status = MessageStatus.PENDING), mode = DirectAckMode.RESEND)
         assertIs<DirectAckMutationResult.Applied>(
             store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u),
         )

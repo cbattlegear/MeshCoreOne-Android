@@ -3,6 +3,8 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.PersistenceKeys
+import com.meshcoreone.android.core.model.DeviceDTO
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.event.TraceInfo
@@ -24,6 +26,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -43,6 +46,115 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class TraceSessionLifetimeTest : RoomProcessTest() {
+    @Test
+    fun reconciledDeviceCannotAuthorizeActionsAgainstThePreviousGraph() = runTest {
+        val memory = MemoryConnectionPreferences()
+        val armed = AtomicBoolean()
+        val reached = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val rebuild = CompletableDeferred<Unit>()
+        val preferences = object : ProcessConnectionPreferences by memory {
+            override suspend fun update(
+                transform: (MutableMap<String, RuntimePreferenceValue>) -> Unit,
+            ): RuntimePreferenceSnapshot {
+                val next = memory.read().values.toMutableMap()
+                var writesLastConnection = false
+                val tracking = object : MutableMap<String, RuntimePreferenceValue> by next {
+                    override fun put(key: String, value: RuntimePreferenceValue): RuntimePreferenceValue? {
+                        if (key == PersistenceKeys.LAST_CONNECTED_DEVICE_NAME) writesLastConnection = true
+                        return next.put(key, value)
+                    }
+                }
+                transform(tracking)
+                if (writesLastConnection && armed.compareAndSet(true, false)) {
+                    reached.complete(Unit)
+                    release.await()
+                }
+                return memory.update { it.clear(); it.putAll(next) }
+            }
+        }
+        val h = ContainerHarness(this, store, preferencesOverride = preferences)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val recents = object : RecentHopsStorage {
+                override fun stringList(key: String): List<String>? = null
+                override fun setStringList(key: String, value: List<String>) = Unit
+            }
+            val actual = h.container.createToolsFeatureDependencies(
+                recents, h.container.createToolsDiagnosticsDependencies(),
+            ).trace
+            val token = assertNotNull(actual.sessionToken())
+            val version = h.appState.servicesVersion.value
+            val device = assertNotNull(actual.connectedDevice())
+            val radioB = RadioId(UUID.randomUUID())
+            val pathA = store.createSavedTracePath(token.radioId, "A route", Bytes.of(0xAA), 1, null)
+            val pathB = store.createSavedTracePath(radioB, "B route", Bytes.of(0xBB), 1, null)
+            val diagnostics = TraceDiagnostics { _, error -> throw AssertionError(error) }
+            var sends = 0
+            var tag = 0u
+            val feature = object : TracePathFeatureDependencies by actual {
+                override fun traceSender() = TraceSender { sentTag, _, _, _ ->
+                    sends += 1
+                    tag = sentTag
+                    MessageSentInfo(0u, Bytes.EMPTY, 0u)
+                }
+            }
+            fun trace() = TracePathStateHolder(
+                backgroundScope, SystemTraceTimeSource, Copy, recents, diagnostics,
+            ).apply {
+                configure(feature)
+                bindConnection(token.radioId, version)
+                loadSavedPath(pathA)
+            }
+            val saving = trace()
+            saving.runTrace()
+            saving.handleTraceResponse(TraceInfo(tag, 0u, 0u, 0u, emptyList()), token.radioId)
+            assertTrue(assertNotNull(saving.state.value.result).success)
+            val sending = trace()
+            val selecting = trace()
+            val sendsBefore = sends
+            store.saveDevice(DeviceDTO(radioId = radioB, publicKey = device.publicKey, nodeName = "Ghost B", isActive = false))
+            armed.set(true)
+            val reconciliation = backgroundScope.async { h.manager.reconcileIdentity(token, rebuild) }
+            h.eventually("reconciled live device held before graph rebuild") { reached.isCompleted }
+            assertEquals(token, actual.sessionToken(), "Registry still owns A")
+            assertEquals(radioB, actual.connectedDevice()?.radioId, "Manager already exposes B")
+            assertEquals(version, h.appState.servicesVersion.value)
+            assertEquals(radioB, store.fetchDevice(device.id)?.radioId)
+            assertFalse(saving.savePath("Must not cross identities"))
+            assertFalse(store.fetchSavedTracePaths(radioB).any { it.name == "Must not cross identities" })
+            assertFalse(store.fetchSavedTracePaths(token.radioId).any { it.name == "Must not cross identities" })
+            sending.runTrace()
+            assertEquals(sendsBefore, sends, "No A sender may be correlated to B")
+            selecting.loadSavedPath(pathB)
+            assertNull(selecting.state.value.activeSavedPath)
+            val saved = SavedPathsStateHolder(SavedCopy, diagnostics).apply {
+                configure(object : SavedPathsDependencies {
+                    override fun sessionToken() = actual.sessionToken()
+                    override fun connectedDevice() = actual.connectedDevice()
+                    override fun savedPaths() = actual.savedPaths()
+                })
+            }
+            saved.loadSavedPaths()
+            assertTrue(saved.state.value.savedPaths.isEmpty(), "New list cannot authorize B with A token")
+            assertFalse(saved.isCurrentConnection(radioB))
+            saved.renamePath(pathB, "Wrong graph")
+            assertFalse(saved.deletePath(pathB))
+            assertEquals("B route", store.fetchSavedTracePath(EntityKey(radioB, pathB.id))?.name)
+            assertNotNull(store.fetchSavedTracePath(EntityKey(token.radioId, pathA.id)))
+            release.complete(Unit)
+            h.eventually("identity reconciliation returns") { reconciliation.isCompleted }
+            assertEquals(radioB, reconciliation.await())
+            assertEquals(token, actual.sessionToken(), "Import handoff still holds rebuild")
+        } finally {
+            release.complete(Unit)
+            h.container.close()
+            rebuild.complete(Unit)
+        }
+    }
+
     @Test
     fun sameRadioMutationAcceptedBeforePublicationMayFinishAgainstItsOriginalKey() =
         mutationAcceptanceBoundary(crossRadio = false)

@@ -48,6 +48,16 @@ when B publishes at the last pre-send token read. Source declarations and source
 are not runtime reproduction: these additions require fresh exact-candidate execution and
 review, and integration remains held pending that evidence.
 
+Independent source review additionally identified device-B/token-A during actual ghost
+identity reconciliation, the reverse of the prior publication controls. The new
+`reconciledDeviceCannotAuthorizeActionsAgainstThePreviousGraph` AppContainer/Room control
+holds real reconciliation persistence and requires rejection of save, dispatch, selection
+and saved-list operations until graph and device identities agree. Bound guards compare
+the same captured device/request radio with the immutable token radio, preserving null-token
+adapters and previously accepted A writes. This is a new unverified successor, not evidence
+transferred from r11. Its actual positive and unchanged-production controls are required;
+the public PR and #402 hold remain unchanged.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

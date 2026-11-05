@@ -30,7 +30,10 @@ internal class RecordingChannelFailureAuthority(private val store: RecordingStor
     private val handles = mutableSetOf<Attempt>()
     private val mutations = Mutex()
     private val acceptanceLock = Any()
-    private val acceptances = mutableMapOf<UUID, Pair<Capture, ChannelQueueAcceptanceReceipt>>()
+    private data class RetainedAcceptance(
+        val capture: Capture, val receipt: ChannelQueueAcceptanceReceipt, val rejected: Boolean,
+    )
+    private val acceptances = mutableMapOf<UUID, RetainedAcceptance>()
     private val admissionCounts = mutableMapOf<UUID, Long>()
     private class Completion(
         val source: Attempt, val current: Attempt, val id: UUID,
@@ -50,19 +53,17 @@ internal class RecordingChannelFailureAuthority(private val store: RecordingStor
         val source = resolve(attempt)
             ?: return@synchronized ChannelQueueAcceptanceResult.Rejected(DirectAckRejection.INVALID_HANDLE)
         val capture = source.capture
-        val pendingID = capture.pendingID
-            ?: return@synchronized ChannelQueueAcceptanceResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
-        if (capture.timestamp != acceptedTimestamp || capture.isResend != (mode == ChannelSendCompletionMode.RESEND)) {
-            return@synchronized ChannelQueueAcceptanceResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
-        }
-        val value = ChannelQueueAcceptanceReceipt(capture.id, capture.key, pendingID,
+        val value = ChannelQueueAcceptanceReceipt(capture.id, capture.key, capture.pendingID,
             completionRequestId, mode, acceptedTimestamp)
         acceptances[capture.id]?.let {
-            return@synchronized if (it.second == value) ChannelQueueAcceptanceResult.AlreadyRegistered(value)
+            return@synchronized if (!it.rejected && it.receipt == value) ChannelQueueAcceptanceResult.AlreadyRegistered(value)
                 else ChannelQueueAcceptanceResult.Rejected(DirectAckRejection.CONFLICT)
         }
-        acceptances[capture.id] = capture to value
-        ChannelQueueAcceptanceResult.Registered(value)
+        val rejected = capture.timestamp != acceptedTimestamp ||
+            capture.isResend != null && capture.isResend != (mode == ChannelSendCompletionMode.RESEND)
+        acceptances[capture.id] = RetainedAcceptance(capture, value, rejected)
+        if (rejected) ChannelQueueAcceptanceResult.Rejected(DirectAckRejection.CONFLICT)
+        else ChannelQueueAcceptanceResult.Registered(value)
     }
 
     override suspend fun admitQueuedChannelSend(
@@ -90,15 +91,27 @@ internal class RecordingChannelFailureAuthority(private val store: RecordingStor
                     return@synchronized ChannelQueueAdmissionResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
                 }
                 val pendingKey = EntityKey(key.radioId, pending.id)
-                fun sameWork(capture: Capture) = capture.key == key && capture.pendingID == pending.id &&
-                    capture.messageLifecycle == store.messageLifecycle(key) &&
+                fun sameMessage(capture: Capture) = capture.key == key &&
+                    capture.messageLifecycle == store.messageLifecycle(key)
+                fun sameWork(capture: Capture) = sameMessage(capture) && capture.pendingID == pending.id &&
                     capture.pendingLifecycle == store.pendingLifecycle(pendingKey)
+                completions.values.firstOrNull { sameMessage(it.source.capture) && it.source.capture.pendingID == null }?.let {
+                    return@synchronized ChannelQueueAdmissionResult.Uncertain(
+                        ChannelQueueUncertaintyReason.UNBOUND_ACCEPTANCE_LINEAGE,
+                        ChannelQueueAcceptanceReceipt(it.source.capture.id, key, null, it.id, it.mode, it.timestamp))
+                }
+                acceptances.values.firstOrNull { sameMessage(it.capture) &&
+                    (it.capture.pendingID == null || it.rejected && sameWork(it.capture)) }?.let {
+                    return@synchronized ChannelQueueAdmissionResult.Uncertain(
+                        if (it.rejected) ChannelQueueUncertaintyReason.REJECTED_ACCEPTANCE_NOTE
+                        else ChannelQueueUncertaintyReason.UNBOUND_ACCEPTANCE_LINEAGE, it.receipt)
+                }
                 completions.values.firstOrNull { sameWork(it.source.capture) }?.let {
                     return@synchronized ChannelQueueAdmissionResult.PreviouslyCompleted(completionReceipt(it))
                 }
-                acceptances.values.firstOrNull { sameWork(it.first) }?.let {
+                acceptances.values.firstOrNull { sameWork(it.capture) }?.let {
                     return@synchronized ChannelQueueAdmissionResult.Uncertain(
-                        ChannelQueueUncertaintyReason.RETAINED_ACCEPTANCE, it.second)
+                        ChannelQueueUncertaintyReason.RETAINED_ACCEPTANCE, it.receipt)
                 }
                 if (old != null) {
                     rejected(old.current)?.let { return@synchronized ChannelQueueAdmissionResult.Rejected(it) }
@@ -167,6 +180,12 @@ internal class RecordingChannelFailureAuthority(private val store: RecordingStor
             source.retired = true
             val completion = Completion(source, successor, completionRequestId, mode, acceptedTimestamp)
             completions[capture.id] = completion
+            synchronized(acceptanceLock) {
+                acceptances[capture.id]?.takeIf {
+                    it.receipt.completionRequestId == completionRequestId &&
+                        it.receipt.mode == mode && it.receipt.acceptedTimestamp == acceptedTimestamp
+                }?.let { acceptances.remove(capture.id) }
+            }
             ChannelSendCompletionResult.Applied(completion, completionReceipt(completion))
         }
         if (result is ChannelSendCompletionResult.Applied) afterCompletion?.invoke(result.receipt)
@@ -300,9 +319,7 @@ internal class RecordingChannelFailureAuthority(private val store: RecordingStor
         lease: DirectAckLease, prepareRequestId: UUID, key: EntityKey, pendingSendId: UUID?, resendTimestamp: UInt?,
     ): ChannelFailureCaptureResult = mutations.withLock {
         val arguments = Preparation(key, pendingSendId, resendTimestamp)
-        replayCapture(lease, prepareRequestId, arguments)?.let { return@withLock it }
         store.authorityAccess("fetchMessage")
-        if (resendTimestamp != null) store.authorityAccess("updateMessageTimestamp")
         if (!store.directAckAuthority.isCurrentLease(lease, key.radioId)) {
             return@withLock ChannelFailureCaptureResult.Rejected(DirectAckRejection.STALE_LEASE)
         }
@@ -313,23 +330,35 @@ internal class RecordingChannelFailureAuthority(private val store: RecordingStor
             return@withLock ChannelFailureCaptureResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         }
         val pending = pendingSendId?.let { store.pending[EntityKey(key.radioId, it)] }
+        val actualRows = store.pending.values.filter { it.radioId == key.radioId && it.messageID == key.id }
+        if (pendingSendId == null && actualRows.isNotEmpty()) {
+            return@withLock ChannelFailureCaptureResult.Rejected(DirectAckRejection.CONFLICT)
+        }
         if (pendingSendId != null && (pending == null || pending.kind != PendingSendKind.CHANNEL ||
                 pending.messageID != key.id || pending.radioId != key.radioId || pending.channelIndex != message.channelIndex)) {
             return@withLock ChannelFailureCaptureResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         }
         val selectedRows = pending?.let { listOf(it) }
-            ?: store.pending.values.filter { it.radioId == key.radioId && it.messageID == key.id }
+            ?: actualRows
+        if (synchronized(acceptanceLock) {
+            acceptances.values.any { it.capture.pendingID == null && it.capture.key == key &&
+                it.capture.messageLifecycle == store.messageLifecycle(key) }
+        }) return@withLock ChannelFailureCaptureResult.Rejected(DirectAckRejection.CONFLICT)
         for (selected in selectedRows) {
             val selectedKey = EntityKey(key.radioId, selected.id)
             fun sameWork(capture: Capture) = capture.key == key && capture.pendingID == selected.id &&
                 capture.messageLifecycle == store.messageLifecycle(key) &&
                 capture.pendingLifecycle == store.pendingLifecycle(selectedKey)
             val suppressed = synchronized(acceptanceLock) {
-                completions.values.any { sameWork(it.source.capture) } || acceptances.values.any { sameWork(it.first) }
+                completions.values.any { sameWork(it.source.capture) } || acceptances.values.any { sameWork(it.capture) }
             }
             if (suppressed) return@withLock ChannelFailureCaptureResult.Rejected(DirectAckRejection.CONFLICT)
         }
-        if (resendTimestamp != null) store.messages[key] = message.copy(timestamp = resendTimestamp)
+        replayCapture(lease, prepareRequestId, arguments)?.let { return@withLock it }
+        if (resendTimestamp != null) {
+            store.authorityAccess("updateMessageTimestamp")
+            store.messages[key] = message.copy(timestamp = resendTimestamp)
+        }
         capture(lease, prepareRequestId, key, pendingSendId, arguments)
     }
 

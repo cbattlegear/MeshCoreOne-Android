@@ -361,7 +361,7 @@ class MessageService(
         }
 
     private fun noteChannelAcceptance(claim: ChannelClaim) {
-        val pendingID = claim.pendingID ?: return
+        val pendingID = claim.pendingID
         if (claim.acceptanceNoted) return
         val stamp = claim.acceptedTimestamp ?: throw channelAuthorityFailure("accepted timestamp unavailable")
         val acceptance = when (val result = queueAdmissionAuthority().noteAcceptedChannelAttempt(
@@ -2207,6 +2207,7 @@ class MessageService(
                 var retainAccepted = false
                 try {
                     channelCompletionAuthority()
+                    queueAdmissionAuthority()
                     lateinit var claim: ChannelClaim
                     channelBoundary(claimID, dto.id) {
                         claim = capturedChannel(claimID, dto.id, null,
@@ -2222,6 +2223,7 @@ class MessageService(
                                     synchronized(lock) { claim.acceptedTimestamp = claim.message.timestamp }
                                     retainAccepted = true
                                 }
+                                noteChannelAcceptance(claim)
                             }
                         }
                     }
@@ -2264,7 +2266,7 @@ class MessageService(
     ): ChannelSendOutcome =
         owned("queuedChannel", channelOperations) {
             channelCompletionAuthority()
-            if (pendingID != null) queueAdmissionAuthority()
+            queueAdmissionAuthority()
             val mode = if (isResend) ChannelSendCompletionMode.RESEND else ChannelSendCompletionMode.SEND
             if (synchronized(lock) {
                 claimID !in channelClaims && channelClaims.values.any {

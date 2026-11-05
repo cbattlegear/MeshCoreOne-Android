@@ -12,6 +12,7 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.*
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.MessagePollingException
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
@@ -1720,6 +1721,150 @@ class MessagingRoomIntegrationTest {
 
     @Test fun genericPendingCounterUpdateCannotLaunderAcceptedWorkIntoReplacementGenerationDispatch() = runTest(scheduler) {
         channelGenerationAcceptance("completion-after", replacement = "pending-update")
+    }
+
+    @Test fun publicChannelSendCannotAcceptAnUnboundInvocationWithAnExistingQueuedPending() = runTest(scheduler) {
+        publicChannelWithExistingPending(isResend = false)
+    }
+
+    @Test fun publicChannelResendCannotAcceptAnUnboundInvocationWithAnExistingQueuedPending() = runTest(scheduler) {
+        publicChannelWithExistingPending(isResend = true)
+    }
+
+    private suspend fun TestScope.publicChannelWithExistingPending(isResend: Boolean) {
+        seed()
+        val first = RadioGeneration(211)
+        first.start()
+        val message = first.service.createPendingChannelMessage("queue already owns this send", 0u, radio)
+        val pending = PendingSendDTO.fromEnvelope(
+            ChannelMessageEnvelope(message.id, 0u, isResend, message.text, message.timestamp, "Local"),
+            radio, enqueuedAt = base).copy(sequence = 1)
+        store.upsertPendingSend(pending)
+        assertFailsWith<PersistenceStoreException> {
+            if (isResend) first.service.resendChannelMessage(message.id, false)
+            else first.service.sendPendingChannelMessage(message.id)
+        }
+        assertTrue(first.firmware.channelSent().isEmpty())
+        assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(listOf(pending), store.fetchPendingSendsForMessage(EntityKey(radio, message.id)))
+        first.stop()
+        val successor = RadioGeneration(212)
+        successor.start(); successor.signals.set(DeviceConnectionState.READY)
+        successor.queue.hydrate(); runCurrent(); successor.queue.awaitDrainCompletion()
+        assertEquals(1, successor.firmware.channelSent().size)
+        assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(radio, message.id))?.status)
+        assertEquals(if (isResend) 2L else 1L, store.fetchMessage(EntityKey(radio, message.id))?.sendCount)
+        assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, message.id)).isEmpty())
+        successor.stop()
+    }
+
+    @Test fun pendingInsertedAfterPublicChannelCaptureRemainsUncertainBeforeAndAfterServiceReplacement() = runTest(scheduler) {
+        unboundChannelAcceptanceAcrossGenerations(rejectNote = false)
+    }
+
+    @Test fun rejectedAcceptanceNoteRetainsOriginalUnboundIdentityAcrossServiceReplacement() = runTest(scheduler) {
+        unboundChannelAcceptanceAcrossGenerations(rejectNote = true)
+    }
+
+    @Test fun inlineChannelAcceptanceFencesLatePendingThroughCompletionOutageAndServiceReplacement() = runTest(scheduler) {
+        unboundChannelAcceptanceAcrossGenerations(rejectNote = false, inline = true)
+    }
+
+    @Test fun inlineAcceptedNotificationRemainsAcceptedWhenItsUnboundNoteIsRejected() = runTest(scheduler) {
+        unboundChannelAcceptanceAcrossGenerations(rejectNote = true, inline = true)
+    }
+
+    private suspend fun TestScope.unboundChannelAcceptanceAcrossGenerations(rejectNote: Boolean, inline: Boolean = false) {
+        seed()
+        val actual = store
+        val fault = PersistenceStoreException(PersistenceStoreError.SaveFailed("uncommitted public acceptance"))
+        var failPublicCompletion = true
+        var publicCompletionCalls = 0
+        val persistence = object : DirectRoles(actual) {
+            override fun noteAcceptedChannelAttempt(
+                attempt: ChannelFailureAttempt, completionRequestId: UUID,
+                mode: ChannelSendCompletionMode, acceptedTimestamp: UInt,
+            ): ChannelQueueAcceptanceResult = actual.noteAcceptedChannelAttempt(
+                attempt, completionRequestId, mode,
+                if (failPublicCompletion && rejectNote) acceptedTimestamp xor 1u else acceptedTimestamp)
+            override suspend fun recordChannelSendCompleted(
+                attempt: ChannelFailureAttempt, completionRequestId: UUID,
+                mode: ChannelSendCompletionMode, acceptedTimestamp: UInt,
+            ): ChannelSendCompletionResult {
+                if (failPublicCompletion) { publicCompletionCalls++; throw fault }
+                return actual.recordChannelSendCompleted(attempt, completionRequestId, mode, acceptedTimestamp)
+            }
+        }
+        val first = RadioGeneration(221, persistence)
+        first.start(); first.signals.set(DeviceConnectionState.READY)
+        var capturedMessage = if (inline) null else first.service.createPendingChannelMessage("unbound original acceptance", 0u, radio)
+        var insertedPending: PendingSendDTO? = null
+        var inserted = false
+        first.firmware.beforeSend = { data ->
+            if (data[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue && !inserted) {
+                inserted = true
+                val message = capturedMessage ?: actual.fetchMessages(radio, 0u).single().also { capturedMessage = it }
+                assertTrue(actual.fetchPendingSendsForMessage(EntityKey(radio, message.id)).isEmpty())
+                val pending = PendingSendDTO.fromEnvelope(
+                    ChannelMessageEnvelope(message.id, 0u, true, message.text, message.timestamp, "Local"),
+                    radio, enqueuedAt = base).copy(sequence = 1)
+                insertedPending = pending
+                actual.upsertPendingSend(pending)
+            }
+        }
+        val receipt = NotificationActionReceipt()
+        assertFailsWith<PersistenceStoreException> {
+            if (inline) withContext(receipt) { first.service.sendChannelMessage("unbound original acceptance", 0u, radio) }
+            else first.service.resendChannelMessage(requireNotNull(capturedMessage).id, true)
+        }
+        first.firmware.beforeSend = null
+        assertTrue(inserted)
+        if (inline) assertTrue(receipt.isAccepted)
+        val message = assertNotNull(capturedMessage)
+        val latePending = assertNotNull(insertedPending)
+        assertEquals(1, first.firmware.channelSent().size)
+        assertEquals(if (rejectNote) 0 else 1, publicCompletionCalls)
+        failPublicCompletion = false
+        val unchanged = assertNotNull(actual.fetchMessage(EntityKey(radio, message.id)))
+        val independent = message.copy(id = UUID.randomUUID(), text = "independent while original is uncertain")
+        val independentPending = latePending.copy(id = UUID.randomUUID(), messageID = independent.id,
+            messageText = independent.text, sequence = 2)
+        actual.saveMessage(independent); actual.upsertPendingSend(independentPending)
+        first.queue.hydrate(); runCurrent(); first.queue.awaitDrainCompletion()
+        assertEquals(2, first.firmware.channelSent().size)
+        assertEquals(unchanged, actual.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(listOf(latePending), actual.fetchPendingSendsForMessage(EntityKey(radio, message.id)))
+        val expectedReason = if (rejectNote) ChannelQueueUncertaintyReason.REJECTED_ACCEPTANCE_NOTE
+            else ChannelQueueUncertaintyReason.UNBOUND_ACCEPTANCE_LINEAGE
+        assertTrue(first.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            val cause = it.cause as? ChannelQueueAdmissionUncertaintyException
+            cause != null && cause.acceptance.key == EntityKey(radio, message.id) &&
+                cause.acceptance.pendingSendId == null && cause.reason == expectedReason
+        })
+        first.stop()
+        val second = RadioGeneration(222)
+        second.start(); second.signals.set(DeviceConnectionState.READY)
+        second.queue.hydrate(); runCurrent(); second.queue.awaitDrainCompletion()
+        assertTrue(second.firmware.channelSent().isEmpty())
+        assertEquals(unchanged, actual.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(listOf(latePending), actual.fetchPendingSendsForMessage(EntityKey(radio, message.id)))
+        assertTrue(second.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            val cause = it.cause as? ChannelQueueAdmissionUncertaintyException
+            cause != null && cause.acceptance.key == EntityKey(radio, message.id) &&
+                cause.acceptance.pendingSendId == null && cause.reason == expectedReason
+        })
+        assertEquals(MessageStatus.SENT, actual.fetchMessage(EntityKey(radio, independent.id))?.status)
+        assertTrue(actual.fetchPendingSendsForMessage(EntityKey(radio, independent.id)).isEmpty())
+        second.stop()
+        actual.deleteMessage(EntityKey(radio, message.id))
+        actual.saveMessage(unchanged); actual.upsertPendingSend(latePending)
+        val third = RadioGeneration(223)
+        third.start(); third.signals.set(DeviceConnectionState.READY)
+        third.queue.hydrate(); runCurrent(); third.queue.awaitDrainCompletion()
+        assertEquals(1, third.firmware.channelSent().size)
+        assertEquals(MessageStatus.SENT, actual.fetchMessage(EntityKey(radio, message.id))?.status)
+        assertTrue(actual.fetchPendingSendsForMessage(EntityKey(radio, message.id)).isEmpty())
+        third.stop()
     }
 
     private suspend fun TestScope.channelGenerationAcceptance(schedule: String, replacement: String? = null) {

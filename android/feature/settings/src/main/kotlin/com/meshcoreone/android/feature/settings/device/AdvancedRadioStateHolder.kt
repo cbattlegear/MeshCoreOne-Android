@@ -206,7 +206,7 @@ class AdvancedRadioStateHolder(
                 if (captured.clientRepeat || device.clientRepeat || request.frequencyKHz == captured.frequency) device.frequency
                 else request.frequencyKHz
             val bandwidthToSend =
-                if (request.bandwidthHz == RadioOptions.nearestBandwidth(captured.bandwidth)) RadioOptions.nearestBandwidth(device.bandwidth)
+                if (request.bandwidthHz == RadioOptions.nearestBandwidth(captured.bandwidth)) device.bandwidth
                 else request.bandwidthHz
             val sfToSend = if (request.spreadingFactor == captured.spreadingFactor) device.spreadingFactor else request.spreadingFactor
             val crToSend = if (request.codingRate == captured.codingRate) device.codingRate else request.codingRate
@@ -225,7 +225,7 @@ class AdvancedRadioStateHolder(
                 it.copy(
                     frequency = frequencyToSend.toDouble() / 1000.0,
                     frequencyText = formatFrequencyMHz(frequencyToSend),
-                    bandwidth = bandwidthToSend,
+                    bandwidth = RadioOptions.nearestBandwidth(bandwidthToSend),
                     spreadingFactor = sfToSend.toInt(),
                     codingRate = crToSend.toInt(),
                     txPower = powerToSend.toInt(),

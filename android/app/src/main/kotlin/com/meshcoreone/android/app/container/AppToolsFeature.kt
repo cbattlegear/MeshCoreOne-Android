@@ -77,6 +77,6 @@ fun AppContainer.createToolsFeatureDependencies(
         { appState.connectedDevice?.radioId },
         appState.servicesVersion,
         toolsDiagnostics,
-        sessionToken = sessions.currentToken,
+        connection = connectionManager.snapshot,
     )
 }

@@ -35,7 +35,8 @@ invalidation after late ledger allocation, followed by
 ownership shared across verifier instances at the same canonical ledger path.
 Notifications module bytes match the storage correction; verifier source/test
 bytes match `2d4c42d8f`.
-These corrections require a new combined exact execution; prior results are historical.
+These corrections executed together at exact `e8d76e687` below; earlier results
+remain historical.
 
 The actual witness PR #576 subsequently landed as trusted-main merge
 `59ee802c3d1067446b6bd2c99299a05e1f299a57`, whose second parent is exactly
@@ -136,8 +137,10 @@ B's actual explicit-action staging is held at `ALLOCATED`, then A's invalidation
 is released and awaited against the shared ledger. The assertions require no
 false corruption, followed by B's actual STAGED/CONSUMED/BOUND result for the
 original immutable operation. No test adapter fabricates verification results.
-This tests the coordinator's cross-verifier reachability hypothesis; it remains
-source-only until the corrected combined candidate executes.
+This tests the coordinator's cross-verifier reachability hypothesis. Both API
+variants executed successfully at exact `e8d76e687` with the owned datastore
+repair. It does not claim that the earlier, uncorrected verifier executed this
+schedule or that a retired action could authorize anything.
 
 The test-only Kotlin helper narrowly suppresses internal visibility diagnostics
 to use datastore's existing constructor seams without widening production APIs
@@ -152,8 +155,9 @@ round trip, foreign witness rejection and changed nonce rejection.
 - `python tools/android-port/portmap.py`: passed.
 - `git diff --check`: passed.
 - Local Gradle: not run, per retained hard execution owner.
-- Kotlin/Compose/SQLite producer execution: accepted for exact `618ed213f` below.
-  The subsequent dependency-corrected composition is not covered by that result.
+- Kotlin/Compose/SQLite producer execution: passed at exact `e8d76e687` below,
+  including the corrected verifier/storage composition. These are host-JVM
+  observations, not physical-device acceptance or activation.
 
 | Exact candidate | Hosted run | Actual outcome |
 | --- | --- | --- |
@@ -163,6 +167,8 @@ round trip, foreign witness rejection and changed nonce rejection.
 | `7401b75380ba8dba4bd3ce8a972cc5e5f3473000` | [42004265838](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42004265838) | Compilation passed; 24 mounted failures. The strict root lookup showed that `Dialog.show` returns before the decor is attached; no initial root exists yet. The no-initial-focus negative control executed without appearing among failures. |
 | `10c1d31e5252132b674d46c722dc8b9d32bcd2af` | [42009037096](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42009037096) | Compilation passed; 12 mounted failures remained. Warning/display and queued stale-action controls ran without failures. Five real-ledger methods needed Android Main queue progress after actual IO; the standalone focus-loss test also ran before the clicked warning had composed. No real-ledger acceptance. |
 | `618ed213f5f7bb2d376b3c99a530a91fc8e942e0` | [42011995652](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42011995652) | All six jobs succeeded, including real mounted enrollment/lifecycle cases and SwiftData restore/export oracle. Original Linux job `127193153516` records every required producer method/API variant below. |
+| `36f3aa83fbbb094a1bbb16e280145b4ff41a6c6e` | [42015816886](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42015816886) | Two failures among 2,062 app cases: the new cross-verifier method at both APIs timed out awaiting `ALLOCATED`. The fixture wired admission callbacks but not write callbacks; no allocation scheduling acceptance. Downstream missing notification reports were caused by app-suite abort. |
+| `e8d76e687e3c83ec3041bb15930c7aa2cde456c9` | [42017808137](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42017808137) | All six jobs succeeded, including the actual allocation-gated producer schedule, corrected verifier and storage regressions, and SwiftData restore/export oracle. Original Linux job `127212729558` is authoritative. |
 
 The original successful hosted named-case inventory was independently compared to
 the exact committed producer test declarations: 16 producer identity methods,
@@ -178,14 +184,39 @@ The candidates from `aee0f1f01` onward reconcile actual main
 were disjoint from enrollment and its runner. Each attempt uses a distinct
 immutable diagnostic ref; all prior refs and runs are preserved.
 
-The next combined candidate uses the existing reviewed runner and accepted
-workflow, independently of the unready PR #580 correction. It must independently
-compare all 167 storage methods at both API variants plus six baseline cases
-(340), all 26 verifier methods at both API variants (52), and actual compiler
-inputs. No PR #580 source or its acceptance is inferred. The old 336-case storage
-execution does not establish acceptance of the corrected 340-case source.
-It also reconciles actual trusted main `663d2029ff461ce82c0befd167e2d3b627b2ea72`
+The final combined execution uses the existing reviewed runner and accepted
+workflow, independently of the unready PR #580 correction. Its original hosted
+JSON was read in memory and independently compared to the exact committed
+method declarations and Git blobs, without retaining another result bundle:
+
+| Exact executed surface | Required named cases and result |
+| --- | --- |
+| Producer identity | 16/16 exact methods |
+| Entry and real producer/adapter schedules | 17 methods at API 31 and default API 37: 34/34 |
+| Native Journal mapper | Three methods at both APIs: 6/6 |
+| Witness adapter | 6/6 |
+| Corrected foreground verifier | 26 methods at both APIs: 52/52 |
+| Notification messaging remap | 167 reply methods at both APIs plus six baseline cases: 340/340 |
+
+The app suite reports 2,062/2,062, datastore 273/273, and notifications 340/340;
+each has zero failures, errors or skips. Every required method/API identity is
+present exactly once. Original actual compiler maps contain 276 app, 15 datastore
+and ten approved notification-messaging test inputs, each matching its exact
+candidate Git blob. The notification compiler map equals all ten inputs under
+the approved messaging remap root; the 25 remapped build/production/test input
+blobs also match Git. Other instrumentation roots are not inferred to have run.
+
+No PR #580 source or its acceptance is inferred. The old 336-case storage
+execution is not used as acceptance of the corrected 340-case source.
+The final composition also reconciles actual trusted main
+`663d2029ff461ce82c0befd167e2d3b627b2ea72`
 (PR #575); its declaration-reader documentation and the previously reviewed
 remapping documentation are retained as disjoint sections.
+
+Hosted dispatch command:
+`gh workflow run android-ci.yml --ref diagnostic-wp303-enrollment-e8d76e687-20261105`
+(passed, run `42017808137`). Every earlier diagnostic ref/run remains unchanged.
+The evidence-only successor does not receive a transferred exact-head CI result;
+the executable-source result above stays bound to `e8d76e687`.
 
 The exact hosted job/log is authoritative. No second CI-result bundle is retained.

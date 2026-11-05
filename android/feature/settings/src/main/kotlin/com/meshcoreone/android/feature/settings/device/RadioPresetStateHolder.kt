@@ -303,13 +303,14 @@ class RadioPresetStateHolder(
 
     private fun disableRepeatMode(target: SettingsRadioTarget) {
         if (mutable.value.isApplying || mutable.value.isApplyingRepeat || writeGate.inFlight.value) return
-        // The switch already shows off while the write runs; a failure puts it back.
+        // A failure before verified off restores the switch; snapshot cleanup cannot undo verified off.
         mutable.update { it.copy(isApplyingRepeat = true, isRepeatEnabled = false, errorMessage = null) }
         writeGate.set(true)
         env.scope.launch { runDisableRepeat(target) }
     }
 
     private suspend fun runDisableRepeat(target: SettingsRadioTarget) {
+        var repeatOffAcknowledged = false
         try {
             target.service.reconcileRadioSettingsIfNeeded()
             deviceStore.validatePreRepeatSettings(target.token)
@@ -322,6 +323,7 @@ class RadioPresetStateHolder(
                 expectedDevice = device,
                 restoreAuthority = restoreAuthority,
             )
+            repeatOffAcknowledged = true
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             deviceStore.clearPreRepeatSettings(target.token)
             mutable.update { it.copy(selectedPresetId = it.currentPresetId) }
@@ -330,7 +332,9 @@ class RadioPresetStateHolder(
             releaseRepeat()
             throw cancelled
         } catch (error: Exception) {
-            setRepeatToggle(if (mutable.value.sessionToken == target.token) true else mutable.value.device?.clientRepeat ?: false)
+            mutable.update {
+                it.copy(isRepeatEnabled = if (it.sessionToken == target.token) !repeatOffAcknowledged else it.device?.clientRepeat ?: false)
+            }
             val message = failures.route(error) { disableRepeatMode(target) }
             mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }
         }

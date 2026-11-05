@@ -30,8 +30,11 @@ Subsequent exact owned corrections are reconciled without unrelated ancestry:
 `9e25cbaea404613859a7a7a04e6032c995e32716` for storage result rendering,
 and `7e7d2b8dc65a601bad61853f49cbcc3cf6a7b0e7` followed by
 `de49a98b2a939793f66c5fa3fa31d95964a3600d` for verifier terminal
-invalidation after late ledger allocation. Notifications module bytes match
-the storage correction; verifier source/test bytes match `de49a98b2`.
+invalidation after late ledger allocation, followed by
+`2d4c42d8f46a4e49e0c84e4e14aed17747c28156` for live allocation
+ownership shared across verifier instances at the same canonical ledger path.
+Notifications module bytes match the storage correction; verifier source/test
+bytes match `2d4c42d8f`.
 These corrections require a new combined exact execution; prior results are historical.
 
 The actual witness PR #576 subsequently landed as trusted-main merge
@@ -106,8 +109,8 @@ locked/corrupt/mismatched reads, dismissed/rotated callbacks, delayed staging,
 uncertain/rejected returns, explicit later new attempts, delayed failed observation
 after a foreground-owner replacement, and copy field boundaries.
 
-`NotificationEnrollmentEntryTest` declares 16 methods and mounts the real entry and Notifications settings
-extension. Controls cover held action, actual displayed descriptor, explicit
+`NotificationEnrollmentEntryTest` declares 17 methods. Sixteen mount the real entry
+or Notifications settings extension. Controls cover held action, actual displayed descriptor, explicit
 confirm/dismissal, pause, window focus loss, actual Activity recreation and
 disposal/remount. Five integrated
 cases use actual product verifier/witness/journal SQLite, real JCE HMAC and host
@@ -123,6 +126,18 @@ and asserts actual window focus. A view-only focus callback does not update the
 attachment focus flag. Positive setup does not bypass the production guard;
 an additional mounted case deliberately withholds initial focus and requires
 retirement without acknowledgment.
+
+The additional actual producer/adapter case controls queued invalidation across
+copy replacement without claiming another mounted UI observation: unconfirmed A
+is synchronously retired; only its actual asynchronous invalidation is delayed.
+The same producer retains the request and all four IDs while the real backend
+creates a different verifier for changed copy B. A stale A confirmation is refused.
+B's actual explicit-action staging is held at `ALLOCATED`, then A's invalidation
+is released and awaited against the shared ledger. The assertions require no
+false corruption, followed by B's actual STAGED/CONSUMED/BOUND result for the
+original immutable operation. No test adapter fabricates verification results.
+This tests the coordinator's cross-verifier reachability hypothesis; it remains
+source-only until the corrected combined candidate executes.
 
 The test-only Kotlin helper narrowly suppresses internal visibility diagnostics
 to use datastore's existing constructor seams without widening production APIs
@@ -154,7 +169,7 @@ the exact committed producer test declarations: 16 producer identity methods,
 16 mounted methods at both API variants (32), and three native Journal mapper
 methods at both variants (six). All 54 required cases are present. The same
 log records six witness-adapter methods and the older verifier's 21 methods at
-both variants (42). This does not cover the later verifier's 25-method source.
+both variants (42). This does not cover the later verifier's 26-method source.
 In particular, the five actual-ledger mounted methods cover real explicit-action
 consumption/binding/reopen and both pause/dispose before stage/consumption.
 
@@ -166,8 +181,11 @@ immutable diagnostic ref; all prior refs and runs are preserved.
 The next combined candidate uses the existing reviewed runner and accepted
 workflow, independently of the unready PR #580 correction. It must independently
 compare all 167 storage methods at both API variants plus six baseline cases
-(340), all 25 verifier methods at both API variants (50), and actual compiler
+(340), all 26 verifier methods at both API variants (52), and actual compiler
 inputs. No PR #580 source or its acceptance is inferred. The old 336-case storage
 execution does not establish acceptance of the corrected 340-case source.
+It also reconciles actual trusted main `663d2029ff461ce82c0befd167e2d3b627b2ea72`
+(PR #575); its declaration-reader documentation and the previously reviewed
+remapping documentation are retained as disjoint sections.
 
 The exact hosted job/log is authoritative. No second CI-result bundle is retained.

@@ -332,6 +332,76 @@ class NotificationEnrollmentEntryTest {
         assertTrue(real.failures.isEmpty())
     }
 
+    @Test fun actualProducerCopyReplacementDefersRetiredVerifierInvalidationAcrossAllocation() {
+        val real = EnrollmentLedgerFixture(temporary.newFolder())
+        ledger = real
+        val actual = real.backend(realJournal())
+        val firstCopy = copy()
+        val changedCopy = firstCopy.copy(title = firstCopy.title + " ")
+        val releaseOldInvalidation = CompletableDeferred<Unit>()
+        val oldInvalidationFinished = CompletableDeferred<Unit>()
+        val delayed = object : NotificationEnrollmentProducer.Backend by actual {
+            override fun present(request: Enrollment.EnrollmentRequest, copy: EnrollmentWarningCopy):
+                NotificationEnrollmentProducer.Presentation {
+                val shown = actual.present(request, copy)
+                return object : NotificationEnrollmentProducer.Presentation by shown {
+                    override suspend fun invalidate() {
+                        if (copy == firstCopy) {
+                            releaseOldInvalidation.await()
+                            try { shown.invalidate() } finally { oldInvalidationFinished.complete(Unit) }
+                        } else shown.invalidate()
+                    }
+                }
+            }
+        }
+        producer = NotificationEnrollmentProducer(scope, delayed) { UUID.randomUUID().also { ids++ } }
+        val owner = Any()
+        try {
+            compose.runOnUiThread {
+                assertTrue(producer.attach(owner))
+                producer.begin(owner, firstCopy)
+            }
+            awaitRealCondition { producer.state.value is NotificationEnrollmentProducer.State.Warning }
+            val first = assertIs<NotificationEnrollmentProducer.State.Warning>(producer.state.value).presentation
+            val firstVerifier = requireNotNull(real.verifier)
+            compose.runOnUiThread {
+                producer.dismiss(owner, first)
+                producer.begin(owner, changedCopy)
+            }
+            awaitRealCondition { producer.state.value is NotificationEnrollmentProducer.State.Warning }
+            val second = assertIs<NotificationEnrollmentProducer.State.Warning>(producer.state.value).presentation
+            assertEquals(first.request, second.request)
+            assertEquals(changedCopy, second.copy)
+            assertFalse(firstVerifier === requireNotNull(real.verifier))
+            assertFalse(real.acknowledgmentFile.exists())
+            shownRequest()
+            real.gate = EnrollmentLedgerFixture.Gate("ALLOCATED")
+            compose.runOnUiThread {
+                producer.confirm(owner, first)
+                assertTrue(assertIs<NotificationEnrollmentProducer.State.Warning>(producer.state.value).presentation === second)
+                producer.confirm(owner, second)
+            }
+            awaitAdmission(real)
+            assertTrue(real.acknowledgmentFile.exists())
+            assertFalse(real.witnessFile.exists())
+            releaseOldInvalidation.complete(Unit)
+            awaitRealCondition { oldInvalidationFinished.isCompleted }
+            assertTrue(real.failures.isEmpty(), "Retired verifier must not report another live allocation as corruption")
+            real.gate?.release?.countDown()
+            awaitRealOutcome()
+            assertEquals(second.request.operation,
+                assertIs<Enrollment.Result.BoundSnapshot>(
+                    assertIs<NotificationEnrollmentProducer.State.Outcome>(producer.state.value).result,
+                ).witness.operation)
+            assertEquals(listOf("STAGED", "CONSUMED"), real.statuses())
+            assertEquals(4, ids)
+            assertTrue(real.failures.isEmpty())
+        } finally {
+            releaseOldInvalidation.complete(Unit)
+            real.gate?.release?.countDown()
+        }
+    }
+
     @Test fun actualPauseBeforeRealStageAdmissionLeavesNoAcknowledgmentWitnessOrJournal() {
         assertRetiredBeforeRealStage(dispose = false)
     }

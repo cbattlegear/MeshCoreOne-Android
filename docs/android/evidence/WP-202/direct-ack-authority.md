@@ -112,6 +112,15 @@ is preparing first-export-only hosted schema recovery; only genuine KSP output
 may become the v2 schema. Hosted exact-head results/logs, not a second result
 bundle, will be authoritative.
 
+The first hosted diagnostic is
+[run 41958103719](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41958103719),
+attempt 1, exact candidate `fade600f73220faf2f67880b0fbc1f1751f379ec`.
+It failed `:core:contracts:compileTestKotlin` on a type-inference error at
+`DirectAckAuthorityTest.kt:133`. The collector also rejected two identical bare
+KSP headers in Gradle's parallel console stream; it produced no artifact.
+This run provides no Room migration or data-suite acceptance and no recovered
+schema. The respective contract and tooling owners are producing bounded fixes.
+
 The concrete service/repeater regression and original successful ACK families
 remain the consumer owner's work against this producer. Old Boolean-wrapper
 tests are not evidence of typed producer calls. No durable ACK ingress,

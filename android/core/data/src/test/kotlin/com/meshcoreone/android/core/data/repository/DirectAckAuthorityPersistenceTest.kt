@@ -65,16 +65,17 @@ class DirectAckAuthorityPersistenceTest {
         row: MessageDTO = message(),
         mode: DirectAckMode = DirectAckMode.SEND,
         pendingId: UUID? = null,
-        lease: DirectAckLease = activate(),
+        lease: DirectAckLease? = null,
         target: RoomPersistenceStore = store,
     ): Claim {
+        val issued = lease ?: activate(target)
         target.saveMessage(row)
         val request = UUID.randomUUID()
         val wire = UUID.randomUUID()
         val result = assertIs<DirectAckBeginResult.Begun>(
-            target.beginDirectAckAttempt(lease, entity(id = row.id), request, wire, 123u, mode, pendingId),
+            target.beginDirectAckAttempt(issued, entity(id = row.id), request, wire, 123u, mode, pendingId),
         )
-        return Claim(lease, request, wire, result.attempt, row)
+        return Claim(issued, request, wire, result.attempt, row)
     }
 
     private suspend fun observed(claim: Claim, target: RoomPersistenceStore = store): DirectAckReceipt =
@@ -214,6 +215,7 @@ class DirectAckAuthorityPersistenceTest {
             { db.messages().upsert(it.toEntity()) },
             { store.saveMessage(it) },
             { db.messages().setAck(RADIO_A.value, it.id, 123, 2, null) },
+            { db.messages().setAck(RADIO_A.value, it.id, 456, 3, 7) },
             { db.messages().setRetryStatus(RADIO_A.value, it.id, 5, 1, 4) },
             { db.openHelper.writableDatabase.execSQL("UPDATE messages SET statusRawValue = statusRawValue") },
             { db.messages().delete(RADIO_A.value, it.id); db.messages().insert(it.toEntity()) },
@@ -439,6 +441,13 @@ class DirectAckAuthorityPersistenceTest {
             DirectPendingCompletionReason.ZeroAttempts(-1),
         )) assertEquals(DirectAckRejection.NOT_ELIGIBLE, assertIs<DirectPendingCaptureResult.Rejected>(
             store.captureDirectPendingCompletion(lease, entity(id = row.id), queued.id, UUID.randomUUID(), reason),
+        ).reason)
+        val delivered = row.copy(status = MessageStatus.DELIVERED)
+        store.saveMessage(delivered)
+        store.upsertPendingSend(queued.copy(isResend = true))
+        assertEquals(DirectAckRejection.NOT_ELIGIBLE, assertIs<DirectPendingCaptureResult.Rejected>(
+            store.captureDirectPendingCompletion(lease, entity(id = row.id), queued.id, UUID.randomUUID(),
+                DirectPendingCompletionReason.AlreadyDeliveredSend),
         ).reason)
     }
 

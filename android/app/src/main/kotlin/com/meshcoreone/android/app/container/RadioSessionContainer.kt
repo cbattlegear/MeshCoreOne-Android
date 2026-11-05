@@ -216,6 +216,9 @@ class RadioSessionContainer private constructor(
                     transmit()
                 }
             } catch (failure: SettingsServiceException) {
+                if (failure.error == SettingsServiceError.NotConnected) {
+                    throw MessageServiceException(MessageServiceError.NotConnected, failure)
+                }
                 val underlying = (failure.error as? SettingsServiceError.SessionError)?.error
                 if (underlying != null && underlying !is MeshCoreException.DeviceError) throw underlying
                 throw MessageServiceException(MessageServiceError.SendFailed("Channel scope reconciliation failed"), failure)

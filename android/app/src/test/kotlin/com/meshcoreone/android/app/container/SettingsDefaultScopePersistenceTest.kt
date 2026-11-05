@@ -552,6 +552,9 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
             for (transient in listOf(
                 com.meshcoreone.android.core.protocol.config.MeshCoreException.Timeout(),
                 com.meshcoreone.android.core.protocol.config.MeshCoreException.ConnectionLost(),
+                com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException(
+                    com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError.NotConnected,
+                ),
             )) {
                 val transport = h.links.radios.single()
                 val scopeOpcode = PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey())[0]

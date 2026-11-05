@@ -96,7 +96,7 @@ class RemoteLocaleMeasurementComposeTest {
     private val tag = mutableStateOf("en-US")
     private val key = Bytes(ByteArray(32) { 1 })
     private val now = Instant.parse("2024-07-13T12:00:00Z")
-    private val clock = object : RemoteNodesClock {
+    private val clock: RemoteNodesClock = object : RemoteNodesClock {
         override val now: Instant get() = this@RemoteLocaleMeasurementComposeTest.now
         override val elapsed = Duration.ZERO
         override suspend fun sleep(duration: Duration) = error("Rendering must not sleep")

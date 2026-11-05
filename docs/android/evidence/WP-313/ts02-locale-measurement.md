@@ -1,7 +1,7 @@
 # WP-313 TS-02: Android locale and measurement presentation
 
 Source-only lifecycle successor of `e0e2649de41d4fc723d79cfe64b4b8c89cd27467`,
-composed against main `b22a7a987f2cbdcaa223c8f8b45506eecb24cbe6`.
+composed against main `7f9b9e1c91e9a1c91b5f08894dd6329a52c7a2c0`.
 It preserves the previously reviewed locale and chart changes; prior immutable
 source candidates and hosted evidence are preserved, not rewritten or reused.
 Original source baseline: `99f03ad2da235e66c5cbcb58e88ac4d9aa55d2c5`.

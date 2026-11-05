@@ -5,6 +5,8 @@ import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.gradle.process.CommandLineArgumentProvider
 
 plugins {
@@ -42,6 +44,14 @@ tasks.withType<Test>().configureEach {
     dependsOn(prepareRemoteNodesPlatformSdks)
     jvmArgumentProviders.add(RemoteNodesPlatformSdkArguments(layout.buildDirectory.dir("remote-nodes-platform-sdks")))
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
+    testLogging.exceptionFormat = TestExceptionFormat.FULL
+    testLogging.quiet {
+        events(TestLogEvent.FAILED)
+        exceptionFormat = TestExceptionFormat.FULL
+        showExceptions = true
+        showCauses = true
+        showStackTraces = true
+    }
 }
 
 rootProject.tasks.named("verifyScaffoldTests") { dependsOn(":feature:remotenodes:testDebugUnitTest") }

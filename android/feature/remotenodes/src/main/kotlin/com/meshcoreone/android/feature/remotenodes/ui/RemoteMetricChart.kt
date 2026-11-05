@@ -6,6 +6,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -28,7 +29,9 @@ internal fun RemoteMetricChart(chart: MetricChartModel) {
     val zone = ZoneId.systemDefault()
     val title = remoteText(chart.title)
     val dates = remember(chart) { chart.drawnSeries.flatMap { it.dataPoints.map { point -> point.date } }.distinct().sorted() }
-    var selected by remember(chart.identity ?: chart.title, dates) { mutableIntStateOf(dates.lastIndex.coerceAtLeast(0)) }
+    var selected by rememberSaveable(chart.identity ?: chart.selectionIdentity ?: chart.title, dates) {
+        mutableIntStateOf(dates.lastIndex.coerceAtLeast(0))
+    }
     val readout = chart.readout(dates.getOrNull(selected), locale)
     val descriptions = readout?.entries?.map { "${remoteText(it.seriesName)}: ${it.valueText} ${if (readout.isMultiSeries) chart.unit else ""}" }.orEmpty()
     val dateText = readout?.let { HistoryDateFormat.monthDayTime(it.date, locale, zone) }.orEmpty()

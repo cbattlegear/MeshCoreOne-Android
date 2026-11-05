@@ -50,6 +50,7 @@ data class MetricChartModel(
     val series: List<ChartSeries>,
     val yAxisDomain: ClosedFloatingPointRange<Double>? = null,
     val identity: SensorChartIdentity? = null,
+    val selectionIdentity: String? = null,
 ) {
     /** More than one series switches to the overlaid layout with a categorical scale and legend. */
     val isMultiSeries: Boolean get() = series.size > 1

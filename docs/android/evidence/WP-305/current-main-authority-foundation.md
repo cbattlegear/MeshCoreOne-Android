@@ -195,8 +195,11 @@ The exact ce5 diagnostic is run `42005755725`, ref
 `ce5b894229de702fec3ee0e638dc2261dce37502`, tree
 `4ea1d9299fd55f0188dbe3107e9ebd01bb3fdc73`, parent
 `bdee78e369c60417003f9725d1d0596eb29df2d5`. Linux job `127172044271`
-completed successfully; the full run still awaited its SwiftData oracle when this
-successor was authored. Its earlier bounded reviews do not cover the following
+completed successfully, followed by full workflow SUCCESS including the SwiftData
+oracle. Its actual method inventory includes nine SettingsRepeatPersistenceTest
+and nineteen DevicePersistenceAuthorityRoomTest methods, including callback identity,
+held transaction, conflicted orphan and the captured-argument races. This is ce5
+evidence only. Its earlier bounded reviews do not cover the following
 newly reported interleavings.
 
 Source inspection confirmed identity reconciliation, deletion, demotion and insertion
@@ -246,6 +249,19 @@ for all four single-field snapshots, Repeat off versus active. The fixture corre
 keeps latch cleanup reachable and distinguishes legitimate post-send retirement
 from the strict pre-send row/zero-SET invariants. These are authored controls, not
 execution evidence for the successor or physical-radio acceptance.
+
+The corrected test-only negative baseline is
+`5a89dfb1c59dc86aef57fc50cca08ac48bd0b864` (single parent ce5), run
+`42009886462`: exactly the two corrected App test blobs from 805 and unchanged ce5
+production. It was still executing when the following compile correction was made.
+The independently reviewed complete repair
+`805cd3fc5b9cfdb908e941b61fafcaed212844cc`, run `42009886185`, Linux job
+`127186021891`, failed Kotlin compilation before product tests: SessionCore's old
+positional `exchange(generation, dispatch, operation)` call no longer matched after
+adding sendPermit. The successor names dispatch and operation explicitly. Other
+affected exchange/query/match forwarding families were inspected; their trailing
+or named operation/predicate arguments remain correctly bound. Neither the old
+ce5 success nor this compile failure is successor test evidence.
 
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive

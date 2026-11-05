@@ -418,7 +418,7 @@ internal class SessionCore(
             dispatch.cancelled(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT)
             throw failure
         }
-        return exchange(generation, dispatch, operation)
+        return exchange(generation, dispatch = dispatch, operation = operation)
     }
 
     suspend fun <T> exchange(

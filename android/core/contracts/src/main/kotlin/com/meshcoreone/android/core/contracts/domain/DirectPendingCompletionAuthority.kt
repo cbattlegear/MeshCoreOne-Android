@@ -29,6 +29,8 @@ enum class DirectPendingCompletionPermission { CURRENT, INVALIDATED, STALE_LEASE
  * purge both snapshots; pending deletion/replacement/update (including own completion) purges
  * pending payload while the message snapshot remains until message erasure. Identity/operation
  * tombstones remain, with non-CURRENT permission and no handle reissue or payload reconstruction.
+ * Revoking/replacing/closing the lease atomically erases all its remaining message/pending snapshots
+ * and marks these histories STALE_LEASE even when the ordinary message row still exists.
  */
 data class DirectPendingCompletionReceipt(
     val captureRequestId: UUID,
@@ -108,7 +110,10 @@ interface DirectPendingCompletionAuthority {
         completionRequestId: UUID,
     ): DirectPendingCompletionResult
 
-    /** Historical snapshots/commit identity only, never a handle or permission upgrade. */
+    /**
+     * Historical snapshots/commit identity only, never a handle or permission upgrade. Retired
+     * lease inspection retains IDs/commit request but returns erased DTO payloads.
+     */
     suspend fun inspectDirectPendingCompletion(
         lease: DirectAckLease,
         captureRequestId: UUID,

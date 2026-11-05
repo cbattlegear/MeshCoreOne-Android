@@ -180,6 +180,25 @@ class DirectAckAuthorityTest {
         }
     }
 
+    @Test
+    fun retiredLeaseReceiptErasesPayloadWithoutImplyingMessageDeletion() {
+        val ordinaryMessageStillExists = message
+        val retired = receipt().copy(
+            message = null,
+            delivery = DirectAckDelivery(UInt.MAX_VALUE, 123u, null),
+            permission = DirectAckPermission.STALE_LEASE,
+        )
+
+        assertSame(message, ordinaryMessageStillExists)
+        assertNull(retired.message)
+        assertNull(retired.delivery?.message)
+        assertEquals(DirectAckPermission.STALE_LEASE, retired.permission)
+        assertEquals(key, retired.key)
+        assertEquals(requestId, retired.requestId)
+        assertEquals(UInt.MAX_VALUE, retired.delivery?.ackCode)
+        assertEquals(123u, retired.delivery?.roundTripTime)
+    }
+
     private fun receipt(wires: SnapshotList<DirectAckWireReceipt> = SnapshotList.empty()) = DirectAckReceipt(
         key = key,
         requestId = requestId,

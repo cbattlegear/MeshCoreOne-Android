@@ -20,6 +20,30 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Authoritative pre-Repeat preservation and bounded test compile repair
+
+Producer 36c8c079-3643-4bc2-876b-f4c80c3bdf4d supplied exact
+8eb272e06999ca44cbf2c2ca809ec00a1e15709d, parent 3b8c90. Its two-path delta is
+transferred without ancestry: ConnectedDeviceEditor.kt preserves an existing complete
+or partial pre-Repeat snapshot in both the legacy Job and awaited token overloads.
+The guard runs on the authoritative row on every CAS retry, not a stale UI observation.
+Any one non-null restoration field preserves the row; explicit clear and the model's
+per-field fallback are unchanged. The two real-Room controls retain full-row/live
+assertions for stale same-session observations and a losing absent-snapshot ticket
+followed by complete or each of four partial winning snapshots. No Settings consumer,
+runtime, OCV or Room production source is changed by this correction.
+
+The separate Settings producer's exact 7bd0e43776fdb69d557e26a87923fd3767994aba
+Linux job 127105721121 exposed two compile errors in unchanged foundation tests:
+OnboardingBoundaryTests.kt lines 484 and 494, Kotlin generic type inference on expected
+target lists. The authoritative hosted log was inspected. Independent repair
+d2f655f4618e7a65c203a82b4cdf7768a9b54092 adds only explicit nullable target element
+types to those two lists, preserving all expected targets, ordering and assertions.
+The exact two-line delta was supplied to the Settings owner without ancestry.
+No tests reached by that failed compilation are credited as executed. This repair and
+the pre-Repeat correction still require fresh exact-head Kotlin discovery; active
+diagnostic references and runs remain unchanged.
+
 ### Live-main infrastructure refresh and exact tip outcome
 
 The owned branch merged live main 1a8b406a67d44006f14ac043ac468b6adf07a9d7 by normal

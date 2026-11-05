@@ -353,13 +353,16 @@ The exact WP-201 contract commit
 accepted-code binding from the inline PENDING-to-SENT transition. The local
 producer implementation now records the returned wire code and ACCEPTED phase
 without changing the product status; only `SendCompleted` can promote the
-current PENDING row with that exact claim-scoped accepted wire. Operation
-replay binds the wire ID, retrying/terminal states cannot be promoted, and
-unknown/predicted-only wires reject. Two actual-Room regression methods and an
-assertion in the retry test cover those rules. This follow-up is local and
-unexecuted; local Gradle remains unavailable under the retained execution-owner
-gate, and the coordinator has held further hosted publication pending the
-separate ACK-origin disposition.
+current PENDING row with that exact claim-scoped accepted wire when the claim
+mode is `SEND`. A review identified that the API KDoc did not explicitly name
+the mode boundary; the producer now rejects `SendCompleted` for RESEND claims
+before product mutation. The actual-Room negative control asserts
+RESEND+PENDING with an accepted wire leaves the product row, message
+incarnation/revision, and operation journal unchanged. The SEND positive and
+existing retry/terminal controls remain. Operation replay binds the wire ID,
+and unknown/predicted-only wires reject. This follow-up is unexecuted; local
+Gradle remains unavailable under the retained execution-owner gate, and no
+active diagnostic ref was changed or rerun.
 
 Verification after composing this follow-up: `git diff --check` passed, and the
 declared Windows readiness command

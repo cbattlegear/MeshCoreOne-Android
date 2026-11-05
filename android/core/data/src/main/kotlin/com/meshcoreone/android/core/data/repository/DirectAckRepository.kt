@@ -263,7 +263,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         }
         when (change) {
             is DirectAckBookkeeping.SendCompleted -> {
-                if (row.statusRawValue != MessageStatus.PENDING.rawValue) {
+                if (claim.mode != DirectAckMode.SEND.name ||
+                    row.statusRawValue != MessageStatus.PENDING.rawValue
+                ) {
                     return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
                 }
                 val wire = dao.wires(claim.radioId, claim.requestId)

@@ -686,6 +686,29 @@ class DirectAckAuthorityPersistenceTest {
         assertEquals(retrying, store.fetchMessage(entity(id = claim.row.id)))
     }
 
+    @Test fun resendCannotUseInlineSendCompletionToPromotePendingRow() = runTest {
+        val claim = begin(mode = DirectAckMode.RESEND)
+        assertIs<DirectAckMutationResult.Applied>(
+            store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u),
+        )
+        val beforeRow = assertNotNull(store.fetchMessage(entity(id = claim.row.id)))
+        assertEquals(MessageStatus.PENDING, beforeRow.status)
+        val beforeIdentity = assertNotNull(db.directAcks().incarnation(
+            RADIO_A.value, claim.row.id, "message",
+        ))
+        val beforeOperations = db.directAcks().operations(RADIO_A.value, claim.request)
+
+        assertEquals(DirectAckRejection.NOT_ELIGIBLE, assertIs<DirectAckMutationResult.Rejected>(
+            store.applyDirectAckBookkeeping(
+                claim.attempt, UUID.randomUUID(), DirectAckBookkeeping.SendCompleted(claim.wire),
+            ),
+        ).reason)
+
+        assertEquals(beforeRow, store.fetchMessage(entity(id = claim.row.id)))
+        assertEquals(beforeIdentity, db.directAcks().incarnation(RADIO_A.value, claim.row.id, "message"))
+        assertEquals(beforeOperations, db.directAcks().operations(RADIO_A.value, claim.request))
+    }
+
     @Test fun activationAndBeginReplayRecoverOnlyTheExactStillCurrentLogicalClaim() = runTest {
         val activation = UUID.randomUUID()
         val lease = activate(request = activation)

@@ -4,6 +4,8 @@ package com.meshcoreone.android.core.services.messaging
 
 import com.meshcoreone.android.core.contracts.domain.DirectAckAttempt
 import com.meshcoreone.android.core.contracts.domain.DirectAckMode
+import com.meshcoreone.android.core.contracts.domain.DirectAckIntent
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.SnapshotSet
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
@@ -37,6 +39,8 @@ internal class DirectSendClaim(
     val isResend: Boolean,
     val pendingSendID: UUID? = null,
     val authorityMode: DirectAckMode = DirectAckMode.SEND,
+    val intent: DirectAckIntent,
+    val contact: ContactDTO,
 ) {
     var timestamp: UInt? = null
     var lastSentInfo: MessageSentInfo? = null

@@ -32,7 +32,7 @@ class RecoveryPolicyTest {
                 if (!writing) {
                     writing = true
                     entered.complete(Unit); release.await()
-                    assertEquals(MessageStatus.FAILED, it.message.status)
+                    assertEquals(MessageStatus.FAILED, it.message?.status)
                     currentCoroutineContext().cancel(cancellation)
                 }
             }
@@ -80,7 +80,7 @@ class RecoveryPolicyTest {
                 if (!writing) {
                     writing = true
                     entered.complete(Unit); release.await()
-                    assertEquals(MessageStatus.FAILED, it.message.status)
+                    assertEquals(MessageStatus.FAILED, it.message?.status)
                     currentCoroutineContext().cancel(CancellationException("cancel before settlement"))
                 }
             }
@@ -123,7 +123,7 @@ class RecoveryPolicyTest {
             h.store.directAckAuthority.afterFailure = {
                 if (!writing) {
                     writing = true
-                    assertEquals(MessageStatus.FAILED, it.message.status)
+                    assertEquals(MessageStatus.FAILED, it.message?.status)
                     currentCoroutineContext().cancel(CancellationException("cancel after FAILED commit without ACK"))
                 }
             }
@@ -187,7 +187,7 @@ class RecoveryPolicyTest {
                     if (!writing) {
                         writing = true
                         entered.complete(Unit); release.await()
-                        committed = it.message.status == MessageStatus.FAILED
+                        committed = it.message?.status == MessageStatus.FAILED
                         currentCoroutineContext().cancel(cancellation)
                     }
                 }
@@ -248,7 +248,7 @@ class RecoveryPolicyTest {
                 val original = IllegalStateException("initiating send error")
                 h.store.directAckAuthority.afterFailure = {
                     entered.complete(Unit); release.await()
-                    assertEquals(MessageStatus.FAILED, it.message.status)
+                    assertEquals(MessageStatus.FAILED, it.message?.status)
                     if (cancel) throw cancellation else throw fault
                 }
                 val observed = mutableListOf<MessageStatusEvent>()

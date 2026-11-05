@@ -21,6 +21,11 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
     private val attempts = mutableMapOf<UUID, Attempt>()
     private val current = mutableMapOf<EntityKey, Attempt>()
     private val revoked = mutableSetOf<Lease>()
+    private class Intent(
+        val lease: Lease, val receipt: DirectAckIntentReceipt,
+        val revision: Long, val pendingRevision: Long?,
+    ) : DirectAckIntent
+    private val intents = mutableMapOf<UUID, Intent>()
     var afterFailure: (suspend (DirectAckReceipt) -> Unit)? = null
     private class Completion(
         val lease: Lease,
@@ -75,17 +80,67 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         return DirectAckActivationResult.Activated(value)
     }
 
-    override suspend fun beginDirectAckAttempt(
-        lease: DirectAckLease, key: EntityKey, requestId: UUID, firstWireRequestId: UUID,
-        predictedAckCode: UInt, mode: DirectAckMode, pendingSendId: UUID?,
-    ): DirectAckBeginResult {
+    private fun intentPermission(value: Intent): DirectAckPermission = when {
+        currentLeases[value.receipt.key.radioId] !== value.lease || value.lease in revoked -> DirectAckPermission.STALE_LEASE
+        store.messages[value.receipt.key] == null -> DirectAckPermission.MISSING
+        store.messageRevision(value.receipt.key) != value.revision ||
+            value.receipt.pendingSendId?.let {
+                store.pendingRevision(EntityKey(value.receipt.key.radioId, it)) != value.pendingRevision
+            } == true -> DirectAckPermission.INVALIDATED
+        else -> DirectAckPermission.CURRENT
+    }
+
+    override suspend fun captureDirectAckIntent(
+        lease: DirectAckLease, key: EntityKey, requestId: UUID, mode: DirectAckMode, pendingSendId: UUID?,
+    ): DirectAckIntentResult {
         val owner = (lease as? Lease)?.takeIf { it === currentLeases[key.radioId] && it !in revoked }
-            ?: return DirectAckBeginResult.Rejected(DirectAckRejection.STALE_LEASE)
+            ?: return DirectAckIntentResult.Rejected(DirectAckRejection.STALE_LEASE)
+        intents[requestId]?.let {
+            if (it.lease !== owner || it.receipt.key != key || it.receipt.mode != mode ||
+                it.receipt.pendingSendId != pendingSendId) return DirectAckIntentResult.Rejected(DirectAckRejection.CONFLICT)
+            return if (intentPermission(it) == DirectAckPermission.CURRENT) DirectAckIntentResult.AlreadyCaptured(it, it.receipt)
+            else DirectAckIntentResult.Rejected(DirectAckRejection.INVALIDATED)
+        }
+        val message = store.messages[key] ?: return DirectAckIntentResult.Rejected(DirectAckRejection.MISSING)
+        if (message.channelIndex != null || message.direction != MessageDirection.OUTGOING ||
+            mode == DirectAckMode.SEND && message.status in listOf(MessageStatus.FAILED, MessageStatus.DELIVERED)) {
+            return DirectAckIntentResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        }
+        val pending = pendingSendId?.let { store.pending[EntityKey(key.radioId, it)] }
+        if (pendingSendId != null && pending?.messageID != key.id) {
+            return DirectAckIntentResult.Rejected(DirectAckRejection.MISSING)
+        }
+        val receipt = DirectAckIntentReceipt(key, requestId, mode, message, pendingSendId, pending, DirectAckPermission.CURRENT)
+        val intent = Intent(owner, receipt, store.messageRevision(key),
+            pendingSendId?.let { store.pendingRevision(EntityKey(key.radioId, it)) })
+        intents[requestId] = intent
+        return DirectAckIntentResult.Captured(intent, receipt)
+    }
+
+    override suspend fun inspectDirectAckIntent(lease: DirectAckLease, requestId: UUID): DirectAckIntentObservation {
+        val value = intents[requestId]?.takeIf { it.lease === lease }
+            ?: return DirectAckIntentObservation.Rejected(DirectAckRejection.MISSING)
+        return DirectAckIntentObservation.Found(value.receipt.copy(permission = intentPermission(value)))
+    }
+
+    override suspend fun beginDirectAckAttempt(
+        intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
+    ): DirectAckBeginResult {
+        val captured = (intent as? Intent)?.takeIf { intents[it.receipt.requestId] === it }
+            ?: return DirectAckBeginResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        val owner = captured.lease
+        val key = captured.receipt.key
+        val requestId = captured.receipt.requestId
+        val mode = captured.receipt.mode
+        val pendingSendId = captured.receipt.pendingSendId
         attempts[requestId]?.let {
             val first = it.receipt.wires.first()
             if (it.lease !== owner || it.receipt.key != key || it.receipt.mode != mode || it.pendingID != pendingSendId ||
                 first.requestId != firstWireRequestId || first.predictedAckCode != predictedAckCode) {
                 return DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
+            }
+            if (intentPermission(captured) != DirectAckPermission.CURRENT) {
+                return DirectAckBeginResult.Rejected(DirectAckRejection.INVALIDATED)
             }
             return if (permission(it) == DirectAckPermission.CURRENT) DirectAckBeginResult.AlreadyBegun(it, receipt(it))
             else DirectAckBeginResult.Rejected(DirectAckRejection.INVALIDATED)
@@ -257,7 +312,7 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
 
     private fun completionPermission(value: Completion): DirectPendingCompletionPermission {
         val key = value.receipt.key
-        val pendingKey = EntityKey(key.radioId, value.receipt.pending.id)
+        val pendingKey = EntityKey(key.radioId, value.receipt.pendingSendId)
         return when {
             currentLeases[key.radioId] !== value.lease || value.lease in revoked ->
                 DirectPendingCompletionPermission.STALE_LEASE
@@ -277,7 +332,7 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         val owner = (lease as? Lease)?.takeIf { currentLeases[key.radioId] === it && it !in revoked }
             ?: return DirectPendingCaptureResult.Rejected(DirectAckRejection.STALE_LEASE)
         completions[captureRequestId]?.let {
-            if (it.lease !== owner || it.receipt.key != key || it.receipt.pending.id != pendingSendId ||
+            if (it.lease !== owner || it.receipt.key != key || it.receipt.pendingSendId != pendingSendId ||
                 it.receipt.reason != reason) return DirectPendingCaptureResult.Rejected(DirectAckRejection.CONFLICT)
             return if (completionPermission(it) == DirectPendingCompletionPermission.CURRENT) {
                 DirectPendingCaptureResult.AlreadyCaptured(it, completionReceipt(it))
@@ -293,7 +348,7 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
             }
         if (!eligible) return DirectPendingCaptureResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         val receipt = DirectPendingCompletionReceipt(
-            captureRequestId, key, reason, message, pending, null, DirectPendingCompletionPermission.CURRENT,
+            captureRequestId, key, reason, message, pendingSendId, pending, null, DirectPendingCompletionPermission.CURRENT,
         )
         val value = Completion(owner, receipt, store.messageRevision(key), store.pendingRevision(pendingKey))
         completions[captureRequestId] = value
@@ -316,8 +371,8 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         if (completionPermission(value) != DirectPendingCompletionPermission.CURRENT) {
             return DirectPendingCompletionResult.Rejected(DirectAckRejection.INVALIDATED)
         }
-        store.pending.remove(EntityKey(value.receipt.key.radioId, value.receipt.pending.id))
-        value.receipt = value.receipt.copy(completedRequestId = completionRequestId)
+        store.pending.remove(EntityKey(value.receipt.key.radioId, value.receipt.pendingSendId))
+        value.receipt = value.receipt.copy(completedRequestId = completionRequestId, pending = null)
         return DirectPendingCompletionResult.Applied(completionReceipt(value))
     }
 

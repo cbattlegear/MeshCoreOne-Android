@@ -160,14 +160,22 @@ class MessagingRoomIntegrationTest {
     private open inner class DirectRoles(private val actual: RoomPersistenceStore) : PersistenceStoreProtocol by actual,
         DirectAckAuthority by actual, DirectPendingCompletionAuthority by actual {
         private val keys = mutableMapOf<DirectAckAttempt, EntityKey>()
+        private val intents = mutableMapOf<DirectAckIntent, EntityKey>()
         protected fun attemptKey(attempt: DirectAckAttempt) = requireNotNull(keys[attempt])
+        override suspend fun captureDirectAckIntent(
+            lease: DirectAckLease, key: EntityKey, requestId: UUID, mode: DirectAckMode, pendingSendId: UUID?,
+        ): DirectAckIntentResult = actual.captureDirectAckIntent(lease, key, requestId, mode, pendingSendId).also {
+            when (it) {
+                is DirectAckIntentResult.Captured -> intents[it.intent] = key
+                is DirectAckIntentResult.AlreadyCaptured -> intents[it.intent] = key
+                is DirectAckIntentResult.Rejected -> Unit
+            }
+        }
         override suspend fun beginDirectAckAttempt(
-            lease: DirectAckLease, key: EntityKey, requestId: UUID, firstWireRequestId: UUID,
-            predictedAckCode: UInt, mode: DirectAckMode, pendingSendId: UUID?,
+            intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
         ): DirectAckBeginResult {
-            val result = actual.beginDirectAckAttempt(
-                lease, key, requestId, firstWireRequestId, predictedAckCode, mode, pendingSendId,
-            )
+            val key = requireNotNull(intents[intent])
+            val result = actual.beginDirectAckAttempt(intent, firstWireRequestId, predictedAckCode)
             when (result) {
                 is DirectAckBeginResult.Begun -> keys[result.attempt] = key
                 is DirectAckBeginResult.AlreadyBegun -> keys[result.attempt] = key
@@ -1455,6 +1463,73 @@ class MessagingRoomIntegrationTest {
             completedStatuses(g, events))
         g.stop()
         assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
+    }
+
+    @Test fun inlineIntentRejectsChangedTextBeforeBegin() = runTest(scheduler) {
+        invalidateIssuedIntent(queued = false, change = "text")
+    }
+
+    @Test fun inlineIntentRejectsIdenticalMessageRecreationBeforeBegin() = runTest(scheduler) {
+        invalidateIssuedIntent(queued = false, change = "recreate")
+    }
+
+    @Test fun queuedIntentRejectsChangedTextBeforeBegin() = runTest(scheduler) {
+        invalidateIssuedIntent(queued = true, change = "text")
+    }
+
+    @Test fun queuedIntentRejectsIdenticalMessageRecreationBeforeBegin() = runTest(scheduler) {
+        invalidateIssuedIntent(queued = true, change = "recreate")
+    }
+
+    @Test fun queuedIntentRejectsSameIdPendingReplacementBeforeBegin() = runTest(scheduler) {
+        invalidateIssuedIntent(queued = true, change = "pending")
+    }
+
+    private suspend fun TestScope.invalidateIssuedIntent(queued: Boolean, change: String) {
+        seed()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val actual = store
+        val barrier = object : DirectRoles(actual) {
+            override suspend fun beginDirectAckAttempt(
+                intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
+            ): DirectAckBeginResult {
+                entered.complete(Unit); release.await()
+                return super.beginDirectAckAttempt(intent, firstWireRequestId, predictedAckCode)
+            }
+        }
+        val g = RadioGeneration(140, barrier, MessageServiceConfig(maxAttempts = 1))
+        g.start(); g.service.startEventMonitoring()
+        val sending = if (queued) {
+            val message = g.service.createPendingMessage("original A", contact)
+            store.upsertPendingSend(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio))
+            g.signals.set(DeviceConnectionState.READY); g.queue.hydrate()
+            null
+        } else async { runCatching { g.service.sendDirectMessage("original A", contact) } }
+        runCurrent()
+        assertTrue(entered.isCompleted)
+        assertTrue(g.firmware.sent().isEmpty())
+        val original = store.fetchMessages(EntityKey(radio, contact.id)).single()
+        val replacement = if (change == "text") original.copy(text = "replacement B") else original
+        when (change) {
+            "recreate" -> { store.deleteMessage(EntityKey(radio, original.id)); store.saveMessage(replacement) }
+            "text" -> store.saveMessage(replacement)
+            "pending" -> store.upsertPendingSend(store.fetchPendingSends(radio).single().copy(messageText = "replacement pending"))
+            else -> error("Unknown intent mutation")
+        }
+        val pendingAfterMutation = store.fetchPendingSends(radio)
+        release.complete(Unit); runCurrent()
+        if (sending != null) assertIs<PersistenceStoreException>(sending.await().exceptionOrNull())
+        else assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            it.operation == "park.${original.id}"
+        })
+        assertEquals(replacement, store.fetchMessage(EntityKey(radio, original.id)))
+        assertEquals(pendingAfterMutation, store.fetchPendingSends(radio))
+        assertTrue(g.firmware.sent().isEmpty())
+        assertEquals(0, g.service.pendingAckCount)
+        g.stop()
+        assertEquals(replacement, store.fetchMessage(EntityKey(radio, original.id)))
+        assertEquals(pendingAfterMutation, store.fetchPendingSends(radio))
     }
 
     private suspend fun TestScope.exercisePublicFinalization(

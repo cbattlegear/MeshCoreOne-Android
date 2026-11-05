@@ -333,3 +333,75 @@ assertion failures also stem from the restore aborting before their intended
 post-commit assertions (including an `IllegalStateException` instead of the
 expected refresh `IOException`), per the exact failure log. Existing app and
 parity assertions are unchanged; another exact-head run is required.
+
+The shared `openMemoryDatabase` callback repair completed successfully on exact
+candidate `cc13f06530ae8e23ff9f169178ba5f093e95921d`:
+[run 41971548941](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41971548941),
+attempt 1, overall `success`. Hosted protocol-suite evidence reports 4,926
+discovered/run/passed, zero failed/errors/skipped; the backup sub-suites report
+`core:data` 646/646 and `core:database` 52/52. Swift codec, controller policy
+(1,478/1,478) and actual SwiftData restore/export oracle also passed. The run
+executed before the local accepted-send bookkeeping follow-up below and does
+not validate that follow-up or close the ACK-origin issue.
+
+## Accepted wire versus inline completion
+
+The exact WP-201 contract commit
+`2b885851a60e4317247ac41589dfa7e10f9fb550` was cherry-picked locally as
+`1d15f42198cd6ddc66607a08f7046ad4286e3367`. Its additive
+`DirectAckBookkeeping.SendCompleted(wireRequestId)` contract separates actual
+accepted-code binding from the inline PENDING-to-SENT transition. The local
+producer implementation now records the returned wire code and ACCEPTED phase
+without changing the product status; only `SendCompleted` can promote the
+current PENDING row with that exact claim-scoped accepted wire. Operation
+replay binds the wire ID, retrying/terminal states cannot be promoted, and
+unknown/predicted-only wires reject. Two actual-Room regression methods and an
+assertion in the retry test cover those rules. This follow-up is local and
+unexecuted; local Gradle remains unavailable under the retained execution-owner
+gate, and the coordinator has held further hosted publication pending the
+separate ACK-origin disposition.
+
+Verification after composing this follow-up: `git diff --check` passed, and the
+declared Windows readiness command
+`python .\tools\android-port\controller\ci.py preflight --local --state $env:ANDROID_CI_STATE --output <fresh absolute temp directory>`
+passed with pinned Python 3.12.4. The declared
+`python .\tools\android-port\controller\ci.py inspect --state $env:ANDROID_CI_STATE --output <fresh absolute temp directory>`
+did not run product tests and exited 2 because `android/scaffold/inspect_apk.py`
+had no available APK input. No `ci.py run`, Gradle, or hosted candidate run was
+started for this uncommitted follow-up; the execution-owner/publication hold
+remains in force.
+
+## Unresolved ACK origin boundary
+
+No producer-side ACK-origin proof is established. The pinned source parser
+`MeshCore/Sources/MeshCore/Protocol/PacketParser.swift:276-286` emits only the
+four-byte ACK code and optional trip time. `MessageSentInfo` carries route,
+expected ACK code and suggested timeout
+(`MeshCore/Sources/MeshCore/Events/MessagingPayloads.swift:6-21`). The Swift
+service registers a speculative ACK entry before `session.sendMessage`
+(`MC1Services/Sources/MC1Services/Services/MessageService+SendDM.swift:75,105`);
+the session subscribes, awaits `transport.send(data)`, then waits for the
+message-sent result (`MeshCore/Sources/MeshCore/Session/MeshCoreSession+EventWaiting.swift:158-173`).
+The ACK has no wire-request or message identity. `AckCodeBuilder` documents
+recipient exclusion and the two-bit attempt mask
+(`MC1Services/Sources/MC1Services/Services/AckCodeBuilder.swift:18-30`), so
+distinct dispatches can have identical raw ACK codes.
+
+The Android session's `onWriteAttempt` callback runs immediately before the
+transport send
+(`android/core/protocol/src/main/kotlin/com/meshcoreone/android/core/protocol/session/SessionCore.kt:583-591`); its
+`MessageWriteDispatch` only classifies cancellation as definitely-unsent or
+possibly-written, not as a transport emission receipt. A before-send persisted
+marker therefore proves possibility, not actual emission or ACK origin.
+13a/a59 reviewed a conservative wildcard proposal: reject later same-radio
+dispatch admission until the earlier possible wire's actual code is known,
+and retain code-collision tombstones. A timeout/error/cancellation before
+`MessageSentInfo` leaves that wildcard unresolved; because no source-proven
+ACK horizon or definite-non-emission outcome exists, strict stale-ACK safety
+would permanently block later sends for that radio. That is a substantial
+unapproved liveness change, not a bounded producer fix. No ambiguous ACK is
+attributed by latest tracker, DTO, request UUID or predicted code, and no
+wildcard/dispatch-admission implementation was added. This remains a concrete
+blocker requiring either a verified transport/protocol guarantee or an explicit
+product decision on permanent fail-closed behavior. No #569 consumer code was
+edited or integrated.

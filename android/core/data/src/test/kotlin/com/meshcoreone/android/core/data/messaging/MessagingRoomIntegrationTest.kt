@@ -2578,13 +2578,24 @@ class MessagingRoomIntegrationTest {
         store.upsertPendingSend(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id, true), radio).copy(sequence = 1))
         val g = RadioGeneration(17); g.start(); g.service.startEventMonitoring()
         val gate = CompletableDeferred<Unit>(); g.firmware.acceptanceGate = gate; g.firmware.ackBeforeAcceptance = true
-        g.queue.hydrate(); runCurrent(); g.signals.set(DeviceConnectionState.READY); runCurrent()
-        assertEquals(0, g.service.pendingAckCount)
-        assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(radio, message.id))?.status)
-        assertEquals(1L, store.fetchMessage(EntityKey(radio, message.id))?.sendCount)
-        gate.complete(Unit); runCurrent(); g.queue.awaitDrainCompletion()
-        assertEquals(2L, store.fetchMessage(EntityKey(radio, message.id))?.sendCount)
-        assertEquals(1, g.firmware.sent().size); g.stop()
+        try {
+            g.queue.hydrate(); runCurrent(); g.signals.set(DeviceConnectionState.READY); runCurrent()
+            assertEquals(1, g.service.pendingAckCount)
+            assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(radio, message.id))?.status)
+            assertNull(store.fetchMessage(EntityKey(radio, message.id))?.roundTripTime)
+            assertEquals(1L, store.fetchMessage(EntityKey(radio, message.id))?.sendCount)
+            gate.complete(Unit); runCurrent(); g.queue.awaitDrainCompletion()
+            assertEquals(0, g.service.pendingAckCount)
+            assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(radio, message.id))?.status)
+            assertEquals(123u, store.fetchMessage(EntityKey(radio, message.id))?.roundTripTime)
+            assertEquals(2L, store.fetchMessage(EntityKey(radio, message.id))?.sendCount)
+            assertEquals(1, g.firmware.sent().size); g.stop()
+        } finally {
+            withContext(NonCancellable) {
+                gate.complete(Unit)
+                g.stop()
+            }
+        }
     }
 
     @Test fun manualPollingRoomConsumerCanCloseWithAnExplicitUnfinishedRecordReport() = runTest(scheduler) {

@@ -40,6 +40,9 @@ class SourceDispositionTests(unittest.TestCase):
             }
             task.afterTest { descriptor, result ->
                 task.logger.quiet("WP208_DATA_TEST|${task.path}|${descriptor.className}|${descriptor.name}|END|${result.resultType}")
+                if (result.resultType == org.gradle.api.tasks.testing.TestResult.ResultType.FAILURE) {
+                    result.exceptions.each { failure -> task.logger.quiet("${failure}\\n${failure.stackTrace.join("\\n")}") }
+                }
             }
             task.onOutput { descriptor, event ->
                 if (descriptor.className == "com.meshcoreone.android.core.data.messaging.MessagingRoomIntegrationTest") {
@@ -49,6 +52,19 @@ class SourceDispositionTests(unittest.TestCase):
                 }
             }
 ''')
+
+    def test_receipt_regression_markers_only_report_actual_native_outcomes(self):
+        guard = ci.TASK_GRAPH_GUARD.read_text(encoding="utf-8")
+        start = guard.index('        if (task.path == ":core:services:test") {')
+        end = guard.index("\n    }\n}", start)
+        self.assertEqual(guard[start:end], '''        if (task.path == ":core:services:test") {
+            task.afterTest { descriptor, result ->
+                if (descriptor.className == "com.meshcoreone.android.core.services.messaging.NativeMessagingTest" &&
+                    descriptor.displayName.contains("lateDifferentActualAck")) {
+                    task.logger.quiet("WP208_RECEIPT_TEST|${task.path}|${descriptor.className}|${descriptor.name}|${descriptor.displayName}|END|${result.resultType}")
+                }
+            }
+        }''')
 
     def test_source_capture_uses_completed_same_project_graph_compilers(self):
         guard = ci.TASK_GRAPH_GUARD.read_text(encoding="utf-8")

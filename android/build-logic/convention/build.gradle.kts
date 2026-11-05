@@ -36,6 +36,7 @@ dependencies {
 tasks.test {
     useJUnitPlatform()
     failOnNoDiscoveredTests.set(true)
+    testLogging.showStandardStreams = true
     maxParallelForks = 1
     maxHeapSize = providers.gradleProperty("scaffoldTestHeap").getOrElse("256m")
     providers.gradleProperty("scaffoldTestJvmArgs").orNull?.let {

@@ -26,6 +26,7 @@ data class DirectAckAmbiguityWire(
 
 enum class DirectAckNonsettlingReason {
     PRE_WIRE,
+    TARGET_ACCEPTANCE_UNRESOLVED,
     UNKNOWN_TARGET_EMISSION,
     UNREGISTERED_CODE,
     KNOWN_CROSS_CLAIM_CODE,
@@ -47,8 +48,13 @@ sealed interface DirectAckAmbiguityDecision {
  * Same-valid-claim retries share a delivery target; a new claim is distinct even for equal payload
  * and incarnation. Legacy registered-only wires conservatively retain unknown emission evidence.
  *
+ * A matching prediction on a potential-emission wire with no accepted result is provisional, not
+ * settling evidence. The consumer must buffer its raw ACK until send completion supplies and persists
+ * actual accepted code, then reconcile that result; this classifier does not hold the buffer or prove
+ * origin. For each wire, acceptedCode supersedes its own prediction for matching after acceptance;
+ * the retained prediction remains history only. Earlier accepted same-claim wires remain eligible.
  * Nonsettling leaves delivery unchanged; it does not prevent send, acceptance, or SendCompleted.
- * Confirmation uncertainty can remain indefinite. No production caller is wired to this candidate.
+ * Confirmation uncertainty can remain indefinite. No production caller is wired here.
  */
 object DirectAckAmbiguityCandidate {
     /**
@@ -62,15 +68,26 @@ object DirectAckAmbiguityCandidate {
         radioHistory: SnapshotList<DirectAckAmbiguityWire>,
     ): DirectAckAmbiguityDecision {
         val reasons = linkedSetOf<DirectAckNonsettlingReason>()
+        fun eligibleCode(wire: DirectAckAmbiguityWire): UInt? =
+            wire.acceptedCode ?: wire.predictedCode
+
         val matchingClaimWires = (sequenceOf(target) + radioHistory.asSequence()).filter {
             it.radioId == target.radioId && it.claimRequestId == target.claimRequestId &&
-                (it.predictedCode == ackCode || it.acceptedCode == ackCode)
+                eligibleCode(it) == ackCode
         }.toList()
+        val acceptedMatchingClaimWire = matchingClaimWires.any {
+            it.emission == DirectAckEmissionEvidence.POTENTIAL_EMISSION &&
+                it.acceptedCode == ackCode
+        }
         if (matchingClaimWires.isEmpty()) {
             reasons.add(DirectAckNonsettlingReason.UNREGISTERED_CODE)
-        } else if (matchingClaimWires.none { it.emission == DirectAckEmissionEvidence.POTENTIAL_EMISSION }) {
+        } else if (!acceptedMatchingClaimWire) {
             if (matchingClaimWires.any { it.emission == DirectAckEmissionEvidence.LEGACY_UNKNOWN }) {
                 reasons.add(DirectAckNonsettlingReason.UNKNOWN_TARGET_EMISSION)
+            } else if (matchingClaimWires.any {
+                    it.emission == DirectAckEmissionEvidence.POTENTIAL_EMISSION
+                }) {
+                reasons.add(DirectAckNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED)
             } else {
                 reasons.add(DirectAckNonsettlingReason.PRE_WIRE)
             }
@@ -81,7 +98,7 @@ object DirectAckAmbiguityCandidate {
             if (wire.acceptedCode == null) {
                 reasons.add(DirectAckNonsettlingReason.UNRESOLVED_PRIOR_EMISSION)
             }
-            if (wire.predictedCode == ackCode || wire.acceptedCode == ackCode) {
+            if (eligibleCode(wire) == ackCode) {
                 reasons.add(DirectAckNonsettlingReason.KNOWN_CROSS_CLAIM_CODE)
             }
         }

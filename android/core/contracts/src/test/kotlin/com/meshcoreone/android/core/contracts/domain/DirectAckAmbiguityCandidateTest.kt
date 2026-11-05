@@ -22,8 +22,15 @@ class DirectAckAmbiguityCandidateTest {
     }
 
     @Test
-    fun uniquePredictionCanSettleBeforeAcceptanceReturnsWithoutClaimingOrigin() {
-        assertSame(DirectAckAmbiguityDecision.NoKnownAmbiguity, assess(target))
+    fun predictedCodeStaysNonsettlingUntilActualAcceptanceIsRecorded() {
+        assertEquals(
+            setOf(DirectAckNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED),
+            nonsettling(target).reasons,
+        )
+        assertSame(
+            DirectAckAmbiguityDecision.NoKnownAmbiguity,
+            assess(target.copy(acceptedCode = 123u)),
+        )
     }
 
     @Test
@@ -61,10 +68,30 @@ class DirectAckAmbiguityCandidateTest {
             assess(retry, 123u, SnapshotList.of(earlier, retry)),
         )
         assertEquals(
-            setOf(DirectAckNonsettlingReason.PRE_WIRE),
+            setOf(DirectAckNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED),
             assertIs<DirectAckAmbiguityDecision.Nonsettling>(
                 assess(retry, 789u, SnapshotList.of(earlier, retry)),
             ).reasons,
+        )
+    }
+
+    @Test
+    fun acceptedActualSupersedesOnlyItsOwnPrediction() {
+        val acceptedMismatch = target.copy(acceptedCode = 456u)
+        assertEquals(
+            setOf(DirectAckNonsettlingReason.UNREGISTERED_CODE),
+            nonsettling(acceptedMismatch).reasons,
+        )
+
+        val earlierEligible = target.copy(acceptedCode = 123u)
+        val currentAcceptedMismatch = target.copy(
+            wireRequestId = UUID(0, 4),
+            predictedCode = 123u,
+            acceptedCode = 456u,
+        )
+        assertSame(
+            DirectAckAmbiguityDecision.NoKnownAmbiguity,
+            assess(currentAcceptedMismatch, 123u, SnapshotList.of(earlierEligible, currentAcceptedMismatch)),
         )
     }
 
@@ -105,6 +132,19 @@ class DirectAckAmbiguityCandidateTest {
         assertSame(
             DirectAckAmbiguityDecision.NoKnownAmbiguity,
             assess(accepted, 456u, SnapshotList.of(old)),
+        )
+    }
+
+    @Test
+    fun acceptedCrossClaimActualSupersedesItsPredictionForKnownCodeOverlap() {
+        val old = wire(6, 7, predicted = 123u, accepted = 456u)
+        assertSame(
+            DirectAckAmbiguityDecision.NoKnownAmbiguity,
+            assess(target.copy(acceptedCode = 123u), 123u, SnapshotList.of(old)),
+        )
+        assertEquals(
+            setOf(DirectAckNonsettlingReason.KNOWN_CROSS_CLAIM_CODE),
+            nonsettling(target.copy(acceptedCode = 456u), SnapshotList.of(old)).reasons,
         )
     }
 

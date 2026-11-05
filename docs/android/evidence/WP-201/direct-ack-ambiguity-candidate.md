@@ -64,11 +64,16 @@ Nine new Kotlin test methods exercise the actual classifier:
 - Identical accepted code across distinct claims after both accepted.
 - Shared old prediction after different actual acceptance, and distinct actual.
 - Unknown prior actual code despite different predictions.
+- Single-wire actual-code mismatch: prediction stops matching after actual
+  acceptance; a matching earlier accepted same-claim wire remains eligible.
+- Accepted actual supersedes a cross-claim prediction for known-code overlap.
 - Legacy unknown evidence and simultaneous retained ambiguity reasons.
 - Affirmative prepared competitor and another radio.
 - Unregistered unsigned-boundary code.
 
-These are executable policy-kernel controls, not actual Room all-writer,
+The first hosted revision contained twelve methods. The currently authored
+mismatch-corrected successor contains fourteen methods and has not yet been
+hosted or executed. These are executable policy-kernel controls, not actual Room all-writer,
 atomicity, transport, permission, or integration evidence. Existing tests and
 assertions are unchanged. Service's separate immutable `e266620cba6194d0eebc952c31cf3516af89a101`
 diagnostic does not contain these new methods and is not advanced here.
@@ -89,10 +94,9 @@ Source-only commands:
 - `python tools\android-port\portmap.py`: passed; output retained in session file
   `ambiguity-candidate-portmap.json`.
 
-No Kotlin compilation or test execution occurred here. Retained local execution
-hold `local-check:f516a7e271f444dd9cb2efcc8b995a16` is not bypassed.
-Nine authored methods are not nine executed or passing methods.
-Exact-candidate hosted compilation/discovery/execution remains required.
+At initial authoring, no Kotlin compilation or test execution occurred locally.
+Retained local execution hold `local-check:f516a7e271f444dd9cb2efcc8b995a16`
+was not bypassed. Exact-candidate hosted verification is recorded below.
 
 ## Same-valid-claim retry correction
 
@@ -119,6 +123,48 @@ For this successor, `git diff --check`,
 `python tools\android-port\controller\validate.py`,
 `python tools\android-port\controller\verification_config.py --check` and
 `python tools\android-port\portmap.py` passed. Provenance output is retained as
-session file `ambiguity-retry-portmap.json`. Kotlin compilation/test execution
-remains unverified under the same retained local execution hold; separate
-exact-candidate hosted execution is required.
+session file `ambiguity-retry-portmap.json`. Kotlin compilation/test execution was not performed locally under the same
+retained execution hold; exact hosted execution is recorded below.
+
+## Exact hosted verification for the retry-corrected candidate
+
+The existing unchanged `Android candidate CI` workflow was dispatched on fresh
+ref `diagnostic/wp201-ack-ambiguity-167b8dbef-20261105a`, exact head
+`167b8dbef7558ef617bb03ae82232dd342a498a4`. Run
+[41982164017](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41982164017)
+completed **success**. The completed Linux build job log records
+`:core:contracts:compileTestKotlin`, `:core:contracts:test`, and the repository
+scaffold/Room verification commands in the successful build.
+
+The actual dedicated `core/contracts` JUnit summary is discovered 43, run 43,
+passed 43, failed 0, errors 0, skipped 0. Its exact test inventory includes all
+twelve methods in `DirectAckAmbiguityCandidateTest`, including the two
+latest-retry regressions and the simultaneous cross-claim/wildcard control.
+The workflow's mandatory Android baseline aggregate is passed 4,926, failed 0,
+errors 0, skipped 0. Controller/workflow tests, frozen source checks, Swift
+codec oracle, and actual SwiftData restore/export oracle also completed
+successfully. This is hosted CI evidence only; it is not Room collision
+enforcement, device/radio evidence, or authorization to activate the candidate.
+
+## Separate accepted-code-mismatch successor
+
+After preserving the successful exact-167 evidence above, owner review found
+that a wire's predicted code must stop being eligible once its own accepted
+actual code differs. The nonactivated classifier now uses each wire's
+`acceptedCode ?: predictedCode` only as the current matching code; retained
+predicted values remain diagnostic history. A matching prediction while the
+potentially emitted target still lacks an accepted result is explicitly
+`TARGET_ACCEPTANCE_UNRESOLVED`, not settling evidence. The consumer buffers
+pre-response raw ACKs, persists actual acceptance, and replays only an ACK
+matching the actual code. Earlier actual codes from eligible wires of the same
+still-valid claim remain eligible when the latest retry is prepared or returns
+a different code. Cross-claim unresolved emission remains wildcard ambiguity.
+
+Canonical `DirectAckAuthority` KDoc now specifies this same storage/consumer
+boundary; signatures and active production callers are unchanged. Service
+owner reports its separate consumer candidate `1cd63` implements buffering;
+storage owns per-wire `acceptedCode ?: predictedCode` and Room enforcement in
+`4e25`. Those owner candidates are not activated here and their execution is
+separate. No delayed-ACK expiry, origin proof, send block or policy activation
+is introduced. This mismatch-corrected successor requires its own exact-head
+hosted compile/test run; the successful `167b8db` run above does not verify it.

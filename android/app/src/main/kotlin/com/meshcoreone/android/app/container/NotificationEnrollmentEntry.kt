@@ -67,6 +67,7 @@ internal fun NotificationEnrollmentEntry(producer: NotificationEnrollmentProduce
     }
     val state by producer.state.collectAsState()
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
+        if (!attached) Text(stringResource(R.string.notification_enrollment_blocked))
         when (val current = state) {
             NotificationEnrollmentProducer.State.Reading, is NotificationEnrollmentProducer.State.Working ->
                 CircularProgressIndicator()

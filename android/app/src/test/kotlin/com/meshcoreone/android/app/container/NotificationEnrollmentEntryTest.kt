@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.container
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -78,7 +79,9 @@ class NotificationEnrollmentEntryTest {
 
     @After fun destroy() {
         ledger?.close()
-        host.pause().stop().destroy()
+        if (host.get().lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) host.pause()
+        if (host.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) host.stop()
+        if (host.get().lifecycle.currentState != Lifecycle.State.DESTROYED) host.destroy()
         scope.cancel()
         generationFile?.let { SQLiteDatabase.deleteDatabase(it) }
     }

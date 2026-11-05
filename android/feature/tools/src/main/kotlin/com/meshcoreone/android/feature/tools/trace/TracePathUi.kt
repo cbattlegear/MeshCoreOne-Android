@@ -5,6 +5,7 @@ package com.meshcoreone.android.feature.tools.trace
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -325,12 +326,11 @@ internal fun TracePathListContent(
                     }
                 }
                 Card(Modifier.fillMaxWidth()) {
-                    Row(
+                    Column(
                         Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Column(Modifier.weight(1f)) {
+                        Column(Modifier.fillMaxWidth()) {
                             Text(
                                 stringResource(
                                     com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_trace_list_hoplabel,
@@ -340,35 +340,41 @@ internal fun TracePathListContent(
                             )
                             Text(hop.hashHex, style = MaterialTheme.typography.bodySmall)
                         }
-                        OutlinedButton(
-                            onClick = moveUp,
-                            enabled = index > 0,
-                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
-                                contentDescription = "$moveUpLabel: $hopLabel"
-                                // Freeze the rendered action, not Clickable's mutable delegate.
-                                onClick { moveUp(); true }
-                            },
+                        FlowRow(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text("↑")
-                        }
-                        OutlinedButton(
-                            onClick = moveDown,
-                            enabled = index < state.outboundPath.lastIndex,
-                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
-                                contentDescription = "$moveDownLabel: $hopLabel"
-                                onClick { moveDown(); true }
-                            },
-                        ) {
-                            Text("↓")
-                        }
-                        OutlinedButton(
-                            onClick = remove,
-                            modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
-                                contentDescription = "$deleteLabel: $hopLabel"
-                                onClick { remove(); true }
-                            },
-                        ) {
-                            Text(deleteLabel)
+                            OutlinedButton(
+                                onClick = moveUp,
+                                enabled = index > 0,
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+                                    contentDescription = "$moveUpLabel: $hopLabel"
+                                    // Freeze the rendered action, not Clickable's mutable delegate.
+                                    onClick { moveUp(); true }
+                                },
+                            ) {
+                                Text("↑")
+                            }
+                            OutlinedButton(
+                                onClick = moveDown,
+                                enabled = index < state.outboundPath.lastIndex,
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+                                    contentDescription = "$moveDownLabel: $hopLabel"
+                                    onClick { moveDown(); true }
+                                },
+                            ) {
+                                Text("↓")
+                            }
+                            OutlinedButton(
+                                onClick = remove,
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+                                    contentDescription = "$deleteLabel: $hopLabel"
+                                    onClick { remove(); true }
+                                },
+                            ) {
+                                Text(deleteLabel)
+                            }
                         }
                     }
                 }

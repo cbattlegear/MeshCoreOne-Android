@@ -184,6 +184,13 @@ the save API, and restores eligibility only for a newly started batch. Fresh B p
 and accepted-before-retirement semantics remain required. This is not a mounted Save
 button claim or a transfer of the still-distinct r20 diagnostic results.
 
+The existing compact/large-font review finding is addressed on the actual path row:
+full-width details precede a wrapping action group. The added mounted case runs at
+320dp with 200% font and checks real text layout, visible name/hash, 48dp controls,
+nonoverlap, disabled boundaries and real removal. It does not substitute the earlier
+840dp code-input test or claim physical accessibility verification. It shares the next
+exact candidate with the batch-save eligibility fix; both require new runtime evidence.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

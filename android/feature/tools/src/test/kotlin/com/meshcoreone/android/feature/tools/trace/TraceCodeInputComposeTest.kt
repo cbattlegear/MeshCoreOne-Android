@@ -266,6 +266,45 @@ class TraceCodeInputComposeTest {
         assertEquals(listOf("Bravo", "Alpha"), harness.state.outboundPath.map { it.resolvedName })
     }
 
+    @Test
+    @Config(qualifiers = "en-rUS-w320dp-h900dp-mdpi")
+    fun compactLargeFontPathRowKeepsNameHashAndEveryActionReadable() {
+        val harness = configured()
+        harness.holder.addNode(contact(0xA1, name = "Mountain Ridge Emergency Repeater"))
+        mountPathList(harness, fontScale = 2f)
+        scrollToIndex(2)
+        val hop = harness.state.outboundPath.single()
+        val label = C.contactsTraceListHopLabel(host.get().resources, 1, hop.displayText)
+        val textNodes = listOf(label, hop.hashHex).map { text ->
+            nodes().single { it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text } }
+        }
+        textNodes.forEach { node ->
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            assertTrue(assertNotNull(node.config[SemanticsActions.GetTextLayoutResult].action)(layouts))
+            val layout = layouts.single()
+            assertFalse(layout.hasVisualOverflow, "Compact 200% text must wrap without clipping")
+            assertTrue(node.boundsInRoot.width >= layout.size.width - 1f)
+            assertTrue(node.boundsInRoot.height >= layout.size.height - 1f)
+            assertTrue(node.boundsInRoot.width > 0f)
+        }
+        val actions = listOf(C.contactsDetailAvatarCropMoveUp, C.contactsDetailAvatarCropMoveDown, L.commonDelete)
+            .map { actionButton(pathActionDescription(it, 1, hop)) }
+        actions.forEach { node ->
+            assertTrue(node.boundsInRoot.width >= 48f && node.boundsInRoot.height >= 48f)
+            assertTrue(node.boundsInRoot.left >= 0f && node.boundsInRoot.right <= content.width.toFloat())
+            textNodes.forEach { text ->
+                assertTrue(text.boundsInRoot.right <= node.boundsInRoot.left ||
+                    text.boundsInRoot.left >= node.boundsInRoot.right ||
+                    text.boundsInRoot.bottom <= node.boundsInRoot.top ||
+                    text.boundsInRoot.top >= node.boundsInRoot.bottom, "Details and controls must not overlap")
+            }
+        }
+        assertTrue(actions[0].config.contains(SemanticsProperties.Disabled))
+        assertTrue(actions[1].config.contains(SemanticsProperties.Disabled))
+        clickDescription(pathActionDescription(L.commonDelete, 1, hop))
+        assertTrue(harness.state.outboundPath.isEmpty(), "Compact layout keeps the real removal action")
+    }
+
     @Test fun mountedClearPathRequiresConfirmationAndResetsTheTraceHashOverride() {
         val harness = configured()
         harness.holder.addNode(contact(0xA1, name = "Alpha"))
@@ -1881,12 +1920,12 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
-    private fun mountPathList(harness: TraceHarness) {
+    private fun mountPathList(harness: TraceHarness, fontScale: Float = 1f) {
         content.setContent {
             key(harness) {
                 val state = harness.holder.state.collectAsStateWithLifecycle().value
                 val codeInput = rememberTraceCodeInputState(harness.holder)
-                CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
                     MaterialTheme { TracePathListContent(state, harness.holder, codeInput) }
                 }
             }

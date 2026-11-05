@@ -129,7 +129,7 @@ class ChatOpenScopeAcceptanceTest : RoomProcessTest() {
             h.manager.connect(h.target())
             h.eventually("replacement ready") { h.manager.connectionState == DeviceConnectionState.READY }
             val replacement = h.links.radios.last()
-            replacement.respondToFloodScopeCommands { emptyList() }
+            replacement.respondToFloodScopeCommands()
             assertNotEquals(previous, assertNotNull(h.sessions.current).token)
             h.manager.replaceConnectedDevice(assertNotNull(h.manager.connectedDevice).copy(firmwareVersion = 12u))
             store.saveChannel(channel)

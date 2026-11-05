@@ -124,7 +124,7 @@ class NativeMessagingTest {
                 }
             }
         },
-        native("retiredEmissionHistorySaturationRetainsExplicitDeliveryUncertainty") {
+        native("compactedKnownEmissionHistoryAllowsDistinctLaterResend") {
             val h = Harness(this, MessageServiceConfig(maxAttempts = 1, minTimeout = 0.0))
             h.start(); h.service.startEventMonitoring()
             h.transport.acknowledge = false
@@ -143,17 +143,22 @@ class NativeMessagingTest {
                 runCurrent()
                 val before = h.stored(message.id)
                 h.transport.pushAck(actual, 321u); runCurrent()
-                assertEquals(before, h.stored(message.id))
-                assertFalse(sending.isCompleted)
+                val delivered = sending.await()
+                assertEquals(MessageStatus.DELIVERED, delivered.status)
+                assertEquals(1000u, delivered.ackCode)
+                assertEquals(321u, delivered.roundTripTime)
+                assertEquals(before.sendCount + 1, delivered.sendCount)
                 assertEquals(67, h.sends(CommandCode.SEND_MESSAGE).size)
-                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
-                    it.operation.startsWith("ackAmbiguous.")
-                })
+                assertEquals(0, h.service.pendingAckCount)
+                assertEquals(0, h.service.retainedDirectAuthorityCount)
+                assertEquals(67, h.service.emissionHistoryBucketCount)
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none {
+                    it.operation.startsWith("ackAmbiguous.") })
             } finally {
                 withContext(NonCancellable) { sending.cancelAndJoin(); h.close() }
             }
         },
-        native("historySaturationDoesNotTreatOlderTrackersAsProvenDisjoint") {
+        native("compactedHistoryDoesNotBlockIndependentDistinctMessage") {
             val h = Harness(this, MessageServiceConfig(maxAttempts = 1, minTimeout = 0.0))
             h.start(); h.service.startEventMonitoring()
             h.transport.acknowledge = false
@@ -169,7 +174,7 @@ class NativeMessagingTest {
             }
             val actual = ByteWriter().appendUInt32LE(1000u).toBytes()
             h.transport.expectedAckOverride = actual
-            val sending = async { h.service.resendDirectMessage(later.id, h.contact, preserveTimestamp = true) }
+            val sending = async { h.service.sendMessageWithRetry("independently distinct after compaction", h.contact) }
             try {
                 runCurrent()
                 val beforeOlder = h.stored(older.id)
@@ -177,25 +182,158 @@ class NativeMessagingTest {
                 val olderTracker = assertNotNull(h.service.pendingAck(older.id))
                 val events = h.service.statusEvents()
                 h.transport.pushAck(olderCode, 555u); runCurrent()
-                assertEquals(beforeOlder, h.stored(older.id))
-                assertFalse(olderTracker.receipt.isCompleted)
-                assertSame(olderTracker.receipt, assertNotNull(h.service.pendingAck(older.id)).receipt)
+                assertEquals(beforeOlder.copy(status = MessageStatus.DELIVERED, roundTripTime = 555u), h.stored(older.id))
+                assertEquals(MeshAcknowledgement(olderCode, 555u), olderTracker.receipt.await())
+                assertNull(h.service.pendingAck(older.id))
                 h.transport.pushAck(actual, 321u); runCurrent()
+                val delivered = sending.await()
                 assertEquals(beforeLater, h.stored(later.id))
-                assertFalse(sending.isCompleted)
+                assertEquals(MessageStatus.DELIVERED, delivered.status)
+                assertEquals(1000u, delivered.ackCode)
+                assertEquals(321u, delivered.roundTripTime)
+                assertEquals(1L, delivered.sendCount)
                 assertEquals(68, h.sends(CommandCode.SEND_MESSAGE).size)
-                assertFalse(assertNotNull(h.service.pendingAck(later.id)).receipt.isCompleted)
-                val ambiguities = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
-                    .filter { it.operation.startsWith("ackAmbiguous.") }
-                assertEquals(2, ambiguities.size)
-                ambiguities.forEach {
-                    assertEquals("Direct ACK authority: ACK correlation history overflow; delivery remains unproven",
-                        assertIs<PersistenceStoreError.SaveFailed>(assertIs<PersistenceStoreException>(it.cause).error).reason)
-                }
-                assertTrue(statuses(h.service, events).isEmpty())
+                assertNull(h.service.pendingAck(delivered.id))
+                assertEquals(1, h.service.retainedDirectAuthorityCount)
+                assertEquals(67, h.service.emissionHistoryBucketCount)
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none {
+                    it.operation.startsWith("ackAmbiguous.") })
+                assertEquals(listOf(
+                    MessageStatusEvent.StatusResolved(older.id, MessageStatus.DELIVERED, 555u),
+                    MessageStatusEvent.StatusResolved(delivered.id, MessageStatus.DELIVERED, 321u),
+                ), statuses(h.service, events))
             } finally {
                 withContext(NonCancellable) { sending.cancelAndJoin(); h.close() }
             }
+        },
+        native("successfulDistinctTrafficRetiresTerminalAuthorityStateBeyondSixtyFourMessages") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            h.transport.acknowledge = true
+            repeat(128) { index ->
+                val code = (index + 1).toUInt()
+                h.transport.expectedAckOverride = ByteWriter().appendUInt32LE(code).toBytes()
+                val delivered = h.service.sendMessageWithRetry("distinct message $index", h.contact)
+                assertEquals(MessageStatus.DELIVERED, delivered.status)
+                assertEquals(code, delivered.ackCode)
+                assertEquals(123u, delivered.roundTripTime)
+                assertEquals(1L, delivered.sendCount)
+                assertEquals(0, h.service.pendingAckCount)
+                assertEquals(0, h.service.retainedDirectAuthorityCount)
+                assertEquals(index + 1, h.sends(CommandCode.SEND_MESSAGE).size)
+                assertEquals(index + 1, h.service.emissionHistoryBucketCount)
+            }
+            assertEquals(128, h.store.messages.size)
+            h.close()
+        },
+        native("compactedBucketOverlapIsExplicitUncertaintyNotPermissionForDifferentHighBytes") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            h.transport.acknowledge = true
+            repeat(65) { index ->
+                h.transport.expectedAckOverride = ByteWriter().appendUInt32LE((index + 1).toUInt()).toBytes()
+                assertEquals(MessageStatus.DELIVERED,
+                    h.service.sendMessageWithRetry("compact history $index", h.contact).status)
+            }
+            assertEquals(0, h.service.retainedDirectAuthorityCount)
+            assertEquals(65, h.service.emissionHistoryBucketCount)
+            h.transport.acknowledge = false
+            val differentActual = ByteWriter().appendUInt32LE(65537u).toBytes()
+            h.transport.expectedAckOverride = differentActual
+            val message = h.service.sendDirectMessage("same bucket different full code", h.contact)
+            val tracker = assertNotNull(h.service.pendingAck(message.id))
+            val events = h.service.statusEvents()
+            h.transport.pushAck(differentActual, 999u); runCurrent()
+            assertEquals(message, h.stored(message.id))
+            assertFalse(tracker.receipt.isCompleted)
+            assertEquals(66, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertTrue(statuses(h.service, events).isEmpty())
+            val ambiguity = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                .single { it.operation.startsWith("ackAmbiguous.") }
+            assertEquals("Direct ACK authority: Compacted ACK code bucket overlaps; delivery remains unproven",
+                assertIs<PersistenceStoreError.SaveFailed>(assertIs<PersistenceStoreException>(ambiguity.cause).error).reason)
+            h.close()
+        },
+        native("promotionIntoCompactedHistoryPreservesEveryPreviouslyKnownCode") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            h.transport.acknowledge = true
+            repeat(65) { index ->
+                h.transport.expectedAckOverride = ByteWriter().appendUInt32LE((index + 1).toUInt()).toBytes()
+                assertEquals(MessageStatus.DELIVERED,
+                    h.service.sendMessageWithRetry("promote code $index", h.contact).status)
+            }
+            assertEquals(65, h.service.emissionHistoryBucketCount)
+            h.transport.acknowledge = false
+            val events = h.service.statusEvents()
+            val observed = mutableListOf<MessageStatusEvent>()
+            val collector = backgroundScope.launch { events.events.collect { observed += it.event } }
+            repeat(65) { index ->
+                val actual = ByteWriter().appendUInt32LE((index + 1).toUInt()).toBytes()
+                h.transport.expectedAckOverride = actual
+                val message = h.service.sendDirectMessage("cannot forget promoted code $index", h.contact)
+                runCurrent()
+                val beforeEvents = observed.toList()
+                val tracker = assertNotNull(h.service.pendingAck(message.id))
+                h.transport.pushAck(actual, 999u); runCurrent()
+                assertEquals(message, h.stored(message.id))
+                assertFalse(tracker.receipt.isCompleted)
+                assertEquals(beforeEvents, observed)
+                assertEquals(66 + index, h.sends(CommandCode.SEND_MESSAGE).size)
+            }
+            assertEquals(65, h.service.retainedDirectAuthorityCount)
+            assertEquals(65, h.service.emissionHistoryBucketCount)
+            collector.cancelAndJoin(); h.close()
+        },
+        native("activeInlineCompletionRetainsItsAuthorityAfterTrackerRetirement") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            h.transport.acknowledge = true
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            h.store.before = { operation ->
+                if (operation == "fetchMessage" && h.store.messages.values.singleOrNull()?.let {
+                    it.status == MessageStatus.DELIVERED && h.service.pendingAck(it.id) == null
+                } == true) {
+                    entered.complete(Unit); release.await()
+                }
+            }
+            val sending = backgroundScope.async { h.service.sendDirectMessage("active inline finalization", h.contact) }
+            try {
+                entered.await()
+                assertEquals(0, h.service.pendingAckCount)
+                assertEquals(1, h.service.retainedDirectAuthorityCount)
+                release.complete(Unit); runCurrent()
+                val delivered = sending.await()
+                assertEquals(MessageStatus.DELIVERED, delivered.status)
+                assertEquals(123u, delivered.roundTripTime)
+                assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+                assertEquals(0, h.service.retainedDirectAuthorityCount)
+            } finally {
+                withContext(NonCancellable) {
+                    release.complete(Unit); sending.cancelAndJoin(); h.store.before = null; h.close()
+                }
+            }
+        },
+        native("unknownEmittedOutcomeCannotBeResetByANewerSessionGraph") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            h.transport.holdMessageReplies = true
+            val receipt = NotificationActionReceipt()
+            val first = backgroundScope.async(receipt) { h.service.sendDirectMessage("unknown prior generation", h.contact) }
+            runCurrent()
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            first.cancelAndJoin()
+            assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+            h.close()
+            val successor = Harness(this, store = h.store, generation = 2)
+            successor.start(); successor.service.startEventMonitoring()
+            val actual = Bytes.of(9, 8, 7, 6)
+            successor.transport.expectedAckOverride = actual
+            val message = successor.service.sendDirectMessage("newer generation same radio", successor.contact)
+            val tracker = assertNotNull(successor.service.pendingAck(message.id))
+            val events = successor.service.statusEvents()
+            successor.transport.pushAck(actual, 999u); runCurrent()
+            assertEquals(message, successor.stored(message.id))
+            assertFalse(tracker.receipt.isCompleted)
+            assertEquals(1, successor.sends(CommandCode.SEND_MESSAGE).size)
+            assertTrue(statuses(successor.service, events).isEmpty())
+            successor.close()
         },
         native("bufferedUnrelatedAckIsReportedUnmatchedOnlyAfterActualResponse") {
             val h = Harness(this); h.start(); h.service.startEventMonitoring()

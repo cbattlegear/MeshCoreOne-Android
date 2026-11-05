@@ -24,6 +24,7 @@ import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import java.time.Duration
 import java.time.Instant
+import java.util.BitSet
 import java.util.UUID
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.math.pow
@@ -85,9 +86,12 @@ class MessageService(
         var acknowledgementBufferOverflow = false
     }
     private val directAuthorities = mutableMapOf<UUID, DirectAuthorityState>()
-    private val retiredDirectEmissions = mutableListOf<DirectAuthorityState>()
     private val inFlightDirectEmissions = mutableSetOf<DirectAuthorityState>()
-    private var directEmissionHistoryOverflow = false
+    private val inlineDirectRequests = mutableSetOf<UUID>()
+    // An unset bucket proves exclusion; a hit never proves which wire produced an ACK.
+    private val retiredEmissionBuckets = BitSet(65536)
+    private var retiredExactEmissionCodes: MutableSet<Bytes>? = mutableSetOf()
+    private var retiredUnknownEmission = false
     private val directIntentMessages = mutableSetOf<UUID>()
     private val directRegistrationIDs = mutableMapOf<UUID, UUID>()
     private class NoDispatchCompletion(
@@ -118,6 +122,8 @@ class MessageService(
     private var checkInterval = 5.0
 
     val pendingAckCount: Int get() = synchronized(lock) { pendingAcks.size }
+    internal val retainedDirectAuthorityCount: Int get() = synchronized(lock) { directAuthorities.size }
+    internal val emissionHistoryBucketCount: Int get() = synchronized(lock) { retiredEmissionBuckets.cardinality() }
     val isAckExpiryCheckingActive: Boolean get() = synchronized(lock) { expiry?.isActive == true }
     val isEventMonitoringActive: Boolean get() = synchronized(lock) { listener?.isActive == true }
     override fun statusEvents(): SessionEventSubscription<MessageStatusEvent> = events.subscribe()
@@ -234,10 +240,43 @@ class MessageService(
     }
 
     private fun retainRetiredEmission(state: DirectAuthorityState) {
-        if (state in inFlightDirectEmissions || state in retiredDirectEmissions ||
+        if (state in inFlightDirectEmissions ||
             directAuthorities.values.any { it === state } || state.possiblyEmittedCodes.isEmpty()) return
-        if (retiredDirectEmissions.size < 64) retiredDirectEmissions += state
-        else directEmissionHistoryOverflow = true
+        state.possiblyEmittedCodes.values.forEach { code ->
+            if (code == null) retiredUnknownEmission = true
+            else {
+                retiredEmissionBuckets.set(emissionBucket(code))
+                retiredExactEmissionCodes?.let { exact ->
+                    if (code !in exact && exact.size == 64) retiredExactEmissionCodes = null
+                    else exact += code
+                }
+            }
+        }
+    }
+
+    private fun pruneDirectAuthorities() {
+        val retired = directAuthorities.filter { (id, state) ->
+            id !in pendingAcks && state !in inFlightDirectEmissions &&
+                state.requestID !in inlineDirectRequests &&
+                directClaims.values.none { it.id == state.requestID }
+        }
+        retired.forEach { (id, state) ->
+            directAuthorities.remove(id)
+            directRegistrationIDs.remove(state.requestID)
+            retainRetiredEmission(state)
+        }
+    }
+
+    private suspend fun <T> withInlineDirectRequest(requestID: UUID, block: suspend () -> T): T {
+        synchronized(lock) { inlineDirectRequests += requestID }
+        try { return block() }
+        finally {
+            synchronized(lock) {
+                inlineDirectRequests -= requestID
+                directRegistrationIDs.remove(requestID)
+                pruneDirectAuthorities()
+            }
+        }
     }
 
     private suspend fun directWire(
@@ -268,10 +307,14 @@ class MessageService(
         }
     }
 
+    private fun emissionBucket(code: Bytes): Int = code.ackCodeUInt32.toInt() and 0xFFFF
+
+    private fun historyMayMatch(code: Bytes): Boolean = retiredUnknownEmission ||
+        (retiredExactEmissionCodes?.contains(code) ?: retiredEmissionBuckets[emissionBucket(code)])
+
     private fun hasCompetingEmission(target: DirectAuthorityState, code: Bytes): Boolean =
-        directEmissionHistoryOverflow ||
-            (retiredDirectEmissions.asSequence() + directAuthorities.values.asSequence() +
-                inFlightDirectEmissions.asSequence()).any { other ->
+        historyMayMatch(code) ||
+            (directAuthorities.values.asSequence() + inFlightDirectEmissions.asSequence()).any { other ->
                 other !== target &&
                     other.possiblyEmittedCodes.values.any { it == null || it == code }
             }
@@ -558,7 +601,7 @@ class MessageService(
         checkIdentity("acknowledgement")
         var deferred = false
         val overflows = mutableListOf<UUID>()
-        val ambiguous = mutableMapOf<UUID, Boolean>()
+        val ambiguous = mutableMapOf<UUID, String>()
         val tracking = synchronized(lock) {
             val found = pendingAcks.values.firstOrNull {
                 code in it.ackCodes && !it.isDelivered &&
@@ -566,7 +609,12 @@ class MessageService(
                     directAuthorities[it.messageID]?.takeIf { state -> state.attempt === it.authority }
                         ?.let { state ->
                             if (state.correlateResponses && hasCompetingEmission(state, code)) {
-                                ambiguous[state.requestID] = directEmissionHistoryOverflow
+                                ambiguous[state.requestID] = when {
+                                    retiredUnknownEmission -> "Retired emitted outcome has no known actual code; delivery remains unproven"
+                                    retiredExactEmissionCodes == null && retiredEmissionBuckets[emissionBucket(code)] ->
+                                        "Compacted ACK code bucket overlaps; delivery remains unproven"
+                                    else -> "ACK may belong to another emitted claim; delivery remains unproven"
+                                }
                                 false
                             } else !state.correlateResponses || code in state.confirmedCodes
                         } != false
@@ -598,11 +646,8 @@ class MessageService(
         overflows.forEach {
             remember("ackBuffer.$it", authorityFailure("ACK correlation buffer overflow; early delivery evidence is uncertain"))
         }
-        ambiguous.forEach { (requestID, overflow) ->
-            remember("ackAmbiguous.$requestID", authorityFailure(
-                if (overflow)
-                    "ACK correlation history overflow; delivery remains unproven"
-                else "ACK may belong to another emitted claim; delivery remains unproven"))
+        ambiguous.forEach { (requestID, detail) ->
+            remember("ackAmbiguous.$requestID", authorityFailure(detail))
         }
         if (tracking == null) {
             if (!deferred && ambiguous.isEmpty()) reportUnmatchedAcknowledgement(code)
@@ -737,6 +782,7 @@ class MessageService(
             recovered("failMessage.$messageID")
             recovered("ackExpiry.$messageID")
         }
+        synchronized(lock) { pruneDirectAuthorities() }
     }
 
     suspend fun checkExpiredAcks() {
@@ -765,6 +811,7 @@ class MessageService(
             }
         }
         retireBufferedAcknowledgements(tracking.messageID, tracking.authority)
+        synchronized(lock) { pruneDirectAuthorities() }
     }
 
     private suspend fun expireOrReconcile(snapshot: PendingAck, now: Instant) {
@@ -1126,48 +1173,50 @@ class MessageService(
                 validate(text, contact)
                 val message = outgoing(text, contact, textType, replyToID)
                 val requestID = UUID.randomUUID()
-                var registered: Pair<DirectAuthorityState, UUID>? = null
-                val (info, tracking, predicted) = sendBoundary(
-                    message.id, true, failDefinitelyUnsentInline = true,
-                    failureAttempt = { registered?.first?.attempt },
-                    failureRequestID = requestID,
-                ) {
-                    dataStore.saveMessage(message)
-                    ownership.check("sendDirectMessage.saved")
-                    checkIdentity("sendDirectMessage")
-                    val prepared = prepareDirect(message.id, requestID, contact, DirectAckMode.SEND, null)
-                    val captured = prepared.message
-                    val selected = prepared.contact
-                    val predicted = AckCodeBuilder.expectedAck(captured.timestamp, 0u, captured.text, localPublicKey)
-                    val registration = registerDirectDispatch(message.id, requestID, predicted, 0, prepared.intent,
-                        correlateResponses = true)
-                    registered = registration
-                    val tracking = trackPendingAck(message.id, selected.id, predicted, checkInterval, selected.publicKey)
-                    val info = withPoolBackoff(3u) {
-                        dmOperations.withLock {
-                            checkIdentity("sendDirectMessage.wire")
-                            inlineWire { dispatch ->
-                                val timestamp = Instant.ofEpochSecond(captured.timestamp.toLong())
-                                directWire(registration.first, registration.second, dispatch) {
-                                    if (dispatch == null) session.sendMessage(selected.publicKey, captured.text, timestamp)
-                                    else session.sendMessage(selected.publicKey, captured.text, timestamp, dispatch = dispatch)
+                withInlineDirectRequest(requestID) {
+                    var registered: Pair<DirectAuthorityState, UUID>? = null
+                    val (info, tracking, predicted) = sendBoundary(
+                        message.id, true, failDefinitelyUnsentInline = true,
+                        failureAttempt = { registered?.first?.attempt },
+                        failureRequestID = requestID,
+                    ) {
+                        dataStore.saveMessage(message)
+                        ownership.check("sendDirectMessage.saved")
+                        checkIdentity("sendDirectMessage")
+                        val prepared = prepareDirect(message.id, requestID, contact, DirectAckMode.SEND, null)
+                        val captured = prepared.message
+                        val selected = prepared.contact
+                        val predicted = AckCodeBuilder.expectedAck(captured.timestamp, 0u, captured.text, localPublicKey)
+                        val registration = registerDirectDispatch(message.id, requestID, predicted, 0, prepared.intent,
+                            correlateResponses = true)
+                        registered = registration
+                        val tracking = trackPendingAck(message.id, selected.id, predicted, checkInterval, selected.publicKey)
+                        val info = withPoolBackoff(3u) {
+                            dmOperations.withLock {
+                                checkIdentity("sendDirectMessage.wire")
+                                inlineWire { dispatch ->
+                                    val timestamp = Instant.ofEpochSecond(captured.timestamp.toLong())
+                                    directWire(registration.first, registration.second, dispatch) {
+                                        if (dispatch == null) session.sendMessage(selected.publicKey, captured.text, timestamp)
+                                        else session.sendMessage(selected.publicKey, captured.text, timestamp, dispatch = dispatch)
+                                    }
                                 }
                             }
                         }
+                        mergeSentInfo(message.id, predicted, info, 0u, null, registration.first)
+                        Triple(info, tracking, predicted)
                     }
-                    mergeSentInfo(message.id, predicted, info, 0u, null, registration.first)
-                    Triple(info, tracking, predicted)
+                    val (state, wireID) = requireNotNull(registered)
+                    postDMSent(message.id, contact.id, info, state, wireID, tracking)
+                    ownership.check("sendDirectMessage.accepted")
+                    if (synchronized(lock) { directAuthorities[message.id] !== state }) {
+                        throw authorityFailure("inline attempt superseded")
+                    }
+                    if (pendingAck(message.id)?.receipt === tracking.receipt) {
+                        mergeSentInfo(message.id, predicted, info, 0u, null, state)
+                    }
+                    fetchSaved(message.id)
                 }
-                val (state, wireID) = requireNotNull(registered)
-                postDMSent(message.id, contact.id, info, state, wireID, tracking)
-                ownership.check("sendDirectMessage.accepted")
-                if (synchronized(lock) { directAuthorities[message.id] !== state }) {
-                    throw authorityFailure("inline attempt superseded")
-                }
-                if (pendingAck(message.id)?.receipt === tracking.receipt) {
-                    mergeSentInfo(message.id, predicted, info, 0u, null, state)
-                }
-                fetchSaved(message.id)
             }
         }
 
@@ -1225,9 +1274,11 @@ class MessageService(
     internal fun releaseDirectClaim(claimID: UUID) {
         synchronized(lock) {
             noDispatchCompletions.remove(claimID)
+            directRegistrationIDs.remove(claimID)
             directClaims.remove(claimID)?.let { claim ->
                 if (activeDirectClaims[claim.messageID] === claim) activeDirectClaims.remove(claim.messageID)
             }
+            pruneDirectAuthorities()
         }
     }
 
@@ -1746,8 +1797,8 @@ class MessageService(
                 pendingAcks.values.forEach { it.receipt.cancel() }
                 pendingAcks.clear()
                 directAuthorities.clear()
-                retiredDirectEmissions.clear()
                 inFlightDirectEmissions.clear()
+                inlineDirectRequests.clear()
                 directRegistrationIDs.clear()
                 noDispatchCompletions.clear()
                 uncertainFailureWrites.clear()

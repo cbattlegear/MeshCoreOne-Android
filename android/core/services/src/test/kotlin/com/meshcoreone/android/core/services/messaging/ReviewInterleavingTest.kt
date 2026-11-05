@@ -87,15 +87,18 @@ class ReviewInterleavingTest {
             queue.hydrate(); runCurrent(); h.signals.set(h.token, DeviceConnectionState.READY); runCurrent()
             assertEquals(2L, h.stored(message.id).sendCount); assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
             assertTrue(h.store.hasPendingSend(EntityKey(RADIO, message.id)))
+            assertEquals(1, h.service.retainedDirectAuthorityCount)
             queue.transportDidOpen(); runCurrent(); queue.awaitDrainCompletion()
             assertEquals(2L, h.stored(message.id).sendCount); assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
             assertTrue(h.store.fetchPendingSends(RADIO).isEmpty())
+            assertEquals(0, h.service.retainedDirectAuthorityCount)
             h.transport.expectedAckOverride = Bytes.of(9, 8, 7, 6)
             queue.enqueueDM(DirectMessageEnvelope(message.id, CONTACT, true)); runCurrent(); queue.awaitDrainCompletion()
             assertEquals(3L, h.stored(message.id).sendCount); assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
             assertEquals(MessageStatus.DELIVERED, h.stored(message.id).status)
             assertEquals(0x06070809u, h.stored(message.id).ackCode)
             assertEquals(123u, h.stored(message.id).roundTripTime)
+            assertEquals(0, h.service.retainedDirectAuthorityCount)
             queue.shutdown(); h.close()
         },
         native("sharedGetMessageResultBeforeManualNoMoreIsDeliveredOnceBeforeSuccessfulCompletion") {

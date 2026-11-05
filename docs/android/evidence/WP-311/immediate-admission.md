@@ -115,6 +115,11 @@ advertisement-service acquisition and while setting A's advertisement flag. They
 command/subscription/publication, no B advertisement mutation by A, cleanup of A's flag when it was
 set, retained admissions and an independent fresh B sync. Existing held-A/B controls remain intact.
 
+If a held sync fetch resumes after graph replacement but before the screen observes it, cleanup
+retires the mismatched operation before dropping its active identity. Success and ordinary-failure
+fetch controls require loading and sync state to stop without waiting for the screen effect,
+prohibit stale publication, preserve A-only advertisement cleanup and require fresh B success.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

@@ -163,6 +163,55 @@ class ContactsNativeTest {
     @Test
     fun `held same-radio sync ordinary failure cannot fail or stop the replacement sync`() = verifySyncReplacement("failure")
 
+    @Test
+    fun `same-radio replacement during held sync fetch retires loading before the screen effect`() =
+        verifySyncFetchReplacement(fails = false)
+
+    @Test
+    fun `same-radio replacement during failing sync fetch retires loading before the screen effect`() =
+        verifySyncFetchReplacement(fails = true)
+
+    private fun verifySyncFetchReplacement(fails: Boolean) = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        harness.store.fetchContactsGate = {
+            entered.complete(Unit)
+            release.await()
+            if (fails) error("old store failed")
+        }
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        val syncing = scope.launch { holder.syncContacts(radio) }
+        entered.await()
+        assertTrue(holder.state.value.isLoading)
+        assertTrue(holder.state.value.isSyncing)
+        val replacement = Harness(clock).connect(radio)
+        val fresh = contact(radioId = radio, name = "Fresh")
+        replacement.store.contacts += fresh
+        harness.session.contacts = replacement.contactService
+        harness.session.adverts = replacement.adverts
+        harness.session.servicesStore = replacement.store
+        harness.session.offlineStore = replacement.store
+        release.complete(Unit)
+        syncing.join()
+        assertTrue(syncing.isCancelled)
+        assertFalse(holder.state.value.isLoading, "A cleanup must retire loading before a delayed screen effect")
+        assertFalse(holder.state.value.isSyncing)
+        assertNull(holder.state.value.errorMessage)
+        assertTrue(holder.state.value.contacts.isEmpty(), "A cannot publish a stale fetch")
+        assertEquals(listOf(true, false), harness.adverts.syncingFlags)
+        assertTrue(replacement.adverts.syncingFlags.isEmpty())
+        holder.onConnectionChanged()
+        assertFalse(holder.state.value.isLoading)
+        holder.syncContacts(radio)
+        assertEquals(listOf(fresh), holder.state.value.contacts)
+        assertFalse(holder.state.value.isLoading)
+        assertFalse(holder.state.value.isSyncing)
+        assertEquals(listOf("sync"), replacement.contactService.calls)
+        assertEquals(listOf(true, false), replacement.adverts.syncingFlags)
+    }
+
     private fun verifySyncReplacement(outcome: String) = scenario {
         val harness = Harness(clock).connect()
         val radio = checkNotNull(harness.session.radioId)

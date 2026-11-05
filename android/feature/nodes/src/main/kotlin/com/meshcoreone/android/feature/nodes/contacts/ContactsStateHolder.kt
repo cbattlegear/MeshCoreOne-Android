@@ -202,6 +202,7 @@ class ContactsStateHolder(
             operation.stopProgress()
             withContext(NonCancellable) {
                 advertisementService?.setSyncingContacts(false)
+                if (activeSync === operation) onConnectionChanged()
                 if (activeSync === operation) {
                     activeSync = null
                     mutableState.update { it.copy(isSyncing = false, syncProgress = null) }

@@ -130,6 +130,11 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         it.push(AppTab.TOOLS, NavigationDestination.Tool(tool)).copy(selectedTool = tool)
     }
 
+    fun navigateToLineOfSight(contact: ContactDTO) = mutableState.update {
+        it.push(AppTab.TOOLS, NavigationDestination.Tool(ToolSelection.LINE_OF_SIGHT, contact))
+            .copy(selectedTool = ToolSelection.LINE_OF_SIGHT)
+    }
+
     fun stageContactLink(link: ContactLinkRequest?) = mutableState.update { it.copy(pendingContactLink = link) }
     fun stageChannelLink(link: ChannelLinkRequest?) = mutableState.update { it.copy(pendingChannelLink = link) }
     fun stageHashtag(link: HashtagJoinRequest?) = mutableState.update { it.copy(pendingHashtag = link) }

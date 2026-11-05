@@ -1382,17 +1382,23 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         } finally { forwarding?.cancel(); forwarding?.join() }
     }
 
-    @Test fun observedRepeatOffStaysOffWhenLaterPersistenceFailsAndANewCycleRecovers() = runTest {
-        for (failurePoint in listOf("clear", "radio-projection")) {
+    @Test fun verifiedRepeatOffStaysOffWhenLaterPersistenceFailsAndANewCycleRecovers() = runTest {
+        for (failurePoint in listOf("repeat-projection", "radio-projection", "clear")) {
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             var failPersistence = true
             val held = object : PersistenceStoreProtocol by store {
                 override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                     val clearsSnapshot = expected.device.preRepeatFrequency != null && dto.preRepeatFrequency == null
+                    val projectsRepeatOff = expected.device.clientRepeat && !dto.clientRepeat && dto.preRepeatFrequency != null
                     val projectsRestoredRf = !expected.device.clientRepeat && !dto.clientRepeat &&
                         expected.device.frequency != dto.frequency && dto.preRepeatFrequency != null
-                    if (failPersistence && if (failurePoint == "clear") clearsSnapshot else projectsRestoredRf) {
+                    val failsHere = when (failurePoint) {
+                        "repeat-projection" -> projectsRepeatOff
+                        "radio-projection" -> projectsRestoredRf
+                        else -> clearsSnapshot
+                    }
+                    if (failPersistence && failsHere) {
                         entered.complete(Unit)
                         release.await()
                         throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Repeat $failurePoint unavailable"))
@@ -1410,15 +1416,15 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
                     }
                     holder.onRepeatToggled(false)
-                    h.eventually("off observation arrives before the held $failurePoint fails") {
-                        entered.isCompleted && holder.state.value.device?.clientRepeat == false
+                    h.eventually("verified off reaches the held $failurePoint boundary") {
+                        entered.isCompleted && holder.state.value.device?.clientRepeat == (failurePoint == "repeat-projection")
                     }
                     assertTrue(holder.state.value.isApplyingRepeat)
                     assertFalse(holder.state.value.isRepeatEnabled)
                     val durableOff = assertNotNull(store.fetchDevice(before.id))
-                    assertFalse(durableOff.clientRepeat)
+                    assertEquals(failurePoint == "repeat-projection", durableOff.clientRepeat)
                     assertNotNull(durableOff.preRepeatFrequency)
-                    if (failurePoint == "radio-projection") {
+                    if (failurePoint != "clear") {
                         assertEquals(before.frequency, radio.frequency, "Actual restore was verified before either publication")
                         assertTrue(durableOff.frequency != before.frequency, "The later RF projection has not committed")
                     }
@@ -1428,8 +1434,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
                     }
                     assertEquals(token, holder.state.value.sessionToken)
-                    assertFalse(holder.state.value.isRepeatEnabled, "Later persistence cannot undo the observed Repeat-off")
-                    assertFalse(assertNotNull(holder.state.value.device).clientRepeat)
+                    assertFalse(holder.state.value.isRepeatEnabled, "Later persistence cannot undo verified Repeat-off")
+                    assertEquals(failurePoint == "repeat-projection", assertNotNull(holder.state.value.device).clientRepeat)
                     assertNotNull(holder.state.value.errorMessage)
                     assertNotNull(store.fetchDevice(before.id)?.preRepeatFrequency, "Failure cannot silently discard the baseline")
 

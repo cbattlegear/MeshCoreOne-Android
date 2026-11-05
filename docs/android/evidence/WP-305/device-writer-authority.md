@@ -163,3 +163,12 @@ command before cancelling, rather than treating lease entry as sufficient queue 
 Per-method quiet listener support was requested for only the two authority classes. Trusted
 admission refused `android/app/build.gradle.kts` / `modify-related-consumer` for WP-305; no build
 file was edited. The concrete blocker was handed to the Project for an admitted support owner.
+
+The Project identified the actual existing `app-build-launcher` operation
+`update-build-or-manifest`; that exact trusted admission succeeded for
+`android/app/build.gradle.kts`. No rule/policy/reservation was changed. The clean existing listener
+hunk is extended with only the two actual authority test classes, emitting their runner-provided
+class/method START and END/result type at quiet level. No predicted method count/outcome, filtering,
+task/workflow change, altered assertion or suppressed failure is introduced. This support successor
+is separate from exploratory run `41945162289` at exact
+`fbf12f347754864cc2317e2f43645ccd3a72c2c0`; that run remains unchanged.

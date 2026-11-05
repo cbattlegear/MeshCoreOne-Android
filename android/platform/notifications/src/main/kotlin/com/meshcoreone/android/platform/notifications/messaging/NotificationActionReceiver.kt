@@ -84,6 +84,7 @@ internal object NotificationActionDispatcher {
     private val pending = ArrayDeque<NotificationResponse>()
     private var scope: CoroutineScope? = null
     private var router: (suspend (NotificationResponse) -> Boolean)? = null
+    private var installation: Any? = null
     private var drainJob: Job? = null
     private var retryRequested = false
 
@@ -91,6 +92,7 @@ internal object NotificationActionDispatcher {
         synchronized(lock) {
             this.scope = scope
             this.router = router
+            installation = Any()
         }
         retry()
     }
@@ -121,6 +123,7 @@ internal object NotificationActionDispatcher {
     private fun prepareDrainLocked(): Job? {
         val owner = scope ?: return null
         if (drainJob != null || owner.coroutineContext[Job]?.isActive == false) return null
+        val installed = installation
         val job = owner.launch(context = NotificationActionCommit(), start = CoroutineStart.LAZY) {
             repeat(RETRY_COUNT) {
                 synchronized(lock) { retryRequested = false }
@@ -136,7 +139,8 @@ internal object NotificationActionDispatcher {
             val next = synchronized(lock) {
                 if (drainJob !== job) return@invokeOnCompletion
                 drainJob = null
-                if (retryRequested) prepareDrainLocked() else null
+                // An old drain can consume a replacement installation's retry before it stops.
+                if (retryRequested || installation !== installed) prepareDrainLocked() else null
             }
             next?.start()
         }
@@ -179,6 +183,7 @@ internal object NotificationActionDispatcher {
             pending.clear()
             scope = null
             router = null
+            installation = null
             retryRequested = false
             previous
         }

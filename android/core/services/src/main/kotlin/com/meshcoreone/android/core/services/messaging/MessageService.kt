@@ -87,7 +87,8 @@ class MessageService(
     }
     private val directAuthorities = mutableMapOf<UUID, DirectAuthorityState>()
     private val retiredDirectEmissions = mutableListOf<DirectAuthorityState>()
-    private var directEmissionHistoryOverflow = false
+    private val inFlightDirectEmissions = mutableSetOf<DirectAuthorityState>()
+    private var directEmissionOverflowOrder: Long? = null
     private var directRegistrationOrder = 0L
     private val directIntentMessages = mutableSetOf<UUID>()
     private val directRegistrationIDs = mutableMapOf<UUID, UUID>()
@@ -224,38 +225,61 @@ class MessageService(
             is DirectAckBeginResult.Rejected -> throw authorityFailure(result.reason.name)
         }
         if (receipt.permission != DirectAckPermission.CURRENT) throw authorityFailure(receipt.permission.name)
-        val state = DirectAuthorityState(requestID, attempt, wireID, correlateResponses, synchronized(lock) {
-            Math.incrementExact(directRegistrationOrder).also { directRegistrationOrder = it }
-        })
-        synchronized(lock) {
-            if (prior != null && prior.possiblyEmittedCodes.isNotEmpty()) {
-                if (retiredDirectEmissions.size < 64) retiredDirectEmissions += prior
-                else directEmissionHistoryOverflow = true
+        val state = synchronized(lock) {
+            val order = Math.incrementExact(directRegistrationOrder).also { directRegistrationOrder = it }
+            DirectAuthorityState(requestID, attempt, wireID, correlateResponses, order).also {
+                it.predictedCodes[wireID] = predicted
+                directAuthorities.put(id, it)?.let { displaced -> retainRetiredEmission(displaced) }
+                pendingAcks.remove(id)?.receipt?.cancel()
             }
-            state.predictedCodes[wireID] = predicted
-            directAuthorities[id] = state
-            pendingAcks.remove(id)?.receipt?.cancel()
         }
         return state to wireID
     }
 
+    private fun retainRetiredEmission(state: DirectAuthorityState) {
+        if (state in inFlightDirectEmissions || state in retiredDirectEmissions ||
+            directAuthorities.values.any { it === state } || state.possiblyEmittedCodes.isEmpty()) return
+        if (retiredDirectEmissions.size < 64) retiredDirectEmissions += state
+        else directEmissionOverflowOrder = directEmissionOverflowOrder?.let {
+            minOf(it, state.registrationOrder)
+        } ?: state.registrationOrder
+    }
+
     private suspend fun directWire(
-        state: DirectAuthorityState, wireID: UUID, transmit: suspend () -> MessageSentInfo,
+        state: DirectAuthorityState, wireID: UUID, dispatch: MessageWriteDispatch?,
+        transmit: suspend () -> MessageSentInfo,
     ): MessageSentInfo {
-        synchronized(lock) { state.possiblyEmittedCodes[wireID] = null }
+        synchronized(lock) {
+            state.possiblyEmittedCodes[wireID] = null
+            inFlightDirectEmissions += state
+        }
         try {
             return transmit().also { info ->
                 synchronized(lock) { state.possiblyEmittedCodes[wireID] = info.expectedAck }
             }
+        } catch (cancelled: CancellationException) {
+            if (dispatch?.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                synchronized(lock) { state.possiblyEmittedCodes.remove(wireID) }
+            }
+            throw cancelled
         } catch (rejected: MeshCoreException.DeviceError) {
             synchronized(lock) { state.possiblyEmittedCodes.remove(wireID) }
             throw rejected
+        } finally {
+            synchronized(lock) {
+                inFlightDirectEmissions -= state
+                retainRetiredEmission(state)
+            }
         }
     }
 
+    private fun hasEmissionOverflowBefore(target: DirectAuthorityState): Boolean =
+        directEmissionOverflowOrder?.let { it < target.registrationOrder } == true
+
     private fun hasCompetingEmission(target: DirectAuthorityState, code: Bytes): Boolean =
-        directEmissionHistoryOverflow ||
-            (retiredDirectEmissions.asSequence() + directAuthorities.values.asSequence()).any { other ->
+        hasEmissionOverflowBefore(target) ||
+            (retiredDirectEmissions.asSequence() + directAuthorities.values.asSequence() +
+                inFlightDirectEmissions.asSequence()).any { other ->
                 other.registrationOrder < target.registrationOrder &&
                     other.possiblyEmittedCodes.values.any { it == null || it == code }
             }
@@ -542,7 +566,7 @@ class MessageService(
         checkIdentity("acknowledgement")
         var deferred = false
         val overflows = mutableListOf<UUID>()
-        val ambiguous = mutableSetOf<UUID>()
+        val ambiguous = mutableMapOf<UUID, Boolean>()
         val tracking = synchronized(lock) {
             val found = pendingAcks.values.firstOrNull {
                 code in it.ackCodes && !it.isDelivered &&
@@ -550,7 +574,7 @@ class MessageService(
                     directAuthorities[it.messageID]?.takeIf { state -> state.attempt === it.authority }
                         ?.let { state ->
                             if (state.correlateResponses && hasCompetingEmission(state, code)) {
-                                ambiguous += state.requestID
+                                ambiguous[state.requestID] = hasEmissionOverflowBefore(state)
                                 false
                             } else !state.correlateResponses || code in state.confirmedCodes
                         } != false
@@ -582,9 +606,9 @@ class MessageService(
         overflows.forEach {
             remember("ackBuffer.$it", authorityFailure("ACK correlation buffer overflow; early delivery evidence is uncertain"))
         }
-        ambiguous.forEach {
-            remember("ackAmbiguous.$it", authorityFailure(
-                if (synchronized(lock) { directEmissionHistoryOverflow })
+        ambiguous.forEach { (requestID, overflow) ->
+            remember("ackAmbiguous.$requestID", authorityFailure(
+                if (overflow)
                     "ACK correlation history overflow; delivery remains unproven"
                 else "ACK may belong to an earlier emitted claim; delivery remains unproven"))
         }
@@ -1132,7 +1156,7 @@ class MessageService(
                             checkIdentity("sendDirectMessage.wire")
                             inlineWire { dispatch ->
                                 val timestamp = Instant.ofEpochSecond(captured.timestamp.toLong())
-                                directWire(registration.first, registration.second) {
+                                directWire(registration.first, registration.second, dispatch) {
                                     if (dispatch == null) session.sendMessage(selected.publicKey, captured.text, timestamp)
                                     else session.sendMessage(selected.publicKey, captured.text, timestamp, dispatch = dispatch)
                                 }
@@ -1385,7 +1409,7 @@ class MessageService(
                         if (unacknowledgedRetirement(claim)) null
                         else completedDirect(claim) ?: notificationWire { dispatch ->
                             val timestamp = Instant.ofEpochSecond(stamp.toLong())
-                            directWire(authorityState, wireID) {
+                            directWire(authorityState, wireID, dispatch) {
                                 if (dispatch == null) {
                                     session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt)
                                 } else {
@@ -1731,6 +1755,7 @@ class MessageService(
                 pendingAcks.clear()
                 directAuthorities.clear()
                 retiredDirectEmissions.clear()
+                inFlightDirectEmissions.clear()
                 directRegistrationIDs.clear()
                 noDispatchCompletions.clear()
                 uncertainFailureWrites.clear()

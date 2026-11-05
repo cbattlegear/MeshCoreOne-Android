@@ -33,7 +33,11 @@ class ContactImportLocalizationCapabilityTests(unittest.TestCase):
         self.assertEqual(self.rule["path_rules"], [ROOT + locale + "/strings.xml" for locale in LOCALES])
         self.assertEqual(self.rule["work_packages"], ["WP-210"])
         self.assertEqual(self.rule["operations"], [OPERATION])
-        self.assertEqual(self.policy["reservation_policy"]["capabilities"][-1], self.rule)
+        actual = next(
+            rule for rule in self.policy["reservation_policy"]["capabilities"]
+            if rule["id"] == self.rule["id"]
+        )
+        self.assertEqual(actual, self.rule)
         for path in self.rule["path_rules"]:
             admitted = self.engine.admit("WP-210", self.manifest.wp("WP-210")["write_paths"], path, OPERATION)
             self.assertEqual(admitted.capability_id, self.rule["id"])
@@ -42,7 +46,10 @@ class ContactImportLocalizationCapabilityTests(unittest.TestCase):
 
     def test_every_other_wp_denied_and_primary_owner_unchanged(self):
         before = copy.deepcopy(self.policy)
-        before["reservation_policy"]["capabilities"].pop()
+        before["reservation_policy"]["capabilities"] = [
+            rule for rule in before["reservation_policy"]["capabilities"]
+            if rule["id"] != self.rule["id"]
+        ]
         previous = CapabilityEngine(before)
         for wp in self.manifest.work_packages:
             assigned = self.manifest.wp(wp)["write_paths"]
@@ -94,8 +101,11 @@ class ContactImportLocalizationCapabilityTests(unittest.TestCase):
                 self.engine.admit("WP-210", [], path, OPERATION)
 
     def test_complete_predecessor_object_and_raw_blob_unchanged(self):
-        current = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
-        untouched = copy.deepcopy(current)
+        full_current = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        untouched = copy.deepcopy(full_current)
+        current = copy.deepcopy(full_current)
+        notification = current["reservation_policy"]["capabilities"].pop()
+        self.assertEqual(notification["id"], "reviewed-support-notification-enrollment-copy")
         original_text = subprocess.check_output(
             ["git", "-C", str(REPO), "show", BASE + ":docs/android/automation-policy.json"],
             encoding="utf-8",
@@ -115,7 +125,7 @@ class ContactImportLocalizationCapabilityTests(unittest.TestCase):
         projected = completion_policy_predecessor(routine_support_predecessor(current))
         self.assertEqual(projected, routine_support_predecessor(previous))
         self.assertEqual(json.loads(historical_policy_text()), projected)
-        self.assertEqual(current, untouched)
+        self.assertEqual(full_current, untouched)
 
     def test_mutated_duplicate_reordered_and_malformed_rule_fails_closed(self):
         for field, value in (
@@ -124,7 +134,11 @@ class ContactImportLocalizationCapabilityTests(unittest.TestCase):
             ("validation", []), ("extra", True),
         ):
             changed = copy.deepcopy(self.policy)
-            changed["reservation_policy"]["capabilities"][-1][field] = value
+            rule = next(
+                item for item in changed["reservation_policy"]["capabilities"]
+                if item["id"] == self.rule["id"]
+            )
+            rule[field] = value
             with self.subTest(field=field), self.assertRaises(PortError):
                 routine_support_predecessor(changed)
         for mode in ("duplicate", "reordered"):

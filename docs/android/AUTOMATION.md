@@ -216,6 +216,17 @@ through an automatic transaction or deterministic merge; real overlap serializes
 current producer. Only an unresolved semantic ownership collision, drift, protected/human gate, missing
 authentication/tool capability or substantive product decision escalates.
 
+WP-303's `reviewed-support-notification-enrollment-copy` capability admits only
+`add-or-update-notification-enrollment-copy` on
+`android/app/src/main/res/values/notification_enrollment.xml`. Its explicit ten-key catalog
+covers the action, title, warning, confirm, cancel, resume, held, interrupted, blocked and bound
+strings. Immutable resource validation rejects file/key deletion, extra keys, malformed XML and
+changes to unrelated notices. Existing Kotlin consumer/test admissions remain separate.
+This is Android-only English source copy; fallback is not reviewed translation or twelve-locale
+acceptance. Frozen reference/generated localization remains unchanged. The support rule must land
+on trusted main and the producer must obtain fresh same-owner admission before editing this resource.
+Admission does not establish displayed consent, verifier/runtime provenance or feature/device acceptance.
+
 WP-503's accessibility source-binding exception is limited to two exact paths and operations:
 `add-or-update-validator-rule` on `android/accessibility-tests/language_binding.py`, and
 `add-regression-fixture-or-test` on `android/accessibility-tests/test_language_binding.py`. These are

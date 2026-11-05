@@ -63,6 +63,39 @@ CONTACT_IMPORT_LOCALIZATION_CAPABILITY = {
     ],
 }
 
+NOTIFICATION_ENROLLMENT_COPY_CAPABILITY = {
+    "id": "reviewed-support-notification-enrollment-copy",
+    "work_packages": ["WP-303"],
+    "path_rules": ["android/app/src/main/res/values/notification_enrollment.xml"],
+    "operations": ["add-or-update-notification-enrollment-copy"],
+    "keys": [
+        "notification_enrollment_action",
+        "notification_enrollment_title",
+        "notification_enrollment_warning",
+        "notification_enrollment_confirm",
+        "notification_enrollment_cancel",
+        "notification_enrollment_resume",
+        "notification_enrollment_held",
+        "notification_enrollment_interrupted",
+        "notification_enrollment_blocked",
+        "notification_enrollment_bound",
+    ],
+    "invariants": [
+        "only-WP303-notification-enrollment-resource-and-ten-approved-string-keys-no-other-key-edit-or-deletion",
+        "AndroidOnly-WP303-English-source-copy-is-not-reviewed-translation-or-localization-acceptance",
+        "preserve-pinned-db14559b39d32322b06477c6ae676112f583db50-source-and-generated-localization-bytes",
+        "preserve-unrelated-notices-and-resources-consumer-and-test-admission-remains-separate",
+        "trusted-main-landing-and-fresh-same-owner-admission-before-product-edit-no-release-recreate",
+        "policy-admission-only-no-feature-acceptance-runtime-installation-dispatch-or-merge-authority",
+    ],
+    "validation": [
+        "exact-resource-path-named-operation-and-ten-key XML validation against immutable base and candidate blobs",
+        "wrong-WP-operation-path-sibling-traversal-extra-key-and-deletion denial fixtures",
+        "complete preceding trusted policy remains byte-semantically unchanged",
+        "policy admission does not claim translated-copy quality UI behavior or WP-303 acceptance",
+    ],
+}
+
 
 def routine_support_predecessor(policy):
     """Project reviewed additive capability extensions back to the historical policy."""
@@ -86,9 +119,15 @@ def routine_support_predecessor(policy):
             and rule != CONTACT_IMPORT_LOCALIZATION_CAPABILITY
         ):
             raise PortError("Contact import localization changed outside the exact reviewed amendment")
+        if (
+            rule["id"] == NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["id"]
+            and rule != NOTIFICATION_ENROLLMENT_COPY_CAPABILITY
+        ):
+            raise PortError("Notification enrollment copy changed outside the exact reviewed amendment")
         if set(rule) not in (
             {"id", "path_rules", "operations", "invariants", "validation"},
             {"id", "path_rules", "operations", "invariants", "validation", "work_packages"},
+            {"id", "path_rules", "operations", "invariants", "validation", "work_packages", "keys"},
         ):
             raise PortError("Malformed reviewed support capability fields")
         if rule["id"] == prefix:
@@ -107,6 +146,11 @@ def routine_support_predecessor(policy):
             or len(set(rule["work_packages"])) != len(rule["work_packages"])
         ):
             raise PortError("Malformed reviewed support capability work_packages")
+        if "keys" in rule and (
+            rule["id"] != NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["id"]
+            or rule["keys"] != NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["keys"]
+        ):
+            raise PortError("Malformed notification enrollment resource key admission")
         for path in rule["path_rules"]:
             roots = ("android/", "tools/android-port/", "docs/android/")
             root = next((value for value in roots if path.startswith(value)), None)

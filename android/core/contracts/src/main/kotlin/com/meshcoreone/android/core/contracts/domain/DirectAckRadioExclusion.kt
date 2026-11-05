@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.SnapshotSet
 import java.util.UUID
+import kotlinx.coroutines.flow.Flow
 
 /** Storage-issued exact-emission refinement handle; public IDs and DTO equality cannot recreate it. */
 interface DirectAckEmissionHandle
@@ -446,4 +447,61 @@ interface DirectAckRadioConfirmationEvidenceInspecting {
     suspend fun inspectDirectAckRadioConfirmationEvidence(
         radioId: RadioId,
     ): DirectAckRadioConfirmationEvidence
+}
+
+/** Subscriber-owned observation events; neither event establishes delivery eligibility. */
+sealed interface DirectAckRadioConfirmationObservation {
+    val radioId: RadioId
+
+    /**
+     * A new complete read is starting; previous evidence remains explicitly historical.
+     * Consumers may retain that historical notice without flashing a loading indicator.
+     */
+    data class Inspecting(
+        override val radioId: RadioId,
+    ) : DirectAckRadioConfirmationObservation
+
+    /** Historical atomic observation, not an instantaneous all-clear or permission to settle. */
+    data class Snapshot(
+        val evidence: DirectAckRadioConfirmationEvidence,
+    ) : DirectAckRadioConfirmationObservation {
+        override val radioId: RadioId get() = evidence.radioId
+    }
+}
+
+/**
+ * Optional, separate cold observation capability. Each collector owns its observation lifetime;
+ * consumers explicitly surface absence as unavailable and start each collection in a checking
+ * state. Evidence is not a cache of current authority and settlement remains independent.
+ * The active radio graph shares one subscription across its consumers to avoid duplicate scans;
+ * a replacement graph or lifecycle resubscription starts a fresh observation, not a cached clear.
+ */
+interface DirectAckRadioConfirmationEvidenceObserving {
+    /**
+     * Emit Inspecting for the requested radio before each complete atomic read, then Snapshot
+     * carrying that read's exact-radio evidence. Reads are serial and do not overlap; no cached
+     * initial snapshot, replay, conflation or distinct suppression may replace a completed read.
+     * Consumers fence collection lifetime, radio and session so late results cannot cross owners.
+     *
+     * The initial read starts immediately on collection. After each Snapshot, wait a cancellable
+     * 1,000 milliseconds before starting the next read, only while subscribed. Complete reads repeat
+     * independently of writer notification, so persisted changes from other Room/raw SQL handles
+     * are eventually observed even without multi-instance invalidation. Same-process invalidation
+     * may accelerate a read but cannot replace or indefinitely postpone this fallback.
+     *
+     * This is snapshot polling, not a per-commit event log or synchronous freshness guarantee.
+     * Intermediate commits may coalesce; query duration, scheduling and collector backpressure
+     * add latency, so there is no hard one-second observation-age bound. Every NoPersistedWildcard
+     * remains historical, never an all-clear, permission or proof of recipient delivery.
+     *
+     * Storage failures and cancellation terminate unchanged, never a no-wildcard fallback.
+     * Store closure must end observation with the existing typed close/read failure, not complete
+     * successfully or emit cached evidence. Consumers surface error or unexpected normal completion
+     * as unavailable/uncertain rather than retain an apparent clear. Cancellation ends this
+     * collector's reads; no detached worker or publisher is created. No expiry, evidence mutation,
+     * schema reset or send-policy change is implied.
+     */
+    fun observeDirectAckRadioConfirmationEvidence(
+        radioId: RadioId,
+    ): Flow<DirectAckRadioConfirmationObservation>
 }

@@ -5,10 +5,13 @@ import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import java.util.UUID
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 
 internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     DirectAckAuthority, DirectPendingCompletionAuthority, DirectAckRadioExclusionAuthority,
-    DirectAckRadioConfirmationEvidenceInspecting {
+    DirectAckRadioConfirmationEvidenceInspecting, DirectAckRadioConfirmationEvidenceObserving {
     private data class Lease(val issuer: UUID, val token: SessionToken, val request: UUID) : DirectAckLease
     private data class Attempt(val lease: Lease, val request: UUID) : DirectAckAttempt
     private data class Intent(val lease: Lease, val request: UUID) : DirectAckIntent
@@ -435,6 +438,15 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         if (contradictory) DirectAckEmissionMutationResult.Conflict(emissionReceipt(updated))
         else DirectAckEmissionMutationResult.Applied(emissionReceipt(updated))
     }
+
+    override fun observeDirectAckRadioConfirmationEvidence(radioId: RadioId): Flow<DirectAckRadioConfirmationObservation> =
+        flow {
+            while (true) {
+                emit(DirectAckRadioConfirmationObservation.Inspecting(radioId))
+                emit(DirectAckRadioConfirmationObservation.Snapshot(inspectDirectAckRadioConfirmationEvidence(radioId)))
+                delay(1_000)
+            }
+        }
 
     override suspend fun inspectDirectAckRadioConfirmationEvidence(radioId: RadioId): DirectAckRadioConfirmationEvidence =
         context.read("inspectDirectAckRadioConfirmationEvidence") {

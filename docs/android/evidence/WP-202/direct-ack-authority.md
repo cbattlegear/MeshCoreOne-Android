@@ -712,6 +712,48 @@ still inherited blob `bfdc036b`. The import changes documentation, not
 declarations or implementation, and prevents a composition from falsely
 claiming the entire older contract tree was already canonical.
 
+### Separate collector-owned confirmation observation (source-only)
+
+The observer implementation imports exact canonical exclusion-file bytes from
+`0fb7fec315cb5d76988dfc8ff2eef9240c72092b`, blob
+`facbbe32c0dcd8cc7f9fa3a47b8fd69a852aa24f`. It is additive to the immutable
+783 snapshot and separate from the bounded-receipt/malformed-evidence repairs.
+Each collector starts a cold serial loop: Inspecting, complete atomic read,
+Snapshot, then cancellable `delay(1_000)` before the next Inspecting/read.
+There is no initial cached value, replay/conflation/distinct suppression,
+detached publisher, global Room builder change or evidence mutation.
+
+The coordinator explicitly selected periodic complete reads rather than
+unproven one-handle invalidations. Other-handle/raw-SQL committed state is
+eventually observed while collection continues, independent of multi-instance
+notifications. Intermediate commits can coalesce. Scheduling, query duration
+and collector backpressure add latency; no hard one-second age bound,
+every-commit delivery or synchronous UI freshness is claimed. NoWildcard
+always describes a historical snapshot, not delivery eligibility or permission.
+The active radio graph must share one subscription and fence radio/session
+lifetime in its consumer; that integration is not owned by this storage source.
+
+Read failures, malformed evidence, closed-store failure and cancellation
+terminate through the existing typed paths. The consumer must show unavailable
+on errors or unexpected completion and may retain a historical warning during
+Inspecting without a flashing spinner. Polling is not a TTL, reset or eviction
+policy and cannot authorize sending or change FAILED/DELIVERED.
+
+`DirectAckRadioConfirmationObservationTest` authors two real same-file-handle
+controls without multi-instance invalidation: cold initial read; persisted
+state committed through the other DAO and raw SQL handle; full reasons for
+MAY/conflict/legacy/provenance/saturation; rollback and radio isolation;
+cancelled subscription stopping queries; and a barrier-ordered commit between
+initial Inspecting and its query. Real SQL failure and closed-store collection
+terminate without a cached clear. All are authored, unexecuted controls.
+
+The inherited e69 base-authority KDoc import is not accepted as generic API
+compatibility: review found that aee/7af incorrectly removed the existing
+generic prediction-before-return rule. WP-201 is preparing a split canonical
+successor preserving generic behavior and restricting accepted-only settlement
+to the new radio-exclusion API/activated service. Final composition must import
+that correction; this observer does not change legacy production semantics.
+
 ### Separate accepted-code mismatch repair
 
 This successor is based on the fixture-only `94af032ee0a7bbe21fee822c86f63edac8745187`

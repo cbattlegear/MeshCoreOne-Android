@@ -35,6 +35,7 @@ class RoomPersistenceStore private constructor(
     DirectPendingCompletionAuthority by directAcks,
     DirectAckRadioExclusionAuthority by directAcks,
     DirectAckRadioConfirmationEvidenceInspecting by directAcks,
+    DirectAckRadioConfirmationEvidenceObserving by directAcks,
     DevicePersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     MessagePersisting by messages, HeardRepeatPersisting by messages, ReactionPersisting by messages,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,

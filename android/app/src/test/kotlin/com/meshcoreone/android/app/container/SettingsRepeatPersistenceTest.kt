@@ -14,6 +14,8 @@ import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotReconciliatio
 import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotClearRequired
 import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
 import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
 import com.meshcoreone.android.core.connectivity.device.DeviceEditPersistenceConflict
 import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
@@ -52,6 +54,90 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
+    @Test fun normalPresetRejectsRepeatModeChangedByFailedEnableReconciliation() = runTest {
+        var rejectRepeatOn = false
+        val failing = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (rejectRepeatOn && !expected.device.clientRepeat && dto.clientRepeat) {
+                    rejectRepeatOn = false
+                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Repeat enable projection unavailable"))
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        withRepeat(failing) { h, holder, failures, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val service = assertNotNull(h.sessions.current).settingsService
+            rejectRepeatOn = true
+            holder.onRepeatToggled(true)
+            holder.confirmEnableRepeatMode()
+            h.eventually("failed enable releases the action with its old false projection") {
+                !holder.state.value.isApplyingRepeat && failures.isNotEmpty() &&
+                    holder.state.value.device?.clientRepeat == false
+            }
+            assertFalse(rejectRepeatOn, "The real Repeat-on Room projection was rejected")
+            assertFalse(holder.state.value.isRepeatEnabled)
+            assertTrue(service.radioSettingsNeedsRecovery)
+            assertTrue(service.queryDevice().clientRepeat, "Firmware enabled Repeat before persistence failed")
+            val failedEnable = assertNotNull(store.fetchDevice(before.id))
+            assertFalse(failedEnable.clientRepeat)
+            assertEquals(before.frequency, failedEnable.preRepeatFrequency)
+            assertEquals(before.bandwidth, failedEnable.preRepeatBandwidth)
+            assertEquals(before.spreadingFactor, failedEnable.preRepeatSpreadingFactor)
+            assertEquals(before.codingRate, failedEnable.preRepeatCodingRate)
+            assertEquals(failedEnable, h.manager.connectedDevice)
+            val previousFailures = failures.size
+
+            holder.onPresetSelected("eu-narrow")
+            h.eventually("normal selection finishes reconciliation before deciding whether to write") {
+                !holder.state.value.isApplying && !service.radioSettingsNeedsRecovery
+            }
+            assertEquals(1, radio.radioWrites.size, "A stale normal selection cannot send a Repeat-off SET")
+            val mismatch = assertIs<SettingsServiceException>(failures.drop(previousFailures).single())
+            assertIs<SettingsServiceError.VerificationFailed>(mismatch.error)
+            assertNotNull(holder.state.value.errorMessage)
+            assertTrue(service.queryDevice().clientRepeat)
+            h.eventually("recovered Repeat-on is rendered") {
+                holder.state.value.device?.clientRepeat == true && holder.state.value.isRepeatEnabled
+            }
+            val recovered = assertNotNull(store.fetchDevice(before.id))
+            assertTrue(recovered.clientRepeat)
+            assertEquals(radio.frequency, recovered.frequency)
+            assertEquals(failedEnable.preRepeatFrequency, recovered.preRepeatFrequency)
+            assertEquals(failedEnable.preRepeatBandwidth, recovered.preRepeatBandwidth)
+            assertEquals(failedEnable.preRepeatSpreadingFactor, recovered.preRepeatSpreadingFactor)
+            assertEquals(failedEnable.preRepeatCodingRate, recovered.preRepeatCodingRate)
+            assertEquals(recovered, h.manager.connectedDevice)
+
+            holder.onRepeatToggled(false)
+            h.eventually("an explicit disable restores and clears the retained baseline") {
+                !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == false &&
+                    holder.state.value.device?.preRepeatFrequency == null
+            }
+            val restored = assertNotNull(store.fetchDevice(before.id))
+            assertEquals(before.frequency, restored.frequency)
+            assertEquals(before.bandwidth, restored.bandwidth)
+            assertEquals(before.spreadingFactor, restored.spreadingFactor)
+            assertEquals(before.codingRate, restored.codingRate)
+            assertNull(restored.preRepeatFrequency)
+            assertNull(restored.preRepeatBandwidth)
+            assertNull(restored.preRepeatSpreadingFactor)
+            assertNull(restored.preRepeatCodingRate)
+            holder.onPresetSelected("eu-narrow")
+            h.eventually("a freshly selected normal preset succeeds after explicit disable") {
+                !holder.state.value.isApplying && holder.state.value.errorMessage == null &&
+                    h.manager.connectedDevice?.appliedRadioPresetID == "eu-narrow"
+            }
+            val saved = assertNotNull(store.fetchDevice(before.id))
+            assertFalse(saved.clientRepeat)
+            assertFalse(service.queryDevice().clientRepeat)
+            assertEquals(869_618u, saved.frequency)
+            assertEquals(saved, h.manager.connectedDevice)
+            assertEquals(listOf(12, 12, 11), radio.radioWrites.map { it.size })
+            assertEquals(listOf(1, 0), radio.radioWrites.take(2).map { it[11].toInt() })
+        }
+    }
+
     @Test fun normalPresetRoomFailureReachesTheActionAndReselectionRetries() = runTest {
         withRepeat(store) { h, holder, failures, radio ->
             val before = assertNotNull(h.manager.connectedDevice)
@@ -1731,7 +1817,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         require(command.size == 11 || command.size == 12)
                         radioWrites += command
                         params = command.slice(1, 11)
-                        if (command.size == 12) repeat = command[11] != 0u.toUByte()
+                        repeat = command.size == 12 && command[11] != 0u.toUByte()
                         if (withholdNextAck) {
                             withholdNextAck = false
                             pendingAck = radio

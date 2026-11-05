@@ -197,4 +197,94 @@ class ChannelQueueAdmissionAuthorityTest {
         assertEquals(5, admit.parameterCount)
         assertEquals("kotlin.coroutines.Continuation", admit.parameterTypes.last().name)
     }
+
+    @Test
+    fun originalUnboundIdentityIsRepresentableWithoutSubstitutingSelectedPendingId() {
+        val original = acceptance.copy(pendingSendId = null)
+        val registered = ChannelQueueAcceptanceResult.Registered(original)
+        val replay = ChannelQueueAcceptanceResult.AlreadyRegistered(original)
+        val parked = ChannelQueueAdmissionResult.Uncertain(
+            ChannelQueueUncertaintyReason.UNBOUND_ACCEPTANCE_LINEAGE, original,
+        )
+
+        assertNull(registered.acceptance.pendingSendId)
+        assertNull(replay.acceptance.pendingSendId)
+        assertNull(parked.acceptance.pendingSendId)
+        assertEquals(captureId, parked.acceptance.captureRequestId)
+        assertEquals(completionId, parked.acceptance.completionRequestId)
+        assertEquals(pendingId, capture.pendingSendId)
+        assertNotEquals(parked.acceptance, acceptance)
+    }
+
+    @Test
+    fun historicalUnboundCompletionCanExposeUncertaintyWithoutClaimingExactPendingCompletion() {
+        val historical = capture.copy(
+            message = null,
+            pendingSendId = null,
+            pending = null,
+            permission = DirectAckPermission.STALE_LEASE,
+        )
+        val completion = ChannelSendCompletionReceipt(
+            historical, completionId, ChannelSendCompletionMode.SEND, 42u, null,
+        )
+        val observation = ChannelQueueAcceptanceReceipt(
+            completion.capture.captureRequestId,
+            completion.capture.key,
+            completion.capture.pendingSendId,
+            completion.completionRequestId,
+            completion.mode,
+            completion.acceptedTimestamp,
+        )
+        val result = ChannelQueueAdmissionResult.Uncertain(
+            ChannelQueueUncertaintyReason.UNBOUND_ACCEPTANCE_LINEAGE, observation,
+        )
+
+        assertNull(result.acceptance.pendingSendId)
+        assertEquals(key, result.acceptance.key)
+        assertEquals(completionId, result.acceptance.completionRequestId)
+        assertEquals(42u, result.acceptance.acceptedTimestamp)
+        assertNotEquals<ChannelQueueAdmissionResult>(
+            ChannelQueueAdmissionResult.PreviouslyCompleted(completion), result,
+        )
+    }
+
+    @Test
+    fun rejectedReportObservationIsDistinctFromRegisteredAcceptanceAndRetainsReportedArguments() {
+        val report = acceptance.copy(
+            pendingSendId = null, mode = ChannelSendCompletionMode.RESEND, acceptedTimestamp = 999u,
+        )
+        val rejection = ChannelQueueAcceptanceResult.Rejected(DirectAckRejection.CONFLICT)
+        val parked = ChannelQueueAdmissionResult.Uncertain(
+            ChannelQueueUncertaintyReason.REJECTED_ACCEPTANCE_NOTE, report,
+        )
+
+        assertEquals(DirectAckRejection.CONFLICT, rejection.reason)
+        assertEquals(captureId, parked.acceptance.captureRequestId)
+        assertEquals(ChannelSendCompletionMode.RESEND, parked.acceptance.mode)
+        assertEquals(999u, parked.acceptance.acceptedTimestamp)
+        assertNull(parked.acceptance.pendingSendId)
+        assertNotEquals(message.timestamp, parked.acceptance.acceptedTimestamp)
+        assertNotEquals(
+            parked,
+            ChannelQueueAdmissionResult.Uncertain(
+                ChannelQueueUncertaintyReason.UNBOUND_ACCEPTANCE_LINEAGE, report,
+            ),
+        )
+    }
+
+    @Test
+    fun everyUncertaintyReasonKeepsExactOriginalReportedIdentityWithoutAuthority() {
+        for (reason in ChannelQueueUncertaintyReason.entries) {
+            for (originalPending in listOf(null, pendingId)) {
+                val report = acceptance.copy(pendingSendId = originalPending)
+                val result = ChannelQueueAdmissionResult.Uncertain(reason, report)
+
+                assertEquals(reason, result.reason)
+                assertEquals(originalPending, result.acceptance.pendingSendId)
+                assertEquals(captureId, result.acceptance.captureRequestId)
+                assertEquals(key, result.acceptance.key)
+                assertEquals(completionId, result.acceptance.completionRequestId)
+            }
+        }
+    }
 }

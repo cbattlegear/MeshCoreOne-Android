@@ -2,8 +2,10 @@
 
 Repository: `cbattlegear/MeshCoreOne-Android`.
 Pinned Swift reference: `db14559b39d32322b06477c6ae676112f583db50`.
-Remote parent: `773d434be7700734ee8cd2cb2b46c8f47fa8d416`,
-tree `ad422ff78f9bbbc41fb51ca03c9c5920b6eff99b`.
+Original contract parent: `773d434be7700734ee8cd2cb2b46c8f47fa8d416`.
+This unbound-boundary successor's remote parent:
+`716066432f2b4d891d3e41af11651083fa69323a`,
+tree `622b3448006521dd219f5acc164a9c90cf6fe16a`.
 Coordinator assignment:
 `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_mPJ03XwtkZGZHl2qiUVgjffg`.
 
@@ -13,7 +15,7 @@ The coordinator authorized a separate atomic queue-admission successor plus a
 synchronous process-owner acceptance note. 808 owns producer-local transactions,
 stable pending lifecycle definitions and producer controls; f805 alone integrates
 shared schema/database/store changes. 13a owns actual service/queue calls, shutdown
-ordering and replacement controls. This change supplies only domain types, eleven
+ordering and replacement controls. This change supplies only domain types, fifteen
 authored shape/value controls and this evidence. No other owner's source is edited.
 
 The trusted remote parent and the local admission inputs were compared as normalized
@@ -25,13 +27,14 @@ LF UTF-8 Git blobs without local Git/object processing:
 | `docs/android/automation-policy.json` | `b12794157978d6d90ab7508d4e2852fdc2d5e4a4` |
 | `tools/android-port/controller/capabilities.py` | `d240bf1007c6921c800401bf3e0637c296a4a0e7` |
 
-Before creating files, the source-derived path/operation checks admitted:
+Before the original creation and again before this successor's modifications, the
+source-derived path/operation checks admitted:
 
 | Path relative to repository | Capability / operation |
 | --- | --- |
-| `android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/ChannelQueueAdmissionAuthority.kt` | `wp-owned / create` |
+| `android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/ChannelQueueAdmissionAuthority.kt` | `wp-owned / modify` (originally `create`) |
 | `android/core/contracts/src/test/kotlin/com/meshcoreone/android/core/contracts/domain/ChannelQueueAdmissionAuthorityTest.kt` | `reviewed-support-test / add-or-update-related-test` |
-| `docs/android/evidence/WP-201/channel-queue-admission-authority.md` | `wp-owned / create` |
+| `docs/android/evidence/WP-201/channel-queue-admission-authority.md` | `wp-owned / modify` (originally `create`) |
 
 The first and third paths are manifest WP-201 descendants. The test matches the
 trusted support-test glob and exact Kotlin-test support regex. The controller,
@@ -111,7 +114,9 @@ Lease retirement/revision invalidation does not erase original acceptance eviden
 or renew authority. Conflicting reports cannot overwrite fences. Unresolved entries
 cannot be cleared by service close, claims.clear, TTL, capacity eviction or ID-cache
 replacement. Pruning needs exact committed supersession or proved identity retirement.
-Rejected post-acceptance registration is reported/parked, never converted into unsent.
+Rejected post-acceptance registration is reported/parked, never converted into unsent;
+an authentic first rejected report must retain process-owner suppression, not only
+an error in the retiring service.
 
 Stable pending birth identity is separate from Direct ACK mutation identity:
 same-relationship UPDATE retains birth but still invalidates all mutation grants;
@@ -120,12 +125,59 @@ different message incarnation. Birth must be captured originally, not inferred b
 backfilling current UUIDs into historical completion. Its tables/triggers/integration
 remain producer/integrator-owned, not an implementation supplied by this contract.
 
+## Confirmed public unbound-pending boundary and successor
+
+The coordinator's independent review found a real public schedule, independently
+source-read at `1ad589b7a43b9553637fc64cdd280eb4e907f25f`,
+ref `diagnostic/wp208-channel-invocation-source-1ad589b7a`,
+tree `0b394c15fbddf18f6b027aa2d08fa3e4aee76cd3`.
+`MessageService.kt` blob `b21ba68abf3dd039997ec4bc3ec6092c1818d075`:
+2167-2175 public send/resend pass `pendingID=null`; 2196-2201 prepares that unbound
+capture; 2214-2215 records a successful return in service RAM; 2221 completes it.
+An actual pending can already exist, or be inserted after capture. Both 13a and
+808 confirmed this path is possible. The original 716 receipt's non-null pending
+ID could not truthfully represent its committed or process-owned unbound history.
+
+The separately authorized successor makes `ChannelQueueAcceptanceReceipt.pendingSendId`
+nullable and explicitly ORIGINAL. Null means the capture had no pending binding,
+never that a current lookup found no row. Both historical committed unbound
+completion and valid process-retained unbound observation for the same actual
+message incarnation produce `Uncertain(UNBOUND_ACCEPTANCE_LINEAGE)`. Neither may
+substitute the later pending ID, manufacture its lifecycle relation or report
+`PreviouslyCompleted` as if exact pending work had been proved.
+
+Producer preparation with null pending must atomically refuse an already-existing
+actual pending BEFORE timestamp/capture DML. This is a new bounded producer
+eligibility repair, not an edit to frozen failure API source/signatures. A pending
+inserted later still cannot be bound retroactively. A genuinely issued unbound
+handle with matching captured timestamp registers synchronous suppression using
+its original private message incarnation and supplied mode, even after revision/
+lease invalidation. The process owner retains that null binding across service
+retirement. A new message incarnation is distinct. A new pending UUID or stable
+birth alone cannot prove separation from old unbound evidence for the SAME message
+incarnation; that narrower case stays parked until actual retirement/supersession
+is proved. Existing truly bound, different-lifecycle positives remain admissible.
+
+The second hole was a first rejected acceptance note disappearing with service
+claims. For an authentic issued capture with mismatched timestamp/known pending
+mode, the producer must synchronously retain its original private identities and
+FIRST reported tuple before returning `Rejected(CONFLICT)`. Later admission returns
+`Uncertain(REJECTED_ACCEPTANCE_NOTE)`. That observation retains reported arguments
+for diagnostics/suppression, NOT validated acceptance, registration or a grant.
+Exact rejected replay remains rejected; changed retries cannot replace that fence.
+A conflict after a valid note preserves the original valid fence. No database IO,
+readback, fabricated pending binding or deferred registration is introduced.
+Foreign fabricated handles cannot identify a storage incarnation for suppression;
+the consumer must require the correct shared issuer/role BEFORE physical invocation.
+
 ## Source controls, required integration evidence and limits
 
-Eleven authored controls cover method suspension shape, actual selected payload/
+Fifteen authored controls cover method suspension shape, actual selected payload/
 mode/count association, full UInt acceptance timestamps, explicit rejections,
 issued-handle separation, current replay versus historical commit and distinct
-retained/unproven uncertainty observations. They are data/shape assertions, NOT a
+retained/unproven/unbound/rejected-report uncertainty observations. Four additive
+controls cover original null identity, historical unbound representation, rejected
+reported arguments and all reason/nullable-ID value families. They are data/shape assertions, NOT a
 fake producer, transaction proof, replacement execution or physical acceptance test.
 The existing 55 authored value controls and all their assertions are unchanged.
 
@@ -136,13 +188,19 @@ later RESEND timestamps, lease replacement, generic same-value pending UPDATE,
 same-ID delete/reinsert and message ABA, exact completion precedence, missing-birth
 history, and acceptance retained across real service close before completion commit.
 Outage and rejected-note paths must visibly park without dispatch or broad cleanup.
+The new public boundary needs actual producer/consumer controls for existing pending
+causing zero-wire/zero-DML rejection, pending insertion after unbound capture followed
+by successful return and generation replacement, historical null-pending completion,
+and a rejected first note retained after service close. Their same-message uncertainty
+must preserve count/timestamp; recreated-message and distinct bound lifecycle controls
+must remain positive. No such runtime execution is supplied by these value tests.
 No prior positive ACK/failure/completion expectations may be weakened.
 
 Only source-derived admission, normalized-byte/whitespace/method-count checks and
 serial Git-data publication are performed here. No local Git, Gradle, controller,
 test runner, readiness recovery, workflow dispatch, PR or merge is run. The retained
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` and host-resource hold remain respected.
-The eleven controls are UNCOMPILED/UNEXECUTED; no discovery or pass count is claimed.
+The fifteen controls are UNCOMPILED/UNEXECUTED; no discovery or pass count is claimed.
 
 This is not a durable prewire journal, process/store-reopen acceptance recovery or
 exactly-once physical-send guarantee. Missing completion never means known unsent.

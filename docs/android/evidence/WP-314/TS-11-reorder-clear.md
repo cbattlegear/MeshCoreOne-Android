@@ -132,6 +132,65 @@ The fresh successor preserves those assertions with exact rendered descriptions
 and composes actual main5012's landed factory-publication fence. A distinct old-UI/
 holder negative will use identical corrected tests and the landed lifecycle baseline.
 
+R17 positive `5e6dbf1c65ac3073ada5417f57ff995f12d9f1c6`, run42017235223, passed
+all six jobs. Original-log audit confirms tools759/759, app2010/2010, zero failed/
+errors/skips and exact compiled blobs for all119 selected methods: mounted57,
+execution37, batch4, saved13, app8. The distinct identical-test negative
+`e5302704542e84acc38ce831d5ebaf1056478d91`, run42017275126, restores only the
+two tools production files from45ac. It fails tools759/6: old dialogs remain at613;
+retained clear confirmations and now-corrected retained hop actions cancel B at619,
+both same/different-radio. The hop loop reaches its first action (up), so the negative
+does not separately reproduce later down/remove branches; the positive executes all.
+Negative app2010/1 is the untouched held ChatMapPreview method at412. No retry,
+test removal or product workaround was applied to that independent failure.
+
+The retained-action production delta received bounded independent source review,
+not full-candidate acceptance. Final integration must bind current main and its own
+exact check/review; these results neither transfer to a combined map candidate nor
+accept physical radio, firmware, TalkBack or the rest of WP-314.
+
+Full independent review of `897e56e` found additional unfenced list/code-entry callbacks
+and live-device width reads after captured dispatch. The immutable `897e56e` diagnostics
+remain separate, not clearance for these changes. Test-only successor
+`6444103507bcd27e234f83a31c534bb8a0586c67`, run42022446364, adds eighteen separately
+discovered same/different-radio retained-action cases plus three held-lookup width methods.
+The repair successor gates all mutating list/input callbacks, retains saveable drafts,
+rechecks run admission after launch, and decodes/saves using actual dispatch/result width.
+The existing code-input path is admitted by trusted `wp-owned/modify` capability with the
+same pinned-source/declared-verification invariants. No runtime outcome is inferred from
+source review or any earlier green run.
+
+R19 test-only42022446364 reports tools780/20 failed: eighteen retained-action cases at
+the B-running assertion642, single dispatch width at891 and batch width at882.
+Source42022705359 reports tools780/27 failed: ten fresh mounted assertions at681/688,
+plus seventeen existing response-parser/listener controls. The mounted setup had loaded
+a single-hop saved route, which the real codec correctly recognizes as auto-return;
+the fresh assertions assumed it was off. The successor explicitly sets it off before
+capturing A, preserving all fresh-route/toggle expectations.
+
+The original response controls intentionally seed correlation with the existing
+`setPendingTagForTesting` helper rather than dispatch a command. That helper now also
+seeds the captured pending mode, matching the new correlation metadata. Production
+retains only the scalar sent mode and never falls back to live width after a real
+dispatch. No original assertion was dropped. These are fixture/metadata repairs to
+be evaluated by distinct exact successor/negative runs, not retroactive passes.
+
+Independent exact-c7 review retained the separate unmounted batch-save finding: old
+completed/partial results remained saveable after reconnect because the editable route
+and batch history intentionally survive retirement. Test-only `4a9cc1682078e4a04213e0a391b900985061d9d3`
+adds four completed/partial same/different-radio controls. The following source successor
+retains history while retiring its save eligibility, checks it in both derived state and
+the save API, and restores eligibility only for a newly started batch. Fresh B persistence
+and accepted-before-retirement semantics remain required. This is not a mounted Save
+button claim or a transfer of the still-distinct r20 diagnostic results.
+
+The existing compact/large-font review finding is addressed on the actual path row:
+full-width details precede a wrapping action group. The added mounted case runs at
+320dp with 200% font and checks real text layout, visible name/hash, 48dp controls,
+nonoverlap, disabled boundaries and real removal. It does not substitute the earlier
+840dp code-input test or claim physical accessibility verification. It shares the next
+exact candidate with the batch-save eligibility fix; both require new runtime evidence.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |
@@ -232,3 +291,57 @@ same-radio registry publication before delayed Compose retirement. Its AppContai
 held-persist reproduction and mounted/virtual-time controls require fresh execution and
 independent review. Same-connection rename/delete outcome ordering is independently tested
 across intervening loads without weakening retired-connection fencing.
+
+### r20 list/input lifetime and dispatch-width diagnostic
+
+Exact `c7dbba695373f7f2ae5ba306a61ebe53c8fe7373`, full workflow run
+`42024833684`, passed all six jobs. The authoritative scaffold report discovered
+780 tools and 2012 app tests, all passing with zero failures, errors or skips.
+An in-memory audit of the original hosted log matched candidate-compiled blobs
+and every declared method in the changed classes: 75 mounted, 40 execution,
+4 batch-card, 13 saved-list and 8 actual AppContainer/Room methods (140 total).
+This verifies that head's list/input guards and per-dispatch decoding controls;
+it does not clear the subsequently reviewed batch-save or compact-row findings.
+
+Identical-test negative `3786435e5736abc4cece8b22824fe68cea473ed3`,
+run `42024875535`, restored the four earlier list/input/width production files
+from `897` without changing the corrected fixtures. It discovered 780 tools
+tests and failed 20: all 18 retained list/input same/different-radio controls at
+the fresh-B running assertion, plus the single-success and batch dispatch-width
+controls. Mandatory downstream reports were incomplete. This is negative
+evidence only; the passing single failure/timeout control is not claimed to
+distinguish the old implementation.
+
+### r21 batch-save and compact-row diagnostic (failed)
+
+Exact `8c37d6a60689e8a77e25fba48ffcbc233458b8ef`, run `42027716076`,
+discovered 785 tools tests and failed three: the compact 320dp/200% font row
+reported visual text overflow, and both partial-batch reconnect controls stopped
+at the immediate old-coroutine completion assertion. The latter precedes the
+history/save assertions: the real virtual clock still holds the old inter-trace
+500ms sleep, although generation checks prevent its later send. The successor
+explicitly releases that sleep after retirement and requires completion without
+any old send, retaining all original history/save/fresh-B assertions.
+The compact overflow remains under investigation; no passing layout or full
+candidate acceptance is inferred.
+
+Identical-test negative `36d6546d5a0e3053cf248eb696b4f9050f5f773b`,
+run `42027762009`, restores only `TraceBatchRunner`, `TracePathState`,
+`TracePathStateHolder` and `TracePathUi` byte-for-byte from `c7`. Its 785 tools
+tests failed five: both completed-batch variants reached the stale-save
+eligibility assertion, both partial variants stopped at old completion, and the
+compact control reached the visible-height assertion. Tests are unchanged.
+Both r21 runs have incomplete mandatory downstream reports and remain immutable
+failed diagnostics, not acceptance for any successor.
+
+Exact axis-diagnostic `070744702bdcdd4635756c27a3d5e5596b5af513`,
+run `42030067067`, discovered 785 tools tests and failed only the compact
+control's short-hash `didOverflowWidth` assertion (line 289); the long name's
+width/height predicates passed. All four retired batch-save schedules proceeded
+through their history, stale-save rejection and fresh-B save assertions after
+the explicit virtual sleep release. Mandatory aggregate reports remained
+incomplete, so this is not full-candidate acceptance.
+The successor gives both detail Text nodes the available column width instead
+of leaving the short hash intrinsically shrink-wrapped. The original visual
+overflow, visible bounds, action size, boundary and real removal assertions
+remain unchanged and require fresh execution.

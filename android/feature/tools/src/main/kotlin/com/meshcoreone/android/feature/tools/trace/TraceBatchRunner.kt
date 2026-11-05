@@ -20,6 +20,11 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
     private var batchCancelled = false
     private var traceContinuation: CompletableDeferred<Unit>? = null
     private var generation = 0L
+    private var pendingMode: UByte? = null
+
+    internal fun seedPendingModeForTesting() {
+        pendingMode = holder.effectiveTraceMode
+    }
 
     private fun isCurrent(operation: Long): Boolean =
         holder.isConnectionCurrent() && generation == operation
@@ -62,6 +67,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
             holder.update { it.copy(isRunning = false) }
             holder.pendingTag = null
             holder.pendingDeviceId = null
+            pendingMode = null
             return
         }
         val timeout = FloodTraceTimeout.sanitized(sent.suggestedTimeoutMs)
@@ -75,6 +81,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
             holder.update { it.copy(isRunning = false) }
             holder.pendingTag = null
             holder.pendingDeviceId = null
+            pendingMode = null
             if (savedPath != null) holder.appendRunInBackground(savedPath, holder.failedRun())
         }
     }
@@ -93,7 +100,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         holder.clearError()
         val dispatch = captureDispatch() ?: return
         if (holder.current.outboundPath.isEmpty()) return
-        holder.update { it.copy(isRunning = true, result = null, batchPresentationActive = true) }
+        holder.update { it.copy(isRunning = true, result = null, batchPresentationActive = true, batchResultsRetired = false) }
         matchSavedPathIfNeeded(operation)
         if (!isCurrent(operation)) return
         val batchSize = holder.current.batchSize
@@ -132,6 +139,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
 
     /** Clears correlation and running state after the caller's coroutine was cancelled. */
     private fun abandonCorrelation() {
+        pendingMode = null
         holder.update { it.copy(isRunning = false, currentTraceIndex = 0) }
         holder.pendingTag = null
         holder.pendingDeviceId = null
@@ -140,6 +148,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
     }
 
     fun cancelBatchTrace() {
+        pendingMode = null
         generation += 1
         batchCancelled = true
         holder.traceJob?.cancel()
@@ -156,6 +165,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         val device = holder.deps.connectedDevice()
         if (!holder.isConnectionCurrent(device)) return
         if (traceInfo.tag != holder.pendingTag) return
+        val mode = pendingMode ?: return
         val pendingDevice = holder.pendingDeviceId
         if (pendingDevice != null && radioId != null && pendingDevice != radioId) return
         holder.traceJob?.cancel()
@@ -164,7 +174,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
             java.time.Duration.between(it, holder.time.now()).toNanos() / 1_000_000
         } ?: 0L
         val hops = holder.resolver().responseHops(traceInfo, device, holder.strings.myDevice)
-        val size = TraceHashModes.hashSize(holder.current.traceHashMode ?: device?.pathHashMode ?: 0u)
+        val size = TraceHashModes.hashSize(mode)
         val result = TraceResult(hops, durationMs, true, null, holder.pendingPathHash ?: Bytes.EMPTY, size)
         if (holder.current.batchEnabled) {
             holder.update { it.copy(result = result, completedResults = it.completedResults + result) }
@@ -173,6 +183,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         }
         holder.pendingPathHash = null
         holder.pendingTag = null
+        pendingMode = null
         holder.pendingDeviceId = null
         holder.traceStartTime = null
         // The source resumed first, but its resumed task ran later on the main actor; clearing
@@ -191,11 +202,12 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         val sent = send(dispatch, tag, pathData)
         if (!isCurrent(operation) || batchCancelled || holder.pendingTag != tag) return
         if (sent == null) {
-            val failed = TraceResult.sendFailed(holder.strings.sendFailed, holder.pendingPathHash ?: Bytes.EMPTY, holder.hashSize)
+            val failed = TraceResult.sendFailed(holder.strings.sendFailed, holder.pendingPathHash ?: Bytes.EMPTY, TraceHashModes.hashSize(dispatch.mode))
             holder.update { it.copy(completedResults = it.completedResults + failed) }
             recordFailedRun()
             holder.pendingPathHash = null
             holder.pendingTag = null
+            pendingMode = null
             return
         }
         // A cancel or a matching response while the send was suspended already settled this trace;
@@ -206,11 +218,12 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         holder.traceJob = holder.scope.launch {
             holder.time.sleep(timeout)
             if (!isCurrent(operation) || traceContinuation == null || holder.pendingTag != tag) return@launch
-            val timedOut = TraceResult.timeout(holder.pendingPathHash ?: Bytes.EMPTY, holder.hashSize, holder.strings.noResponse)
+            val timedOut = TraceResult.timeout(holder.pendingPathHash ?: Bytes.EMPTY, TraceHashModes.hashSize(dispatch.mode), holder.strings.noResponse)
             holder.update { it.copy(completedResults = it.completedResults + timedOut) }
             recordFailedRun()
             holder.pendingPathHash = null
             holder.pendingTag = null
+            pendingMode = null
             resumeContinuation()
         }
         try {
@@ -245,6 +258,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
     }
 
     private fun beginCorrelation(dispatch: Dispatch): UInt {
+        pendingMode = dispatch.mode
         val tag = holder.tagSource()
         holder.pendingTag = tag
         holder.pendingDeviceId = dispatch.radioId

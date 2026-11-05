@@ -284,6 +284,56 @@ class TraceCodeInputComposeTest {
         assertEquals(listOf("Bravo", "Alpha"), harness.state.outboundPath.map { it.resolvedName })
     }
 
+    @Test
+    @Config(qualifiers = "en-rUS-w320dp-h900dp-mdpi")
+    fun compactLargeFontPathRowKeepsNameHashAndEveryActionReadable() {
+        val harness = configured()
+        harness.holder.addNode(contact(0xA1, name = "Mountain Ridge Emergency Repeater"))
+        mountPathList(harness, fontScale = 2f)
+        scrollToIndex(2)
+        val hop = harness.state.outboundPath.single()
+        val label = C.contactsTraceListHopLabel(host.get().resources, 1, hop.displayText)
+        val textNodes = listOf(label, hop.hashHex).map { text ->
+            nodes().single { it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == text } }
+        }
+        textNodes.forEach { node ->
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            assertTrue(assertNotNull(node.config[SemanticsActions.GetTextLayoutResult].action)(layouts))
+            val layout = layouts.single()
+            if (layout.layoutInput.text.text == label) {
+                assertFalse(layout.didOverflowWidth, "Hop name width: $layout")
+                assertFalse(layout.didOverflowHeight, "Hop name height: $layout")
+            } else {
+                assertFalse(layout.didOverflowWidth, "Hop hash width: $layout")
+                assertFalse(layout.didOverflowHeight, "Hop hash height: $layout")
+            }
+            assertFalse(layout.hasVisualOverflow,
+                "Compact 200% text must wrap without clipping: text=${layout.layoutInput.text}, " +
+                    "size=${layout.size}, bounds=${node.boundsInRoot}, " +
+                    "widthOverflow=${layout.didOverflowWidth}, heightOverflow=${layout.didOverflowHeight}, " +
+                    "lines=${layout.lineCount}, paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height}")
+            assertTrue(node.boundsInRoot.width >= layout.size.width - 1f)
+            assertTrue(node.boundsInRoot.height >= layout.size.height - 1f)
+            assertTrue(node.boundsInRoot.width > 0f)
+        }
+        val actions = listOf(C.contactsDetailAvatarCropMoveUp, C.contactsDetailAvatarCropMoveDown, L.commonDelete)
+            .map { actionButton(pathActionDescription(it, 1, hop)) }
+        actions.forEach { node ->
+            assertTrue(node.boundsInRoot.width >= 48f && node.boundsInRoot.height >= 48f)
+            assertTrue(node.boundsInRoot.left >= 0f && node.boundsInRoot.right <= content.width.toFloat())
+            textNodes.forEach { text ->
+                assertTrue(text.boundsInRoot.right <= node.boundsInRoot.left ||
+                    text.boundsInRoot.left >= node.boundsInRoot.right ||
+                    text.boundsInRoot.bottom <= node.boundsInRoot.top ||
+                    text.boundsInRoot.top >= node.boundsInRoot.bottom, "Details and controls must not overlap")
+            }
+        }
+        assertTrue(actions[0].config.contains(SemanticsProperties.Disabled))
+        assertTrue(actions[1].config.contains(SemanticsProperties.Disabled))
+        clickDescription(pathActionDescription(L.commonDelete, 1, hop))
+        assertTrue(harness.state.outboundPath.isEmpty(), "Compact layout keeps the real removal action")
+    }
+
     @Test fun mountedClearPathRequiresConfirmationAndResetsTheTraceHashOverride() {
         val harness = configured()
         harness.holder.addNode(contact(0xA1, name = "Alpha"))
@@ -544,6 +594,178 @@ class TraceCodeInputComposeTest {
             assertEquals(1, persistence.paths.getValue(selected.id).runs.size)
             assertEquals(1, persistence.paths.values.sumOf { it.runs.size })
             assertTrue(texts().contains("SNR: 6.0 dB"))
+        }
+    }
+
+    @Test fun sameRadioReconnectRejectsRetainedAutoReturn() = retainedListActionAcrossReconnect(false, "auto")
+    @Test fun differentRadioReconnectRejectsRetainedAutoReturn() = retainedListActionAcrossReconnect(true, "auto")
+    @Test fun sameRadioReconnectRejectsRetainedBatchToggle() = retainedListActionAcrossReconnect(false, "batch")
+    @Test fun differentRadioReconnectRejectsRetainedBatchToggle() = retainedListActionAcrossReconnect(true, "batch")
+    @Test fun sameRadioReconnectRejectsRetainedHashMode() = retainedListActionAcrossReconnect(false, "hash")
+    @Test fun differentRadioReconnectRejectsRetainedHashMode() = retainedListActionAcrossReconnect(true, "hash")
+    @Test fun sameRadioReconnectRejectsRetainedRepeaterAdd() = retainedListActionAcrossReconnect(false, "repeater")
+    @Test fun differentRadioReconnectRejectsRetainedRepeaterAdd() = retainedListActionAcrossReconnect(true, "repeater")
+    @Test fun sameRadioReconnectRejectsRetainedRun() = retainedListActionAcrossReconnect(false, "run")
+    @Test fun differentRadioReconnectRejectsRetainedRun() = retainedListActionAcrossReconnect(true, "run")
+    @Test fun sameRadioReconnectRejectsRetainedCancel() = retainedListActionAcrossReconnect(false, "cancel")
+    @Test fun differentRadioReconnectRejectsRetainedCancel() = retainedListActionAcrossReconnect(true, "cancel")
+    @Test fun sameRadioReconnectRejectsRetainedCodeText() = retainedListActionAcrossReconnect(false, "text")
+    @Test fun differentRadioReconnectRejectsRetainedCodeText() = retainedListActionAcrossReconnect(true, "text")
+    @Test fun sameRadioReconnectRejectsRetainedCodePaste() = retainedListActionAcrossReconnect(false, "paste")
+    @Test fun differentRadioReconnectRejectsRetainedCodePaste() = retainedListActionAcrossReconnect(true, "paste")
+    @Test fun sameRadioReconnectRejectsRetainedCodeAdd() = retainedListActionAcrossReconnect(false, "codes")
+    @Test fun differentRadioReconnectRejectsRetainedCodeAdd() = retainedListActionAcrossReconnect(true, "codes")
+
+    private fun retainedListActionAcrossReconnect(crossRadio: Boolean, action: String) {
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+        )
+        var version = 1
+        val persistence = InMemoryTracePathStore { T0 }
+        val saved = savedPath(Bytes.of(0xA1), radioId = RADIO)
+        persistence.insert(saved)
+        val recorded = FakeTraceSender()
+        val events = TraceResponseBroadcaster()
+        val deps = FakeTraceDependencies().apply {
+            device = device()
+            store = persistence
+            sender = recorded
+            responses = { events.subscribe() }
+            directory = FakeNodeDirectory(contacts = listOf(contact(0xA1, name = "Alpha"), contact(0xB2, name = "Bravo")))
+        }
+        val feature = object : TracePathFeatureDependencies by deps {
+            override fun sessionToken() = token
+            override fun originatingSessionToken(generation: Int) = token.takeIf { generation == version }
+            override fun isOriginatingSessionCurrent(
+                generation: Int,
+                token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+            ) = generation == version && token == this.sessionToken()
+        }
+        val connection = mutableStateOf(TracePathScreen.Dependencies(
+            feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+        ))
+        content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(saved.name)
+        host.get().runOnUiThread {
+            val autoReturn = nodes().first { it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch }
+            assertEquals(androidx.compose.ui.state.ToggleableState.On, autoReturn.config[SemanticsProperties.ToggleableState])
+            assertTrue(assertNotNull(autoReturn.config[SemanticsActions.OnClick].action)())
+        }
+        settle()
+        val codeAction = action in listOf("text", "paste", "codes")
+        val runLabel = host.get().getString(C.contactsTraceListRunTrace)
+        if (codeAction) {
+            scrollToIndex(4)
+            click("Add Hop")
+            setInput("B2")
+        }
+        if (action == "cancel") {
+            scrollToIndex(11)
+            click(runLabel)
+        }
+        scrollToIndex(when (action) {
+            "auto" -> 1
+            "batch" -> 9
+            "hash" -> 8
+            "repeater" -> 7
+            "run", "cancel" -> 11
+            else -> 4
+        })
+        fun switchAction(last: Boolean): () -> Boolean {
+            val switches = nodes().filter { it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch }
+            return assertNotNull((if (last) switches.last() else switches.first()).config[SemanticsActions.OnClick].action)
+        }
+        val oldText = if (action == "text") assertNotNull(input().config[SemanticsActions.SetText].action) else null
+        val old = when (action) {
+            "auto" -> switchAction(false)
+            "batch" -> switchAction(true)
+            "hash" -> assertNotNull(button("4 B").config[SemanticsActions.OnClick].action)
+            "repeater" -> assertNotNull(button("Bravo").config[SemanticsActions.OnClick].action)
+            "run" -> assertNotNull(button(runLabel).config[SemanticsActions.OnClick].action)
+            "cancel" -> assertNotNull(button(host.get().getString(C.contactsTraceListRunningTrace)).config[SemanticsActions.OnClick].action)
+            "paste" -> assertNotNull(button("Paste from clipboard").config[SemanticsActions.OnClick].action)
+            "codes" -> assertNotNull(button("Add nodes: B2").config[SemanticsActions.OnClick].action)
+            else -> null
+        }
+        val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
+        host.get().runOnUiThread {
+            token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2), radioId = nextRadio)
+            version = 2
+            deps.device = device().copy(radioId = nextRadio)
+            connection.value = connection.value.copy(radioId = nextRadio, generation = version)
+        }
+        settle()
+        scrollToIndex(11)
+        click(runLabel)
+        val sent = recorded.sent.last()
+        val sendCount = recorded.sent.size
+        assertEquals(Bytes.of(0xA1), sent.path)
+        if (action == "paste") {
+            val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("trace codes", "B2B2,C3C3"))
+        }
+        host.get().runOnUiThread {
+            if (oldText != null) assertTrue(oldText(AnnotatedString("B2B2,C3C3")))
+            else assertTrue(assertNotNull(old)())
+        }
+        settle()
+        assertEquals(sendCount, recorded.sent.size, "Retained $action cannot issue a B trace")
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)),
+            "Retained $action cannot edit or cancel B's trace")
+        if (codeAction) {
+            scrollToIndex(4)
+            assertEquals("B2", input().config[SemanticsProperties.EditableText].text, "B retains its draft without A overwriting it")
+            scrollToIndex(11)
+        }
+        events.yield(TraceResponse(traceInfo(sent.tag, listOf(node(0xA1, 6.0), node(null, 3.0))), nextRadio))
+        settle()
+        assertTrue(texts().contains("SNR: 6.0 dB"), "Retained $action cannot corrupt B correlation")
+        scrollToIndex(when (action) {
+            "auto" -> 1
+            "batch" -> 9
+            "hash" -> 8
+            "repeater" -> 7
+            "run", "cancel" -> 11
+            else -> 4
+        })
+        when (action) {
+            "auto" -> host.get().runOnUiThread { assertTrue(switchAction(false)()) }
+            "batch" -> host.get().runOnUiThread { assertTrue(switchAction(true)()) }
+            "hash" -> click("4 B")
+            "repeater" -> click("Bravo")
+            "run", "cancel" -> {
+                click(runLabel)
+                assertEquals(sendCount + 1, recorded.sent.size)
+                click(host.get().getString(C.contactsTraceListRunningTrace))
+                assertFalse(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)))
+            }
+            else -> {
+                setInput("B2")
+                if (action == "paste") paste("B2")
+                click("Add nodes: B2")
+                assertEquals("", input().config[SemanticsProperties.EditableText].text)
+            }
+        }
+        settle()
+        if (action == "auto" || action == "batch") {
+            val switches = nodes().filter { it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch }
+            assertEquals(androidx.compose.ui.state.ToggleableState.On,
+                (if (action == "auto") switches.first() else switches.last()).config[SemanticsProperties.ToggleableState],
+                "Fresh B toggle changes the real holder")
+        }
+        if (codeAction || action == "repeater") {
+            scrollToIndex(12)
+            click(runLabel)
+            assertEquals(Bytes.of(0xA1, 0xB2), recorded.sent.last().path, "Fresh B $action changes the real route")
+            click(host.get().getString(C.contactsTraceListRunningTrace))
+        } else if (action == "hash") {
+            scrollToIndex(11)
+            click(runLabel)
+            assertEquals(2u.toUByte(), recorded.sent.last().flags)
+            click(host.get().getString(C.contactsTraceListRunningTrace))
         }
     }
 
@@ -1846,12 +2068,12 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
-    private fun mountPathList(harness: TraceHarness) {
+    private fun mountPathList(harness: TraceHarness, fontScale: Float = 1f) {
         content.setContent {
             key(harness) {
                 val state = harness.holder.state.collectAsStateWithLifecycle().value
                 val codeInput = rememberTraceCodeInputState(harness.holder)
-                CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
                     MaterialTheme { TracePathListContent(state, harness.holder, codeInput) }
                 }
             }

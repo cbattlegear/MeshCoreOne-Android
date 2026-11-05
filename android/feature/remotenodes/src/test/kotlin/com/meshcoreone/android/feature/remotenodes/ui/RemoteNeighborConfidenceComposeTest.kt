@@ -1,13 +1,15 @@
 // AndroidOnly: WP-313 Mounted current and disappeared neighbor confidence disclosure.
 package com.meshcoreone.android.feature.remotenodes.ui
 
+import android.os.Looper
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -35,6 +37,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.domain.NeighborBaseline
+import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.model.NeighborSnapshotEntry
 import com.meshcoreone.android.core.model.ContactDTO
@@ -75,9 +78,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowDialog
+import org.robolectric.shadows.ShadowViewRootImpl
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h800dp-mdpi")
@@ -136,6 +143,28 @@ class RemoteNeighborConfidenceComposeTest {
         compose.onNodeWithText(text(L.remoteNodesStatusPossibleMatchExplanation)).assertDoesNotExist()
     }
 
+    private fun attachAuthenticationWindow() {
+        compose.runOnUiThread {
+            Snapshot.sendApplyNotifications()
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+        }
+        compose.mainClock.advanceTimeByFrame()
+        compose.runOnUiThread {
+            val host = activity.get().window.decorView
+            val view = requireNotNull(ShadowDialog.getLatestDialog().window).decorView
+            assertTrue(view.isAttachedToWindow)
+            view.measure(
+                View.MeasureSpec.makeMeasureSpec(host.width, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(host.height, View.MeasureSpec.AT_MOST),
+            )
+            view.layout(0, 0, view.measuredWidth, view.measuredHeight)
+            val root = View::class.java.getMethod("getViewRootImpl").invoke(view)
+            Shadow.extract<ShadowViewRootImpl>(root).callWindowFocusChanged(true)
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            assertTrue(view.hasWindowFocus())
+        }
+    }
+
     @Test fun statusRouteKeepsExactAndUnknownHopsDistinctAndClosesStaleExplanation() {
         val node = session()
         val target = contact(publicKey = node.publicKey, outPathLength = 3u, outPath = Bytes.of(0x10, 0x20, 0x30))
@@ -146,7 +175,7 @@ class RemoteNeighborConfidenceComposeTest {
         val repeater = RepeaterStatusStateHolder(VirtualClock(), FakeFaults, scope)
         activity.get().setContent {
             CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
-                MaterialTheme {
+                MeshCoreTheme(motionScale = 0f) {
                     RemoteNodeStatusContent(node, repeater.helper, repeater, null, catalog.value, false, Modifier.fillMaxSize(), { _, _, _, _, _, _, _ -> })
                 }
             }
@@ -190,7 +219,7 @@ class RemoteNeighborConfidenceComposeTest {
         }
         activity.get().setContent {
             CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
-                MaterialTheme {
+                MeshCoreTheme(motionScale = 0f) {
                     RemoteNodeStatusContent(node, repeater.helper, repeater, null, catalog, false, Modifier.fillMaxSize(), map)
                 }
             }
@@ -236,10 +265,11 @@ class RemoteNeighborConfidenceComposeTest {
         }
         var cancelled = 0
         activity.get().setContent {
-            MaterialTheme {
+            MeshCoreTheme(motionScale = 0f) {
                 RemoteNodeAuthenticationDialog(target, dependencies, catalog, { cancelled++ }, { error("Must not authenticate") })
             }
         }
+        attachAuthenticationWindow()
         compose.onNodeWithText("Exact login").performScrollTo().assertIsDisplayed()
         compose.onNodeWithContentDescription("Exact login, ${text(L.remoteNodesStatusPossibleMatch)}").assertDoesNotExist()
         compose.onNodeWithText(text(L.remoteNodesAuthPathHopUnknown)).performScrollTo().assertIsDisplayed()
@@ -323,7 +353,7 @@ class RemoteNeighborConfidenceComposeTest {
         val fixtureMap: RemoteNodesMapSurface = { _, _, _, _, _, _, modifier -> Box(modifier) }
         activity.get().setContent {
             CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
-                MaterialTheme {
+                MeshCoreTheme(motionScale = 0f) {
                     RemoteNodeStatusContent(node, repeater.helper, repeater, null, liveCatalog.value, false, Modifier.fillMaxSize(), fixtureMap)
                 }
             }
@@ -349,6 +379,9 @@ class RemoteNeighborConfidenceComposeTest {
                 hasText(title) and hasAnyAncestor(hasContentDescription(description)), useUnmergedTree = true,
             ).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
             assertEquals(fontScale, layouts.single().layoutInput.density.fontScale, 0f)
+            if (layouts.single().hasVisualOverflow) {
+                println("TS07 overflowing $name at $fontScale: ${layouts.single()}")
+            }
             assertFalse(layouts.single().hasVisualOverflow)
             indicator.performClick()
             compose.onNodeWithText(explanation).assertIsDisplayed()

@@ -286,3 +286,25 @@ authority test setup now uses the supported `updateMessageLinkPreview` before
 intent capture to persist real blobs, preserving its original full-DTO equality
 and SQL-column erasure assertions. No production mapping or oracle is changed.
 This fix is source-derived from the real mapping; successor execution is pending.
+
+## Backup fixture fencing diagnostic
+
+Exact `dc6fa1e8ad8e4d8c618957fec6f94a75bf56acd3`
+[run 41966079500](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41966079500)
+failed `core:data`: 645 tests, 116 failures. The numerous backup failures report
+`DirectAckStorage.kt:302`, which is the canonical-trigger verification check,
+not the active-transaction check. `BackupRoomTest` constructed its primary
+in-memory database, file databases and independent destinations without the
+production `DirectAckStorage.callback`. Restore now correctly rejects those
+unfenced databases. The shared backup fixture now installs the actual production
+callback on all three builders. No backup expectations, compatibility rules,
+production checks or transaction/erasure guarantees are relaxed.
+
+A discriminating public-import control removes one fencing trigger from an
+otherwise configured real Room database, then asserts the exact rejection
+before the import commit hook, unchanged histories in all four tables and
+unchanged product message/pending rows. The earlier real-import duplicate-skip,
+failure and cancellation controls remain intact. The separate preview fixture
+setup failures in this run were already repaired by the supported preview
+mutation. These changes are source-checked assertions pending a new immutable
+hosted run, not passing runtime evidence.

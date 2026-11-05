@@ -565,6 +565,46 @@ class DirectAckAuthorityPersistenceTest {
         } finally { storage.close() }
     }
 
+    @Test fun publicBackupImportRejectsMissingFencingWithoutErasingHistoryOrChangingProductRows() = runTest {
+        val storage = MeshCoreStorage.get(context)
+        try {
+            val row = message()
+            val queued = pending(messageID = row.id)
+            val device = device()
+            store.saveDevice(device)
+            store.saveContact(contact())
+            store.upsertPendingSend(queued)
+            val claim = begin(row, pendingId = queued.id)
+            val completion = UUID.randomUUID()
+            assertIs<DirectPendingCaptureResult.Captured>(
+                store.captureDirectPendingCompletion(claim.lease, entity(id = row.id), queued.id, completion,
+                    DirectPendingCompletionReason.ZeroAttempts(0)),
+            )
+            store.settleDirectAck(claim.attempt, 123u, 7u)
+            val product = assertNotNull(store.fetchMessage(entity(id = row.id)))
+            val claimBefore = db.directAcks().claim(RADIO_A.value, claim.request)
+            val deliveryBefore = db.directAcks().delivery(RADIO_A.value, claim.request)
+            val intentBefore = db.directAcks().intent(RADIO_A.value, claim.request)
+            val completionBefore = db.directAcks().pendingCompletion(RADIO_A.value, completion)
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER direct_ack_message_delete")
+            var beforeCommitReached = false
+            val service = AppBackupService(AppBackupCodec(), storage.backupPreferences, "1.0", "1",
+                RepositoryClock(), BackupImportHooks(beforeCommit = { beforeCommitReached = true }))
+            val backup = com.meshcoreone.android.core.data.backup.envelope(
+                devices = listOf(device), contacts = listOf(contact()), messages = listOf(product),
+            )
+            val failure = assertFailsWith<IllegalStateException> { service.importBackup(backup, store) }
+            assertEquals("Direct ACK all-writer fencing triggers are missing or changed", failure.message)
+            assertFalse(beforeCommitReached)
+            assertEquals(claimBefore, db.directAcks().claim(RADIO_A.value, claim.request))
+            assertEquals(deliveryBefore, db.directAcks().delivery(RADIO_A.value, claim.request))
+            assertEquals(intentBefore, db.directAcks().intent(RADIO_A.value, claim.request))
+            assertEquals(completionBefore, db.directAcks().pendingCompletion(RADIO_A.value, completion))
+            assertEquals(product, store.fetchMessage(entity(id = row.id)))
+            assertEquals(listOf(queued), store.fetchPendingSendsForMessage(entity(id = row.id)))
+        } finally { storage.close() }
+    }
+
     @Test fun ownFailureAndMatchingAckCommitAtomicallyWithExactTupleReplay() = runTest {
         val claim = begin()
         assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u))

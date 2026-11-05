@@ -11,7 +11,8 @@ import kotlinx.coroutines.flow.flow
 
 internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     DirectAckAuthority, DirectPendingCompletionAuthority, DirectAckRadioExclusionAuthority,
-    DirectAckRadioConfirmationEvidenceInspecting, DirectAckRadioConfirmationEvidenceObserving {
+    DirectAckRadioConfirmationEvidenceInspecting, DirectAckRadioConfirmationEvidenceObserving,
+    DirectAckRadioFailureAuthority {
     private data class Lease(val issuer: UUID, val token: SessionToken, val request: UUID) : DirectAckLease
     private data class Attempt(val lease: Lease, val request: UUID) : DirectAckAttempt
     private data class Intent(val lease: Lease, val request: UUID) : DirectAckIntent
@@ -577,6 +578,58 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         return DirectAckRadioWireEvidence(
             RadioId(row.radioId), row.claimId, row.wireId, row.markRequestId, row.predictedCode.asUInt(), outcome,
         )
+    }
+
+    override suspend fun recordDirectFailureExcludingRadioHistory(
+        attempt: DirectAckAttempt,
+    ): DirectAckRadioFailureResult = transaction("recordDirectFailureExcludingRadioHistory") {
+        val issued = issuedAttempt(attempt)
+            ?: return@transaction DirectAckRadioFailureResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        val radio = issued.lease.token.radioId.value
+        val dao = database.directAcks()
+        val claim = dao.claim(radio, issued.request)
+            ?: return@transaction DirectAckRadioFailureResult.Rejected(DirectAckRejection.MISSING)
+        if (claim.leaseId != issued.lease.request) {
+            return@transaction DirectAckRadioFailureResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        if (dao.delivery(radio, claim.requestId) != null ||
+            claim.phase == DirectAckPhase.DELIVERED.name || claim.initialStatus == MessageStatus.DELIVERED.rawValue
+        ) return@transaction DirectAckRadioFailureResult.AlreadyDelivered(receipt(claim, issued.lease))
+        val proofs = dao.radioFailures(radio, claim.requestId)
+        if (proofs.size > 1) invalidData("Multiple guarded radio failure proofs")
+        val proof = proofs.singleOrNull()
+        if (proof != null) {
+            if (proof.argument != null || proof.maximum != null || proof.pendingId != null ||
+                claim.phase != DirectAckPhase.FAILED.name
+            ) invalidData("Malformed guarded radio failure proof")
+            return@transaction DirectAckRadioFailureResult.AlreadyApplied(receipt(claim, issued.lease))
+        }
+        if (claim.phase == DirectAckPhase.FAILED.name) {
+            return@transaction DirectAckRadioFailureResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        rejection(permission(claim, issued.lease))?.let {
+            return@transaction DirectAckRadioFailureResult.Rejected(it)
+        }
+        val history = database.directAckExclusions().failureEvidence(radio, claim.requestId)
+        val reasons = linkedSetOf<DirectAckRadioNonfailingReason>()
+        if (history.targetUnresolved) reasons += DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION
+        if (history.targetConflict) reasons += DirectAckRadioNonfailingReason.TARGET_CONFLICTING_PHYSICAL_EVIDENCE
+        if (history.targetLegacy) reasons += DirectAckRadioNonfailingReason.TARGET_UNTRACKED_LEGACY_ANCESTRY
+        if (history.saturated) reasons += DirectAckRadioNonfailingReason.RADIO_HISTORY_SATURATED
+        if (history.targetAccepted || reasons.isNotEmpty()) {
+            if (history.otherUnresolved) reasons += DirectAckRadioNonfailingReason.UNRESOLVED_OTHER_CLAIM_EMISSION
+            if (history.otherConflict) reasons += DirectAckRadioNonfailingReason.CONFLICTING_OTHER_CLAIM_EVIDENCE
+            if (history.otherLegacy) reasons += DirectAckRadioNonfailingReason.UNTRACKED_OTHER_CLAIM_ANCESTRY
+            if (history.otherKnownCode) reasons += DirectAckRadioNonfailingReason.KNOWN_OTHER_CLAIM_CODE
+        }
+        if (reasons.isNotEmpty()) return@transaction DirectAckRadioFailureResult.Nonfailing(reasons.snapshotSet())
+        var request = UUID.randomUUID()
+        while (dao.operation(radio, claim.requestId, request) != null) request = UUID.randomUUID()
+        ownWrite(database.messages().setStatusUnlessDelivered(radio, claim.messageId, MessageStatus.FAILED.rawValue))
+        val updated = renew(claim, DirectAckPhase.FAILED.name, 1)
+        dao.operation(DirectAckOperationEntity(radio, claim.requestId, request, "RADIO_FAILURE", null, null, null))
+        save()
+        DirectAckRadioFailureResult.Applied(receipt(updated, issued.lease))
     }
 
     override suspend fun recordDirectFailure(attempt: DirectAckAttempt): DirectAckMutationResult =

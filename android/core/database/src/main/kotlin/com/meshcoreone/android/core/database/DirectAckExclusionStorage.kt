@@ -11,12 +11,19 @@ import java.util.UUID
 
 private const val MALFORMED_PHYSICAL_EVIDENCE = """
     predictedCode NOT BETWEEN 0 AND 4294967295
-    OR actualCode NOT BETWEEN 0 AND 4294967295
+    OR (actualCode IS NOT NULL AND actualCode NOT BETWEEN 0 AND 4294967295)
     OR state NOT IN ('MAY_HAVE_WRITTEN','DEFINITELY_UNSENT','ACCEPTED','CONFLICT','CONFLICT_UNSENT')
     OR (state = 'MAY_HAVE_WRITTEN' AND (actualCode IS NOT NULL OR resolutionRequestId IS NOT NULL))
     OR (state = 'DEFINITELY_UNSENT' AND (actualCode IS NOT NULL OR resolutionRequestId IS NULL))
     OR (state = 'ACCEPTED' AND (actualCode IS NULL OR resolutionRequestId IS NULL))
     OR (state IN ('CONFLICT','CONFLICT_UNSENT') AND resolutionRequestId IS NULL)
+"""
+
+private const val ACCEPTED_TARGET_CODES = """
+    SELECT actualCode FROM direct_ack_emissions
+    WHERE radioId = :radio AND claimId = :claim AND state = 'ACCEPTED'
+      AND actualCode BETWEEN 0 AND 4294967295 AND predictedCode BETWEEN 0 AND 4294967295
+      AND resolutionRequestId IS NOT NULL
 """
 
 @Entity(tableName = "direct_ack_emissions", primaryKeys = ["radioId", "claimId", "wireId", "markRequestId"])
@@ -46,8 +53,64 @@ data class DirectAckRadioConfirmationRow(
     val malformedPhysicalEvidence: Boolean,
 )
 
+data class DirectAckRadioFailureRow(
+    val targetUnresolved: Boolean,
+    val targetConflict: Boolean,
+    val targetLegacy: Boolean,
+    val targetAccepted: Boolean,
+    val otherUnresolved: Boolean,
+    val otherConflict: Boolean,
+    val otherLegacy: Boolean,
+    val otherKnownCode: Boolean,
+    val saturated: Boolean,
+)
+
 @Dao
 interface DirectAckExclusionDao {
+    @Query("""
+        SELECT
+            EXISTS(SELECT 1 FROM direct_ack_emissions
+                WHERE radioId = :radio AND claimId = :claim AND state = 'MAY_HAVE_WRITTEN'
+                  AND NOT ($MALFORMED_PHYSICAL_EVIDENCE)) AS targetUnresolved,
+            EXISTS(SELECT 1 FROM direct_ack_emissions
+                WHERE radioId = :radio AND claimId = :claim
+                  AND (state IN ('CONFLICT','CONFLICT_UNSENT') OR ($MALFORMED_PHYSICAL_EVIDENCE))) AS targetConflict,
+            EXISTS(SELECT 1 FROM direct_ack_wires w
+                WHERE w.radioId = :radio AND w.claimId = :claim AND NOT EXISTS(
+                    SELECT 1 FROM direct_ack_operations o
+                    WHERE o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
+                      AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
+                      AND o.maximum = 1 AND o.pendingId IS NULL)) AS targetLegacy,
+            EXISTS($ACCEPTED_TARGET_CODES) AS targetAccepted,
+            EXISTS(SELECT 1 FROM direct_ack_emissions
+                WHERE radioId = :radio AND claimId != :claim AND state = 'MAY_HAVE_WRITTEN'
+                  AND NOT ($MALFORMED_PHYSICAL_EVIDENCE)) AS otherUnresolved,
+            EXISTS(SELECT 1 FROM direct_ack_emissions
+                WHERE radioId = :radio AND claimId != :claim
+                  AND (state IN ('CONFLICT','CONFLICT_UNSENT') OR ($MALFORMED_PHYSICAL_EVIDENCE))) AS otherConflict,
+            EXISTS(SELECT 1 FROM direct_ack_wires w
+                WHERE w.radioId = :radio AND w.claimId != :claim AND NOT EXISTS(
+                    SELECT 1 FROM direct_ack_operations o
+                    WHERE o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
+                      AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
+                      AND o.maximum = 1 AND o.pendingId IS NULL)) AS otherLegacy,
+            (EXISTS(SELECT 1 FROM direct_ack_emissions
+                WHERE radioId = :radio AND claimId != :claim AND state != 'DEFINITELY_UNSENT'
+                  AND (predictedCode IN ($ACCEPTED_TARGET_CODES) OR actualCode IN ($ACCEPTED_TARGET_CODES)))
+             OR EXISTS(SELECT 1 FROM direct_ack_wires w
+                WHERE w.radioId = :radio AND w.claimId != :claim
+                  AND (w.acceptedCode IS NOT NULL OR NOT EXISTS(
+                      SELECT 1 FROM direct_ack_operations o
+                      WHERE o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
+                        AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
+                        AND o.maximum = 1 AND o.pendingId IS NULL))
+                  AND (w.predictedCode IN ($ACCEPTED_TARGET_CODES) OR w.acceptedCode IN ($ACCEPTED_TARGET_CODES))))
+                AS otherKnownCode,
+            EXISTS(SELECT 1 FROM direct_ack_radio_exclusions
+                WHERE radioId = :radio AND saturated != 0) AS saturated
+    """)
+    suspend fun failureEvidence(radio: UUID, claim: UUID): DirectAckRadioFailureRow
+
     @Query("""
         SELECT
             EXISTS(SELECT 1 FROM direct_ack_emissions

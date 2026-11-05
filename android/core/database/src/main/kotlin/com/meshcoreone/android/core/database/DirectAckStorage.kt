@@ -149,7 +149,7 @@ interface DirectAckDao {
     @Query("""
         SELECT * FROM direct_ack_operations
         WHERE radioId = :radio AND claimId = :claim
-          AND kind NOT IN ('RADIO_DELIVERY','EMISSION_TRACKING_REQUIRED')
+          AND kind NOT IN ('RADIO_DELIVERY','RADIO_FAILURE','EMISSION_TRACKING_REQUIRED')
           AND substr(kind,1,20) != 'EMISSION_RESOLUTION:'
         ORDER BY requestId
     """)
@@ -160,6 +160,8 @@ interface DirectAckDao {
     suspend fun operation(radio: UUID, claim: UUID, request: UUID): DirectAckOperationEntity?
     @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND kind = 'RADIO_DELIVERY' LIMIT 2")
     suspend fun radioDeliveries(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
+    @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND kind = 'RADIO_FAILURE' LIMIT 2")
+    suspend fun radioFailures(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
     @Upsert suspend fun operation(row: DirectAckOperationEntity)
     @Query("SELECT * FROM direct_pending_completions WHERE radioId = :radio AND captureRequestId = :request")
     suspend fun pendingCompletion(radio: UUID, request: UUID): DirectPendingCompletionEntity?

@@ -754,6 +754,111 @@ successor preserving generic behavior and restricting accepted-only settlement
 to the new radio-exclusion API/activated service. Final composition must import
 that correction; this observer does not change legacy production semantics.
 
+## Atomic guarded failure successor: source only
+
+This successor is independently layered on immutable observer source
+`a2c1b66d9f567b497f4002c9022b2efc9c0aa713`. It imports the exact WP-201
+canonical saturation clarification from
+`671343259886e9c7eb0d7a8c836d4e7e8e2a0d1a`:
+`DirectAckRadioExclusion.kt` blob `dccd38dea9fc646932e7e04957dc392c40e1ddb6`.
+The corrected generic `DirectAckAuthority.kt` blob is
+`8e59fda1ada8178ad687d13de1ae98f65fae6bb1`. The previously inherited
+aee/7af generic KDoc is explicitly superseded, not retroactively accepted.
+Legacy generic settlement still matches each wire's `accepted ?: predicted`,
+including an unaccepted prediction before return. Only radio-exclusion
+settlement requires accepted physical evidence. Generic production methods
+are unchanged by this successor.
+
+The optional `DirectAckRadioFailureAuthority` delegates to one serialized
+Room write transaction. Genuine own delivery and protected initially DELIVERED
+RESEND baseline win without mutation. Otherwise an exact existing
+`RADIO_FAILURE` journal proof returns historical AlreadyApplied, even after
+later history, invalidation, restore or revocation; it does not renew authority.
+A generic FAILED phase without this proof is Rejected(CONFLICT), never upgraded.
+New failure requires current lease, message incarnation/revision and grant,
+complete history, the FAILED write, expected-revision renewal and proof insertion
+in the same transaction. Proofs use the existing operation journal, are excluded
+from public receipt bookkeeping, and are read with LIMIT 2 to reject duplicates.
+There is no entity, migration, schema-version or generated-schema change.
+
+One constant-size SQL projection inspects all target physical emissions and
+tracking provenance plus full retained foreign history for the radio.
+Target MAY, conflict, malformed evidence or legacy ancestry blocks failure.
+ANY valid accepted target actual code colliding with another claim's known
+predicted/actual code blocks failure; an additional noncolliding actual is not
+proof that the blocked emission failed. Foreign unresolved/conflicting/legacy
+history blocks a possibly emitted target. Malformed target/foreign evidence is
+mapped to the corresponding typed conflict reason for this failure operation;
+the existing snapshot and settlement malformed-input typed errors are unchanged.
+
+Sticky saturation ALWAYS blocks every NEW failure, even a tracked target with
+no marker or only represented DefinitelyUnsent rows. CoveredBySaturation may
+permit an additional physical invocation without a row/handle; the current
+contract supplies no overriding target-specific proof. Only on a nonsaturated
+radio may a fully tracked markerless/all-unsent target use the known-safe path
+despite unrelated foreign ambiguity. Delivery and exact guarded replay retain
+their earlier read-only precedence. Nonfailing has nonempty typed reasons,
+writes no product status/proof, and renews no grant.
+
+`DirectAckRadioFailurePersistenceTest` contains 11 authored actual-Room controls:
+own MAY and earlier MAY/later unsent; target legacy/conflict/malformed evidence;
+ANY accepted-code collision plus all foreign wildcard kinds; nonsaturated
+no-marker/all-unsent positives with foreign MAY; both saturated markerless and
+represented-unsent cases including CoveredBySaturation; exact historical proof
+replay and generic-failure rejection; delivery/baseline precedence; malformed
+foreign evidence and current-grant rejection; proof-insertion rollback and
+post-commit caller cancellation; cancellation during proof insertion; durable
+proof through restore/delete/recreate/reopen with no handle reissuance; and
+two ordinary same-file handles with an explicitly asserted SQLite BUSY failure
+followed by a complete-history Nonfailing retry. Internal proof exclusion from
+public receipt bookkeeping is asserted. These controls are NOT executed.
+
+No local build/test, KSP, migration execution, hosted dispatch, runtime/device
+acceptance, PR or merge is claimed. Exact canonical blob checks are source
+checks only. Older storage-only diagnostic run `42084764103` binds only composed
+candidate `74dfb3d08b89a1ae6a8cf04203b00bf276009bba`, not this source.
+The retained local execution hold remains in force.
+
+The missing-contact/preclaim path has no positive authority in this successor.
+Generic save/upsert/import, incarnation/revision, captured intent, zero-attempt
+metadata and empty claim history do not establish trusted birth/no-write proof.
+The coordinator selected explicit unavailable/uncertain retain-and-park rather
+than generic FAILED or unsynchronized pending deletion. New birth provenance
+is a separate design, not implemented or inferred for old rows. A separate
+message-level durable collision observation contract is also not included in
+this frozen radio observer/failure surface.
+
+### Blocking pre-authority migration-history finding
+
+Source inspection found that the existing v1-to-v2 migration creates empty
+claims/wires and backfills only surviving message/pending identities. The
+v2-to-v3 migration creates empty emission/saturation tables. Legacy detection
+only sees existing wires. A supported pre-authority send can therefore leave
+no journal after upgrade, including when its message/radio was deleted before
+migration. A delayed ACK sharing a new tracked attempt's accepted code is not
+excluded by the existing journal queries. Complete retained SQL history is
+not proof of complete physical prehistory.
+
+The service owner independently traced published main
+`f8b1d31190f3e02370df147eb95428c9611de2c3`, MessageService blob
+`14568ac582098c3fe98bbd2c0d0d3f78ea5365f5`: generic saveMessage followed by
+physical session.sendMessage, including queued retry, with no ACK-authority
+wire registration. Published database blob
+`fddaf0eb11805586e72b3e9ec848aa5fa6fbbee7` is version 1. This is a concrete
+unsupported completeness claim, not evidence that old messages were unsent.
+No actual migration/reopen execution is claimed for this finding.
+
+Full safety acceptance remains BLOCKED. The coordinator selected a separate
+durable DB-wide pre-authority UNKNOWN latch, including empty upgrades and
+removed/re-added radios, without TTL/reset and without inventing target birth
+proof. That successor requires separately admitted migration/version ownership,
+canonical coordination and authentic hosted schema generation. The genuine
+v3 schema and earlier immutable source candidates remain unchanged. Two
+expected-failing real-file v1 migration/reopen regressions are being frozen
+separately before implementation, not included as passing guarded-failure
+acceptance. This finding also bounds every earlier COMPLETE/NoWildcard statement
+to retained rows; those historical labels do not establish physical prehistory.
+
 ### Separate accepted-code mismatch repair
 
 This successor is based on the fixture-only `94af032ee0a7bbe21fee822c86f63edac8745187`

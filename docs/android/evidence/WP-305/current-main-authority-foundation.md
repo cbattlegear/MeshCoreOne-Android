@@ -20,6 +20,59 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Bounded actual Repeat consumer follow-up
+
+The coordinator assigned the remaining fire-and-forget Repeat consumer race after
+the independent review of verified da8. This successor starts from evidence-only
+d19ac7ad307d1270f89858ccef4711bb7bff4477, whose product parent is verified da8.
+Producer 244fb3ac-2ee7-4761-874d-9617d4935209 explicitly handed off selected hunks
+from b1e99a61cf65a6857a22b652b98103a77ca6206e, with original awaited-consumer
+provenance ec027bed2c67ff6429bc074547badf0766d77748 and busy/retry correction
+1bbc6e17413063738314f1bdd59e921c53a3132a. No historical ancestry, broad Settings
+scope/alias/ACK/manual-radio work or producer receipt is imported.
+
+The actual preset holder awaits token-bound snapshot persistence before any Repeat
+radio mutation, and awaits token-bound clear after verified restoration. Captured
+rendered/session targets survive confirmation, queued actions and retries; a
+missing/consumed confirmation cannot acquire another target. AppSettingsFeature
+exposes token-bound observations and delegates to the existing awaited editor,
+rejecting absent/retired tokens rather than discarding Jobs. DeviceUpdated and
+ClientRepeatUpdated consumers await the originating token's editor operations;
+other Settings event families are unchanged. The producer's optional RF baseline
+guard checks actual radio identity/RF/Repeat values inside the service operation
+lock before SET, without assuming asynchronous events already reached Room.
+
+One necessary refinement to the handed-off holder always awaits the authoritative
+preserving-or-saving snapshot primitive on every enable and retry. A non-null
+observed snapshot, or an earlier acknowledged save, cannot prove that a concurrent
+clear did not remove the authoritative snapshot. The old snapshotSaved/saved skip
+is therefore removed. Existing complete/partial snapshots remain preserved by the
+already-verified editor transform; no editor/Room/runtime source changes are made.
+A held-store unit control starts with a non-null observed restoration field and
+requires the same awaited boundary before transmission.
+
+All original preset holder tests/assertions remain. The added unit controls cover
+held, failed and cancelled save, clear acknowledgement and retry service retention.
+SettingsRepeatPersistenceTest extracts the producer's actual holder/production
+adapter/Room/radio save-failure, restore-failure and successful retry control, with
+all four restoration fields asserted. Separate controls hold an actual Room
+transaction while the real editor read is queued, and retire a held save or clear
+before reconnecting the same radio with a new token. The latter asserts full live
+and durable successor DTO preservation and a fresh successor snapshot action.
+The persistence-failure injection is before the real conditional Room write, not
+claimed as an injected native Room commit failure. The actual held transaction is
+identified separately. The producer's real service-lock/buffered-event RF guard
+control is retained.
+
+Fresh trusted main 1a8b path/operation admissions accepted all fifteen Kotlin
+surfaces as reviewed-support-consumer or reviewed-support-test. Source validation,
+portmap, verification-config check, parity audit/semantic check and diff check passed
+with pinned Python after the documented existing-state native Windows preflight,
+using fresh private output preflight-repeat-consumer-01. Local Gradle remains held
+and was not invoked. These are source checks only: this changed candidate still
+requires independent source review and its own exact-head hosted discovery.
+Neither da8's success nor any Settings producer result is transferred.
+
 ### Exact current-main wired foundation verified
 
 Immutable candidate da8a36741b681954a8cb2c4023263082c353efc7 ran as

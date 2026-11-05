@@ -16,6 +16,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 
 class RadioPresetStateHolderTest {
     private val scheduler = TestScheduler()
@@ -25,10 +27,114 @@ class RadioPresetStateHolderTest {
     private val regions = FakeRegions()
     private val store = FakeStore()
     private val gate = RadioWriteGate()
-    private val holder = RadioPresetStateHolder(scheduler.environment(), connection, regions, catalog, { service }, store, gate)
+    private var currentService: SettingsRadioPort = service
+    private val holder = RadioPresetStateHolder(scheduler.environment(), connection, regions, catalog, { currentService }, store, gate)
     private val state get() = holder.state.value
 
     private fun started(): RadioPresetStateHolder { holder.start(); scheduler.runCurrent(); return holder }
+
+    @Test
+    fun `enable awaits the durable snapshot and releases no radio write while it is held`() {
+        started()
+        val saved = CompletableDeferred<Unit>()
+        store.beforeRepeatEdit = { saved.await() }
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+        assertTrue(state.isApplyingRepeat && gate.inFlight.value)
+        assertEquals(listOf("getSelfInfo"), service.calls)
+        assertTrue(store.calls.isEmpty())
+        holder.onPresetSelected("eu-868")
+        holder.onRepeatToggled(false)
+        assertTrue(state.isApplyingRepeat && gate.inFlight.value)
+        assertEquals(listOf("getSelfInfo"), service.calls)
+        saved.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(listOf("savePreRepeat"), store.calls)
+        assertEquals("setRadioParamsVerified(911000,250000,10,5,true,null)", service.calls.last())
+        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
+    }
+
+    @Test
+    fun `an observed existing snapshot never skips the authoritative awaited save`() {
+        connection.deviceFlow.value = connection.deviceFlow.value!!.copy(preRepeatFrequency = 868_000u)
+        started()
+        val saved = CompletableDeferred<Unit>()
+        store.beforeRepeatEdit = { saved.await() }
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+        assertTrue(state.isApplyingRepeat && gate.inFlight.value)
+        assertEquals(listOf("getSelfInfo"), service.calls)
+        assertTrue(store.calls.isEmpty())
+        saved.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(listOf("savePreRepeat"), store.calls)
+        assertTrue(state.isRepeatEnabled)
+        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
+    }
+
+    @Test
+    fun `failed durable snapshot never changes radio and a later attempt can succeed`() {
+        started()
+        store.beforeRepeatEdit = { throw IllegalStateException("snapshot unavailable") }
+        val writes = service.calls.size
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+        assertEquals(writes, service.calls.size)
+        assertFalse(state.isRepeatEnabled || state.isApplyingRepeat || gate.inFlight.value)
+        assertTrue(state.errorMessage != null)
+        store.beforeRepeatEdit = {}
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+        assertTrue(state.isRepeatEnabled)
+        assertEquals(writes + 1, service.calls.size)
+    }
+
+    @Test
+    fun `cancelled snapshot never transmits and releases repeat gate`() {
+        started()
+        store.beforeRepeatEdit = { throw CancellationException("snapshot retired") }
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+        assertEquals(listOf("getSelfInfo"), service.calls)
+        assertFalse(state.isApplyingRepeat || state.isRepeatEnabled || gate.inFlight.value)
+        assertTrue(store.calls.isEmpty())
+    }
+
+    @Test
+    fun `restore waits for durable clear and retryable clear failure does not resample service`() {
+        connection.deviceFlow.value = device(clientRepeat = true, frequency = 910_525u)
+        started()
+        val cleared = CompletableDeferred<Unit>()
+        store.beforeRepeatEdit = { cleared.await() }
+        holder.onRepeatToggled(false)
+        scheduler.runCurrent()
+        assertTrue(state.isApplyingRepeat && gate.inFlight.value)
+        assertTrue(store.calls.isEmpty())
+        cleared.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(listOf("clearPreRepeat"), store.calls)
+        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
+        store.beforeRepeatEdit = { throw SettingsServiceException(SettingsServiceError.SendFailed) }
+        holder.onRepeatToggled(false)
+        scheduler.runCurrent()
+        assertTrue(holder.retryAlertState.value.isPresented)
+        assertTrue(state.isRepeatEnabled)
+        store.beforeRepeatEdit = {}
+        val replacement = FakeSettingsPort()
+        currentService = replacement
+        val originalWrites = service.calls.size
+        holder.retry.retry()
+        scheduler.runCurrent()
+        assertEquals(2, store.calls.size)
+        assertEquals(originalWrites + 1, service.calls.size)
+        assertTrue(replacement.calls.isEmpty(), "Retry must retain the original service")
+        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
+    }
 
     @Test
     fun `starts on the preset the radio matches and refreshes self info once`() {

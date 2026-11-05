@@ -128,6 +128,8 @@ class ConnectionManagerAppPort(
     override fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken) = editor.updateOCVSettings(device, expectedToken)
     override fun updateAutoAddConfig(config: AutoAddConfig) { editor.updateAutoAddConfig(config) }
     override fun updateClientRepeat(enabled: Boolean) { editor.updateClientRepeat(enabled) }
+    override suspend fun updateClientRepeat(enabled: Boolean, expectedToken: SessionToken): Boolean =
+        editor.updateClientRepeat(enabled, expectedToken)
     override fun updatePathHashMode(mode: UByte) { editor.updatePathHashMode(mode) }
     override suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
         editor.updatePathHashMode(mode, expectedToken)

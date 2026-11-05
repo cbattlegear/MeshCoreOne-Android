@@ -57,6 +57,8 @@ interface AppConnectionPort {
         throw UnsupportedOperationException("Session-bound OCV publication is not supported")
     fun updateAutoAddConfig(config: AutoAddConfig)
     fun updateClientRepeat(enabled: Boolean)
+    suspend fun updateClientRepeat(enabled: Boolean, expectedToken: SessionToken): Boolean =
+        throw UnsupportedOperationException("Session-bound Repeat updates are not supported")
     fun updatePathHashMode(mode: UByte)
     suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
         throw UnsupportedOperationException("Session-bound path hash updates are not supported")

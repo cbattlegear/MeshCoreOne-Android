@@ -46,6 +46,15 @@ internal class FakeStore : DeviceSettingsStorePort {
     }
     override fun savePreRepeatSettings() { calls += "savePreRepeat" }
     override fun clearPreRepeatSettings() { calls += "clearPreRepeat" }
+    var beforeRepeatEdit: suspend () -> Unit = {}
+    override suspend fun savePreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
+        beforeRepeatEdit()
+        savePreRepeatSettings()
+    }
+    override suspend fun clearPreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
+        beforeRepeatEdit()
+        clearPreRepeatSettings()
+    }
     override fun addKnownRegion(region: String) { calls += "add($region)" }
     override fun removeKnownRegion(region: String) { calls += "remove($region)" }
 }

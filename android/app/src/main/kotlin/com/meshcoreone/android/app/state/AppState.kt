@@ -536,7 +536,9 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             try {
                 subscription.events.collect { wrapped ->
                     when (val event = wrapped.event) {
-                        is SettingsEvent.DeviceUpdated -> connection.updateDevice(event.info, event.appliedRadioPresetID)
+                        is SettingsEvent.DeviceUpdated -> persistSessionRadioEdit("radio settings") {
+                            connection.updateDevice(event.info, event.appliedRadioPresetID, wrapped.token)
+                        }
                         is SettingsEvent.AutoAddConfigUpdated -> {
                             connection.updateAutoAddConfig(event.config)
                             // Clear the storage-full flag when overwrite-oldest is enabled.
@@ -544,7 +546,9 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                                 connectionUI.isNodeStorageFull = false
                             }
                         }
-                        is SettingsEvent.ClientRepeatUpdated -> connection.updateClientRepeat(event.enabled)
+                        is SettingsEvent.ClientRepeatUpdated -> persistSessionRadioEdit("client repeat") {
+                            connection.updateClientRepeat(event.enabled, wrapped.token)
+                        }
                         is SettingsEvent.PathHashModeUpdated -> connection.updatePathHashMode(event.mode)
                         is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges)
                         is SettingsEvent.DefaultFloodScopeUpdated -> connection.updateDefaultFloodScopeName(event.name)
@@ -554,6 +558,16 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                 subscription.close()
             }
         })
+    }
+
+    private suspend fun persistSessionRadioEdit(operation: String, edit: suspend () -> Boolean) {
+        try {
+            if (!edit()) logger.fine("Ignored $operation update from a retired session")
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.log(Level.WARNING, "Failed to persist $operation update", failure)
+        }
     }
 
     private fun wireDeviceUpdateCallbacks(session: AppSession) {

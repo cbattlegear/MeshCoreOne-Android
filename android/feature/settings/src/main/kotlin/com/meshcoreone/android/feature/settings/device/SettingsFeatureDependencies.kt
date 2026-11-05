@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.AdvertLocationPolicy
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RegionSelection
@@ -11,6 +12,8 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.AutoAddConfig
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /**
  * The connection facts the sections read (Swift `appState.connectedDevice`, `connectionState` and
@@ -19,9 +22,39 @@ import kotlinx.coroutines.flow.StateFlow
 interface SettingsConnection {
     val connectedDevice: StateFlow<DeviceDTO?>
     val connectionState: StateFlow<DeviceConnectionState>
+    val deviceObservations: Flow<SettingsDeviceObservation>
+        get() = connectedDevice.map { SettingsDeviceObservation(it) }
 
     /** `appState.canRunSettingsStartupReads`: false while contact/channel sync still contends for the radio. */
     val startupReadsAllowed: StateFlow<Boolean>
+}
+
+data class SettingsDeviceObservation(val device: DeviceDTO?, val sessionToken: SessionToken? = null)
+
+internal data class SettingsRadioTarget(val device: DeviceDTO, val service: SettingsRadioPort, val token: SessionToken?) {
+    fun requireCurrent(device: DeviceDTO?, token: SessionToken?) {
+        if (this.token != token || device == null ||
+            (token != null && (device.id != this.device.id || device.radioId != token.radioId))
+        ) throw SettingsNotConnectedException()
+    }
+
+    fun currentDevice(observedDevice: DeviceDTO?, observedToken: SessionToken?): DeviceDTO {
+        requireCurrent(observedDevice, observedToken)
+        val current = if (token == null) requireNotNull(observedDevice) else service.currentDevice(token)
+        requireCurrent(current, token)
+        return current
+    }
+
+    companion object {
+        fun capture(
+            renderedToken: SessionToken?, device: DeviceDTO?, observedToken: SessionToken?, service: SettingsRadioPort?,
+        ): SettingsRadioTarget {
+            if (service == null || device == null || observedToken != renderedToken || service.sessionToken != renderedToken ||
+                (renderedToken != null && device.radioId != renderedToken.radioId)
+            ) throw SettingsNotConnectedException()
+            return SettingsRadioTarget(device, service, renderedToken)
+        }
+    }
 }
 
 /** Device GPS capability and switch (mirror of `core:services` `DeviceGPSState`). */
@@ -33,10 +66,14 @@ data class DeviceGpsState(val isSupported: Boolean, val isEnabled: Boolean)
  * `RadioPreset` lives in core:services. Failures stay `SettingsServiceException` (core:contracts).
  */
 interface SettingsRadioPort {
+    val sessionToken: SessionToken? get() = null
+    fun currentDevice(expectedToken: SessionToken): DeviceDTO =
+        throw UnsupportedOperationException("Session-bound current radio device is not supported")
     suspend fun getSelfInfo(): SelfInfo
     suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
+        expectedDevice: DeviceDTO? = null,
     ): SelfInfo
     suspend fun setTxPowerVerified(power: Byte): SelfInfo
     suspend fun applyRadioPresetVerified(presetId: String): SelfInfo
@@ -150,6 +187,12 @@ interface DeviceSettingsStorePort {
     suspend fun updateOcvSettings(deviceId: java.util.UUID, preset: String, customArray: String?)
     fun savePreRepeatSettings()
     fun clearPreRepeatSettings()
+    suspend fun savePreRepeatSettings(expectedToken: SessionToken?) {
+        throw UnsupportedOperationException("Awaited Repeat snapshots are not supported")
+    }
+    suspend fun clearPreRepeatSettings(expectedToken: SessionToken?) {
+        throw UnsupportedOperationException("Awaited Repeat snapshots are not supported")
+    }
     fun addKnownRegion(region: String)
     fun removeKnownRegion(region: String)
 }

@@ -113,6 +113,7 @@ private fun PresetLocationSection(holders: RadioSettingsHolders, navigator: Sett
 private fun RadioPresetSection(holders: RadioSettingsHolders) {
     val holder = holders.preset
     val state by holder.state.collectAsState()
+    val renderedToken = state.sessionToken
     val inFlight by holders.gate.inFlight.collectAsState()
     val connected = state.connectionState == DeviceConnectionState.READY
     val custom = res(AppSettingsStrings.batteryCurveCustom)
@@ -129,16 +130,16 @@ private fun RadioPresetSection(holders: RadioSettingsHolders) {
     }
     SettingsSection(res(AppSettingsStrings.radioHeader), footers) {
         DropdownRow(res(AppSettingsStrings.radioPreset), selectedName?.let { UiText.Verbatim(it) } ?: custom, options,
-            enabled = state.pickerEnabled(inFlight), onSelect = holder::onPresetSelected)
+            enabled = state.pickerEnabled(inFlight), onSelect = { holder.onPresetSelected(it, renderedToken) })
         if (state.supportsRepeatToggle) {
             RowDivider()
             SwitchRow(res(AppSettingsStrings.radioRepeatMode), state.isRepeatEnabled, state.repeatToggleEnabled(inFlight) && connected,
-                holder::onRepeatToggled, description = res(AppSettingsStrings.radioRepeatModeFooter))
+                { holder.onRepeatToggled(it, renderedToken) }, description = res(AppSettingsStrings.radioRepeatModeFooter))
         }
     }
     ConfirmDialog(
         state.showRepeatConfirmation, res(AppSettingsStrings.radioRepeatModeConfirmTitle), res(AppSettingsStrings.radioRepeatModeConfirmMessage),
-        res(AppSettingsStrings.radioRepeatModeConfirmEnable), holder::confirmEnableRepeatMode, holder::dismissRepeatConfirmation, destructive = false,
+        res(AppSettingsStrings.radioRepeatModeConfirmEnable), { holder.confirmEnableRepeatMode(renderedToken) }, holder::dismissRepeatConfirmation, destructive = false,
     )
     ErrorMessageDialog(state.errorMessage, holder::dismissError)
     RetryAlertDialog(holder.retry)

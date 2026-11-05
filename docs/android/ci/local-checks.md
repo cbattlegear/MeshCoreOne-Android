@@ -430,15 +430,17 @@ does not become JVM test evidence.
 
 Affected and full selection explicitly request `:platform:notifications:testDebugUnitTest`.
 Its existing JUnit and compiled-source collectors must discover every declared
-remapped test method, including new candidate methods, plus the six mandatory
-delivery/payload/dispatcher identities. Missing, zero, substituted or skipped
-cases fail. The exact candidate build, production, conventional test and approved
-remapped input blobs are recorded as `remapped_jvm_inputs` in the same run log.
-Tracked changes and untracked additions under those inputs are refused, and the
-actual compiled remapped Kotlin source inventory must exactly match candidate
-blobs. These are JVM/Robolectric observations, never API/device or notification
-trampoline evidence. A candidate verifier change cannot approve itself: trusted
-reader deployment and admission are separate from these source fixtures.
+remapped and conventional `src/test`/`src/testDebug` Kotlin test methods,
+including new candidate methods, plus the six mandatory delivery/payload/dispatcher
+identities. Missing, zero, substituted or skipped cases fail. Unsupported Java
+test sources fail closed. The exact candidate build, production, conventional test
+and approved remapped input blobs are recorded as `remapped_jvm_inputs` in the same
+run log. Tracked changes and untracked additions under those inputs are refused,
+and the actual compiled Kotlin test-source inventory must exactly match candidate
+blobs across both source roots. These are JVM/Robolectric observations, never
+API/device or notification trampoline evidence. A candidate verifier change
+cannot approve itself: trusted reader deployment and admission are separate from
+these source fixtures.
 
 Focused source-only remapping and selector regression command (no Gradle lock,
 runtime installation or device execution):

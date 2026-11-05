@@ -232,6 +232,54 @@ class NewTest { @Test fun newlyRequired() {} }
         })
         self.assertEqual(check_module_tests(self.repo)["platform/notifications"]["passed"], 7)
 
+    def test_conventional_notification_case_is_mandatory_and_compiled_exactly(self):
+        self.notifications()
+        relative = "src/test/kotlin/com/meshcoreone/android/platform/notifications/messaging/AdapterTest.kt"
+        self.source("platform/notifications", relative, """
+package com.meshcoreone.android.platform.notifications.messaging
+import org.junit.Test
+class AdapterTest { @Test fun conventionalRequired() {} }
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "conventional notification test")
+        source = "android/platform/notifications/" + relative
+        inputs = module_sources(self.repo)["platform/notifications"]
+        self.assertIn(source, inputs)
+        with self.assertRaisesRegex(PortError, "conventionalRequired"):
+            check_module_tests(self.repo)
+        notification_report(self.repo, NOTIFICATION_CASES | {
+            ("com.meshcoreone.android.platform.notifications.messaging.AdapterTest", "conventionalRequired"),
+        })
+        self.assertEqual(check_module_tests(self.repo)["platform/notifications"]["passed"], 7)
+
+        compiled = {path: blob for path, blob in inputs.items() if path.endswith(".kt")}
+        expected = {"platform/notifications": inputs}
+        self.assertEqual(validate_remapped_compilation(
+            self.repo, {"platform/notifications": compiled}, ["platform/notifications"],
+        ), expected)
+        for actual in (
+            {path: blob for path, blob in compiled.items() if path != source},
+            {**compiled, source: "0" * 40},
+            {**compiled, source + "Extra.kt": "0" * 40},
+        ):
+            with self.subTest(actual=actual), self.assertRaisesRegex(PortError, "compilation"):
+                validate_remapped_compilation(
+                    self.repo, {"platform/notifications": actual}, ["platform/notifications"],
+                )
+
+        self.source("platform/notifications", relative, "changed after commit")
+        with self.assertRaisesRegex(PortError, "differ"):
+            check_module_tests(self.repo)
+
+    def test_unsupported_java_notification_test_input_fails_closed(self):
+        self.notifications()
+        relative = "src/test/java/com/meshcoreone/android/platform/notifications/messaging/AdapterTest.java"
+        self.source("platform/notifications", relative, "class AdapterTest {}")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "unsupported Java notification test")
+        with self.assertRaisesRegex(PortError, "Unsupported Java notification JVM test input"):
+            check_module_tests(self.repo)
+
     def test_actual_compilation_requires_exact_remapped_blobs_and_no_extra_sources(self):
         self.notifications()
         inputs = module_sources(self.repo)["platform/notifications"]

@@ -118,6 +118,19 @@ def check_module_inputs(repo, modules):
         raise PortError("Compiled module inputs differ from the immutable candidate")
 
 
+def _notification_jvm_test_sources(module, inputs):
+    prefix = f"android/{module}/"
+    roots = JVM_REMAPS[module]["roots"]
+    sources = {}
+    for path, blob in inputs.items():
+        if not path.startswith(prefix) or not unit_source(path[len(prefix):], roots):
+            continue
+        if not path.endswith(".kt"):
+            raise PortError("Unsupported Java notification JVM test input: " + path)
+        sources[path] = blob
+    return sources
+
+
 def require_remapped_cases(repo, module, directory, inputs):
     if module not in JVM_REMAPS:
         return
@@ -125,9 +138,7 @@ def require_remapped_cases(repo, module, directory, inputs):
     from .repair_acceptance import _kotlin_junit_methods
 
     required = set(NOTIFICATION_CASES)
-    for path, blob in inputs.items():
-        if not path.startswith(f"android/{module}/{NOTIFICATION_ROOT}/") or not path.endswith(".kt"):
-            continue
+    for path, blob in _notification_jvm_test_sources(module, inputs).items():
         classes = {}
         methods = _kotlin_junit_methods(
             git(repo, "cat-file", "blob", blob).decode("utf-8"), classes, reject_inherited=True,
@@ -147,16 +158,10 @@ def validate_remapped_compilation(repo, compiled_sources, modules):
     expected = module_sources(repo)
     check_module_inputs(repo, selected)
     for module in selected:
-        sources = {
-            path: blob for path, blob in expected.get(module, {}).items()
-            if path.startswith(f"android/{module}/{NOTIFICATION_ROOT}/") and path.endswith(".kt")
-        }
-        actual = {
-            path: blob for path, blob in compiled_sources.get(module, {}).items()
-            if path.startswith(f"android/{module}/{NOTIFICATION_ROOT}/")
-        }
+        sources = _notification_jvm_test_sources(module, expected.get(module, {}))
+        actual = _notification_jvm_test_sources(module, compiled_sources.get(module, {}))
         if not sources or actual != sources:
-            raise PortError("Actual JVM compilation omits/changes immutable remapped sources: " + module)
+            raise PortError("Actual JVM compilation omits/changes immutable notification test sources: " + module)
     return {module: expected[module] for module in sorted(selected)}
 
 

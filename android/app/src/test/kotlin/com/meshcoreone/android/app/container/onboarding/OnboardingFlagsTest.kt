@@ -36,6 +36,9 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlin.coroutines.CoroutineContext
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.IOException
@@ -250,6 +253,58 @@ class OnboardingFlagsTest {
             assertEquals(listOf(writeFailure), reported)
             assertFalse(flags.hasCompleted.value)
         } finally { release.complete(Unit); scope.cancel() }
+    }
+
+    @Test fun `shutdown entering during abandoned waiter dispatch waits for all cleanup`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val delegate = StandardTestDispatcher(testScheduler)
+        var duringCleanup: (() -> Unit)? = null
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                duringCleanup?.invoke()
+                delegate.dispatch(context, block)
+            }
+        }
+        var stopping: Deferred<Unit>? = null
+        var rejectedWaiters = 0
+        val flags = WriteBehindOnboardingFlags(
+            emptyMap(), scope, { _, _ ->
+                started.complete(Unit)
+                release.await()
+                throw CancellationException("active write cancelled")
+            },
+        )
+        try {
+            val active = async { runCatching { flags.persistBoolean("active", true) } }
+            started.await()
+            val queued = List(2) { index ->
+                async(dispatcher) { runCatching { flags.persistBoolean("queued $index", true) } }
+            }
+            runCurrent()
+            assertTrue(queued.none { it.isCompleted })
+            duringCleanup = {
+                rejectedWaiters++
+                if (stopping == null) stopping = async(start = CoroutineStart.UNDISPATCHED) { flags.shutdown() }
+                assertFalse("Shutdown must wait until every abandoned continuation is resumed", stopping!!.isCompleted)
+            }
+            release.complete(Unit)
+            duringCleanup = null
+            withTimeout(1_000) {
+                assertTrue(active.await().exceptionOrNull() is CancellationException)
+                queued.forEach { assertTrue(it.await().exceptionOrNull() is CancellationException) }
+                assertEquals(2, rejectedWaiters)
+                checkNotNull(stopping).await()
+                flags.shutdown()
+            }
+            assertFalse(flags.hasCompleted.value)
+        } finally {
+            duringCleanup = null
+            stopping?.cancel()
+            release.complete(Unit)
+            scope.cancel()
+        }
     }
 
     @Test fun `retirement during real staging remains incomplete on preference reload and can retry`() =

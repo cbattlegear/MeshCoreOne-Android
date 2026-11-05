@@ -174,11 +174,24 @@ class WriteBehindOnboardingFlags(
                     val pending = writes.toList()
                     writes.clear()
                     pendingCompletions.clear()
-                    (pending to drained).also { drained = CompletableDeferred(Unit) }
+                    pending to drained
                 }
                 try {
-                    wakeups.close(failure)
-                    abandoned.forEach { it.persisted?.resumeWithException(failure) }
+                    try {
+                        wakeups.close(failure)
+                    } finally {
+                        var cleanupFailure: Throwable? = null
+                        abandoned.forEach {
+                            try {
+                                it.persisted?.resumeWithException(failure)
+                            } catch (callbackFailure: Throwable) {
+                                val previous = cleanupFailure
+                                if (previous == null) cleanupFailure = callbackFailure
+                                else if (previous !== callbackFailure) previous.addSuppressed(callbackFailure)
+                            }
+                        }
+                        cleanupFailure?.let { throw it }
+                    }
                 } finally {
                     completion.complete(Unit)
                 }

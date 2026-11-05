@@ -4,6 +4,8 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.PersistenceKeys
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.MessageSentInfo
+import com.meshcoreone.android.core.protocol.event.TraceInfo
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.runtime.RuntimePreferenceSnapshot
@@ -17,6 +19,10 @@ import com.meshcoreone.android.feature.tools.trace.TraceDiagnostics
 import com.meshcoreone.android.feature.tools.trace.TracePathFeatureDependencies
 import com.meshcoreone.android.feature.tools.trace.TracePathStateHolder
 import com.meshcoreone.android.feature.tools.trace.TracePathStrings
+import com.meshcoreone.android.feature.tools.trace.TraceSender
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -25,13 +31,154 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class TraceSessionLifetimeTest : RoomProcessTest() {
+    @Test
+    fun sameRadioMutationAcceptedBeforePublicationMayFinishAgainstItsOriginalKey() =
+        mutationAcceptanceBoundary(crossRadio = false)
+
+    @Test
+    fun saveAcceptedBeforeDifferentRadioPublicationNeverUsesTheReplacementRadio() =
+        mutationAcceptanceBoundary(crossRadio = true)
+
+    private fun mutationAcceptanceBoundary(crossRadio: Boolean) = runTest {
+        val memory = MemoryConnectionPreferences()
+        val holdPublication = AtomicBoolean()
+        val publicationReached = CompletableDeferred<Unit>()
+        val releasePublication = CompletableDeferred<Unit>()
+        val preferences = object : ProcessConnectionPreferences by memory {
+            override suspend fun update(
+                transform: (MutableMap<String, RuntimePreferenceValue>) -> Unit,
+            ): RuntimePreferenceSnapshot {
+                val next = memory.read().values.toMutableMap()
+                var writesLastConnection = false
+                val tracking = object : MutableMap<String, RuntimePreferenceValue> by next {
+                    override fun put(key: String, value: RuntimePreferenceValue): RuntimePreferenceValue? {
+                        if (key == PersistenceKeys.LAST_CONNECTED_DEVICE_NAME) writesLastConnection = true
+                        return next.put(key, value)
+                    }
+                }
+                transform(tracking)
+                if (writesLastConnection && holdPublication.compareAndSet(true, false)) {
+                    publicationReached.complete(Unit)
+                    releasePublication.await()
+                }
+                return memory.update { it.clear(); it.putAll(next) }
+            }
+        }
+        var replacing = false
+        val h = ContainerHarness(this, store, identity = { if (replacing && crossRadio) key(9) else key(7) },
+            preferencesOverride = preferences)
+        val releaseTokenRead = CountDownLatch(1)
+        val worker = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val holderScope = CoroutineScope(SupervisorJob() + worker)
+        try {
+            val target = h.target()
+            h.manager.connect(target)
+            h.settle()
+            h.assertReady()
+            val recents = object : RecentHopsStorage {
+                override fun stringList(key: String): List<String>? = null
+                override fun setStringList(key: String, value: List<String>) = Unit
+            }
+            val actual = h.container.createToolsFeatureDependencies(
+                recents, h.container.createToolsDiagnosticsDependencies(),
+            ).trace
+            val oldToken = assertNotNull(actual.sessionToken())
+            val version = h.appState.servicesVersion.value
+            val holdTokenRead = AtomicBoolean()
+            val tokenRead = CompletableDeferred<Unit>()
+            var tag = 0u
+            val feature = object : TracePathFeatureDependencies by actual {
+                override fun sessionToken(): com.meshcoreone.android.core.contracts.domain.SessionToken? {
+                    val captured = actual.sessionToken()
+                    if (holdTokenRead.compareAndSet(true, false)) {
+                        tokenRead.complete(Unit)
+                        check(releaseTokenRead.await(30, TimeUnit.SECONDS)) { "Publication control did not release token read" }
+                    }
+                    return captured
+                }
+                override fun traceSender() = TraceSender { sentTag, _, _, _ ->
+                    tag = sentTag
+                    MessageSentInfo(0u, Bytes.EMPTY, 0u)
+                }
+            }
+            val path = store.createSavedTracePath(oldToken.radioId, "Accepted A mutation", Bytes.of(0xAA), 1, null)
+            val untouched = store.createSavedTracePath(oldToken.radioId, "Stale A callback", Bytes.of(0xBB), 1, null)
+            val diagnostics = TraceDiagnostics { _, error -> throw AssertionError(error) }
+            val saved = SavedPathsStateHolder(SavedCopy, diagnostics)
+            val trace = TracePathStateHolder(holderScope, SystemTraceTimeSource, Copy, recents, diagnostics)
+            withContext(worker) {
+                saved.configure(object : SavedPathsDependencies {
+                    override fun sessionToken() = feature.sessionToken()
+                    override fun connectedDevice() = feature.connectedDevice()
+                    override fun savedPaths() = feature.savedPaths()
+                })
+                saved.loadSavedPaths()
+                trace.configure(feature)
+                trace.bindConnection(oldToken.radioId, version)
+                trace.loadSavedPath(path)
+                trace.runTrace()
+                trace.handleTraceResponse(TraceInfo(tag, 0u, 0u, 0u, emptyList()), oldToken.radioId)
+                assertTrue(assertNotNull(trace.state.value.result).success)
+            }
+            holdTokenRead.set(true)
+            val accepted = backgroundScope.async(worker) {
+                if (crossRadio) trace.savePath("Accepted A result") else saved.deletePath(path)
+            }
+            h.eventually("A action token read") { tokenRead.isCompleted }
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.settle()
+            replacing = true
+            holdPublication.set(true)
+            val replacementTarget = if (crossRadio) h.target() else target
+            val reconnect = backgroundScope.async { h.manager.connect(replacementTarget) }
+            h.eventually("B device published before A action continues") { publicationReached.isCompleted }
+            val newToken = assertNotNull(actual.sessionToken())
+            assertNotEquals(oldToken, newToken)
+            assertEquals(version, h.appState.servicesVersion.value)
+            assertEquals(newToken.radioId, actual.connectedDevice()?.radioId)
+            assertEquals(crossRadio, oldToken.radioId != newToken.radioId)
+            releaseTokenRead.countDown()
+            h.eventually("accepted A action finished") { accepted.isCompleted }
+            assertTrue(accepted.await())
+            if (crossRadio) {
+                assertEquals(1, store.fetchSavedTracePaths(oldToken.radioId).count { it.name == "Accepted A result" })
+                assertFalse(store.fetchSavedTracePaths(newToken.radioId).any { it.name == "Accepted A result" })
+            } else {
+                assertNull(store.fetchSavedTracePath(EntityKey(oldToken.radioId, path.id)))
+            }
+            withContext(worker) {
+                assertFalse(saved.deletePath(untouched), "A callback first invoked after B publication is not accepted")
+                trace.loadSavedPath(untouched)
+                assertNull(trace.state.value.activeSavedPath)
+                assertFalse(trace.savePath("Stale B result"))
+            }
+            assertNotNull(store.fetchSavedTracePath(EntityKey(oldToken.radioId, untouched.id)))
+            releasePublication.complete(Unit)
+            h.eventually("new connection ready") { reconnect.isCompleted }
+            reconnect.await()
+            h.settle()
+            h.assertReady()
+        } finally {
+            releaseTokenRead.countDown()
+            releasePublication.complete(Unit)
+            holderScope.cancel()
+            worker.close()
+            h.container.close()
+        }
+    }
+
     @Test
     fun sameRadioRegistryPublicationRejectsOldCallbacksBeforeServicesVersionChanges() = runTest {
         val memory = MemoryConnectionPreferences()

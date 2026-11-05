@@ -28,6 +28,26 @@ cancellation, hash-override reset, and preservation of the auto-return setting.
 
 ## Checks and execution status
 
+Earlier frozen diagnostic updates (not acceptance of the authority-boundary successor):
+exact `bd0929a529eb7d660ccad24baa134bd43233e4a2`, full run
+[42000049311](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42000049311),
+passed all six jobs. Original hosted discovery reports 747/747 tools and 2001/2001 app
+cases passing, zero failures/errors/skips; candidate-compiled discovery includes mounted48,
+execution34, batch-card4, saved-list13 and the actual AppContainer boundary control.
+Exact `22ecb4e453a0122e4f36b7c025b52ae626427c0d`, run
+[42001677036](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42001677036),
+failed `ChatMapPreviewTest.sharedLoadingFailureAndRetryReachBothCardsWithoutDuplicateRenders[31]`
+at line412 (app2001, one failure). That held unrelated control is unchanged; no passing
+aggregate or timeout-successor acceptance is inferred.
+
+The next successor adds token-read-to-publication AppContainer/Room controls for an accepted
+same-radio deletion and different-radio save. Accepted A operations retain immutable A keys;
+callbacks first invoked after B reject. Save captures the radio before token acceptance.
+A holder dispatch control also checks that accepted sender/radio/hash flags remain captured
+when B publishes at the last pre-send token read. Source declarations and source reasoning
+are not runtime reproduction: these additions require fresh exact-candidate execution and
+review, and integration remains held pending that evidence.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

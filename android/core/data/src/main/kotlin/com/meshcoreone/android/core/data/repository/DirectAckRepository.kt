@@ -7,7 +7,8 @@ import com.meshcoreone.android.core.model.*
 import java.util.UUID
 
 internal class DirectAckRepository(private val context: RoomRepositoryContext) :
-    DirectAckAuthority, DirectPendingCompletionAuthority, DirectAckRadioExclusionAuthority {
+    DirectAckAuthority, DirectPendingCompletionAuthority, DirectAckRadioExclusionAuthority,
+    DirectAckRadioConfirmationEvidenceInspecting {
     private data class Lease(val issuer: UUID, val token: SessionToken, val request: UUID) : DirectAckLease
     private data class Attempt(val lease: Lease, val request: UUID) : DirectAckAttempt
     private data class Intent(val lease: Lease, val request: UUID) : DirectAckIntent
@@ -434,6 +435,18 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         if (contradictory) DirectAckEmissionMutationResult.Conflict(emissionReceipt(updated))
         else DirectAckEmissionMutationResult.Applied(emissionReceipt(updated))
     }
+
+    override suspend fun inspectDirectAckRadioConfirmationEvidence(radioId: RadioId): DirectAckRadioConfirmationEvidence =
+        context.read("inspectDirectAckRadioConfirmationEvidence") {
+            val row = database.directAckExclusions().confirmationEvidence(radioId.value)
+            val reasons = linkedSetOf<DirectAckRadioConfirmationWildcardReason>()
+            if (row.unresolvedPhysicalEmission) reasons += DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION
+            if (row.conflictingPhysicalEvidence) reasons += DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE
+            if (row.untrackedLegacyAncestry) reasons += DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY
+            if (row.stickySaturation) reasons += DirectAckRadioConfirmationWildcardReason.STICKY_SATURATION
+            if (reasons.isEmpty()) DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radioId)
+            else DirectAckRadioConfirmationEvidence.PersistedWildcard(radioId, reasons.snapshotSet())
+        }
 
     override suspend fun inspectDirectAckRadioEvidence(radioId: RadioId): DirectAckRadioEvidenceObservation =
         transaction("inspectDirectAckRadioEvidence") {

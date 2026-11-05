@@ -28,8 +28,34 @@ data class DirectAckRadioExclusionEntity(
     val saturated: Boolean,
 )
 
+data class DirectAckRadioConfirmationRow(
+    val unresolvedPhysicalEmission: Boolean,
+    val conflictingPhysicalEvidence: Boolean,
+    val untrackedLegacyAncestry: Boolean,
+    val stickySaturation: Boolean,
+)
+
 @Dao
 interface DirectAckExclusionDao {
+    @Query("""
+        SELECT
+            EXISTS(SELECT 1 FROM direct_ack_emissions
+                WHERE radioId = :radio
+                  AND (state NOT IN ('ACCEPTED','DEFINITELY_UNSENT','CONFLICT','CONFLICT_UNSENT')
+                    OR (state = 'ACCEPTED' AND actualCode IS NULL))) AS unresolvedPhysicalEmission,
+            EXISTS(SELECT 1 FROM direct_ack_emissions
+                WHERE radioId = :radio AND state IN ('CONFLICT','CONFLICT_UNSENT')) AS conflictingPhysicalEvidence,
+            EXISTS(SELECT 1 FROM direct_ack_wires w
+                WHERE w.radioId = :radio AND NOT EXISTS(
+                    SELECT 1 FROM direct_ack_operations o
+                    WHERE o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
+                      AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
+                      AND o.maximum = 1 AND o.pendingId IS NULL)) AS untrackedLegacyAncestry,
+            EXISTS(SELECT 1 FROM direct_ack_radio_exclusions
+                WHERE radioId = :radio AND saturated != 0) AS stickySaturation
+    """)
+    suspend fun confirmationEvidence(radio: UUID): DirectAckRadioConfirmationRow
+
     @Query("""
         SELECT * FROM direct_ack_emissions
         WHERE radioId = :radio AND claimId = :claim AND wireId = :wire AND markRequestId = :mark

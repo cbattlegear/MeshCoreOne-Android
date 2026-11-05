@@ -392,3 +392,58 @@ sealed interface DirectAckRadioSettlementReceipt {
     data class Applied(val receipt: DirectAckReceipt) : DirectAckRadioSettlementReceipt
     data class AlreadyApplied(val receipt: DirectAckReceipt) : DirectAckRadioSettlementReceipt
 }
+
+enum class DirectAckRadioConfirmationWildcardReason {
+    UNRESOLVED_PHYSICAL_EMISSION,
+    CONFLICTING_PHYSICAL_EVIDENCE,
+    UNTRACKED_LEGACY_ANCESTRY,
+    STICKY_SATURATION,
+}
+
+/**
+ * Complete persisted radio-wide wildcard observation at one atomic storage snapshot, not delivery
+ * eligibility, a grant, or a proof that known ACK-code collisions are absent. It may become stale
+ * immediately; settlement must independently validate its complete history and current grant.
+ */
+sealed interface DirectAckRadioConfirmationEvidence {
+    val radioId: RadioId
+
+    /** No persisted wildcard was observed in this snapshot; known code collisions may still exist. */
+    data class NoPersistedWildcard(
+        override val radioId: RadioId,
+    ) : DirectAckRadioConfirmationEvidence
+
+    data class PersistedWildcard(
+        override val radioId: RadioId,
+        val reasons: SnapshotSet<DirectAckRadioConfirmationWildcardReason>,
+    ) : DirectAckRadioConfirmationEvidence {
+        init {
+            require(reasons.isNotEmpty()) { "Persisted wildcard evidence requires at least one reason" }
+        }
+    }
+}
+
+/**
+ * Optional read-only capability, separate from settlement and diagnostic sampling. A missing
+ * capability must be surfaced as unavailable, never as NoPersistedWildcard or an empty history.
+ * Storage failures and cancellation propagate unchanged through existing typed failure paths.
+ * There is no default implementation, grant/handle issuance, authority renewal or mutation.
+ */
+interface DirectAckRadioConfirmationEvidenceInspecting {
+    /**
+     * Return the exact requested radio and every applicable typed wildcard reason from its complete
+     * persisted history in one atomic read transaction, including retired leases and generations.
+     * MAY_HAVE_WRITTEN/unresolved physical emissions, physical evidence conflicts, untracked legacy
+     * ancestry even with a known accepted code or later markers, and already-persisted sticky
+     * saturation must remain distinguishable. Known accepted and definitely-unsent physical rows
+     * alone are not wildcards; tracked-but-unmarked registered wires are not physical emissions.
+     *
+     * No sample, diagnostic row cap, synthetic excluded claim, lease/grant, generation filter or
+     * TTL may narrow this query. The read never creates/clears evidence or saturation. Absence of
+     * persisted wildcards does not establish per-code uniqueness, recipient delivery, message
+     * eligibility or permission to settle; this snapshot cannot replace atomic settlement.
+     */
+    suspend fun inspectDirectAckRadioConfirmationEvidence(
+        radioId: RadioId,
+    ): DirectAckRadioConfirmationEvidence
+}

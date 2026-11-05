@@ -629,6 +629,44 @@ timing to establish transaction contention. The test is authored, not executed.
 This repair changes no schema/entity metadata and is frozen separately from
 the later optional complete-radio confirmation query.
 
+### Separate complete-radio confirmation snapshot (source-only)
+
+The separately authored canonical optional read capability from
+`78336196243c9de8e2f28a11a0817186e1bff80d` is imported exactly, Git blob
+`e5c9bfd74d529c1524dbdb6469643859dc44141b`. The implementation is separate
+from the bounded-receipt repair and does not change atomic settlement.
+`inspectDirectAckRadioConfirmationEvidence(radioId)` runs one four-EXISTS
+SQL aggregate across emissions, legacy wires/provenance and saturation inside
+`RoomRepositoryContext.read`, which uses a real Room transaction. Every
+applicable reason is retained; no row sample, claim sentinel, generation
+filter, lease, grant, handle, TTL or authority mutation is involved.
+
+The optional capability reports the exact requested radio. Known accepted
+and definitely-unsent physical history alone is not a wildcard; untracked
+ancestry remains wildcard even with accepted metadata. Unknown physical
+states and accepted rows missing actual codes conservatively report unresolved
+physical evidence. A NoPersistedWildcard result is only the complete atomic
+snapshot's absence of wildcard evidence, never code uniqueness, delivery
+eligibility, permission, or a guarantee of continued freshness.
+
+`DirectAckRadioConfirmationPersistenceTest` contains seven authored real Room
+controls: known-code collision without wildcard; all four typed reasons and
+radio isolation with unchanged storage; distinct conflict/unresolved reasons;
+an unknown physical row deliberately outside the diagnostic cap; original
+MAY evidence after actual file reopen without adopting a grant/handle;
+two ordinary same-file handles with a held multi-table transition, explicit
+SQLite BUSY negative control, committed aggregate and rollback isolation;
+and typed SQL/closed-store failures plus cancellation instead of all-clear.
+They have not compiled or executed under the local execution hold.
+No new schema/entity metadata is introduced.
+
+This suspend snapshot is not a live invalidation/observation stream. Current
+`MeshCoreDatabase.open` does not enable multi-instance invalidation; a
+single-instance Room Flow is not evidence that a different handle's commits
+are observed. Cross-handle/raw-writer observation and UI refresh semantics are
+being coordinated separately. No stream, synchronous freshness, App integration,
+accessible live warning, or runtime acceptance is claimed by this snapshot.
+
 ### Separate accepted-code mismatch repair
 
 This successor is based on the fixture-only `94af032ee0a7bbe21fee822c86f63edac8745187`

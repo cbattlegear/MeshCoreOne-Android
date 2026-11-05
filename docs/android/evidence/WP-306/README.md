@@ -271,7 +271,9 @@ Intended controls, not execution results:
   resource-backed recipient labels and activates both through the mounted App
   conversation. Mail actions reuse the existing localized `Open Link: %1$s`
   label rather than exposing indistinguishable `Open Link` actions. Quoted-link,
-  internal-apostrophe and balanced-subject controls preserve the intended URI.
+  internal-apostrophe, square-bracket wrapper and balanced-subject controls
+  preserve the intended URI. Only unmatched closing parentheses/brackets are
+  removed; balanced subject punctuation remains part of the link.
 
 The App test is configured for Robolectric API31/37, not real Android hardware.
 No new local execution is claimed; the retained local execution-owner hold is

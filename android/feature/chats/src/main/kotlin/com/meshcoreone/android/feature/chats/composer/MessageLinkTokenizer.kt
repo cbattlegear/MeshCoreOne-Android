@@ -27,7 +27,8 @@ object MessageLinkTokenizer {
             var closingQuote = match.range.first > 0 && normalized[match.range.first - 1] == '\''
             while (url.isNotEmpty()) {
                 val last = url.last()
-                val unbalanced = last == ')' && url.count { it == '(' } < url.count { it == ')' }
+                val opening = when (last) { ')' -> '('; ']' -> '['; else -> null }
+                val unbalanced = opening != null && url.count { it == opening } < url.count { it == last }
                 if (last in ".,;:!" || unbalanced) url = url.dropLast(1)
                 else if (last == '\'' && closingQuote) {
                     url = url.dropLast(1)

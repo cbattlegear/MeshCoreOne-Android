@@ -37,11 +37,15 @@ class ChatMailtoPolicyTest {
         val mail = "mailto:test@example.com?subject=Hi%20Mesh"
         assertEquals(listOf(mail), MessageTextFormatter.format("($mail).").links)
         assertEquals(listOf(mail), MessageTextFormatter.format("Contact '$mail'.").links)
+        assertEquals(listOf(mail), MessageTextFormatter.format("[$mail]").links)
+        assertEquals(listOf(mail), MessageTextFormatter.format("[($mail)].").links)
         val apostrophe = "mailto:o'brien@example.com?subject=O'Brien"
         assertEquals(listOf(apostrophe), MessageTextFormatter.format(apostrophe).links)
         assertEquals(listOf(apostrophe), MessageTextFormatter.format("'$apostrophe'.").links)
         val balanced = "mailto:test@example.com?subject=Meeting(Ops)"
         assertEquals(listOf(balanced), MessageTextFormatter.format("($balanced).").links)
+        val brackets = "mailto:test@example.com?subject=Meeting[Ops]"
+        assertEquals(listOf(brackets), MessageTextFormatter.format("[$brackets]").links)
         assertEquals(listOf("https://example.com/mailto:test@example.com"),
             MessageTextFormatter.format("https://example.com/mailto:test@example.com").links)
         assertEquals(emptyList(), MessageTextFormatter.format("test@example.com").links)

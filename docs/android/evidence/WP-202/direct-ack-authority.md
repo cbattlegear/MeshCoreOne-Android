@@ -277,3 +277,12 @@ the erasure; injected typed failure and cancellation restore exact history rows
 and current permission. All paths preserve the ordinary message and pending
 rows. This companion avoids treating a manually simulated skip as importer
 execution; it too remains authored rather than executed evidence.
+
+The overlay-free predecessor run 41965047472 failed `core:data` with 642 tests,
+one failure in the multi-route erasure control; `core:database` reported 52/52.
+The fixture supplied preview blobs to generic `saveMessage`, but the existing
+`MessageDTO.toEntity` deliberately stores those fields as null. The shared
+authority test setup now uses the supported `updateMessageLinkPreview` before
+intent capture to persist real blobs, preserving its original full-DTO equality
+and SQL-column erasure assertions. No production mapping or oracle is changed.
+This fix is source-derived from the real mapping; successor execution is pending.

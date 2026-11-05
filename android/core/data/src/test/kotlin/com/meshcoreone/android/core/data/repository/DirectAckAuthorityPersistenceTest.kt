@@ -76,6 +76,10 @@ class DirectAckAuthorityPersistenceTest {
     ): Claim {
         val issued = lease ?: activate(target)
         target.saveMessage(row)
+        if (row.linkPreviewImageData != null || row.linkPreviewIconData != null || row.linkPreviewFetched) {
+            target.updateMessageLinkPreview(entity(id = row.id), row.linkPreviewURL, row.linkPreviewTitle,
+                row.linkPreviewImageData, row.linkPreviewIconData, row.linkPreviewFetched)
+        }
         val request = UUID.randomUUID()
         val wire = UUID.randomUUID()
         val capture = assertIs<DirectAckIntentResult.Captured>(

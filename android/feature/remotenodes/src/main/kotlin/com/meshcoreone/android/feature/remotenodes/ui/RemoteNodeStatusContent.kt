@@ -147,7 +147,8 @@ internal fun RemoteNodeStatusContent(
                     NeighborRows.disappeared(repeaterState.neighbors, state.previousNeighborSnapshot, repeaterState.neighborKeyDisplayByteCount, context).forEach { row ->
                         key(row.entry.publicKeyPrefix) {
                             val name = remoteText(row.displayName)
-                            RemoteValue(name, stringResource(L.remoteNodesHistoryNotSeen))
+                            RemoteValue(name, remoteText(row.snrText))
+                            Text(stringResource(L.remoteNodesHistoryNotSeen))
                             if (row.matchKind == NodeNameMatchKind.FALLBACK) RemoteNodePossibleMatch(name)
                         }
                     }

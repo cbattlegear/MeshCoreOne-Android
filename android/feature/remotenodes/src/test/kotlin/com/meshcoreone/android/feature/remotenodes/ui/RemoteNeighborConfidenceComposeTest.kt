@@ -315,7 +315,7 @@ class RemoteNeighborConfidenceComposeTest {
         val node = session().copy(id = UUID(0, 1))
         val clock = VirtualClock()
         val gone = listOf(
-            NeighborSnapshotEntry(Bytes.of(0x40), 2.0, 60),
+            NeighborSnapshotEntry(Bytes.of(0x40), -2.5, 60),
             NeighborSnapshotEntry(Bytes.of(0x50), 3.0, 60),
             NeighborSnapshotEntry(Bytes.of(0x60), 4.0, 60),
         )
@@ -424,6 +424,22 @@ class RemoteNeighborConfidenceComposeTest {
             compose.onNodeWithContentDescription("$name, $label").assertDoesNotExist()
         }
         compose.onAllNodesWithText(text(L.remoteNodesHistoryNotSeen)).assertCountEquals(3)
+        listOf("Gone Alpha" to "-2.5", "Exact gone" to "3.0", "60" to "4.0").forEachIndexed { index, (name, previousSnr) ->
+            val snrText = L.remoteNodesStatusSnrFormat(activity.get().resources, previousSnr)
+            compose.onAllNodesWithText(snrText).assertCountEquals(1)
+            val rowSnr = compose.onNodeWithText(snrText)
+            rowSnr.performScrollTo().assertIsDisplayed()
+            val nameBounds = compose.onNodeWithText(name).fetchSemanticsNode().boundsInRoot
+            val snrBounds = rowSnr.fetchSemanticsNode().boundsInRoot
+            val notSeenBounds = compose.onAllNodesWithText(text(L.remoteNodesHistoryNotSeen))[index]
+                .fetchSemanticsNode().boundsInRoot
+            assertTrue(snrBounds.top >= nameBounds.bottom)
+            assertTrue(snrBounds.bottom <= notSeenBounds.top)
+            val layouts = mutableListOf<TextLayoutResult>()
+            rowSnr.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+            assertEquals(fontScale, layouts.single().layoutInput.density.fontScale, 0f)
+            assertFalse(layouts.single().hasVisualOverflow)
+        }
         compose.onAllNodesWithText(text(L.remoteNodesHistoryNew)).assertCountEquals(3)
         val snr = L.remoteNodesStatusSnrFormat(activity.get().resources, "5.5")
         val lastSeen = L.remoteNodesStatusSecondsAgo(activity.get().resources, 30)

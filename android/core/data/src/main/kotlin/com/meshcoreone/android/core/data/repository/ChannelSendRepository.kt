@@ -11,12 +11,19 @@ internal data class ChannelSendLease(val issuer: UUID, val token: SessionToken, 
 internal class ChannelSendRepository(
     private val context: RoomRepositoryContext,
     private val directAcks: DirectAckRepository,
-) : ChannelFailureAuthority {
+) : ChannelFailureAuthority, ChannelSendCompletionAuthority {
     private data class Attempt(
         val lease: ChannelSendLease,
         val capture: UUID,
         val version: Long,
     ) : ChannelFailureAttempt
+
+    private data class Completion(
+        val lease: ChannelSendLease,
+        val capture: UUID,
+        val request: UUID,
+        val version: Long,
+    ) : ChannelSendCompletion
 
     override suspend fun activateChannelFailureSession(
         token: SessionToken,
@@ -153,6 +160,9 @@ internal class ChannelSendRepository(
                 handle.copy(version = previous.outputVersion), receipt(captured, handle.lease),
             )
         }
+        if (dao.completion(captured.radioId, captured.captureRequestId) != null) {
+            return@transaction ChannelFailureRemapResult.Rejected(DirectAckRejection.CONFLICT)
+        }
         rejection(permission(captured, handle.lease))?.let {
             return@transaction ChannelFailureRemapResult.Rejected(it)
         }
@@ -199,6 +209,9 @@ internal class ChannelSendRepository(
             }
             return@transaction ChannelFailureResult.AlreadyApplied(receipt(captured, handle.lease))
         }
+        if (dao.completion(captured.radioId, captured.captureRequestId) != null) {
+            return@transaction ChannelFailureResult.Rejected(DirectAckRejection.CONFLICT)
+        }
         rejection(permission(captured, handle.lease))?.let {
             return@transaction ChannelFailureResult.Rejected(it)
         }
@@ -242,6 +255,162 @@ internal class ChannelSendRepository(
             return@transaction ChannelFailureObservation.Rejected(DirectAckRejection.CONFLICT)
         }
         ChannelFailureObservation.Found(receipt(captured, issued))
+    }
+
+    override suspend fun recordChannelSendCompleted(
+        attempt: ChannelFailureAttempt,
+        completionRequestId: UUID,
+        mode: ChannelSendCompletionMode,
+        acceptedTimestamp: UInt,
+    ): ChannelSendCompletionResult = transaction("recordChannelSendCompleted") {
+        val handle = issued(attempt)
+            ?: return@transaction ChannelSendCompletionResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        val dao = database.channelSends()
+        val capture = dao.attempt(handle.lease.token.radioId.value, handle.capture)
+            ?: return@transaction ChannelSendCompletionResult.Rejected(DirectAckRejection.MISSING)
+        if (capture.leaseId != handle.lease.request) {
+            return@transaction ChannelSendCompletionResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        val previous = dao.completion(capture.radioId, capture.captureRequestId)
+        if (previous != null) {
+            validate(previous, capture)
+            if (previous.completionRequestId != completionRequestId || previous.mode != mode.name ||
+                previous.acceptedTimestamp != acceptedTimestamp.toLong() || previous.inputVersion != handle.version
+            ) return@transaction ChannelSendCompletionResult.Rejected(DirectAckRejection.CONFLICT)
+            val observed = completionReceipt(capture, previous, handle.lease)
+            val current = observed.capture.permission == DirectAckPermission.CURRENT &&
+                previous.outputVersion == capture.version && previous.pendingCompletionRequestId == null
+            return@transaction ChannelSendCompletionResult.AlreadyApplied(
+                if (current) Completion(handle.lease, handle.capture, completionRequestId, previous.outputVersion) else null,
+                observed,
+            )
+        }
+        rejection(permission(capture, handle.lease))?.let {
+            return@transaction ChannelSendCompletionResult.Rejected(it)
+        }
+        if (handle.version != capture.version) {
+            return@transaction ChannelSendCompletionResult.Rejected(DirectAckRejection.INVALIDATED)
+        }
+        val row = currentMessage(capture)
+        if (row.statusRawValue == MessageStatus.DELIVERED.rawValue) {
+            return@transaction ChannelSendCompletionResult.AlreadyDelivered(receipt(capture, handle.lease))
+        }
+        if (row.timestamp != acceptedTimestamp.toLong()) {
+            return@transaction ChannelSendCompletionResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        val pending = capture.pendingId?.let {
+            dao.pending(capture.radioId, it) ?: invalidData("Current completion lost its captured pending")
+        }
+        val resend = mode == ChannelSendCompletionMode.RESEND
+        if (pending != null && pending.isResend != resend) {
+            return@transaction ChannelSendCompletionResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        val count = if (resend) checkedIncrement(row.sendCount) else row.sendCount
+        ownWrite(dao.complete(capture.radioId, capture.messageId, capture.messageIncarnation,
+            capture.messageRevision, acceptedTimestamp.toLong(), count, if (resend) 0 else row.heardRepeats))
+        val identity = advanced(capture)
+        if (resend) {
+            dao.deleteCompletionRepeats(capture.radioId, capture.messageId, identity.incarnation, identity.revision)
+        }
+        val next = capture.copy(messageRevision = identity.revision, version = checkedIncrement(capture.version))
+        ownWrite(dao.update(next))
+        val completed = ChannelSendCompletionEntity(capture.radioId, capture.captureRequestId, completionRequestId,
+            mode.name, acceptedTimestamp.toLong(), handle.version, next.version, null)
+        dao.insert(completed)
+        save()
+        ChannelSendCompletionResult.Applied(
+            Completion(handle.lease, handle.capture, completionRequestId, next.version),
+            completionReceipt(next, completed, handle.lease),
+        )
+    }
+
+    override suspend fun completeChannelSendPending(
+        completion: ChannelSendCompletion,
+        pendingCompletionRequestId: UUID,
+    ): ChannelSendPendingCompletionResult = transaction("completeChannelSendPending") {
+        val handle = (completion as? Completion)?.takeIf { it.lease.issuer == context.directAckIssuer }
+            ?: return@transaction ChannelSendPendingCompletionResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        val dao = database.channelSends()
+        val capture = dao.attempt(handle.lease.token.radioId.value, handle.capture)
+            ?: return@transaction ChannelSendPendingCompletionResult.Rejected(DirectAckRejection.MISSING)
+        val committed = dao.completion(capture.radioId, capture.captureRequestId)
+            ?: return@transaction ChannelSendPendingCompletionResult.Rejected(DirectAckRejection.MISSING)
+        validate(committed, capture)
+        if (capture.leaseId != handle.lease.request || committed.completionRequestId != handle.request ||
+            committed.outputVersion != handle.version
+        ) return@transaction ChannelSendPendingCompletionResult.Rejected(DirectAckRejection.CONFLICT)
+        if (committed.pendingCompletionRequestId != null) {
+            if (committed.pendingCompletionRequestId != pendingCompletionRequestId) {
+                return@transaction ChannelSendPendingCompletionResult.Rejected(DirectAckRejection.CONFLICT)
+            }
+            return@transaction ChannelSendPendingCompletionResult.AlreadyApplied(
+                completionReceipt(capture, committed, handle.lease),
+            )
+        }
+        rejection(permission(capture, handle.lease))?.let {
+            return@transaction ChannelSendPendingCompletionResult.Rejected(it)
+        }
+        if (capture.version != handle.version) {
+            return@transaction ChannelSendPendingCompletionResult.Rejected(DirectAckRejection.INVALIDATED)
+        }
+        val pendingId = capture.pendingId
+            ?: return@transaction ChannelSendPendingCompletionResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        ownWrite(dao.deletePending(capture.radioId, capture.messageId, pendingId,
+            requireNotNull(capture.pendingIncarnation), requireNotNull(capture.pendingRevision)))
+        val identity = advanced(capture)
+        val next = capture.copy(messageRevision = identity.revision, pendingDeleted = true, current = false)
+        ownWrite(dao.update(next))
+        val cleaned = committed.copy(pendingCompletionRequestId = pendingCompletionRequestId)
+        ownWrite(dao.update(cleaned))
+        save()
+        ChannelSendPendingCompletionResult.Applied(completionReceipt(next, cleaned, handle.lease))
+    }
+
+    override suspend fun inspectChannelSendCompletion(
+        lease: DirectAckLease,
+        captureRequestId: UUID,
+        completionRequestId: UUID,
+    ): ChannelSendCompletionObservation = transaction("inspectChannelSendCompletion") {
+        val issued = issued(lease)
+            ?: return@transaction ChannelSendCompletionObservation.Rejected(DirectAckRejection.INVALID_HANDLE)
+        val capture = database.channelSends().attempt(issued.token.radioId.value, captureRequestId)
+            ?: return@transaction ChannelSendCompletionObservation.Rejected(DirectAckRejection.MISSING)
+        if (capture.leaseId != issued.request) {
+            return@transaction ChannelSendCompletionObservation.Rejected(DirectAckRejection.CONFLICT)
+        }
+        validate(capture)
+        val committed = database.channelSends().completion(capture.radioId, captureRequestId)
+        if (committed == null) {
+            return@transaction ChannelSendCompletionObservation.NotRecorded(captureRequestId, completionRequestId)
+        }
+        validate(committed, capture)
+        if (committed.completionRequestId != completionRequestId) {
+            return@transaction ChannelSendCompletionObservation.Rejected(DirectAckRejection.CONFLICT)
+        }
+        ChannelSendCompletionObservation.Found(completionReceipt(capture, committed, issued))
+    }
+
+    private suspend fun RepositoryTransaction.completionReceipt(
+        capture: ChannelSendAttemptEntity,
+        completion: ChannelSendCompletionEntity,
+        lease: ChannelSendLease,
+    ): ChannelSendCompletionReceipt {
+        validate(completion, capture)
+        return ChannelSendCompletionReceipt(receipt(capture, lease), completion.completionRequestId,
+            ChannelSendCompletionMode.valueOf(completion.mode), completion.acceptedTimestamp.toUInt(),
+            completion.pendingCompletionRequestId)
+    }
+
+    private fun validate(completion: ChannelSendCompletionEntity, capture: ChannelSendAttemptEntity) {
+        if (completion.radioId != capture.radioId || completion.captureRequestId != capture.captureRequestId ||
+            ChannelSendCompletionMode.entries.none { it.name == completion.mode } ||
+            completion.acceptedTimestamp !in 0..UInt.MAX_VALUE.toLong() ||
+            completion.inputVersion < 0 || completion.inputVersion == Long.MAX_VALUE ||
+            completion.outputVersion != completion.inputVersion + 1 || completion.outputVersion != capture.version ||
+            (completion.pendingCompletionRequestId != null &&
+                (capture.pendingId == null || !capture.pendingDeleted || capture.current)) ||
+            (completion.pendingCompletionRequestId == null && capture.pendingDeleted)
+        ) invalidData("Malformed channel completion binding")
     }
 
     private fun issued(lease: DirectAckLease): ChannelSendLease? =

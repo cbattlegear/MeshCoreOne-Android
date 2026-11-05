@@ -40,6 +40,18 @@ data class ChannelSendOperationEntity(
     val outputVersion: Long,
 )
 
+@Entity(tableName = "channel_send_completions", primaryKeys = ["radioId", "captureRequestId"])
+data class ChannelSendCompletionEntity(
+    val radioId: UUID,
+    val captureRequestId: UUID,
+    val completionRequestId: UUID,
+    val mode: String,
+    val acceptedTimestamp: Long,
+    val inputVersion: Long,
+    val outputVersion: Long,
+    val pendingCompletionRequestId: UUID?,
+)
+
 @Dao
 interface ChannelSendDao {
     @Query("SELECT * FROM pending_sends WHERE radioId = :radio AND id = :id")
@@ -65,6 +77,37 @@ interface ChannelSendDao {
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertMessage(row: MessageEntity)
+
+    @Query("SELECT * FROM channel_send_completions WHERE radioId = :radio AND captureRequestId = :capture")
+    suspend fun completion(radio: UUID, capture: UUID): ChannelSendCompletionEntity?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(row: ChannelSendCompletionEntity)
+
+    @Update
+    suspend fun update(row: ChannelSendCompletionEntity): Int
+
+    @Query("""
+        UPDATE messages SET statusRawValue = 2, sendCount = :sendCount, heardRepeats = :heardRepeats
+        WHERE radioId = :radio AND id = :message
+          AND channelIndex BETWEEN 0 AND 255 AND contactID IS NULL AND directionRawValue = 1
+          AND statusRawValue != 3 AND timestamp = :timestamp
+          AND EXISTS(SELECT 1 FROM direct_ack_incarnations i
+                     WHERE i.radioId = :radio AND i.id = :message AND i.kind = 'message'
+                       AND i.incarnation = :incarnation AND i.revision = :revision)
+    """)
+    suspend fun complete(
+        radio: UUID, message: UUID, incarnation: String, revision: Long, timestamp: Long,
+        sendCount: Long, heardRepeats: Long,
+    ): Int
+
+    @Query("""
+        DELETE FROM message_repeats WHERE radioId = :radio AND messageID = :message
+          AND EXISTS(SELECT 1 FROM direct_ack_incarnations i
+                     WHERE i.radioId = :radio AND i.id = :message AND i.kind = 'message'
+                       AND i.incarnation = :incarnation AND i.revision = :revision)
+    """)
+    suspend fun deleteCompletionRepeats(radio: UUID, message: UUID, incarnation: String, revision: Long): Int
 
     @Query("""
         UPDATE messages SET timestamp = :timestamp
@@ -120,6 +163,13 @@ object ChannelSendStorage {
                 "radioId TEXT NOT NULL,captureRequestId TEXT NOT NULL,requestId TEXT NOT NULL,kind TEXT NOT NULL," +
                 "inputVersion INTEGER NOT NULL,outputVersion INTEGER NOT NULL," +
                 "PRIMARY KEY(radioId,captureRequestId,requestId))",
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS channel_send_completions (" +
+                "radioId TEXT NOT NULL,captureRequestId TEXT NOT NULL,completionRequestId TEXT NOT NULL," +
+                "mode TEXT NOT NULL,acceptedTimestamp INTEGER NOT NULL," +
+                "inputVersion INTEGER NOT NULL,outputVersion INTEGER NOT NULL,pendingCompletionRequestId TEXT," +
+                "PRIMARY KEY(radioId,captureRequestId))",
         )
     }
 

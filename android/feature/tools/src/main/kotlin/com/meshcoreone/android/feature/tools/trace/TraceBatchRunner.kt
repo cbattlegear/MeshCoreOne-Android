@@ -30,7 +30,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         val sender = holder.deps.traceSender() ?: return null
         val device = holder.deps.connectedDevice()
         val mode: UByte = holder.current.traceHashMode ?: device?.pathHashMode ?: 0u
-        if (!holder.isConnectionCurrent(device)) return null
+        if (!holder.isConnectionCurrent()) return null
         return Dispatch(sender, device?.radioId, mode)
     }
 
@@ -153,8 +153,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
     }
 
     fun handleTraceResponse(traceInfo: TraceInfo, radioId: RadioId?) {
-        val device = holder.deps.connectedDevice()
-        if (!holder.isConnectionCurrent(device)) return
+        if (!holder.isConnectionCurrent()) return
         if (traceInfo.tag != holder.pendingTag) return
         val pendingDevice = holder.pendingDeviceId
         if (pendingDevice != null && radioId != null && pendingDevice != radioId) return
@@ -163,9 +162,8 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         val durationMs = holder.traceStartTime?.let {
             java.time.Duration.between(it, holder.time.now()).toNanos() / 1_000_000
         } ?: 0L
-        val hops = holder.resolver().responseHops(traceInfo, device, holder.strings.myDevice)
-        val size = TraceHashModes.hashSize(holder.current.traceHashMode ?: device?.pathHashMode ?: 0u)
-        val result = TraceResult(hops, durationMs, true, null, holder.pendingPathHash ?: Bytes.EMPTY, size)
+        val hops = holder.resolver().responseHops(traceInfo, holder.deps.connectedDevice(), holder.strings.myDevice)
+        val result = TraceResult(hops, durationMs, true, null, holder.pendingPathHash ?: Bytes.EMPTY, holder.hashSize)
         if (holder.current.batchEnabled) {
             holder.update { it.copy(result = result, completedResults = it.completedResults + result) }
         } else {

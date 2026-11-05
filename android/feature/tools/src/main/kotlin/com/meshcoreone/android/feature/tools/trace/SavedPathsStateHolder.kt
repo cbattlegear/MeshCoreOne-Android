@@ -63,12 +63,8 @@ class SavedPathsStateHolder(
         isCurrentConnection(path.radioId) &&
             mutableState.value.savedPaths.any { it.id == path.id && it.radioId == path.radioId }
 
-    fun isCurrentConnection(radioId: RadioId): Boolean {
-        val deviceRadio = deps?.connectedDevice()?.radioId
-        val token = sessionToken
-        return active && deviceRadio == radioId && (token == null || token.radioId == radioId) &&
-            deps?.sessionToken() == token
-    }
+    fun isCurrentConnection(radioId: RadioId): Boolean =
+        active && deps?.sessionToken() == sessionToken && deps?.connectedDevice()?.radioId == radioId
 
     private fun isCurrent(operation: Long, radioId: RadioId): Boolean =
         operation == revision && isCurrentConnection(radioId)

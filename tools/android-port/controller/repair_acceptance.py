@@ -866,21 +866,30 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
 
 
 def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=False,
-                          inheritance=None, source_declarations=None, source_symbols=None):
+                          inheritance=None, source_declarations=None, source_symbols=None,
+                          java_source=False):
+    if java_source and (source_symbols is None or source_declarations is not None):
+        raise PortError("Java source scanning supports symbol indexing only")
+    language = "Java" if java_source else "Kotlin"
+
     def comment(index):
         if text.startswith("//", index):
             end = text.find("\n", index)
+            if java_source:
+                carriage = text.find("\r", index)
+                if carriage >= 0 and (end < 0 or carriage < end):
+                    end = carriage
             return len(text) if end < 0 else end
         depth, index = 1, index + 2
         while index < len(text) and depth:
-            if text.startswith("/*", index):
+            if not java_source and text.startswith("/*", index):
                 depth, index = depth + 1, index + 2
             elif text.startswith("*/", index):
                 depth, index = depth - 1, index + 2
             else:
                 index += 1
         if depth:
-            raise PortError("Unterminated Kotlin block comment in hosted test source")
+            raise PortError("Unterminated " + language + " block comment in hosted test source")
         return index
 
     def literal(index):
@@ -893,13 +902,13 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     while end < len(text) and text[end] == '"':
                         end += 1
                 return end
-            if text[index] == "\\" and quote != '"""':
+            if text[index] == "\\" and (java_source or quote != '"""'):
                 index += 2
-            elif text.startswith("${", index) and quote != "'":
+            elif not java_source and text.startswith("${", index) and quote != "'":
                 index = template(index + 2)
             else:
                 index += 1
-        raise PortError("Unterminated Kotlin literal in hosted test source")
+        raise PortError("Unterminated " + language + " literal in hosted test source")
 
     def template(index):
         depth = 1
@@ -918,8 +927,10 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             raise PortError("Unterminated Kotlin string template in hosted test source")
         return index
 
-    token = re.compile(r"`[^`\r\n]+`|[^\W\d]\w*|[^\s]")
-    identifier = re.compile(r"[^\W\d]\w*")
+    identifier = re.compile(r"(?:[^\W\d]|[$])[\w$]*" if java_source else r"[^\W\d]\w*")
+    token = re.compile(
+        identifier.pattern + r"|[^\s]" if java_source else r"`[^`\r\n]+`|[^\W\d]\w*|[^\s]"
+    )
 
     def name_token(value):
         return identifier.fullmatch(value) is not None or (
@@ -1198,6 +1209,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         "Implements": "org.robolectric.annotation.Implements",
         "NotificationManager": "android.app.NotificationManager",
         "ShadowNotificationManager": "org.robolectric.shadows.ShadowNotificationManager",
+        "Implementation": "org.robolectric.annotation.Implementation",
     }
     shadow_names = set(shadow_imports) | {"org", "android"}
     if (
@@ -1226,7 +1238,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     if notification_shadows and reject_inherited and inheritance is None:
         raise PortError("External Robolectric identity requires immutable candidate source proof")
     if notification_shadows and inheritance is not None:
-        for target in (*shadow_imports.values(), "org.robolectric.annotation.Implementation"):
+        for target in shadow_imports.values():
             inheritance({"external_non_junit": target}, True)
     # Keep these bodies in lexical inheritance checks; only their known external
     # lineage is non-JUnit, not their annotations or nested declarations.
@@ -1536,10 +1548,12 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 for source, blob in inventory.items():
                     if (
                         not isinstance(source, str)
-                        or not source.startswith("android/" + module + "/")
-                        or not source.endswith(".kt") or candidate_tree.get(source) != blob
+                        or not source.startswith("android/") or not source.endswith(".kt")
+                        or not isinstance(blob, str) or SHA.fullmatch(blob) is None
+                        or candidate_tree.get(source) != blob
                     ):
                         raise PortError("Stale or missing compiled Kotlin superclass source: " + str(source))
+                    git_path(source)
             symbols = set()
             for source, blob in candidate_tree.items():
                 if not source.endswith((".kt", ".java")):
@@ -1555,7 +1569,9 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                     raise PortError("External-identity source is not UTF-8") from error
                 if source.endswith(".java"):
                     text = re.sub(r"\\u+([0-9a-fA-F]{4})", lambda match: chr(int(match[1], 16)), text)
-                _kotlin_junit_methods(text, source_symbols=symbols)
+                _kotlin_junit_methods(
+                    text, source_symbols=symbols, java_source=source.endswith(".java"),
+                )
             external_sources = symbols
         return external_sources
 

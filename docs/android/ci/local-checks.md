@@ -423,7 +423,8 @@ the exact `@Implements(NotificationManager::class)` / `: ShadowNotificationManag
 shape and unaliased, unshadowed explicit Android/Robolectric imports. The external
 `org.robolectric.shadows.ShadowNotificationManager` in the pinned Robolectric 4.17
 is a shadow, not a JUnit superclass. This is not a general `@Implements` exemption.
-Only resolved `@Implementation` function annotations are admitted inside this
+Only `@Implementation` resolved through its exact unaliased canonical
+`org.robolectric.annotation.Implementation` import is admitted inside this
 collaborator; test/lifecycle/rule annotations, unknown or additional bases,
 aliases, ambiguous names, inherited enclosing classes and bodyless declarations
 remain fail-closed. Other nested inherited suites retain the existing checks.
@@ -433,9 +434,14 @@ modules, not just the selected Kotlin test compiler map. A declaration shadowing
 any of the four canonical Android/Robolectric identities or their package prefixes
 (including an object, interface, record, enum or type alias) rejects the exception,
 irrespective of its file path or whether the substitute declares tests. Java
-Unicode escapes are normalized before tokenization. Missing, stale or mismatched
-compiled/source blobs also fail; an unrelated same-simple-name declaration is not
-a collision. Approved JVM-remapped `src/androidTest` coverage uses this proof too.
+Unicode escapes are normalized before Java-aware tokenization: block comments
+do not nest, line comments end at CR or LF, and strings have no Kotlin templates.
+Missing, stale or mismatched compiled/source blobs also fail; an unrelated
+same-simple-name declaration is not a collision. Compiler maps are keyed by the
+executing module, not each source's physical directory: shared Kotlin inputs
+inside `android/` retain exact path/blob checks without directory containment.
+Ordinary superclass resolution retains its module-local scope. Approved
+JVM-remapped `src/androidTest` coverage uses this proof too.
 Unremapped native-only coverage cannot use this exception without that proof.
 This rejects repository-source ambiguity; it is not an execution of Kotlin's
 classpath resolver or proof about generated/external dependency bytes. Those

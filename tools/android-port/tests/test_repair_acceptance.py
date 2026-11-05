@@ -906,6 +906,100 @@ class RepairExecutionTests(unittest.TestCase):
                             scope, blobs, manifest.repo, executed, compiled,
                         )
 
+    def test_notification_shadow_rejects_lifecycle_and_rule_imported_as_implementation(self):
+        for annotation in ("Before", "After", "BeforeClass", "AfterClass", "Rule", "ClassRule"):
+            source = self.notification_shadow_source().replace(
+                "import org.robolectric.annotation.Implementation",
+                "import org.junit." + annotation + " as Implementation",
+            )
+            for whole in (False, True):
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(
+                    {TEST: source.encode()}, whole=whole,
+                )
+                with self.subTest(annotation=annotation, whole=whole), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaises(PortError):
+                    validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_notification_shadow_accepts_cross_directory_compiler_inputs_with_exact_blobs(self):
+        for whole in (False, True):
+            external = "android/accessibility-tests/src/shared/kotlin/Shared.kt"
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                TEST: self.notification_shadow_source().encode(),
+                external: b"package unrelated\nclass Shared {}",
+            }, whole=whole)
+            compiled["app"] = {external: compiled["core/maps"].pop(external)}
+            with self.subTest(whole=whole), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                for mutation in ("stale", "missing", "null", "unsafe"):
+                    inventory = copy.deepcopy(compiled)
+                    if mutation == "stale":
+                        inventory["app"][external] = "7" * 40
+                    elif mutation == "missing":
+                        inventory["app"]["android/ui-tests/src/test/kotlin/Missing.kt"] = "7" * 40
+                    elif mutation == "null":
+                        inventory["app"]["android/ui-tests/src/test/kotlin/Missing.kt"] = None
+                    else:
+                        inventory["app"]["../Shared.kt"] = blobs[external]
+                    with self.subTest(mutation=mutation), self.assertRaises(PortError):
+                        validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, inventory)
+
+    def test_notification_shadow_rejects_java_non_nested_comment_collision(self):
+        for package, name in (
+            ("org.robolectric.shadows", "ShadowNotificationManager"),
+            ("org.robolectric.annotation", "Implementation"),
+            ("org.robolectric.annotation", "Implements"),
+            ("android.app", "NotificationManager"),
+        ):
+            for whole in (False, True):
+                for comment in ("/* /* */", "// ignored\r", r"// ignored\u000d"):
+                    path = "android/core/model/src/main/java/" + name + ".java"
+                    source = (
+                        "package " + package + "; " + comment + " public class " + name
+                        + " { @org.junit.Test public void inheritedCase() {} } // */"
+                    )
+                    manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                        TEST: self.notification_shadow_source().encode(), path: source.encode(),
+                    }, whole=whole)
+                    del compiled["core/maps"][path]
+                    with self.subTest(name=name, whole=whole, comment=comment), patch(
+                        "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                    ), self.assertRaisesRegex(PortError, "shadows the external Robolectric identity"):
+                        validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_java_source_symbols_use_java_comments_literals_and_identifiers(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = r'''
+            package sample;
+            class Outer {
+                String templateLike = "${";
+                char quote = '"';
+                String escaped = "\"";
+                String block = """
+                    \""" class Hidden {}
+                    """;
+            }
+            /* /* */ class Visible {} // */
+            class Visible$Suffix {}
+            class $Prefix {}
+        '''
+        symbols = set()
+        self.assertEqual(_kotlin_junit_methods(source, source_symbols=symbols, java_source=True), {})
+        self.assertEqual(symbols, {
+            "sample.Outer", "sample.Visible", "sample.Visible$Suffix", "sample.$Prefix",
+        })
+        symbols = set()
+        _kotlin_junit_methods(
+            "package sample\n/* /* */ class Hidden {} */ class Visible {}",
+            source_symbols=symbols,
+        )
+        self.assertEqual(symbols, {"sample.Visible"})
+        with self.assertRaisesRegex(PortError, "symbol indexing only"):
+            _kotlin_junit_methods(source, java_source=True)
+
     def test_notification_shadow_external_inventory_requires_immutable_actual_blobs(self):
         base = TEST.replace("MapTest.kt", "UnrelatedShadow.kt")
         for whole in (False, True):

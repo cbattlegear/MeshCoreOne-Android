@@ -16,6 +16,11 @@ enum class DirectAckRejection {
 
 enum class DirectAckPhase { REGISTERED, ACCEPTED, FAILED, DELIVERED }
 
+/**
+ * Storage dispatch admission, not product/UI resend intent. RESEND permits a real new wire dispatch
+ * against a terminal baseline (including a pre-dispatch creation callback's write); it implies no
+ * sendCount increment or Resent event. No-wire cleanup must use DirectPendingCompletionAuthority.
+ */
 enum class DirectAckMode { SEND, RESEND }
 
 /**

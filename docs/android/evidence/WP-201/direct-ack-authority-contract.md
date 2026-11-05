@@ -150,3 +150,38 @@ diff checks were rerun successfully for this follow-up; provenance now accounts
 for 2,037 Kotlin files. Kotlin compilation and all eleven newly authored methods
 across both handoffs remain **unexecuted** under the same retained execution hold.
 This follow-up contains no schema, migration, DAO, repository or service changes.
+
+## Storage dispatch mode clarification
+
+Clarification parent: `80e8ebc33ac2730c2e45845333425284c7e4f77a`.
+Pinned `MessageService+SendDM.swift:207` invokes `onMessageCreated` before the
+retry loop at line 214, without a terminal-row dispatch gate. A callback can have
+already committed DELIVERED before a real first wire attempt; the existing
+consumer positives still require actual wire failures to propagate and preserve
+the delivered baseline.
+
+Storage and service owners confirmed that `DirectAckMode.RESEND` is explicit
+**storage dispatch admission**, not the product `isResend` flag. It can admit a
+real new logical wire dispatch against that terminal baseline, binding its actual
+incarnation/revision and new wire identity while fencing its predecessor. It does
+not imply a sendCount increment or a Resent event. It never revives a grant
+invalidated after begin, regresses DELIVERED, or creates authority for no-wire
+cleanup. The independent pending-completion role remains required for that case.
+This only clarifies existing mode semantics; no signature, test assertion,
+consumer, schema or runtime behavior is changed here.
+
+Trusted `wp-owned/modify` admissions were rechecked for the contract and this
+evidence. Source-only manifest, verification-configuration, provenance and staged
+diff checks passed again. Compilation and all Kotlin tests remain unexecuted in
+this worktree under the retained hold; external diagnostic results are not
+credited as this clarification's acceptance.
+
+The storage owner reported exact hosted run `41958103719`, candidate `fade600f`,
+failing `:core:contracts:compileTestKotlin` at `DirectAckAuthorityTest.kt:133`
+because `assertNotEquals` could not infer its common type for two singleton result
+variants. This successor explicitly supplies `DirectAckRevocationResult` as the
+type argument, preserving both operands and the inequality assertion. Trusted
+`reviewed-support-test/add-or-update-related-test` admission was rechecked.
+The failing run did not execute Room tests and supplied no schema artifact.
+This surgical source repair is not a successful compiler rerun; hosted
+verification of the integrated successor remains required.

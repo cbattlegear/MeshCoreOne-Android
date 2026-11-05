@@ -51,6 +51,23 @@ class ChatMailtoConsumerTest : RoomProcessTest() {
     @Test fun mountedMultipleMailLinksHaveDistinctRecipientActions() =
         mountedMailto(false, listOf("mailto:alice@example.com", "mailto:bob@example.com"))
 
+    @Test fun mailtoTaskFlagIsOnlyAddedForNonActivityContexts() {
+        for ((base, expectedFlag) in listOf(
+            host.get() to 0,
+            host.get().applicationContext to Intent.FLAG_ACTIVITY_NEW_TASK,
+        )) {
+            var launched: Intent? = null
+            val context = object : ContextWrapper(base) {
+                override fun startActivity(intent: Intent) { launched = intent }
+            }
+            ChatExternalLinkOpener(context, { error("Expected a mail action") }, { throw it }).open(url)
+            val intent = assertNotNull(launched)
+            assertEquals(expectedFlag, intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK)
+            assertEquals(Intent.ACTION_SENDTO, intent.action)
+            assertEquals(url, intent.dataString)
+        }
+    }
+
     private fun mountedMailto(unavailable: Boolean, tappedUrls: List<String> = listOf(url)) = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { radio -> radio.knownContacts += contactFrame(key(20), "Mail Peer") }
@@ -103,6 +120,7 @@ class ChatMailtoConsumerTest : RoomProcessTest() {
                 val intent = attempts[index]
                 assertEquals(Intent.ACTION_SENDTO, intent.action)
                 assertEquals("mailto:" + tappedUrls[index].substringAfter(':'), intent.dataString)
+                assertEquals(0, intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK)
                 assertNull(intent.component)
                 assertNull(intent.selector)
             }

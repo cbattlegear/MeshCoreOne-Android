@@ -274,6 +274,9 @@ Intended controls, not execution results:
   internal-apostrophe, square-bracket wrapper and balanced-subject controls
   preserve the intended URI. Only unmatched closing parentheses/brackets are
   removed; balanced subject punctuation remains part of the link.
+- `mailtoTaskFlagIsOnlyAddedForNonActivityContexts` requires no new-task flag
+  for an Activity-backed wrapper and the required flag for an application-backed
+  wrapper. Mounted mail actions also assert that their Activity task is retained.
 
 The App test is configured for Robolectric API31/37, not real Android hardware.
 No new local execution is claimed; the retained local execution-owner hold is

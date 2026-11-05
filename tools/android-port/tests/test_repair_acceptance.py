@@ -1731,6 +1731,42 @@ class RepairExecutionTests(unittest.TestCase):
                 self.assertRaisesRegex(PortError, "Ambiguous Kotlin function annotation"):
             validate_hosted_methods(scope, {PATH: "5" * 40, TEST: "4" * 40}, manifest.repo, {})
 
+    def test_kotlin_robolectric_sdk_configuration_is_bound_to_actual_test_methods(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = """
+            package sample
+            import org.junit.Test
+            import org.robolectric.annotation.Config as RoboConfig
+            @RoboConfig(sdk = [31, 37])
+            class ConfiguredTest { @Test fun runsAtEverySdk() {} }
+        """
+        classes, configurations = {}, {}
+        self.assertEqual(
+            _kotlin_junit_methods(
+                source, classes, sdk_configurations=configurations,
+            ),
+            {"runsAtEverySdk": "test"},
+        )
+        self.assertEqual(classes, {"runsAtEverySdk": "sample.ConfiguredTest"})
+        self.assertEqual(configurations, {"runsAtEverySdk": (31, 37)})
+
+        method_source = """
+            import org.junit.Test
+            import org.robolectric.annotation.Config
+            class ConfiguredTest { @Config(sdk = 37) @Test fun oneSdk() {} }
+        """
+        configurations = {}
+        _kotlin_junit_methods(method_source, sdk_configurations=configurations)
+        self.assertEqual(configurations, {"oneSdk": (37,)})
+        for unsupported in (
+            source.replace("[31, 37]", "sdkProvider()"),
+            source.replace("[31, 37]", "[31, 31]"),
+        ):
+            with self.subTest(source=unsupported), self.assertRaises(PortError):
+                configurations = {}
+                _kotlin_junit_methods(unsupported, sdk_configurations=configurations)
+
     def test_grouped_annotations_fail_closed_without_rejecting_literals_or_comments(self):
         from controller.repair_acceptance import _kotlin_junit_methods
 

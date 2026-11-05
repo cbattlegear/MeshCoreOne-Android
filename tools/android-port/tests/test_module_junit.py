@@ -255,6 +255,80 @@ class ModuleJUnitTests(unittest.TestCase):
         )
         self.assertEqual(report.parent.name, "testDebugUnitTest")
 
+    def test_remapped_parameterized_sdk_identities_require_every_configured_execution(self):
+        self.notifications()
+        relative = NOTIFICATION_ROOT + "/SdkFamilyTest.kt"
+        self.source("platform/notifications", relative, """
+package com.meshcoreone.android.platform.notifications.messaging
+import android.app.NotificationManager
+import org.junit.Test
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implements
+import org.robolectric.annotation.Implementation
+import org.robolectric.shadows.ShadowNotificationManager
+@Config(sdk = [31, 37])
+class SdkFamilyTest {
+    @Test fun runsAtEveryConfiguredSdk() {}
+    @Implements(NotificationManager::class)
+    class CountingNotificationManager : ShadowNotificationManager() {
+        @Implementation
+        fun notify(tag: String?, id: Int) {}
+    }
+}
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "SDK parameterized notification test")
+        compiled = self.compiled_notification_sources()
+        classname = "com.meshcoreone.android.platform.notifications.messaging.SdkFamilyTest"
+        base = (classname, "runsAtEveryConfiguredSdk")
+        sdk31 = (classname, "runsAtEveryConfiguredSdk[31]")
+        required = set(NOTIFICATION_CASES)
+
+        notification_report(self.repo, required | {base, sdk31})
+        self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 8)
+
+        for identities in (
+            required | {base},
+            required | {sdk31},
+            required | {base, sdk31, (classname, "runsAtEveryConfiguredSdk[37]")},
+            list(required | {base, sdk31}) + [sdk31],
+        ):
+            with self.subTest(identities=identities):
+                notification_report(self.repo, identities)
+                with self.assertRaises(PortError):
+                    check_module_tests(self.repo, compiled)
+
+    def test_remapped_sdk_method_override_and_unsupported_configuration(self):
+        self.notifications()
+        relative = NOTIFICATION_ROOT + "/SdkFamilyTest.kt"
+        source = """
+package com.meshcoreone.android.platform.notifications.messaging
+import org.junit.Test
+import org.robolectric.annotation.Config
+@Config(sdk = [31, 37])
+class SdkFamilyTest {
+    @Config(sdk = [37]) @Test fun oneSdk() {}
+    @Config(shadows = []) @Test fun inheritedSdks() {}
+}
+"""
+        self.source("platform/notifications", relative, source)
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "SDK method overrides")
+        classname = "com.meshcoreone.android.platform.notifications.messaging.SdkFamilyTest"
+        notification_report(self.repo, NOTIFICATION_CASES | {
+            (classname, "oneSdk"), (classname, "inheritedSdks"), (classname, "inheritedSdks[31]"),
+        })
+        self.assertEqual(check_module_tests(
+            self.repo, self.compiled_notification_sources(),
+        )["platform/notifications"]["passed"], 9)
+
+        for value in ("sdkProvider()", "[31, 34, 37]", "[3 1, 37]", "[31, 31]", "[31, 37], maxSdk = 31"):
+            self.source("platform/notifications", relative, source.replace("[31, 37]", value))
+            self.command("add", "--all")
+            self.command("commit", "--quiet", "-m", "unsupported SDK configuration")
+            with self.subTest(value=value), self.assertRaisesRegex(PortError, "SDK"):
+                check_module_tests(self.repo, self.compiled_notification_sources())
+
     def test_default_full_fast_scaffold_requires_fresh_notification_compiler_inventory(self):
         self.notifications()
         path = self.root / "gradle-test-sources.jsonl"
@@ -300,7 +374,7 @@ class NewTest { @Test fun newlyRequired() {} }
         self.command("add", "--all")
         self.command("commit", "--quiet", "-m", "new case")
         compiled = self.compiled_notification_sources()
-        with self.assertRaisesRegex(PortError, "Verification coverage"):
+        with self.assertRaisesRegex(PortError, "Verification coverage|SDK cases"):
             check_module_tests(self.repo, compiled)
         notification_report(self.repo, NOTIFICATION_CASES | {
             ("com.meshcoreone.android.platform.notifications.messaging.NewTest", "newlyRequired"),
@@ -321,12 +395,17 @@ class AdapterTest { @Test fun conventionalRequired() {} }
         inputs = module_sources(self.repo)["platform/notifications"]
         compiled = self.compiled_notification_sources()
         self.assertIn(source, inputs)
-        with self.assertRaisesRegex(PortError, "conventionalRequired"):
+        with self.assertRaisesRegex(PortError, "did not actually execute"):
             check_module_tests(self.repo, compiled)
         notification_report(self.repo, NOTIFICATION_CASES | {
             ("com.meshcoreone.android.platform.notifications.messaging.AdapterTest", "conventionalRequired"),
         })
         self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 7)
+        notification_report(self.repo, NOTIFICATION_CASES | {
+            ("com.meshcoreone.android.platform.notifications.messaging.AdapterTest", "conventionalRequired[31]"),
+            ("com.meshcoreone.android.platform.notifications.messaging.AdapterTest", "conventionalRequired[37]"),
+        })
+        self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 8)
 
         expected = {"platform/notifications": inputs}
         self.assertEqual(validate_remapped_compilation(

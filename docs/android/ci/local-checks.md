@@ -545,7 +545,15 @@ Its existing JUnit and compiled-source collectors must discover every declared
 remapped and conventional `src/test`/`src/testDebug` Kotlin test methods,
 including new candidate methods, plus the six mandatory delivery/payload/dispatcher
 identities. Missing, zero, substituted or skipped cases fail. Unsupported Java
-test sources fail closed. The exact candidate build, production, conventional test
+test sources fail closed. Canonical Kotlin declaration IDs remain separate from
+JUnit execution names: conventional tests use the shared hosted-method matcher,
+including suffix-only executions. Approved remapped tests with literal Robolectric
+`@Config(sdk = [31, 37])` require both the unsuffixed API-37 execution and `[31]`;
+an explicit single API-31 or API-37 configuration requires the unsuffixed execution.
+Method-level SDK overrides take precedence over class-level SDKs. Dynamic SDK
+expressions, SDK ranges, unsupported families and missing/duplicate/unexpected
+family executions fail closed. These names prove JVM runner discovery, not device
+coverage. The exact candidate build, production, conventional test
 and approved remapped input blobs are recorded as `remapped_jvm_inputs` in the same
 run log. Tracked changes and untracked additions under those inputs are refused,
 and the actual compiled Kotlin test-source inventory must exactly match candidate

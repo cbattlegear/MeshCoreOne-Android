@@ -178,9 +178,34 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
         raise PortError("Missing mandatory remapped JVM named cases: " + str(sorted(required - observed)))
     coverage = []
     for path in sources:
+        classes, sdk_configurations = {}, {}
+        methods = _kotlin_junit_methods(
+            git(repo, "cat-file", "blob", inputs[path]).decode("utf-8"),
+            classes, sdk_configurations=sdk_configurations,
+        )
+        if not methods or any(kind != "test" for kind in methods.values()):
+            raise PortError("Unsupported remapped notification JVM test family: " + path)
+        expected_cases = set()
+        for method in methods:
+            configured_sdks = sdk_configurations[method]
+            if configured_sdks is None:
+                names = {method}
+            elif configured_sdks in ((31,), (37,)):
+                names = {method}
+            elif configured_sdks == (31, 37):
+                names = {method, method + "[31]"}
+            else:
+                raise PortError("Unsupported remapped notification SDK family: " + path + "#" + method)
+            expected_cases.update((classes[method], name) for name in names)
+        actual_cases = [
+            (case["class"], case["method"])
+            for case in records if case["class"] in set(classes.values())
+        ]
+        if len(actual_cases) != len(expected_cases) or set(actual_cases) != expected_cases:
+            raise PortError("Missing, duplicate, or unexpected remapped notification SDK cases: " + path)
         coverage.append({
             "path": path, "modules": [module],
-            "native_methods": [case["class"] + "#" + case["method"] for case in records],
+            "native_methods": [classes[method] + "#" + method for method in methods],
             "hosted_methods": [],
         })
     for path, blob in expected.items():
@@ -194,7 +219,6 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
         if any(kind != "test" for kind in methods.values()):
             raise PortError("Unsupported conventional notification JVM test family: " + path)
         if methods:
-            required.update((classes[method], method) for method in methods)
             coverage.append({
                 "path": path, "modules": [module], "native_methods": [],
                 "hosted_methods": [

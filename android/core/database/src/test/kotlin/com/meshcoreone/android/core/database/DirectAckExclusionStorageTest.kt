@@ -13,6 +13,8 @@ import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -134,8 +136,13 @@ class DirectAckExclusionStorageTest {
         val name = "ack-exclusion-handles-${UUID.randomUUID()}.db"
         val first = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
             .addCallback(DirectAckStorage.callback).build()
+        val secondBegin = CompletableDeferred<Unit>()
+        val observeSecondBegin = AtomicBoolean(false)
         val second = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
-            .addCallback(DirectAckStorage.callback).build()
+            .addCallback(DirectAckStorage.callback)
+            .setQueryCallback({ sql, _ ->
+                if (observeSecondBegin.get() && sql.startsWith("BEGIN")) secondBegin.complete(Unit)
+            }, Executor { it.run() }).build()
         val radio = UUID.randomUUID()
         val claim = UUID.randomUUID()
         val competitor = UUID.randomUUID()
@@ -146,31 +153,33 @@ class DirectAckExclusionStorageTest {
             assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
-            val secondStarted = CompletableDeferred<Unit>()
-            withContext(Dispatchers.IO) { withTimeout(30_000) {
-                val heldTransaction = async(Dispatchers.IO) {
-                    first.withTransaction {
-                        assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
-                        entered.complete(Unit)
-                        release.await()
-                        assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
-                    } }
-                }
-                entered.await()
-                val competingWrite = async(Dispatchers.IO) {
-                    secondStarted.complete(Unit)
-                    second.withTransaction {
-                        second.directAcks().wire(DirectAckWireEntity(radio, competitor, wire, 123, null))
-                        second.directAckExclusions().emission(DirectAckEmissionEntity(
-                            radio, competitor, wire, UUID.randomUUID(), UUID.randomUUID(),
-                            123, "MAY_HAVE_WRITTEN", null, null,
-                        ))
+            withContext(Dispatchers.IO) {
+                withTimeout(30_000) {
+                    val heldTransaction = async(Dispatchers.IO) {
+                        first.withTransaction {
+                            assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
+                            entered.complete(Unit)
+                            release.await()
+                            assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
+                        }
                     }
+                    entered.await()
+                    observeSecondBegin.set(true)
+                    val competingWrite = async(Dispatchers.IO) {
+                        second.withTransaction {
+                            second.directAcks().wire(DirectAckWireEntity(radio, competitor, wire, 123, null))
+                            second.directAckExclusions().emission(DirectAckEmissionEntity(
+                                radio, competitor, wire, UUID.randomUUID(), UUID.randomUUID(),
+                                123, "MAY_HAVE_WRITTEN", null, null,
+                            ))
+                        }
+                    }
+                    secondBegin.await()
+                    assertFalse(competingWrite.isCompleted)
+                    release.complete(Unit)
+                    heldTransaction.await()
+                    competingWrite.await()
                 }
-                secondStarted.await()
-                release.complete(Unit)
-                heldTransaction.await()
-                competingWrite.await()
             }
             first.withTransaction {
                 assertTrue(first.directAckExclusions().unresolvedCompetitor(radio, claim))

@@ -36,12 +36,15 @@ interface DirectAckExclusionDao {
     """)
     suspend fun emission(radio: UUID, claim: UUID, wire: UUID, mark: UUID): DirectAckEmissionEntity?
 
+    @Query("SELECT * FROM direct_ack_emissions WHERE radioId = :radio AND markRequestId = :mark LIMIT 2")
+    suspend fun emissionRequests(radio: UUID, mark: UUID): List<DirectAckEmissionEntity>
+
     @Upsert suspend fun emission(row: DirectAckEmissionEntity)
 
     @Query("SELECT COUNT(*) FROM direct_ack_emissions WHERE radioId = :radio")
     suspend fun count(radio: UUID): Long
 
-    @Query("SELECT * FROM direct_ack_emissions WHERE radioId = :radio ORDER BY claimId,wireId LIMIT :maximum")
+    @Query("SELECT * FROM direct_ack_emissions WHERE radioId = :radio ORDER BY claimId,wireId,markRequestId LIMIT :maximum")
     suspend fun emissions(radio: UUID, maximum: Int): List<DirectAckEmissionEntity>
 
     @Query("SELECT EXISTS(SELECT 1 FROM direct_ack_radio_exclusions WHERE radioId = :radio AND saturated != 0)")
@@ -51,37 +54,43 @@ interface DirectAckExclusionDao {
 
     @Query("""
         SELECT EXISTS(
+            SELECT 1 FROM direct_ack_emissions
+            WHERE radioId = :radio AND claimId != :claim AND state != 'DEFINITELY_UNSENT'
+              AND (predictedCode = :code OR actualCode = :code)
+        ) OR EXISTS(
             SELECT 1 FROM direct_ack_wires w
-            LEFT JOIN direct_ack_emissions e
-              ON e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId
             WHERE w.radioId = :radio AND w.claimId != :claim
-              AND (e.state IS NULL OR e.state != 'DEFINITELY_UNSENT')
-              AND (w.predictedCode = :code OR w.acceptedCode = :code OR e.actualCode = :code)
+              AND (w.acceptedCode IS NOT NULL OR NOT EXISTS(
+                  SELECT 1 FROM direct_ack_emissions e
+                  WHERE e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId))
+              AND (w.predictedCode = :code OR w.acceptedCode = :code)
         )
     """)
     suspend fun competingCode(radio: UUID, claim: UUID, code: Long): Boolean
 
     @Query("""
         SELECT EXISTS(
+            SELECT 1 FROM direct_ack_emissions
+            WHERE radioId = :radio AND claimId != :claim
+              AND (state NOT IN ('ACCEPTED','DEFINITELY_UNSENT') OR (state = 'ACCEPTED' AND actualCode IS NULL))
+        ) OR EXISTS(
             SELECT 1 FROM direct_ack_wires w
-            LEFT JOIN direct_ack_emissions e
-              ON e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId
-            WHERE w.radioId = :radio AND w.claimId != :claim
-              AND ((e.state IS NULL AND w.acceptedCode IS NULL)
-                OR e.state = 'CONFLICT'
-                OR (e.state = 'MAY_HAVE_WRITTEN' AND e.actualCode IS NULL))
+            WHERE w.radioId = :radio AND w.claimId != :claim AND w.acceptedCode IS NULL
+              AND NOT EXISTS(SELECT 1 FROM direct_ack_emissions e
+                  WHERE e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId)
         )
     """)
     suspend fun unresolvedCompetitor(radio: UUID, claim: UUID): Boolean
 
     @Query("""
         SELECT EXISTS(
+            SELECT 1 FROM direct_ack_emissions
+            WHERE radioId = :radio AND claimId = :claim AND state = 'ACCEPTED' AND actualCode = :code
+        ) OR EXISTS(
             SELECT 1 FROM direct_ack_wires w
-            LEFT JOIN direct_ack_emissions e
-              ON e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId
-            WHERE w.radioId = :radio AND w.claimId = :claim
-              AND w.acceptedCode = :code
-              AND (e.state IS NULL OR (e.state = 'ACCEPTED' AND e.actualCode = :code))
+            WHERE w.radioId = :radio AND w.claimId = :claim AND w.acceptedCode = :code
+              AND NOT EXISTS(SELECT 1 FROM direct_ack_emissions e
+                  WHERE e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId)
         )
     """)
     suspend fun acceptedCurrentWire(radio: UUID, claim: UUID, code: Long): Boolean
@@ -89,10 +98,24 @@ interface DirectAckExclusionDao {
     @Query("""
         SELECT EXISTS(
             SELECT 1 FROM direct_ack_emissions
-            WHERE radioId = :radio AND claimId = :claim AND state = 'CONFLICT'
+            WHERE radioId = :radio AND claimId = :claim AND state IN ('CONFLICT','CONFLICT_UNSENT')
         )
     """)
     suspend fun conflictedClaim(radio: UUID, claim: UUID): Boolean
+
+    @Query("""
+        SELECT EXISTS(
+            SELECT 1 FROM direct_ack_emissions
+            WHERE radioId = :radio AND claimId = :claim
+              AND (state NOT IN ('ACCEPTED','DEFINITELY_UNSENT') OR (state = 'ACCEPTED' AND actualCode IS NULL))
+        ) OR EXISTS(
+            SELECT 1 FROM direct_ack_wires w
+            WHERE w.radioId = :radio AND w.claimId = :claim AND w.acceptedCode IS NULL
+              AND NOT EXISTS(SELECT 1 FROM direct_ack_emissions e
+                  WHERE e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId)
+        )
+    """)
+    suspend fun unresolvedCurrentClaim(radio: UUID, claim: UUID): Boolean
 
     @Query("""
         SELECT COUNT(*) FROM direct_ack_wires w
@@ -113,8 +136,6 @@ interface DirectAckExclusionDao {
 }
 
 object DirectAckExclusionStorage {
-    const val MAX_EMISSIONS_PER_RADIO = 4096
-
     val migration2To3: Migration = object : Migration(2, 3) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL(

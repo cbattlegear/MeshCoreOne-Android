@@ -139,9 +139,13 @@ interface DirectAckDao {
     @Upsert suspend fun delivery(row: DirectAckDeliveryEntity)
     @Query("SELECT * FROM direct_ack_wires WHERE radioId = :radio AND claimId = :claim ORDER BY requestId")
     suspend fun wires(radio: UUID, claim: UUID): List<DirectAckWireEntity>
+    @Query("SELECT * FROM direct_ack_wires WHERE radioId = :radio AND claimId = :claim AND requestId = :request")
+    suspend fun wire(radio: UUID, claim: UUID, request: UUID): DirectAckWireEntity?
     @Upsert suspend fun wire(row: DirectAckWireEntity)
     @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim ORDER BY requestId")
     suspend fun operations(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
+    @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND requestId = :request")
+    suspend fun operation(radio: UUID, claim: UUID, request: UUID): DirectAckOperationEntity?
     @Upsert suspend fun operation(row: DirectAckOperationEntity)
     @Query("SELECT * FROM direct_pending_completions WHERE radioId = :radio AND captureRequestId = :request")
     suspend fun pendingCompletion(radio: UUID, request: UUID): DirectPendingCompletionEntity?

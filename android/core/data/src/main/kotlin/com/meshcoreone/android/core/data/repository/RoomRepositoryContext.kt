@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.RxLogEntryEntity
 import com.meshcoreone.android.core.model.RadioId
 import java.time.Clock
+import java.util.UUID
 import java.util.WeakHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -78,7 +79,10 @@ internal class RoomRepositoryContext(
     parentScope: CoroutineScope,
     val reporter: RepositoryIssueReporter,
 ) {
-    private val mutex = synchronized(databaseMutexes) { databaseMutexes.getOrPut(database) { Mutex() } }
+    private val shared = synchronized(databaseStates) { databaseStates.getOrPut(database) { DatabaseState() } }
+    private val mutex = shared.mutex
+    internal val deviceRevisions get() = shared.deviceRevisions
+    internal val deviceAuthorityRevisions get() = shared.deviceAuthorityRevisions
     private val flushOwner = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + flushOwner)
     private val pendingRx = LinkedHashMap<EntityKey, RxLogEntryEntity>()
@@ -341,6 +345,11 @@ internal class RoomRepositoryContext(
     }
 
     private companion object {
-        val databaseMutexes = WeakHashMap<MeshCoreDatabase, Mutex>()
+        class DatabaseState {
+            val mutex = Mutex()
+            val deviceRevisions = mutableMapOf<UUID, Long>()
+            val deviceAuthorityRevisions = mutableMapOf<UUID, Long>()
+        }
+        val databaseStates = WeakHashMap<MeshCoreDatabase, DatabaseState>()
     }
 }

@@ -13,49 +13,64 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.util.UUID
 
 internal class DeviceRepository(private val context: RoomRepositoryContext) : DevicePersisting, DeviceEditPersisting {
-    private var revision = 0L
-    private var authorityRevision = 0L
+    private class RetiredWrite : RuntimeException()
 
-    private suspend fun <T> write(
-        operation: String,
-        changesAuthority: Boolean = true,
-        action: suspend RepositoryTransaction.() -> T,
-    ): T =
-        context.write(operation) {
-            val nextRevision = Math.incrementExact(revision)
-            val nextAuthority = if (changesAuthority) Math.incrementExact(authorityRevision) else authorityRevision
-            val result = action()
-            if (saves) afterCommit {
-                revision = nextRevision
-                if (changesAuthority) authorityRevision = nextAuthority
-            }
-            result
+    private fun RepositoryTransaction.changed(id: UUID, authority: Boolean = true) {
+        val nextRevision = checkedIncrement(context.deviceRevisions[id] ?: 0L)
+        val nextAuthority = if (authority) checkedIncrement(context.deviceAuthorityRevisions[id] ?: 0L) else null
+        afterCommit {
+            context.deviceRevisions[id] = nextRevision
+            if (nextAuthority != null) context.deviceAuthorityRevisions[id] = nextAuthority
         }
-
-    override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? = context.read("fetchDeviceWriteSnapshot") {
-        database.devices().byId(id)?.let { DeviceWriteSnapshot(it.toDTO(), revision, authorityRevision) }
     }
 
-    override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean = write("insertDeviceIfAbsent") {
+    private suspend fun conditionalWrite(
+        operation: String,
+        isCurrent: () -> Boolean,
+        action: suspend RepositoryTransaction.() -> Boolean,
+    ): Boolean = try {
+        context.write(operation) {
+            if (!isCurrent()) return@write false
+            beforeCommit { if (!isCurrent()) throw RetiredWrite() }
+            action()
+        }
+    } catch (_: RetiredWrite) {
+        false
+    }
+
+    override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? = context.read("fetchDeviceWriteSnapshot") {
+        database.devices().byId(id)?.let {
+            DeviceWriteSnapshot(it.toDTO(), context.deviceRevisions[id] ?: 0L, context.deviceAuthorityRevisions[id] ?: 0L)
+        }
+    }
+
+    override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean = context.write("insertDeviceIfAbsent") {
         if (database.devices().byId(dto.id) != null) return@write false
         database.devices().upsert(dto.copy(isActive = false).toEntity())
+        changed(dto.id)
         save()
         true
     }
 
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean =
-        write("saveDeviceIfUnchanged", changesAuthority = false) {
-            val existing = database.devices().byId(dto.id) ?: return@write false
-            if (revision != expected.revision || authorityRevision != expected.authorityRevision || existing.toDTO() != expected.device ||
-                dto.id != expected.device.id || dto.radioId != expected.device.radioId) return@write false
-            if (dto.isActive != expected.device.isActive || dto.lastConnected != expected.device.lastConnected) return@write false
-            if (dto.publicKey != expected.device.publicKey) {
-                val nextAuthority = Math.incrementExact(authorityRevision)
-                afterCommit { authorityRevision = nextAuthority }
+        expected.withAuthority {
+            conditionalWrite("saveDeviceIfUnchanged", expected.isCurrent) {
+                val existing = database.devices().byId(dto.id) ?: return@conditionalWrite false
+                if ((context.deviceRevisions[dto.id] ?: 0L) != expected.revision ||
+                    (context.deviceAuthorityRevisions[dto.id] ?: 0L) != expected.authorityRevision ||
+                    existing.toDTO() != expected.device ||
+                    dto.id != expected.device.id || dto.radioId != expected.device.radioId) return@conditionalWrite false
+                if (dto.isActive != expected.device.isActive || dto.lastConnected != expected.device.lastConnected) return@conditionalWrite false
+                val removed = existing.knownRegions.toSet() - dto.knownRegions.toSet()
+                if (dto.defaultFloodScopeName != null && dto.defaultFloodScopeName in removed) {
+                    invalidData("Removing the default region requires clearing its default flood scope")
+                }
+                database.devices().upsert(dto.toEntity())
+                resetRemovedRegionScopes(dto.radioId, removed)
+                changed(dto.id, authority = dto.publicKey != expected.device.publicKey)
+                save()
+                true
             }
-            database.devices().upsert(existing.applying(dto))
-            save()
-            true
         }
 
     override suspend fun fetchDevice(id: UUID): DeviceDTO? = context.read("fetchDeviceById") {
@@ -78,20 +93,20 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         database.devices().active().firstOrNull()?.toDTO()
     }
 
-    override suspend fun saveDevice(dto: DeviceDTO) = write("saveDevice") {
+    override suspend fun saveDevice(dto: DeviceDTO) = context.write("saveDevice") {
         val existing = database.devices().byId(dto.id)
         database.devices().upsert(existing?.applying(dto) ?: dto.toEntity())
+        changed(dto.id)
         save()
     }
 
-    override suspend fun setActiveDevice(id: UUID) = write("setActiveDevice") {
+    override suspend fun setActiveDevice(id: UUID) = context.write("setActiveDevice") {
         activate(id)
         save()
     }
 
     override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean =
-        write("activateDeviceIfCurrent") {
-            if (!isCurrent()) return@write false
+        conditionalWrite("activateDeviceIfCurrent", isCurrent) {
             if (database.devices().byId(id) == null) throw PersistenceStoreException(PersistenceStoreError.DeviceNotFound)
             activate(id)
             save()
@@ -100,63 +115,76 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
 
     private suspend fun RepositoryTransaction.activate(id: UUID) {
         for (device in database.devices().all()) {
+            if (device.id != id && !device.isActive) continue
             database.devices().upsert(device.copy(
                 isActive = device.id == id,
                 lastConnected = if (device.id == id) StoredInstant.from(clock.instant()) else device.lastConnected,
             ))
+            changed(device.id)
         }
     }
 
     override suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt) =
-        write("updateDeviceLastContactSync", changesAuthority = false) {
+        context.write("updateDeviceLastContactSync") {
             val row = database.devices().forRadio(radioId.value).firstOrNull()
                 ?: throw PersistenceStoreException(PersistenceStoreError.DeviceNotFound)
             database.devices().upsert(row.copy(lastContactSync = timestamp.toLong()))
+            changed(row.id, authority = false)
             save()
         }
 
     override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String) =
-        write("addDeviceKnownRegion", changesAuthority = false) {
+        context.write("addDeviceKnownRegion") {
             val row = database.devices().forRadio(radioId.value).firstOrNull()
                 ?: throw PersistenceStoreException(PersistenceStoreError.DeviceNotFound)
             if (region !in row.knownRegions) {
                 database.devices().upsert(row.copy(knownRegions = (row.knownRegions + region).snapshot()))
+                changed(row.id, authority = false)
                 save()
             }
         }
 
     override suspend fun removeDeviceKnownRegion(radioId: RadioId, region: String) =
-        write("removeDeviceKnownRegion", changesAuthority = false) {
+        context.write("removeDeviceKnownRegion") {
             val row = database.devices().forRadio(radioId.value).firstOrNull()
                 ?: throw PersistenceStoreException(PersistenceStoreError.DeviceNotFound)
             database.devices().upsert(row.copy(
                 knownRegions = row.knownRegions.filterNot { it == region }.snapshot(),
                 defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { it == region },
             ))
-            for (channel in database.channels().forRadio(radioId.value)) {
-                if (channel.toDTO().floodScope == ChannelFloodScope.Region(region)) {
-                    database.channels().setFloodScope(radioId.value, channel.id, "inherit", null)
-                }
-            }
+            resetRemovedRegionScopes(radioId, setOf(region))
+            changed(row.id, authority = false)
             save()
         }
 
-    override suspend fun deleteDevice(id: UUID) = write("deleteDevice") {
+    private suspend fun RepositoryTransaction.resetRemovedRegionScopes(radioId: RadioId, removed: Set<String>) {
+        if (removed.isEmpty()) return
+        for (channel in database.channels().forRadio(radioId.value)) {
+            val scope = channel.toDTO().floodScope
+            if (scope is ChannelFloodScope.Region && scope.name in removed) {
+                database.channels().setFloodScope(radioId.value, channel.id, "inherit", null)
+            }
+        }
+    }
+
+    override suspend fun deleteDevice(id: UUID) = context.write("deleteDevice") {
         database.devices().delete(id)
+        changed(id)
         save()
     }
 
-    override suspend fun demoteDeviceToGhost(id: UUID) = write("demoteDeviceToGhost") {
+    override suspend fun demoteDeviceToGhost(id: UUID) = context.write("demoteDeviceToGhost") {
         val row = database.devices().byId(id) ?: return@write
         database.devices().delete(id)
         database.devices().upsert(row.copy(
             id = UUID.randomUUID(), isActive = false, connectionMethods = SnapshotList.empty(),
         ))
+        changed(id)
         save()
     }
 
     override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? =
-        write("reconcileGhostIdentity") {
+        context.write("reconcileGhostIdentity") {
             val ghost = database.devices().forPublicKey(newPublicKey)
                 .firstOrNull { it.id != currentDeviceID && !it.isActive } ?: return@write null
             if (ghost.connectionMethods.any { it.isBluetooth }) return@write null
@@ -169,18 +197,22 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
                 radioId = ghost.radioId, publicKey = newPublicKey, connectionMethods = methods.snapshot(),
             ))
             database.devices().delete(ghost.id)
+            changed(currentDeviceID)
+            changed(ghost.id)
             save()
             RadioId(ghost.radioId)
         }
 
-    override suspend fun deleteDeviceData(id: UUID) = write("deleteDeviceData") {
+    override suspend fun deleteDeviceData(id: UUID) = context.write("deleteDeviceData") {
         deleteAllDeviceData(id)
+        changed(id)
         save()
     }
 
-    override suspend fun deleteDeviceAndData(id: UUID) = write("deleteDeviceAndData") {
+    override suspend fun deleteDeviceAndData(id: UUID) = context.write("deleteDeviceAndData") {
         deleteAllDeviceData(id)
         database.devices().delete(id)
+        changed(id)
         save()
     }
 

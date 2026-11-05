@@ -622,6 +622,7 @@ class TraceCodeInputComposeTest {
     @Test fun offlineDraftSurvivesAcceptedBatchSaveCompletion() = offlineDraftAfterOldWork("batch-save")
     @Test fun offlineDraftSurvivesAcceptedHistoryRefreshCompletion() = offlineDraftAfterOldWork("history")
     @Test fun offlineDraftSurvivesUnmatchedLateResponse() = offlineDraftAfterOldWork("response")
+    @Test fun offlineDraftSurvivesStrictRunRejection() = offlineDraftAfterOldWork("strict")
 
     private fun offlineDraftAfterOldWork(stage: String) {
         val h = configured()
@@ -695,6 +696,10 @@ class TraceCodeInputComposeTest {
         h.main.runCurrent()
         h.time.advanceBy(500.milliseconds)
         if (stage == "response") h.respond(tags.single(), listOf(node(0xAA, 9.0), node(null, 3.0)), RADIO)
+        if (stage == "strict") {
+            assertFalse(h.holder.isConnectionCurrent(), "Local draft authority never authorizes radio execution")
+            h.complete { h.holder.runBatchTrace() }
+        }
         h.time.advanceBy(60.seconds)
         assertTrue(run.isCompleted)
         assertTrue(save?.isCompleted != false)

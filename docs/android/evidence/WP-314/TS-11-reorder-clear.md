@@ -482,9 +482,9 @@ merge: old asynchronous A work could call the mutating connection gate before
 its generation/revision check and retire a correctly rebound offline draft.
 No merge occurred.
 
-The successor adds seven mounted real-holder controls: held lookup, held send,
+The successor adds eight mounted real-holder controls: held lookup, held send,
 inter-trace batch sleep, accepted single save, accepted batch save, accepted
-history refresh and unmatched late response. Each disconnects/rebinds offline,
+history refresh, unmatched late response and direct strict Run rejection. Each disconnects/rebinds offline,
 releases old work, requires unchanged offline state and usable Text/Paste/Done,
 checks no old send and retained accepted A attribution, then exercises fresh B
 Add on the actual retained route. Source changes reject obsolete generations/

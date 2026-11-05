@@ -129,7 +129,7 @@ class JavaCompilerInventoryTest {
             remove("ANDROID_CI_TEST_LINEAGE")
         }
         val gradleHome = assertNotNull(environment["GRADLE_USER_HOME"], "Use the supported hosted scaffold route")
-        val result = GradleRunner.create().withProjectDir(directory).withPluginClasspath()
+        val result = GradleRunner.create().withProjectDir(directory).withPluginClasspath().forwardOutput()
             .withEnvironment(environment)
             .withArguments(
                 ":platform:notifications:testDebugUnitTest", "--init-script", collector.absolutePath,

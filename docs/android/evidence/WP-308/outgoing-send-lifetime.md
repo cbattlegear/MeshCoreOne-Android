@@ -2,6 +2,27 @@
 
 ## Recovery-list consumer preparation (not activated)
 
+`RecoveryContinuityNotice` is separately authored stateless Material content
+for the coordinator-proposed loss-aware new-action-generation acknowledgment.
+It is not a user-selected product decision or an activated enrollment flow.
+All labels are supplied as shared `UiText`; production copy resources and
+the real receipt/capacity/bootstrap operations are not supplied by this slice.
+The create callback requires both explicit acknowledgment and producer readiness,
+and is disabled while working. No callback runs from composition or an effect.
+The enclosing route must invalidate acknowledgment when continuity evidence
+changes. Readable-text inspection remains a distinct action, not destination
+authentication, generation creation or automatic sending.
+
+An authored mounted 200%-font control checks initial refusal, manual inspection,
+acknowledgment without readiness, readiness without automatic invocation,
+one explicit create gesture, working-state refusal and explicit failure after
+evidence invalidation. Fixture English labels are test inputs, not production
+fallback resources or actual enrollment proof. It is uncompiled/unexecuted.
+No automatic UI launch, failed-write survival, recovery of physically lost
+text, authenticated unknown-token target, or production storage operation is
+promised. The real unbound durable receipt and full-capacity path remain
+producer-owned activation prerequisites; existing origin/fence holds remain.
+
 The bounded WP-005 resource handoff `ced55e0ef6f7a8b3cbcfd002936e2af82d1ad16a`
 and evidence successor `36fe163514b41e2318f8fdeeaa6fc1248681ea73`
 are integrated by cherry-pick as `d5434d3bc` and `4dc17e7e6`, without

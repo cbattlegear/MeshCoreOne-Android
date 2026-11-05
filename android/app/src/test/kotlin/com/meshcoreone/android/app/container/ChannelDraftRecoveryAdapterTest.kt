@@ -24,6 +24,8 @@ import com.meshcoreone.android.feature.chats.composer.ComposerTarget
 import com.meshcoreone.android.feature.chats.composer.RecoveredDraftStateHolder
 import com.meshcoreone.android.feature.chats.composer.ui.recoveredDraftLabels
 import com.meshcoreone.android.feature.chats.composer.ui.RecoveredDraftList
+import com.meshcoreone.android.feature.chats.composer.ui.RecoveryContinuityLabels
+import com.meshcoreone.android.feature.chats.composer.ui.RecoveryContinuityNotice
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.ui.UiText
 import java.time.Instant
@@ -58,6 +60,74 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         text = "  original \u4e2d\uD83D\uDE80 $id  ", timestamp = 100u,
         createdAt = Instant.ofEpochSecond(id), channelOccupantID = origin, status = MessageStatus.FAILED,
     )
+
+    @Test fun mountedLossAwareNoticeRequiresAcknowledgmentAndProducerReadiness() {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.get().actionBar?.hide()
+        host.windowFocusChanged(true)
+        val acknowledged = mutableStateOf(false)
+        val available = mutableStateOf(false)
+        val working = mutableStateOf(false)
+        val failure = mutableStateOf<UiText?>(null)
+        var creations = 0
+        var inspections = 0
+        val acknowledgment = "I understand that a new generation does not recover lost text."
+        val create = "Create a new notification action generation"
+        val inspect = "Inspect readable text for manual copy"
+        try {
+            host.get().setContent {
+                MeshCoreTheme {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+                        RecoveryContinuityNotice(
+                            labels = RecoveryContinuityLabels(
+                                UiText.Verbatim("Notification continuity unavailable"),
+                                UiText.Verbatim("Previous installation continuity cannot be established."),
+                                UiText.Verbatim("Physically lost text cannot be recovered. Unsaved text can be lost when the process stops."),
+                                UiText.Verbatim("Readable old or unknown text has no authenticated destination. Choose a chat and copy manually; nothing is sent."),
+                                UiText.Verbatim(acknowledgment),
+                                UiText.Verbatim(create), UiText.Verbatim(inspect),
+                            ),
+                            acknowledged = acknowledged.value, working = working.value,
+                            creationAvailable = available.value, failure = failure.value,
+                            onAcknowledgedChange = { acknowledged.value = it },
+                            onCreateNewGeneration = { creations++ },
+                            onInspectRecoveredText = { inspections++ },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
+            fun node(text: String): SemanticsNodeInteraction {
+                compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text))
+                return compose.onNodeWithText(text)
+            }
+            node(create).assertIsNotEnabled()
+            node(inspect).performClick()
+            assertEquals(1, inspections)
+            assertEquals(0, creations)
+            node(acknowledgment).performClick()
+            node(create).assertIsNotEnabled()
+            compose.runOnIdle { available.value = true }
+            node(create).assertIsEnabled()
+            assertEquals(0, creations)
+            node(create).performClick()
+            assertEquals(1, creations)
+            compose.runOnIdle { working.value = true }
+            node(create).assertIsNotEnabled()
+            node(inspect).assertIsNotEnabled()
+            compose.runOnIdle {
+                working.value = false
+                available.value = false
+                acknowledged.value = false
+                failure.value = UiText.Verbatim("Storage unavailable. No new generation was confirmed.")
+            }
+            node("Storage unavailable. No new generation was confirmed.").assertIsDisplayed()
+            node(create).assertIsNotEnabled()
+            assertEquals(1, creations)
+        } finally {
+            host.pause().stop().destroy()
+        }
+    }
 
     @Test fun replacementListAndExactCopyKeepBothKnownAndUnknownOriginalsUnchanged() = runBlocking {
         store.saveChannel(radio, channel(1))

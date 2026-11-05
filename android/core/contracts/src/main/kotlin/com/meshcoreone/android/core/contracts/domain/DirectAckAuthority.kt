@@ -94,6 +94,9 @@ sealed interface DirectAckIntentObservation {
  * purge message and pending DTO snapshots from all persisted authority histories, retaining only
  * operation/identity tombstones. Own status/ACK/retry/count writes do not redact payload. Historical
  * replay never recreates erased payloads, returns fake DTOs or describes a recreated current row.
+ * Explicit lease revocation, successor activation and process close also atomically erase every
+ * payload snapshot for that retired lease and retain nonpayload tombstones with STALE_LEASE. Thus a
+ * null historical DTO does not imply the ordinary product message row is absent or deleted.
  */
 data class DirectAckReceipt(
     val key: EntityKey,
@@ -274,6 +277,11 @@ interface DirectAckAuthority {
     /** Historical evidence only; never returns a handle or upgrades permission. */
     suspend fun inspectDirectAckAttempt(lease: DirectAckLease, requestId: UUID): DirectAckObservation
 
-    /** Idempotent durable revocation fences pending writes before any successor can act. */
+    /**
+     * Idempotent durable revocation fences pending writes before any successor can act and erases
+     * this lease's persisted message/pending/delivery DTO snapshots across intent, claim and
+     * no-dispatch history. Keep IDs, phase, ACK/RTT and operation tombstones with STALE_LEASE; do
+     * not imply the underlying ordinary message row was erased.
+     */
     suspend fun revokeDirectAckSession(lease: DirectAckLease): DirectAckRevocationResult
 }

@@ -253,7 +253,29 @@ This is not a passing provenance result or a Kotlin test failure. A standalone
 retry without the concurrent JSON-consumer process remained running without output
 after its 120-second initial wait and was explicitly stopped; no passing result
 is credited. Provenance validation remains unverified for this successor.
-Kotlin compilation and all fourteen authored
+Kotlin compilation and all fourteen then-authored
 methods across the handoffs remain unexecuted in this worktree under the retained
 execution hold. No integrated hosted result, migration, erasure enforcement or
 consumer parity acceptance is claimed here.
+
+## Lease-retirement erasure follow-up
+
+The storage producer reports commit
+`0182ef8354e6e42adf6246d5eee14311a942285a` atop its producer
+`4f20d23482a8b0bcd5b9124b778b4d8db270c7c5` and integrated contract
+`46dd00d6a`. It adds a canonical SQLite active-to-inactive lease trigger that
+erases all snapshots for explicit revoke, successor activation and process close,
+while retaining stable radio/lease and claim identities, phase, ACK code, RTT and
+operation journals. The owner reports corresponding actual Room tests cover all
+three retirement paths and verify the ordinary product rows remain unchanged.
+
+Those commits and test sources are not in this contract worktree and have not
+been executed or independently validated here. The exact follow-up source/status
+is producer-reported integration context, not this branch's contents or passing
+test evidence. This contract makes the corresponding behavior explicit:
+retired-lease receipts may have null payload snapshots and `STALE_LEASE` even
+when the ordinary message row still exists. This contract follow-up adds two
+more value-only assertions; sixteen methods are now authored but none has been
+executed here. No public API or generated Room
+schema bytes are changed by that reported storage follow-up; export remains a
+separate pending validation gate.

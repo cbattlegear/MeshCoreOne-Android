@@ -103,4 +103,23 @@ class DirectPendingCompletionAuthorityTest {
         assertEquals(receipt.captureRequestId, erased.captureRequestId)
         assertEquals(UUID(0, 7), erased.completedRequestId)
     }
+
+    @Test
+    fun retiredLeaseErasesPendingAndMessageSnapshotsButRetainsCompletionIdentity() {
+        val ordinaryMessageStillExists = message
+        val retired = receipt.copy(
+            message = null,
+            pending = null,
+            completedRequestId = UUID(0, 8),
+            permission = DirectPendingCompletionPermission.STALE_LEASE,
+        )
+
+        assertSame(message, ordinaryMessageStillExists)
+        assertNull(retired.message)
+        assertNull(retired.pending)
+        assertEquals(pending.id, retired.pendingSendId)
+        assertEquals(UUID(0, 8), retired.completedRequestId)
+        assertEquals(receipt.captureRequestId, retired.captureRequestId)
+        assertEquals(DirectPendingCompletionPermission.STALE_LEASE, retired.permission)
+    }
 }

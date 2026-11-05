@@ -390,7 +390,7 @@ class NotificationReplyEnrollmentStore internal constructor(
     }
 
     private fun checked(db: SQLiteDatabase): CreationReceipt {
-        if (db.version != 4 && db.version != 5) throw Invalid(Failure.EXISTING_UNATTRIBUTED_STORAGE)
+        if (db.version !in 4..6) throw Invalid(Failure.EXISTING_UNATTRIBUTED_STORAGE)
         val receipt = validate(db, null)
         if (textState(db, receipt).limits != unboundLimits) throw Invalid(Failure.POLICY_MISMATCH)
         // Validate journal/issuance/custody before accepting even copy-only storage as healthy.

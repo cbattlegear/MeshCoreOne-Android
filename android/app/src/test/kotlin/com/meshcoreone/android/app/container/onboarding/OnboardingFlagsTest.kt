@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -159,6 +160,96 @@ class OnboardingFlagsTest {
             assertFalse(flags.hasCompleted.value)
             assertFailsWith<kotlinx.coroutines.CancellationException> { OnboardingState(flags).completeOnboarding() }
         } finally { scope.cancel() }
+    }
+
+    @Test fun `cancelled active write abandons queued waiters and releases existing and later shutdown`() = runTest {
+        for ((shutdownBeforeCancellation, cancelWorker) in listOf(
+            true to false, false to false, true to true, false to true,
+        )) {
+            val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val activeFailure = CancellationException("active write cancelled")
+            val persisted = mutableListOf<String>()
+            try {
+                val flags = WriteBehindOnboardingFlags(
+                    emptyMap(), scope, { key, _ ->
+                        persisted += key
+                        started.complete(Unit)
+                        release.await()
+                        throw activeFailure
+                    },
+                )
+                val active = async { runCatching { flags.persistBoolean("active", true) } }
+                started.await()
+                val cancelledQueued = async { flags.persistBoolean("cancelled queued", true) }
+                val queued = async { runCatching { flags.persistBoolean("queued", true) } }
+                runCurrent()
+                assertFalse(active.isCompleted)
+                assertFalse(cancelledQueued.isCompleted)
+                assertFalse(queued.isCompleted)
+                cancelledQueued.cancel()
+                cancelledQueued.join()
+                assertTrue(cancelledQueued.isCancelled)
+                val stopping = if (shutdownBeforeCancellation) async { flags.shutdown() } else null
+                runCurrent()
+                if (stopping != null) assertFalse(stopping.isCompleted)
+                if (cancelWorker) scope.cancel() else release.complete(Unit)
+                withTimeout(1_000) {
+                    val cancelled = active.await().exceptionOrNull()
+                    assertTrue(cancelled is CancellationException)
+                    if (!cancelWorker) assertEquals(activeFailure.message, cancelled?.message)
+                    val abandoned = queued.await().exceptionOrNull()
+                    assertTrue(abandoned is CancellationException)
+                    assertEquals("Onboarding preference writer stopped", abandoned?.message)
+                    stopping?.await()
+                    flags.shutdown()
+                }
+                assertEquals(listOf("active"), persisted)
+                assertFalse(flags.getBoolean("active"))
+                assertFalse(flags.getBoolean("queued"))
+                assertFalse(flags.hasCompleted.value)
+                assertFailsWith<CancellationException> { flags.persistBoolean("late", true) }
+            } finally { release.complete(Unit); scope.cancel() }
+        }
+    }
+
+    @Test fun `failure callback cancellation still abandons queued work and completes captured shutdown`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val writeFailure = IOException("disk unavailable")
+        val reported = mutableListOf<Throwable>()
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ ->
+                    started.complete(Unit)
+                    release.await()
+                    throw writeFailure
+                },
+                onFailure = {
+                    reported += it
+                    throw CancellationException("reporting cancelled")
+                },
+            )
+            val active = async { runCatching { flags.persistBoolean("active", true) } }
+            started.await()
+            val queued = async { runCatching { flags.persistBoolean("queued", true) } }
+            runCurrent()
+            assertFalse(queued.isCompleted)
+            val stopping = async { flags.shutdown() }
+            runCurrent()
+            assertFalse(stopping.isCompleted)
+            release.complete(Unit)
+            withTimeout(1_000) {
+                assertEquals(writeFailure.message, active.await().exceptionOrNull()?.message)
+                assertTrue(queued.await().exceptionOrNull() is CancellationException)
+                stopping.await()
+                flags.shutdown()
+            }
+            assertEquals(listOf(writeFailure), reported)
+            assertFalse(flags.hasCompleted.value)
+        } finally { release.complete(Unit); scope.cancel() }
     }
 
     @Test fun `retirement during real staging remains incomplete on preference reload and can retry`() =

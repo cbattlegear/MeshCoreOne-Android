@@ -39,6 +39,7 @@ class NotificationEnrollmentWitness internal constructor(
     private val reporter: StorageIssueReporter = AndroidStorageIssueReporter,
     private val newWitnessId: () -> UUID = UUID::randomUUID,
     private val fault: ((WritePoint) -> Unit)? = null,
+    private val synchronize: (File) -> Unit = AndroidWitnessDurability::synchronize,
 ) {
     constructor(context: Context, acknowledgment: ForegroundWitnessAcknowledgment) : this(
         File(context.applicationContext.noBackupFilesDir, "notification-enrollment-witness-v1.db"),
@@ -198,7 +199,7 @@ class NotificationEnrollmentWitness internal constructor(
                 }
             }
             if (result is WitnessMutation.Stored) {
-                syncCommittedFile()
+                synchronize(file)
                 fault?.invoke(WritePoint.COMMITTED)
                 // A failed/lost readback is not a successful write acknowledgment.
                 open().use { db ->
@@ -306,20 +307,6 @@ class NotificationEnrollmentWitness internal constructor(
         DatabaseErrorHandler { throw Invalid(WitnessProblem.CORRUPT_STORAGE) },
     )
 
-    private fun syncCommittedFile() {
-        try {
-            val committed = Os.open(file.absolutePath, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
-            try { Os.fsync(committed) } finally { Os.close(committed) }
-            val directory = Os.open(requireNotNull(file.parent), OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
-            try {
-                if (!OsConstants.S_ISDIR(Os.fstat(directory).st_mode)) throw IOException("Witness parent is not a directory")
-                Os.fsync(directory)
-            } finally { Os.close(directory) }
-        } catch (failure: ErrnoException) {
-            throw IOException("Witness synchronization failed", failure)
-        }
-    }
-
     private inline fun <T> transaction(db: SQLiteDatabase, action: () -> T): T {
         // API31 has no framework read-only transaction API. Existing-file opens prohibit creation
         // and locale metadata; observation issues only SELECTs within this coherent native snapshot.
@@ -329,6 +316,22 @@ class NotificationEnrollmentWitness internal constructor(
             action().also { db.setTransactionSuccessful() }
         } finally {
             db.endTransaction()
+        }
+
+        internal object AndroidWitnessDurability {
+            fun synchronize(file: File) {
+                try {
+                    val committed = Os.open(file.absolutePath, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+                    try { Os.fsync(committed) } finally { Os.close(committed) }
+                    val directory = Os.open(requireNotNull(file.parent), OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+                    try {
+                        if (!OsConstants.S_ISDIR(Os.fstat(directory).st_mode)) throw IOException("Witness parent is not a directory")
+                        Os.fsync(directory)
+                    } finally { Os.close(directory) }
+                } catch (failure: ErrnoException) {
+                    throw IOException("Witness synchronization failed", failure)
+                }
+            }
         }
     }
 

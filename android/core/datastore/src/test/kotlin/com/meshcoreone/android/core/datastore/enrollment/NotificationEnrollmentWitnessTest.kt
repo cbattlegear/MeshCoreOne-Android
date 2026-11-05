@@ -4,6 +4,8 @@ package com.meshcoreone.android.core.datastore.enrollment
 import android.database.sqlite.SQLiteDatabase
 import java.io.File
 import java.io.IOException
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.util.UUID
 import javax.crypto.KeyGenerator
 import javax.crypto.Mac
@@ -328,6 +330,15 @@ class NotificationEnrollmentWitnessTest {
     }
 
     @Test
+    fun failedFileOrDirectorySynchronizationNeverAcknowledgesFreshAuthorization() = runBlocking {
+        val f = fixture()
+        f.synchronize = { throw IOException("synchronization failed") }
+        assertEquals(WitnessMutation.Indeterminate(f.operation), f.store().authorize(f.request))
+        assertFalse(assertIs<WitnessMutation.Stored>(f.store().authorize(f.request)).newlyAuthorized)
+        assertEquals(1, f.keys.created)
+    }
+
+    @Test
     fun failedInitialAllocationOrKeyCreationNeverRecreatesPartialStorage() = runBlocking {
         for (point in listOf(
             NotificationEnrollmentWitness.WritePoint.ALLOCATED,
@@ -400,11 +411,17 @@ class NotificationEnrollmentWitnessTest {
             ForegroundAcknowledgmentResult.NewlyVerified(it)
         }
         val failures = mutableListOf<StorageFailure>()
+        // ShadowLinux uses RandomAccessFile for Os.open and cannot open directories. Exercise
+        // real JVM file/directory force here, not a purported Android Os/Keystore device proof.
+        var synchronize: (File) -> Unit = { file ->
+            FileChannel.open(file.toPath(), StandardOpenOption.READ).use { it.force(true) }
+            FileChannel.open(file.parentFile.toPath(), StandardOpenOption.READ).use { it.force(true) }
+        }
         fun store(fault: ((NotificationEnrollmentWitness.WritePoint) -> Unit)? = null) =
             NotificationEnrollmentWitness(file, keys, ForegroundWitnessAcknowledgment {
                 verifications++
                 verification(it)
-            }, StorageIssueReporter { failures.add(it) }, fault = fault)
+            }, StorageIssueReporter { failures.add(it) }, fault = fault, synchronize = { synchronize(it) })
 
         suspend fun authorize() = assertIs<WitnessMutation.Stored>(store().authorize(request)).record
         fun preparing() = WitnessCreationReceipt(operation, 1, JournalPhase.PREPARING, operation.creationNonce, null)

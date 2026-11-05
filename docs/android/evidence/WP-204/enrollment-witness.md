@@ -90,10 +90,15 @@ detection, OS text survival, current-generation ingress fencing or readiness.
 ## Verification state
 
 At initial authoring, no Kotlin compilation or test execution is claimed.
-The two test classes contain 25 native-SQLite methods at SDK31/37 and three
+The two test classes contain 26 native-SQLite methods at SDK31/37 and three
 framework-lock/key-specification methods at SDK31/32/33/37. Tests use explicit
 test-only JCE keys; even successful Robolectric execution is not AndroidKeystore
 device, reboot, process-death, power-loss or restore-device evidence.
+Robolectric 4.17 ShadowLinux implements `Os.open` using RandomAccessFile and
+cannot open a directory. Persistence tests therefore inject actual JVM
+FileChannel file/directory force, not an Android fsync success-shaped fallback.
+The production default always uses Android Os and fails indeterminately when
+synchronization fails; a regression explicitly injects that failure.
 
 The documented verification-venv interpreter was absent. The installed pinned
 Python 3.12.4 ran:

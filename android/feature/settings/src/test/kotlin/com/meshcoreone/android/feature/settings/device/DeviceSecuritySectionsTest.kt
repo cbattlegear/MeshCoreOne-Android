@@ -448,7 +448,7 @@ class DefaultFloodScopeStateHolderTest {
         assertTrue(bound.state.value.isApplying)
         bound.select(null)
         scheduler.runCurrent()
-        assertEquals(listOf("zone 2"), calls)
+        assertEquals(listOf<String?>("zone 2"), calls)
         release.complete(Unit)
         scheduler.runCurrent()
         assertFalse(bound.state.value.isApplying)

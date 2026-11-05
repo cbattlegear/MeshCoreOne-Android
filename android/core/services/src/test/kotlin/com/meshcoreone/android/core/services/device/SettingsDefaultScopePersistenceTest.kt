@@ -27,7 +27,7 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsDefaultScopePersistenceTest {
     private suspend fun SettingsService.selectScope(name: String?) = setDefaultFloodScopePersisted(name) {
-        DeviceDTO(radioId = RADIO, publicKey = filled(1), knownRegions = listOf("EU868", "US915").snapshot())
+        DeviceDTO(radioId = RADIO, publicKey = filled(1), nodeName = "Test", knownRegions = listOf("EU868", "US915").snapshot())
     }
 
     @Test fun persistenceFailureReachesTheCallerAndTheSameScopeCanBeRetried() = runTest {
@@ -177,7 +177,8 @@ class SettingsDefaultScopePersistenceTest {
         val region = "\u00e9".repeat(16)
         val radioName = "\u00e9".repeat(15)
         val device = DeviceDTO(
-            radioId = RADIO, publicKey = filled(1), firmwareVersion = 11u, knownRegions = listOf(region).snapshot(),
+            radioId = RADIO, publicKey = filled(1), nodeName = "Test", firmwareVersion = 11u,
+            knownRegions = listOf(region).snapshot(),
         )
         val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
             subscription.events.collect {

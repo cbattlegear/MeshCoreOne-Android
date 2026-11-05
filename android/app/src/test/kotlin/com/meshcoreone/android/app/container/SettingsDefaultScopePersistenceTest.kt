@@ -56,7 +56,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     h.manager.connectedDevice?.defaultFloodScopeName == "EU868"
             }
             assertEquals(before.copy(defaultFloodScopeName = "EU868"), store.fetchDevice(before.id))
-            assertEquals(listOf("EU868", "EU868"), radio.writes)
+            assertEquals(listOf<String?>("EU868", "EU868"), radio.writes)
         }
     }
 
@@ -90,7 +90,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 }
                 h.settle()
                 assertFalse(removal.isCompleted)
-                assertEquals(listOf("EU868"), radio.writes)
+                assertEquals(listOf<String?>("EU868"), radio.writes)
                 assertEquals(before, store.fetchDevice(before.id))
                 release.complete(Unit)
                 h.eventually("selection and queued region removal acknowledge") {
@@ -269,7 +269,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
             }
             assertEquals(1, rejected)
             assertTrue(failures.isEmpty())
-            assertEquals(listOf("EU868"), radio.writes)
+            assertEquals(listOf<String?>("EU868"), radio.writes)
             assertEquals(before.copy(defaultFloodScopeName = "EU868", lastContactSync = 9876u), store.fetchDevice(before.id))
             assertEquals(store.fetchDevice(before.id), h.manager.connectedDevice)
         }

@@ -36,6 +36,7 @@ import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueConfig
 import com.meshcoreone.android.core.services.messaging.MessageService
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
+import com.meshcoreone.android.core.services.messaging.DirectAckNonsettlementException
 import com.meshcoreone.android.core.services.messaging.MessagePollingService
 import com.meshcoreone.android.core.services.messaging.PoolBackoffConfig
 import com.meshcoreone.android.core.services.contacts.ChannelService
@@ -70,7 +71,7 @@ import org.robolectric.annotation.SQLiteMode
 @OptIn(ExperimentalCoroutinesApi::class)
 class MessagingRoomIntegrationTest {
     private val scheduler = TestCoroutineScheduler()
-    private val process = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
+    private var process = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
     private val radio = RadioId(UUID.fromString("AAAAAAAA-1111-2222-3333-444444444444"))
     private val other = RadioId(UUID.fromString("BBBBBBBB-1111-2222-3333-444444444444"))
     private val self = Bytes(ByteArray(32) { 1 })
@@ -137,9 +138,10 @@ class MessagingRoomIntegrationTest {
         sessionTimeout: Double = 2.0,
         channelQuery: MessagingChannelQuery = MessagingChannelQuery { null },
         queueConfig: ChatSendQueueConfig = ChatSendQueueConfig(),
+        processEpoch: ProcessEpoch = ProcessEpoch(UUID.fromString("CCCCCCCC-1111-2222-3333-444444444444")),
     ) {
         val scope = CoroutineScope(SupervisorJob(process.coroutineContext[Job]) + StandardTestDispatcher(scheduler))
-        val token = SessionToken(ProcessEpoch(UUID.fromString("CCCCCCCC-1111-2222-3333-444444444444")), Generation(number), radio)
+        val token = SessionToken(processEpoch, Generation(number), radio)
         val signals = RoomSignals(token)
         val firmware = RoomFirmware()
         val diagnostics = mutableListOf<MessagingDiagnostic>()
@@ -147,7 +149,8 @@ class MessagingRoomIntegrationTest {
         val service = MessageService(token, self, session, persistence, signals, scope, config, clock,
             reporter = MessagingIssueReporter { diagnostics += it },
             directAckAuthority = persistence as? DirectAckAuthority ?: store,
-            directPendingCompletionAuthority = persistence as? DirectPendingCompletionAuthority ?: store)
+            directPendingCompletionAuthority = persistence as? DirectPendingCompletionAuthority ?: store,
+            directAckRadioExclusionAuthority = persistence as? DirectAckRadioExclusionAuthority ?: store)
         val queue = ChatSendQueueService(token, persistence, service, channelQuery,
             OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, scope, queueConfig, clock,
             reporter = MessagingIssueReporter { diagnostics += it })
@@ -158,7 +161,8 @@ class MessagingRoomIntegrationTest {
     }
 
     private open inner class DirectRoles(private val actual: RoomPersistenceStore) : PersistenceStoreProtocol by actual,
-        DirectAckAuthority by actual, DirectPendingCompletionAuthority by actual {
+        DirectAckAuthority by actual, DirectPendingCompletionAuthority by actual,
+        DirectAckRadioExclusionAuthority by actual {
         private val keys = mutableMapOf<DirectAckAttempt, EntityKey>()
         private val intents = mutableMapOf<DirectAckIntent, EntityKey>()
         protected fun attemptKey(attempt: DirectAckAttempt) = requireNotNull(keys[attempt])
@@ -171,11 +175,11 @@ class MessagingRoomIntegrationTest {
                 is DirectAckIntentResult.Rejected -> Unit
             }
         }
-        override suspend fun beginDirectAckAttempt(
+        override suspend fun beginDirectAckAttemptRequiringEmissionTracking(
             intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
         ): DirectAckBeginResult {
             val key = requireNotNull(intents[intent])
-            val result = actual.beginDirectAckAttempt(intent, firstWireRequestId, predictedAckCode)
+            val result = actual.beginDirectAckAttemptRequiringEmissionTracking(intent, firstWireRequestId, predictedAckCode)
             when (result) {
                 is DirectAckBeginResult.Begun -> keys[result.attempt] = key
                 is DirectAckBeginResult.AlreadyBegun -> keys[result.attempt] = key
@@ -419,6 +423,105 @@ class MessagingRoomIntegrationTest {
         g.signals.set(DeviceConnectionState.READY); runCurrent(); advanceTimeBy(3501); runCurrent()
         assertEquals(100u, g.firmware.sent().first().readUInt32LE(3))
         assertEquals(sort, assertNotNull(store.fetchMessage(EntityKey(radio, message.id))).sortDate); g.stop()
+    }
+
+    @Test fun processOwnerAndFileStoreRestartReportsUnverifiableUnrelatedAckWithoutClearingUnknownEmission() = runTest(scheduler) {
+        val name = "ack-restart.db"
+        store.close(); db.close()
+        db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
+        seed()
+        val old = RadioGeneration(150)
+        old.firmware.acknowledge = false
+        old.firmware.acceptedAck = Bytes.of(0x10, 0x20, 0x30, 0x40)
+        val responseGate = CompletableDeferred<Unit>()
+        old.firmware.acceptanceGate = responseGate
+        old.start()
+        val interrupted = old.scope.async { old.service.sendDirectMessage("interrupted old claim", contact) }
+        runCurrent()
+        assertEquals(1, old.firmware.sent().size)
+        val oldMessageID = store.fetchMessages(EntityKey(radio, contact.id)).single().id
+        val marked = assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio))
+            .snapshot.wires.single()
+        assertEquals(DirectAckRadioWireOutcome.MayHaveWritten, marked.outcome)
+        assertNotNull(marked.emissionRequestId)
+
+        assertNotNull(process.coroutineContext[Job]).cancelAndJoin()
+        assertFailsWith<CancellationException> { interrupted.await() }
+        responseGate.complete(Unit)
+        old.stop()
+        val oldRow = assertNotNull(store.fetchMessage(EntityKey(radio, oldMessageID)))
+        assertEquals(marked, assertIs<DirectAckRadioEvidenceObservation.Found>(
+            store.inspectDirectAckRadioEvidence(radio)).snapshot.wires.single())
+        store.close(); db.close()
+
+        process = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
+        db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
+        store.warmUp()
+        assertEquals(oldRow, store.fetchMessage(EntityKey(radio, oldMessageID)))
+        assertEquals(marked, assertIs<DirectAckRadioEvidenceObservation.Found>(
+            store.inspectDirectAckRadioEvidence(radio)).snapshot.wires.single())
+        val fresh = RadioGeneration(1, processEpoch = ProcessEpoch(UUID.fromString("DDDDDDDD-1111-2222-3333-444444444444")))
+        assertNotEquals(old.token.epoch, fresh.token.epoch)
+        fresh.firmware.acknowledge = false
+        val actual = Bytes.of(0x50, 0x60, 0x70, 0x80)
+        fresh.firmware.acceptedAck = actual
+        fresh.start(); fresh.service.startEventMonitoring()
+        val events = fresh.service.statusEvents()
+        val observed = mutableListOf<MessageStatusEvent>()
+        val listener = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            events.events.collect { observed += it.event }
+        }
+        try {
+            val sent = fresh.service.sendDirectMessage("unrelated fresh claim", contact)
+            runCurrent()
+            assertNotEquals(oldMessageID, sent.id)
+            assertEquals(MessageStatus.SENT, sent.status)
+            assertEquals(actual.readUInt32LE(0), sent.ackCode)
+            assertNull(sent.roundTripTime)
+            assertEquals(1, fresh.firmware.sent().size)
+            val beforeAck = observed.toList()
+            fresh.firmware.pushAck(actual, 999u); runCurrent()
+
+            val diagnostic = fresh.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().single {
+                it.operation == "ackAmbiguous.${sent.id}"
+            }
+            val uncertain = assertIs<DirectAckNonsettlementException>(diagnostic.cause)
+            assertEquals(fresh.token, uncertain.token)
+            assertEquals(sent.id, uncertain.messageID)
+            assertEquals(actual.readUInt32LE(0), uncertain.acknowledgedCode)
+            assertEquals(setOf(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION), uncertain.reasons.toSet())
+            assertEquals(sent, store.fetchMessage(EntityKey(radio, sent.id)))
+            assertEquals(oldRow, store.fetchMessage(EntityKey(radio, oldMessageID)))
+            assertEquals(beforeAck, observed)
+            assertTrue(observed.none {
+                it is MessageStatusEvent.Failed ||
+                    it is MessageStatusEvent.StatusResolved && it.status == MessageStatus.DELIVERED
+            })
+            assertEquals(1, fresh.service.pendingAckCount)
+            assertEquals(1, fresh.firmware.sent().size)
+            assertEquals(1, old.firmware.sent().size)
+            val persisted = assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio)).snapshot
+            assertEquals(DirectAckRadioEvidenceCoverage.COMPLETE, persisted.coverage)
+            assertEquals(2, persisted.wires.size)
+            assertEquals(marked, persisted.wires.single { it.emissionRequestId == marked.emissionRequestId })
+            assertEquals(DirectAckRadioWireOutcome.Accepted(actual.readUInt32LE(0)),
+                persisted.wires.single { it.claimRequestId != marked.claimRequestId }.outcome)
+            advanceTimeBy(31_001); runCurrent()
+            fresh.service.checkExpiredAcks(); runCurrent()
+            assertEquals(0, fresh.service.pendingAckCount)
+            assertEquals(sent, store.fetchMessage(EntityKey(radio, sent.id)))
+            assertEquals(oldRow, store.fetchMessage(EntityKey(radio, oldMessageID)))
+            assertEquals(beforeAck, observed)
+            assertEquals(1, fresh.firmware.sent().size)
+            assertEquals(persisted, assertIs<DirectAckRadioEvidenceObservation.Found>(
+                store.inspectDirectAckRadioEvidence(radio)).snapshot)
+        } finally {
+            withContext(NonCancellable) {
+                listener.cancelAndJoin()
+                events.close()
+                fresh.stop()
+            }
+        }
     }
 
     @OriginalCase("ChatSendQueueServiceTests::hydrate fetch returns rows in sequence order()")
@@ -1447,11 +1550,11 @@ class MessagingRoomIntegrationTest {
                 DirectAckIntentResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
             } else super.captureDirectAckIntent(lease, key, requestId, mode, pendingSendId)
 
-            override suspend fun beginDirectAckAttempt(
+            override suspend fun beginDirectAckAttemptRequiringEmissionTracking(
                 intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
             ): DirectAckBeginResult {
                 if (stage == "beforeBegin") throw fault
-                val result = super.beginDirectAckAttempt(intent, firstWireRequestId, predictedAckCode)
+                val result = super.beginDirectAckAttemptRequiringEmissionTracking(intent, firstWireRequestId, predictedAckCode)
                 assertIs<DirectAckBeginResult.Begun>(result)
                 beginsCommitted++
                 throw fault
@@ -1517,31 +1620,36 @@ class MessagingRoomIntegrationTest {
         val acceptedAttempts = mutableListOf<DirectAckAttempt>()
         val deliveredAttempts = mutableListOf<DirectAckAttempt>()
         val recording = object : DirectRoles(actual) {
-            override suspend fun beginDirectAckAttempt(
+            override suspend fun beginDirectAckAttemptRequiringEmissionTracking(
                 intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
-            ): DirectAckBeginResult = super.beginDirectAckAttempt(intent, firstWireRequestId, predictedAckCode).also {
+            ): DirectAckBeginResult = super.beginDirectAckAttemptRequiringEmissionTracking(intent, firstWireRequestId, predictedAckCode).also {
                 if (it is DirectAckBeginResult.Begun) {
                     registrations += it.attempt
                     requests += it.receipt.requestId
                 }
             }
-            override suspend fun recordDirectSendAccepted(
-                attempt: DirectAckAttempt, wireRequestId: UUID, ackCode: UInt,
-            ): DirectAckMutationResult {
+            override suspend fun resolveDirectAckWireEmission(
+                handle: DirectAckEmissionHandle, resolutionRequestId: UUID, resolution: DirectAckEmissionResolution,
+            ): DirectAckEmissionMutationResult {
                 if (loseAcceptanceRecord && !lostAcceptance) {
                     lostAcceptance = true
                     throw fault
                 }
+                return actual.resolveDirectAckWireEmission(handle, resolutionRequestId, resolution)
+            }
+            override suspend fun recordDirectSendAccepted(
+                attempt: DirectAckAttempt, wireRequestId: UUID, ackCode: UInt,
+            ): DirectAckMutationResult {
                 return actual.recordDirectSendAccepted(attempt, wireRequestId, ackCode).also {
                     if (it is DirectAckMutationResult.Applied || it is DirectAckMutationResult.AlreadyApplied) {
                         acceptedAttempts += attempt
                     }
                 }
             }
-            override suspend fun settleDirectAck(
+            override suspend fun settleDirectAckExcludingRadioHistory(
                 attempt: DirectAckAttempt, ackCode: UInt, roundTripTime: UInt?,
-            ): DirectAckMutationResult = actual.settleDirectAck(attempt, ackCode, roundTripTime).also {
-                if (it is DirectAckMutationResult.Applied || it is DirectAckMutationResult.AlreadyApplied) {
+            ): DirectAckRadioSettlementResult = actual.settleDirectAckExcludingRadioHistory(attempt, ackCode, roundTripTime).also {
+                if (it is DirectAckRadioSettlementResult.Settled) {
                     deliveredAttempts += attempt
                 }
             }
@@ -1552,16 +1660,18 @@ class MessagingRoomIntegrationTest {
         val first = if (loseAcceptanceRecord) {
             g.firmware.acknowledge = false
             g.firmware.acceptedAck = code
-            val saved = g.service.sendDirectMessage("same actual across claims", contact)
+            assertSame(fault, assertFailsWith<PersistenceStoreException> {
+                g.service.sendDirectMessage("same actual across claims", contact)
+            })
+            val saved = store.fetchMessages(EntityKey(radio, contact.id)).single()
             assertEquals(1, g.firmware.sent().size)
             assertEquals(code, g.firmware.lastAck)
             assertTrue(acceptedAttempts.isEmpty())
             assertNull(db.directAcks().wires(radio.value, requests.single()).single().acceptedCode)
             assertEquals(MessageStatus.PENDING, saved.status)
             assertNull(saved.ackCode)
-            assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
-                it.operation == "dmSent.${saved.id}" && it.cause === fault
-            })
+            val evidence = assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio))
+            assertEquals(DirectAckRadioWireOutcome.MayHaveWritten, evidence.snapshot.wires.single().outcome)
             assertEquals(saved, store.fetchMessage(EntityKey(radio, saved.id)))
             saved
         } else {
@@ -1658,10 +1768,10 @@ class MessagingRoomIntegrationTest {
         val settlements = mutableListOf<DirectAckAttempt>()
         val actual = store
         val barrier = object : DirectRoles(actual) {
-            override suspend fun beginDirectAckAttempt(
+            override suspend fun beginDirectAckAttemptRequiringEmissionTracking(
                 intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
             ): DirectAckBeginResult {
-                val result = super.beginDirectAckAttempt(intent, firstWireRequestId, predictedAckCode)
+                val result = super.beginDirectAckAttemptRequiringEmissionTracking(intent, firstWireRequestId, predictedAckCode)
                 if (result is DirectAckBeginResult.Begun) {
                     registrations += result.attempt to firstWireRequestId
                     predictions += predictedAckCode
@@ -1688,11 +1798,11 @@ class MessagingRoomIntegrationTest {
                 if (change is DirectAckBookkeeping.SendCompleted) completions += attempt
                 return actual.applyDirectAckBookkeeping(attempt, requestId, change)
             }
-            override suspend fun settleDirectAck(
+            override suspend fun settleDirectAckExcludingRadioHistory(
                 attempt: DirectAckAttempt, ackCode: UInt, roundTripTime: UInt?,
-            ): DirectAckMutationResult {
+            ): DirectAckRadioSettlementResult {
                 settlements += attempt
-                return actual.settleDirectAck(attempt, ackCode, roundTripTime)
+                return actual.settleDirectAckExcludingRadioHistory(attempt, ackCode, roundTripTime)
             }
         }
         val g = RadioGeneration(142, barrier, MessageServiceConfig(maxAttempts = 1))
@@ -2093,11 +2203,11 @@ class MessagingRoomIntegrationTest {
         val release = CompletableDeferred<Unit>()
         val actual = store
         val barrier = object : DirectRoles(actual) {
-            override suspend fun beginDirectAckAttempt(
+            override suspend fun beginDirectAckAttemptRequiringEmissionTracking(
                 intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
             ): DirectAckBeginResult {
                 entered.complete(Unit); release.await()
-                return super.beginDirectAckAttempt(intent, firstWireRequestId, predictedAckCode)
+                return super.beginDirectAckAttemptRequiringEmissionTracking(intent, firstWireRequestId, predictedAckCode)
             }
         }
         val g = RadioGeneration(140, barrier, MessageServiceConfig(maxAttempts = 1))
@@ -2141,11 +2251,11 @@ class MessagingRoomIntegrationTest {
         var writeGuardInstalled = false
         val actual = store
         val guarded = object : DirectRoles(actual) {
-            override suspend fun settleDirectAck(
+            override suspend fun settleDirectAckExcludingRadioHistory(
                 attempt: DirectAckAttempt, ackCode: UInt, roundTripTime: UInt?,
-            ): DirectAckMutationResult = actual.settleDirectAck(attempt, ackCode, roundTripTime).also {
+            ): DirectAckRadioSettlementResult = actual.settleDirectAckExcludingRadioHistory(attempt, ackCode, roundTripTime).also {
                 if (rejectWriteAfterDelivery && !writeGuardInstalled &&
-                    (it is DirectAckMutationResult.Applied || it is DirectAckMutationResult.AlreadyApplied)) {
+                    it is DirectAckRadioSettlementResult.Settled) {
                     db.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_delivered_rewrite AFTER UPDATE ON messages " +
                         "BEGIN SELECT RAISE(FAIL, 'finalization rewrote listener delivery'); END")
                     writeGuardInstalled = true

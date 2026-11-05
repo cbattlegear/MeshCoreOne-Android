@@ -31,19 +31,10 @@ class NativeMessagingTest {
             assertEquals(listOf(0, 1, 2, 3, 4), h.sends(CommandCode.SEND_MESSAGE).map { it[2].toInt() }); h.close()
         },
         native("ackBeforeMessageSentCannotCauseSecondWireSendOrOverwriteFirmwareRTT") {
-            val h = Harness(this); h.start(); h.service.startEventMonitoring()
-            h.transport.acknowledge = true; h.transport.ackBeforeAcceptance = true
-            val m = h.service.sendMessageWithRetry("fast", h.contact)
-            assertEquals(MessageStatus.DELIVERED, m.status); assertEquals(123u, m.roundTripTime)
-            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size); assertEquals(0, h.service.pendingAckCount); h.close()
+            earlyAckCompletesOnce(actualOverride = null)
         },
         native("firmwareAckMismatchStillMatchesAnEarlyBufferedAuthoritativeAck") {
-            val h = Harness(this); h.start()
-            h.transport.acknowledge = true; h.transport.ackBeforeAcceptance = true; h.transport.expectedAckOverride = Bytes.of(9, 8, 7, 6)
-            val m = h.service.sendMessageWithRetry("different firmware code", h.contact)
-            assertEquals(MessageStatus.DELIVERED, m.status); assertEquals(0x06070809u, m.ackCode)
-            assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
-            assertTrue(h.diagnostics.any { it is MessagingDiagnostic.AckCodeMismatch }); assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size); h.close()
+            earlyAckCompletesOnce(actualOverride = Bytes.of(9, 8, 7, 6))
         },
         native("lateDifferentActualAckRetiresTrackerAndCompletesRetryWithListener") {
             lateDifferentActualAckCompletes(queued = false, listener = true)
@@ -89,6 +80,13 @@ class NativeMessagingTest {
             assertEquals(later, h.stored(later.id))
             assertFalse(tracker.receipt.isCompleted)
             assertNull(assertNotNull(h.service.pendingAck(later.id)).acknowledgement)
+            val uncertain = assertIs<DirectAckNonsettlementException>(
+                h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().single {
+                    it.operation == "ackAmbiguous.${later.id}"
+                }.cause)
+            assertEquals(h.service.token, uncertain.token)
+            assertEquals(later.id, uncertain.messageID)
+            assertEquals(setOf(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION), uncertain.reasons.toSet())
             assertTrue(statuses(h.service, events).isEmpty())
             assertEquals(3, h.sends(CommandCode.SEND_MESSAGE).size)
             h.close()
@@ -349,20 +347,26 @@ class NativeMessagingTest {
                 val actual = Bytes.of(9, 8, 7, 6)
                 h.transport.expectedAckOverride = actual
                 release.complete(Unit); runCurrent()
-                blocker.await(); old.await(); newClaim.await()
+                blocker.await()
+                val oldFailure = old.await()
+                assertEquals("Direct ACK authority: INVALIDATED",
+                    assertIs<PersistenceStoreError.SaveFailed>(oldFailure.error).reason)
+                newClaim.await()
                 assertEquals(NotificationActionReceipt.State.READY, oldReceipt.state)
                 assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
                 val before = h.stored(message.id)
+                val tracker = assertNotNull(service.pendingAck(message.id))
                 val events = service.statusEvents()
                 h.transport.pushAck(actual, 999u); runCurrent()
-                assertEquals(before, h.stored(message.id))
+                assertEquals(before.copy(status = MessageStatus.DELIVERED, roundTripTime = 999u), h.stored(message.id))
                 assertEquals(MessageStatus.SENT, before.status)
-                assertNull(assertNotNull(service.pendingAck(message.id)).acknowledgement)
-                assertFalse(assertNotNull(service.pendingAck(message.id)).receipt.isCompleted)
-                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                assertEquals(MeshAcknowledgement(actual, 999u), tracker.receipt.await())
+                assertNull(service.pendingAck(message.id))
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none {
                     it.operation.startsWith("ackAmbiguous.")
                 })
-                assertTrue(statuses(service, events).isEmpty())
+                assertEquals(listOf(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 999u)),
+                    statuses(service, events))
             } finally {
                 withContext(NonCancellable) {
                     release.complete(Unit)
@@ -704,9 +708,14 @@ class NativeMessagingTest {
                 assertFalse(secondTracker.receipt.isCompleted)
                 assertNull(assertNotNull(h.service.pendingAck(first.id)).acknowledgement)
                 assertNull(assertNotNull(h.service.pendingAck(secondID)).acknowledgement)
-                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
-                    it.operation.startsWith("ackAmbiguous.")
-                })
+                val uncertain = assertIs<DirectAckNonsettlementException>(
+                    h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().single {
+                        it.operation == "ackAmbiguous.${first.id}"
+                    }.cause)
+                assertEquals(h.service.token, uncertain.token)
+                assertEquals(first.id, uncertain.messageID)
+                assertEquals(actual.readUInt32LE(0), uncertain.acknowledgedCode)
+                assertEquals(setOf(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE), uncertain.reasons.toSet())
                 assertTrue(statuses(h.service, events).isEmpty())
                 gate.complete(Unit); runCurrent(); second.await()
                 h.transport.pushAck(actual, 888u); runCurrent()
@@ -746,9 +755,14 @@ class NativeMessagingTest {
             h.transport.acknowledge = false
             h.transport.expectedAckOverride = actual
             h.transport.acceptanceGate = gate
+            val events = h.service.statusEvents()
+            val observed = mutableListOf<MessageStatusEvent>()
+            val collector = backgroundScope.launch { events.events.collect { observed += it.event } }
             val sending = async { h.service.sendDirectMessage("bounded early ACK", h.contact) }
             runCurrent()
             val id = h.store.messages.values.single().id
+            val before = h.stored(id)
+            val tracker = assertNotNull(h.service.pendingAck(id))
             repeat(64) {
                 h.transport.pushAck(Bytes.of(it, 0, 0, 0), 123u)
                 runCurrent()
@@ -762,15 +776,25 @@ class NativeMessagingTest {
             assertEquals(1, h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
                 .count { it.operation.startsWith("ackBuffer.") })
             assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
+            assertEquals(before, h.stored(id))
+            assertFalse(tracker.receipt.isCompleted)
+            assertTrue(observed.isEmpty())
             gate.complete(Unit); runCurrent()
             val accepted = sending.await()
             assertEquals(MessageStatus.SENT, accepted.status)
             assertNull(accepted.roundTripTime)
+            assertEquals(before.copy(status = MessageStatus.SENT, ackCode = actual.ackCodeUInt32), accepted)
+            assertFalse(tracker.receipt.isCompleted)
             h.transport.pushAck(actual, 123u); runCurrent()
             assertEquals(MessageStatus.DELIVERED, h.stored(id).status)
             assertEquals(123u, h.stored(id).roundTripTime)
+            assertEquals(accepted.copy(status = MessageStatus.DELIVERED, roundTripTime = 123u), h.stored(id))
+            assertEquals(MeshAcknowledgement(actual, 123u), tracker.receipt.await())
+            assertEquals(listOf(
+                MessageStatusEvent.StatusResolved(id, MessageStatus.SENT, null),
+                MessageStatusEvent.StatusResolved(id, MessageStatus.DELIVERED, 123u)), observed)
             assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
-            h.close()
+            collector.cancelAndJoin(); h.close()
         },
         native("wrongAckDoesNotResolveAndLateFirstAttemptAckStillResolvesSecondAttempt") {
             val h = Harness(this, MessageServiceConfig(maxAttempts = 2, floodAfter = 5)); h.start(); h.service.startEventMonitoring()
@@ -1057,6 +1081,54 @@ class NativeMessagingTest {
             p.close(); h.close()
         },
     )
+    private suspend fun TestScope.earlyAckCompletesOnce(actualOverride: Bytes?) {
+        val h = Harness(this); h.start(); h.service.startEventMonitoring()
+        val release = CompletableDeferred<Unit>()
+        h.transport.acknowledge = true
+        h.transport.ackBeforeAcceptance = true
+        h.transport.expectedAckOverride = actualOverride
+        h.transport.acceptanceGate = release
+        val events = h.service.statusEvents()
+        val sending = backgroundScope.async {
+            h.service.sendMessageWithRetry(if (actualOverride == null) "fast" else "different firmware code", h.contact)
+        }
+        try {
+            runCurrent()
+            val before = h.store.messages.values.single()
+            val tracker = assertNotNull(h.service.pendingAck(before.id))
+            val actual = actualOverride ?: tracker.ackCodes.single()
+            assertEquals(MessageStatus.PENDING, before.status)
+            assertEquals(1, h.service.bufferedAcknowledgementCount(before.id))
+            assertFalse(tracker.receipt.isCompleted)
+            assertNull(tracker.acknowledgement)
+            assertEquals(DirectAckRadioWireOutcome.MayHaveWritten,
+                assertIs<DirectAckRadioEvidenceObservation.Found>(
+                    h.store.directAckAuthority.inspectDirectAckRadioEvidence(RADIO)).snapshot.wires.single().outcome)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            release.complete(Unit); runCurrent()
+            val delivered = sending.await()
+            assertEquals(before.copy(status = MessageStatus.DELIVERED,
+                ackCode = actual.ackCodeUInt32, roundTripTime = 123u), delivered)
+            assertEquals(MessageStatus.DELIVERED, delivered.status)
+            assertEquals(123u, delivered.roundTripTime)
+            assertEquals(MeshAcknowledgement(actual, 123u), tracker.receipt.await())
+            assertEquals(0, h.service.pendingAckCount)
+            assertEquals(0, h.service.bufferedAcknowledgementCount(before.id))
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
+            if (actualOverride != null) {
+                assertEquals(0x06070809u, delivered.ackCode)
+                assertTrue(h.diagnostics.any { it is MessagingDiagnostic.AckCodeMismatch })
+            }
+            assertEquals(listOf(MessageStatusEvent.StatusResolved(before.id, MessageStatus.DELIVERED, 123u)),
+                statuses(h.service, events))
+        } finally {
+            withContext(NonCancellable) {
+                release.complete(Unit); sending.cancelAndJoin(); h.close()
+            }
+        }
+    }
+
     private suspend fun TestScope.legacyUnknownBlocksModernDelivery(acceptedCode: UInt?) {
         val h = Harness(this); h.start(); h.service.startEventMonitoring()
         h.transport.expectedAckOverride = Bytes.of(5, 6, 7, 8)

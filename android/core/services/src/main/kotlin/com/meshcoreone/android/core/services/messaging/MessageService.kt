@@ -87,6 +87,7 @@ class MessageService(
         val confirmedCodes = mutableSetOf<Bytes>()
         val bufferedAcknowledgements = mutableListOf<MeshAcknowledgement>()
         var acknowledgementBufferOverflow = false
+        var nonsettlement: DirectAckNonsettlementException? = null
     }
     private class AcceptedEmission(
         val handle: DirectAckEmissionHandle?,
@@ -790,16 +791,18 @@ class MessageService(
                     is DirectAckRadioSettlementReceipt.AlreadyApplied -> DirectAckMutationResult.AlreadyApplied(applied.receipt)
                 }
                 is DirectAckRadioSettlementResult.Nonsettling -> {
+                    val uncertainty = DirectAckNonsettlementException(
+                        token, messageID, ack.code.ackCodeUInt32, settled.reasons,
+                    )
                     synchronized(lock) {
                         pendingAcks[messageID]?.takeIf {
                             it.receipt === tracking.receipt && it.authority === attempt && it.acknowledgement == ack
                         }?.let {
                             pendingAcks[messageID] = it.copy(isDelivered = false, acknowledgement = null)
+                            directAuthorities[messageID]?.takeIf { it.attempt === attempt }?.nonsettlement = uncertainty
                         }
                     }
-                    remember("ackAmbiguous.$messageID", authorityFailure(
-                        "Radio exclusion denied delivery: ${settled.reasons.joinToString { it.name }}",
-                    ))
+                    remember("ackAmbiguous.$messageID", uncertainty)
                     return
                 }
                 is DirectAckRadioSettlementResult.Rejected -> DirectAckMutationResult.Rejected(settled.reason)
@@ -846,6 +849,12 @@ class MessageService(
             committed.roundTripTime != delivery.roundTripTime) throw authorityFailure("delivery readback changed")
         synchronized(lock) {
             if (pendingAcks[messageID]?.receipt === tracking.receipt) {
+                directAuthorities[messageID]?.takeIf { it.attempt === tracking.authority }?.let {
+                    if (retainedFailures["ackAmbiguous.$messageID"] === it.nonsettlement) {
+                        retainedFailures.remove("ackAmbiguous.$messageID")
+                    }
+                    it.nonsettlement = null
+                }
                 activeDirectClaims[messageID]?.takeIf { directAuthorities[messageID]?.attempt === tracking.authority }
                     ?.acknowledgement = ack
                 tracking.receipt.complete(ack)
@@ -1047,6 +1056,9 @@ class MessageService(
             val attempt = expectedAttempt ?: tracking?.authority ?: synchronized(lock) {
                 if (tracking == null) directAuthorities[messageID]?.attempt else null
             }
+            if (synchronized(lock) {
+                directAuthorities[messageID]?.takeIf { it.attempt === attempt }?.nonsettlement != null
+            }) return false
             if (attempt == null && tracking == null) {
                 if (synchronized(lock) { messageID in directIntentMessages }) {
                     throw authorityFailure("dispatch intent has no failure grant")

@@ -40,9 +40,9 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
     private class Emission(
         val attempt: Attempt,
         var receipt: DirectAckEmissionReceipt,
-        val resolutions: MutableMap<UUID, DirectAckEmissionResolution> = mutableMapOf(),
     ) : DirectAckEmissionHandle
     private val emissions = mutableMapOf<UUID, Emission>()
+    private val resolutions = mutableMapOf<Pair<UUID, UUID>, Pair<Emission, DirectAckEmissionResolution>>()
     private val trackedWires = mutableSetOf<Pair<UUID, UUID>>()
     private val saturatedRadios = mutableSetOf<RadioId>()
     private val radioMutations = Mutex()
@@ -122,8 +122,11 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
     ): DirectAckEmissionMutationResult = radioMutations.withLock {
         val emission = (handle as? Emission)?.takeIf { emissions[it.receipt.emissionRequestId] === it }
             ?: return@withLock DirectAckEmissionMutationResult.Rejected(DirectAckRejection.INVALID_HANDLE)
-        val replay = emission.resolutions[resolutionRequestId]
-        if (replay == resolution) return@withLock DirectAckEmissionMutationResult.AlreadyApplied(emission.receipt)
+        val operation = emission.attempt.receipt.requestId to resolutionRequestId
+        val replay = resolutions[operation]
+        if (replay != null && replay.first === emission && replay.second == resolution) {
+            return@withLock DirectAckEmissionMutationResult.AlreadyApplied(emission.receipt)
+        }
         store.authorityAccess("resolveDirectAckWireEmission")
         val prior = emission.receipt.evidence.outcome
         val next = when (resolution) {
@@ -139,8 +142,9 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
                 (prior as? DirectAckRadioWireOutcome.Conflict)?.definitelyUnsentObserved == true,
         )
         emission.receipt = emission.receipt.copy(
-            resolutionRequestId = resolutionRequestId, evidence = emission.receipt.evidence.copy(outcome = outcome))
-        emission.resolutions.putIfAbsent(resolutionRequestId, resolution)
+            resolutionRequestId = if (replay == null) resolutionRequestId else emission.receipt.resolutionRequestId,
+            evidence = emission.receipt.evidence.copy(outcome = outcome))
+        resolutions.putIfAbsent(operation, emission to resolution)
         if (resolution is DirectAckEmissionResolution.Accepted) {
             val value = emission.attempt
             value.receipt = value.receipt.copy(

@@ -86,6 +86,26 @@ only before commit. No committed-success fallback, Room context/runtime lease ch
 or identity-assertion weakening is introduced. The other two failures require
 separate repairs; this source correction alone is not Kotlin execution evidence.
 
+The two control-fixture repairs are separate from that production correction.
+The common harness uses an immediate Room transaction executor. Holding an external
+suspending transaction with that executor can hold Room's synchronized executor
+submission monitor while the test thread tries to submit the editor's transaction:
+the test cannot then reach its release. The held-transaction control now owns a
+single-thread transaction executor and its own actual Room store, and explicitly
+asserts that the barrier is inside an open transaction. It retains the busy,
+zero-SET, unchanged-live-row and committed-snapshot-before-SET assertions; the owned
+executor is shut down and awaited after store/database teardown.
+
+The retired-clear fixture previously reconnected firmware reporting Repeat off.
+DeviceDTO.fromConnection intentionally clears prior restoration data in that state,
+so no successor snapshot existed even before old clear resumed. The clear family
+now explicitly reconnects firmware reporting Repeat active, establishing a retained
+successor snapshot and asserting its presence before releasing the stale action.
+All original post-release full live/durable equality, snapshot, failure and fresh
+successor-action assertions remain. The save family still reports Repeat off and
+must retain no snapshot. Initialization/model semantics are unchanged. Neither
+fixture correction is accepted until fresh exact-head execution.
+
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive
 cancellation before SET, then a later manual RF edit and fresh enable/off would

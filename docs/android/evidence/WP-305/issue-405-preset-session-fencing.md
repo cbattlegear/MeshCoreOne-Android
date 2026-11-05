@@ -262,6 +262,40 @@ Queued-dispatcher controls require immediate reset state, actual Job cancellatio
 resumption, fresh-apply preservation, and rejection of an old apply that had not started yet.
 These authored controls have not executed in Kotlin.
 
+## Corrected handoff composition
+
+The separate owners supplied immutable combined Settings/core head
+`0e38149e1af61663954caf3c3bd072fe50932c41` from exact fc7. After source review,
+its six ordered commits were composed without conflicts onto producer head
+`5e9e3deb38432df1e850922c7be6828066f99f88`:
+
+| Original handoff | Local composition | Scope |
+|---|---|---|
+| `a785591c3b534fa0f0e36cf7593541d43d9ee8c9` | `7d493985e` | Await normal Settings path-hash durable event acknowledgement. |
+| `43be5a6c2` | `39127cf62` | Retry/restore after persistence failure; real-store wrapper delegation. |
+| `85ad11aad` (original `c8698b515`) | `1aa834a38` | Authoritative intended-field rebase and serialized device edits. |
+| `2634c430e` (original `d3568bb18`) | `1cf9a5cfe` | Non-replacing initialization and guarded activation. |
+| `6a1ffe99b13af2a1929b88552d5decf8e5316af4` | `816ed2aed` | Correct actual DEVICE_INFO fixture byte offset without changing token assertions. |
+| `0e38149e1af61663954caf3c3bd072fe50932c41` (original `b25179d8e`) | `16f6d9aa0` | Correct two outer JUnit test placements and preserve snapshot-fetch failure semantics. |
+
+The final correction addresses the integration review's concrete nested-test finding and the
+core owner's actual d356 hosted fetch-failure regression. Production editor writes now transform
+the fresh authoritative Room snapshot, await persistence before live publication, preserve newer
+live fields and serialize ordinary writes with token-bound edits. Targeted concurrent watermark/OCV
+conflicts retry without overwriting unrelated fields; full replacement/activation invalidates their
+authority. Normal Settings waits for the AppState event consumer's persistence result and surfaces
+unrecoverable failure/retry through its actual action. Detailed owner evidence remains in
+`device-writer-authority.md` and `docs/android/deviations/WP-317.md`.
+
+Trusted WP-305 admission passed for every imported production path
+(`modify-related-consumer`), related test (`add-or-update-related-test`), owned evidence
+(`modify`) and the imported WP-317 deviation record (`record-validation-evidence`). Composition
+preserved the exact owner bytes on these paths. Source validator, documented portmap, test inventory
+and diff checks passed on the composition. Owner-hosted results do not test this complete candidate;
+publication requests only its ordinary automatic candidate workflow, with no local Gradle or manual
+dispatch. No held #495 source is present in this composition. Complete-head Kotlin execution and
+independent review remain outstanding at authoring.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

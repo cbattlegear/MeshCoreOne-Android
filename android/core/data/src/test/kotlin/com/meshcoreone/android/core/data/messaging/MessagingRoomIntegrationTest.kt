@@ -951,8 +951,12 @@ class MessagingRoomIntegrationTest {
         unprovedZeroAttemptFailure(reopen = false)
     }
 
-    private suspend fun TestScope.unprovedZeroAttemptFailure(reopen: Boolean) {
-        val name = "zero-attempt-may.db"
+    @Test fun uncertainAcceptedExpiryCannotTurnSameServiceZeroAttemptPreclaimFaultIntoDefiniteFailure() = runTest(scheduler) {
+        unprovedZeroAttemptFailure(reopen = false, acceptedBeforeExpiry = true)
+    }
+
+    private suspend fun TestScope.unprovedZeroAttemptFailure(reopen: Boolean, acceptedBeforeExpiry: Boolean = false) {
+        val name = "zero-attempt-$reopen-$acceptedBeforeExpiry.db"
         store.close(); db.close()
         db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
         seed()
@@ -968,14 +972,29 @@ class MessagingRoomIntegrationTest {
             }
         }
         val old = RadioGeneration(157, boundary(store), config = MessageServiceConfig(maxAttempts = 0))
-        old.start(); old.firmware.error = 2u
-        assertFailsWith<MessageServiceException> { old.service.sendDirectMessage("old physical MAY, no live tracker", contact) }
-        val message = store.fetchMessages(EntityKey(radio, contact.id)).single()
-        assertEquals(MessageStatus.PENDING, message.status)
+        old.start(); old.firmware.acknowledge = false
+        val message = if (acceptedBeforeExpiry) {
+            val accepted = old.service.sendDirectMessage("accepted history before uncertain expiry", contact)
+            assertEquals(1, old.service.pendingAckCount)
+            advanceTimeBy(31_001); runCurrent()
+            old.service.checkExpiredAcks(); runCurrent()
+            assertEquals(accepted, store.fetchMessage(EntityKey(radio, accepted.id)))
+            assertTrue(old.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                (it.cause as? DirectAckFailureNonsettlementException)?.reasons?.contains(
+                    DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN) == true
+            })
+            accepted
+        } else {
+            old.firmware.error = 2u
+            assertFailsWith<MessageServiceException> { old.service.sendDirectMessage("old physical MAY, no live tracker", contact) }
+            store.fetchMessages(EntityKey(radio, contact.id)).single()
+        }
+        assertEquals(if (acceptedBeforeExpiry) MessageStatus.SENT else MessageStatus.PENDING, message.status)
         assertEquals(0, old.service.pendingAckCount)
         assertEquals(1, old.firmware.sent().size)
         val evidence = assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio)).snapshot
-        assertEquals(DirectAckRadioWireOutcome.MayHaveWritten, evidence.wires.single().outcome)
+        assertEquals(if (acceptedBeforeExpiry) DirectAckRadioWireOutcome.Accepted(requireNotNull(message.ackCode))
+            else DirectAckRadioWireOutcome.MayHaveWritten, evidence.wires.single().outcome)
         val pending = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio).copy(sequence = 1)
         store.upsertPendingSend(pending)
         val current = if (reopen) {
@@ -1244,9 +1263,14 @@ class MessagingRoomIntegrationTest {
             }
             // Same physical session API used by immutable pre-authority MessageService; no old service class is executed.
             legacySession.start()
-            val info = legacySession.sendMessage(target, "pre-authority physical send", base)
+            val info = legacySession.sendMessage(target, "pre-authority physical send", Instant.ofEpochSecond(1_700_000_000L))
             assertEquals(legacyAck, info.expectedAck)
             assertEquals(1, legacyFirmware.sent().size)
+            sqlite.query("SELECT timestamp FROM messages WHERE radioId=? AND id=?",
+                arrayOf<Any?>(radioText, oldText)).use {
+                assertTrue(it.moveToFirst())
+                assertEquals(it.getLong(0).toUInt(), legacyFirmware.sent().single().readUInt32LE(3))
+            }
             sqlite.execSQL("UPDATE messages SET statusRawValue=2,ackCode=? WHERE radioId=? AND id=?",
                 arrayOf<Any?>(info.expectedAck.readUInt32LE(0).toLong(), radioText, oldText))
             if (deleted) sqlite.execSQL("DELETE FROM messages WHERE radioId=? AND id=?", arrayOf<Any?>(radioText, oldText))

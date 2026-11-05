@@ -84,6 +84,9 @@ sealed interface DirectMessageConfirmationEvidence {
  * established at its original tracked birth, alongside emission-tracking provenance. Older tracked
  * wires lacking it remain legacy/unproven even with an empty journal or matching latest physical
  * actual. Do not backfill provenance or reconstruct lost codes from absence.
+ * Report TARGET_UNTRACKED_LEGACY_ANCESTRY or UNTRACKED_OTHER_CLAIM_ANCESTRY for that missing birth
+ * coverage independently of saturation. Saturation explains missing physical rows for fully
+ * covered wires, not missing historical acceptance coverage on older wires.
  * Sticky saturation can legitimately cover a physical invocation without an emission row/handle
  * followed by generic wire acceptance. Retain RADIO_HISTORY_SATURATED; the missing physical match
  * alone is not a conflict or invalid-data failure there, even alongside UNSENT/MAY/mismatched rows.

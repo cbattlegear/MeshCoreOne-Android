@@ -919,3 +919,27 @@ relevant proof corruption. These and an actual reopen/old-handle rejection
 control remain separately owned and unexecuted here. This successor changes
 only contract KDoc/evidence; no declarations, replay implementation, public
 version, schema, generic behavior or test expectations are changed.
+
+## Older-wire coverage mapping and saturation boundary
+
+Storage confirmed the exact mapping for emission-tracked wires missing
+independent acceptance-history birth provenance. Strict settlement uses
+TARGET_ACCEPTANCE_UNRESOLVED for the target and
+UNRESOLVED_OTHER_CLAIM_EMISSION for a foreign claim. Failure/message diagnostics
+use TARGET_UNTRACKED_LEGACY_ANCESTRY or UNTRACKED_OTHER_CLAIM_ANCESTRY; full radio
+confirmation reports UNTRACKED_LEGACY_ANCESTRY. Bounded physical diagnostics
+surface existing typed InvalidData/unavailable rather than a fabricated
+legacy physical row.
+
+This coverage gap remains unproven even when the latest actual matches a
+physical row, the acceptance journal is empty, or the radio is saturated.
+The legitimate CoveredBySaturation exception explains missing physical rows
+on fully covered new wires; it never retroactively certifies missing birth
+coverage. Both provenance markers are written only at new tracked-wire
+creation, never appended by old registration or generic replay.
+
+This clarification changes KDoc/evidence only. Producer implementation and
+bootstrap UNKNOWN durability remain separately owned and unverified. UI
+reported an independently frozen conservative aggregate-only integration
+with authored identical-DTO replacement controls; those reports are not
+execution evidence or a claim that row-specific identity binding now exists.

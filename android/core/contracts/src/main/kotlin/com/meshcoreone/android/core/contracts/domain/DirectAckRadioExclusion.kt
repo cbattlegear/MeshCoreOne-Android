@@ -395,6 +395,9 @@ interface DirectAckRadioExclusionAuthority {
      * invocation followed by generic wire acceptance. Retain SATURATED coverage and actual stored
      * physical rows; the unmatched wire binding alone must not cause invalid-data failure there,
      * even alongside earlier UNSENT/MAY/mismatched rows. Structural malformed data still fails.
+     * That exception requires both immutable tracking/acceptance-history birth provenances.
+     * An older emission-tracked wire missing acceptance-history birth provenance remains
+     * unrepresentable here: typed invalid-data/unavailable applies even when the radio is saturated.
      */
     suspend fun inspectDirectAckRadioEvidence(
         radioId: RadioId,
@@ -417,6 +420,9 @@ interface DirectAckRadioExclusionAuthority {
      * foreign inconsistency yields UNRESOLVED_OTHER_CLAIM_EMISSION. No generic behavior changes.
      * Sticky saturation instead explains possible unrecorded CoveredBySaturation acceptance;
      * that missing match alone is not corruption, but saturation still blocks new settlement.
+     * Missing acceptance-history birth provenance is independently unresolved: target maps to
+     * TARGET_ACCEPTANCE_UNRESOLVED and foreign to UNRESOLVED_OTHER_CLAIM_EMISSION, even on a
+     * saturated radio or when current physical acceptance matches. Do not retroactively certify it.
      */
     suspend fun settleDirectAckExcludingRadioHistory(
         attempt: DirectAckAttempt,
@@ -498,6 +504,8 @@ interface DirectAckRadioConfirmationEvidenceInspecting {
      * contributes CONFLICTING_PHYSICAL_EVIDENCE; do not omit it as tracked-but-unmarked.
      * Sticky saturation can legitimately cover an unrecorded invocation and wire acceptance;
      * retain STICKY_SATURATION, not an automatic conflict solely for its missing physical match.
+     * Missing acceptance-history birth provenance independently contributes
+     * UNTRACKED_LEGACY_ANCESTRY, including on saturated radios and alongside matching physical rows.
      *
      * No sample, diagnostic row cap, synthetic excluded claim, lease/grant, generation filter or
      * TTL may narrow this query. The read never creates/clears evidence or saturation. Absence of
@@ -660,6 +668,10 @@ sealed interface DirectAckRadioFailureResult {
  * previously overwritten generic codes. Never backfill or upgrade that wire to clean history.
  * Internal birth markers and acceptance entries are not public bookkeeping or wire receipts;
  * preserve existing receipt filtering, generic eligibility, original replay and denied semantics.
+ * Missing acceptance-history birth provenance contributes TARGET_UNTRACKED_LEGACY_ANCESTRY or
+ * UNTRACKED_OTHER_CLAIM_ANCESTRY independently of saturation or a matching current physical actual.
+ * The saturation exception explains missing physical rows only for fully covered new wires;
+ * it never certifies historical acceptance coverage for an older wire.
  * Do not fabricate a marker or legacy ancestry, silently discard the accepted binding, or repair
  * rows during assessment. Distinct genuine accepted and unsent physical invocations sharing one
  * logical wire are valid: an unsent retry does not contradict or erase an earlier accepted send.

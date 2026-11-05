@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -53,6 +54,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -288,6 +290,67 @@ class OnboardingGateTest {
                 listOf(com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice), delivered,
             )
         } finally { processScope.cancel() }
+    }
+
+    @Test fun `mounted no-device action refreshes when cancelled completion settles unknown`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val finalizerEntered = CompletableDeferred<String>()
+        val releaseFinalizer = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            var committedId: String? = null
+            var readbackAvailable = false
+            val reads = mutableListOf<String>()
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, _ -> error("Use the original finalizer") },
+                persistCompletion = { id ->
+                    finalizerEntered.complete(id)
+                    releaseFinalizer.await()
+                    committedId = id
+                    throw java.io.IOException("lost acknowledgement")
+                },
+                reconcileCompletion = { id ->
+                    reads += id
+                    if (!readbackAvailable) throw java.io.IOException("readback unavailable")
+                    committedId == id
+                },
+            )
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope)
+            val flow = dependencies.retainedFlowCoordinator()
+            flow.onboarding.replacePath(listOf(OnboardingStep.PAIR))
+            flow.openPairingSheet(PairSheet.NO_DEVICE)
+            val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+            showFlow(dependencies) { delivered += it; true }
+            val confirm = compose.onNodeWithText(host.get().getString(
+                com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.noDeviceSheetConfirm,
+            ))
+            compose.waitForIdle()
+
+            val pending = async(start = CoroutineStart.UNDISPATCHED) { flow.onboarding.completeOnboarding() }
+            val attemptId = finalizerEntered.await()
+            pending.cancelAndJoin()
+            compose.waitForIdle()
+            assertTrue(flow.onboarding.unsettledCompletionFlow.value)
+            confirm.assertIsNotEnabled()
+            assertTrue(reads.isEmpty())
+
+            releaseFinalizer.complete(Unit)
+            flow.onboarding.reconciliationReadyFlow.first { it }
+            compose.waitForIdle()
+            confirm.assertIsEnabled()
+
+            compose.runOnIdle { readbackAvailable = true }
+            confirm.performClick()
+            compose.waitForIdle()
+            assertEquals(listOf(attemptId, attemptId), reads)
+            assertEquals(
+                listOf(com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice),
+                delivered,
+            )
+        } finally {
+            releaseFinalizer.complete(Unit)
+            processScope.cancel()
+        }
     }
 
     @Test fun `mounted preset retry reads the original sealed receipt even after its radio is replaced`() = runBlocking {

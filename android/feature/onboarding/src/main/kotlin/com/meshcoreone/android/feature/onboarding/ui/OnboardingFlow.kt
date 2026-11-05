@@ -114,6 +114,8 @@ private fun PairStep(
     val pairedCount by deps.pairing.pairedAccessoryCount.collectAsState()
     val clearing by flow.isClearingPairings.collectAsState()
     val wifiState by flow.wifi.state.collectAsState()
+    val completionUnsettled by flow.onboarding.unsettledCompletionFlow.collectAsState()
+    val canReconcileCompletion by flow.onboarding.reconciliationReadyFlow.collectAsState()
     val action = flow.deviceScan.primaryAction(demoEnabled, state.otherAppDeviceId)
     LaunchedEffect(state.sheet == PairSheet.WIFI) {
         if (state.sheet == PairSheet.WIFI) {
@@ -140,7 +142,7 @@ private fun PairStep(
         when (sheet) {
             PairSheet.NO_DEVICE -> NoDeviceSheetContent(
                 flow::confirmNoDevice, flow::dismissPairingSheet, isCompleting = completingWithoutDevice,
-                canConfirm = flow.canCompleteWithoutDevice(),
+                canConfirm = flow.canCompleteWithoutDevice() && (!completionUnsettled || canReconcileCompletion),
             )
             PairSheet.TROUBLESHOOTING -> TroubleshootingSheetContent(
                 pairedCount, clearing, flow::clearStalePairings, deps::openAppSettings, flow::dismissPairingSheet,
@@ -173,10 +175,11 @@ private fun PresetStep(flow: OnboardingFlowCoordinator, deps: OnboardingFeatureD
     val state by flow.preset.state.collectAsState()
     val canApply by deps.presets.canApply.collectAsState()
     val selection by deps.region.selection.collectAsState()
+    val completionUnsettled by flow.onboarding.unsettledCompletionFlow.collectAsState()
     val canReconcile by flow.onboarding.reconciliationReadyFlow.collectAsState()
     PresetStepScreen(
         state, selection?.let(deps.region.catalog::displayName), flow.preset.visiblePresets(),
-        flow.preset.canApply(canApply, state),
+        flow.preset.canApply(canApply, state) && (!completionUnsettled || canReconcile),
         PresetStepActions(flow.preset::select, { flow.preset.apply() }, flow.preset::dismissError, flow.preset::retry, flow.preset::dismissRetryAlert),
         canReconcileCompletion = canReconcile,
     )

@@ -5,6 +5,7 @@ package com.meshcoreone.android.core.data.repository
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
+import com.meshcoreone.android.core.contracts.domain.DeviceWriteConflict
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.database.*
@@ -12,6 +13,9 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
 import java.util.UUID
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.yield
 
 internal class DeviceRepository(private val context: RoomRepositoryContext) : DevicePersisting, DeviceEditPersisting {
     override val repeatSnapshotAuthority get() = context.repeatSnapshotAuthority
@@ -46,12 +50,18 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         }
     }
 
-    override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean = context.write("insertDeviceIfAbsent") {
-        if (database.devices().byId(dto.id) != null) return@write false
-        database.devices().upsert(dto.copy(isActive = false).toEntity())
-        changed(dto.id)
-        save()
-        true
+    override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean = repeatSnapshotAuthority.withAdmission(dto.id) {
+        context.write("insertDeviceIfAbsent") {
+            if (database.devices().byId(dto.id) != null) return@write false
+            database.devices().upsert(dto.copy(isActive = false).toEntity())
+            changed(dto.id)
+            afterCommit {
+                repeatSnapshotAuthority.invalidateIdentity(dto.id)
+                repeatSnapshotAuthority.observeCommittedClear(dto)
+            }
+            save()
+            true
+        }
     }
 
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean =
@@ -78,6 +88,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
                     resetRemovedRegionScopes(dto.radioId, removed)
                     changed(dto.id, authority = dto.publicKey != expected.device.publicKey)
                     afterCommit {
+                        repeatSnapshotAuthority.observeIdentityChange(expected.device, dto)
                         repeatSnapshotAuthority.observeCommittedClear(dto)
                         var receiptFailure: Throwable? = null
                         try {
@@ -130,7 +141,11 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             val stored = existing?.applying(dto) ?: dto.toEntity()
             database.devices().upsert(stored)
             changed(dto.id)
-            afterCommit { repeatSnapshotAuthority.observeCommittedClear(stored.toDTO()) }
+            afterCommit {
+                if (existing == null) repeatSnapshotAuthority.invalidateIdentity(dto.id)
+                else repeatSnapshotAuthority.observeIdentityChange(existing.toDTO(), stored.toDTO())
+                repeatSnapshotAuthority.observeCommittedClear(stored.toDTO())
+            }
             save()
         }
     }
@@ -209,41 +224,68 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         }
     }
 
-    override suspend fun deleteDevice(id: UUID) = context.write("deleteDevice") {
-        database.devices().delete(id)
-        changed(id)
-        save()
-    }
-
-    override suspend fun demoteDeviceToGhost(id: UUID) = context.write("demoteDeviceToGhost") {
-        val row = database.devices().byId(id) ?: return@write
-        database.devices().delete(id)
-        database.devices().upsert(row.copy(
-            id = UUID.randomUUID(), isActive = false, connectionMethods = SnapshotList.empty(),
-        ))
-        changed(id)
-        save()
-    }
-
-    override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? =
-        context.write("reconcileGhostIdentity") {
-            val ghost = database.devices().forPublicKey(newPublicKey)
-                .firstOrNull { it.id != currentDeviceID && !it.isActive } ?: return@write null
-            if (ghost.connectionMethods.any { it.isBluetooth }) return@write null
-            val current = database.devices().byId(currentDeviceID) ?: return@write null
-            val methods = current.connectionMethods.toMutableList()
-            for (method in ghost.connectionMethods) {
-                if (!method.isBluetooth && methods.none { it.id == method.id }) methods += method
-            }
-            database.devices().upsert(current.copy(
-                radioId = ghost.radioId, publicKey = newPublicKey, connectionMethods = methods.snapshot(),
-            ))
-            database.devices().delete(ghost.id)
-            changed(currentDeviceID)
-            changed(ghost.id)
+    override suspend fun deleteDevice(id: UUID) = repeatSnapshotAuthority.withAdmission(id) {
+        context.write("deleteDevice") {
+            database.devices().delete(id)
+            changed(id)
+            afterCommit { repeatSnapshotAuthority.invalidateIdentity(id) }
             save()
-            RadioId(ghost.radioId)
         }
+    }
+
+    override suspend fun demoteDeviceToGhost(id: UUID) {
+        val ghostId = UUID.randomUUID()
+        repeatSnapshotAuthority.withAdmissions(listOf(id, ghostId)) {
+            context.write("demoteDeviceToGhost") {
+                val row = database.devices().byId(id) ?: return@write
+                val ghost = row.copy(id = ghostId, isActive = false, connectionMethods = SnapshotList.empty())
+                database.devices().delete(id)
+                database.devices().upsert(ghost)
+                changed(id)
+                changed(ghostId)
+                afterCommit { repeatSnapshotAuthority.observeIdentityChange(row.toDTO(), ghost.toDTO()) }
+                save()
+            }
+        }
+    }
+
+    override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? {
+        repeat(8) {
+            currentCoroutineContext().ensureActive()
+            val selected = context.read("selectGhostIdentity") {
+                database.devices().forPublicKey(newPublicKey).firstOrNull { it.id != currentDeviceID && !it.isActive }?.id
+            } ?: return null
+            val result = repeatSnapshotAuthority.withAdmissions(listOf(currentDeviceID, selected)) {
+                context.write("reconcileGhostIdentity") {
+                    val ghost = database.devices().forPublicKey(newPublicKey)
+                        .firstOrNull { it.id != currentDeviceID && !it.isActive } ?: return@write true to null
+                    if (ghost.id != selected) return@write false to null
+                    if (ghost.connectionMethods.any { it.isBluetooth }) return@write true to null
+                    val current = database.devices().byId(currentDeviceID) ?: return@write true to null
+                    val methods = current.connectionMethods.toMutableList()
+                    for (method in ghost.connectionMethods) {
+                        if (!method.isBluetooth && methods.none { it.id == method.id }) methods += method
+                    }
+                    val merged = current.copy(
+                        radioId = ghost.radioId, publicKey = newPublicKey, connectionMethods = methods.snapshot(),
+                    )
+                    database.devices().upsert(merged)
+                    database.devices().delete(ghost.id)
+                    changed(currentDeviceID)
+                    changed(ghost.id)
+                    afterCommit {
+                        repeatSnapshotAuthority.observeIdentityChange(current.toDTO(), merged.toDTO())
+                        repeatSnapshotAuthority.invalidateIdentity(ghost.id)
+                    }
+                    save()
+                    true to RadioId(ghost.radioId)
+                }
+            }
+            if (result.first) return result.second
+            yield()
+        }
+        throw DeviceWriteConflict()
+    }
 
     override suspend fun deleteDeviceData(id: UUID) = context.write("deleteDeviceData") {
         deleteAllDeviceData(id)
@@ -251,11 +293,14 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         save()
     }
 
-    override suspend fun deleteDeviceAndData(id: UUID) = context.write("deleteDeviceAndData") {
-        deleteAllDeviceData(id)
-        database.devices().delete(id)
-        changed(id)
-        save()
+    override suspend fun deleteDeviceAndData(id: UUID) = repeatSnapshotAuthority.withAdmission(id) {
+        context.write("deleteDeviceAndData") {
+            deleteAllDeviceData(id)
+            database.devices().delete(id)
+            changed(id)
+            afterCommit { repeatSnapshotAuthority.invalidateIdentity(id) }
+            save()
+        }
     }
 
     private suspend fun RepositoryTransaction.deleteAllDeviceData(id: UUID) {

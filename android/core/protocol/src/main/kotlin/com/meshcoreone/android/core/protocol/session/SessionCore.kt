@@ -407,6 +407,9 @@ internal class SessionCore(
 
     suspend fun <T> exchange(operation: suspend ExchangeOwner.() -> T): T = exchange(generation(), operation = operation)
 
+    suspend fun <T> exchange(sendPermit: RadioWritePermit, operation: suspend ExchangeOwner.() -> T): T =
+        exchange(generation(), sendPermit = sendPermit, operation = operation)
+
     suspend fun <T> exchange(dispatch: ChannelWriteDispatch, operation: suspend ExchangeOwner.() -> T): T {
         val generation = try {
             generation()
@@ -421,6 +424,7 @@ internal class SessionCore(
     suspend fun <T> exchange(
         generation: SessionGeneration,
         dispatch: ChannelWriteDispatch? = null,
+        sendPermit: RadioWritePermit? = null,
         operation: suspend ExchangeOwner.() -> T,
     ): T {
         val caller = currentCoroutineContext()
@@ -429,7 +433,7 @@ internal class SessionCore(
             throw MeshTransportError.NotConnected
         }
         try {
-            return generation.serializer.withOwnedSerialization(dispatch) {
+            return generation.serializer.withOwnedSerialization(dispatch, sendPermit) {
                 requireCurrent(generation)
                 if (synchronized(lock) { ARBITRARY_RESPONSE_FAMILY in generation.unresolvedReplies }) {
                     checkCorrelation(generation, ARBITRARY_RESPONSE_FAMILY, acceptsErrors = false)
@@ -581,14 +585,17 @@ internal class ExchangeOwner(
     suspend fun send(
         data: Bytes, cleanup: Boolean = false, withoutResponse: Boolean = false,
         onWriteAttempt: () -> Unit = {},
+        afterSend: () -> Unit = {},
     ) {
         core.requireCurrent(generation)
         supervisorScope {
             val operation = async(start = CoroutineStart.LAZY) {
-                core.requireCurrent(generation)
-                context.beforeSend(cleanup)
-                onWriteAttempt()
-                if (withoutResponse) core.transport.sendWithoutResponse(data) else core.transport.send(data)
+                try {
+                    core.requireCurrent(generation)
+                    context.beforeSend(cleanup)
+                    onWriteAttempt()
+                    if (withoutResponse) core.transport.sendWithoutResponse(data) else core.transport.send(data)
+                } finally { afterSend() }
             }
             context.attachSend(operation, cleanup)
             operation.start()
@@ -600,8 +607,8 @@ internal class ExchangeOwner(
     suspend fun <T> query(
         data: Bytes, family: String, timeout: Double? = null,
         errorMatcher: ((MeshEvent) -> Exception?)? = null,
-        cleanup: Boolean = false, predicate: (MeshEvent) -> T?,
-    ): T = match(data, family, timeout, errorMatcher != null, cleanup) { event ->
+        cleanup: Boolean = false, afterSend: () -> Unit = {}, predicate: (MeshEvent) -> T?,
+    ): T = match(data, family, timeout, errorMatcher != null, cleanup, afterSend) { event ->
         val error = errorMatcher?.invoke(event)
         if (error != null) ResponseDisposition.Failure(error)
         else predicate(event)?.let { ResponseDisposition.Success(it) } ?: ResponseDisposition.Ignore
@@ -610,6 +617,7 @@ internal class ExchangeOwner(
     suspend fun <T> match(
         data: Bytes, family: String, timeout: Double? = null,
         acceptsErrors: Boolean = false, cleanup: Boolean = false,
+        afterSend: () -> Unit = {},
         matcher: (MeshEvent) -> ResponseDisposition<T>,
     ): T {
         core.checkCorrelation(generation, family, acceptsErrors)
@@ -618,7 +626,7 @@ internal class ExchangeOwner(
         var terminalResponse = false
         try {
             return core.clock.withDeadline(timeout ?: core.configuration.defaultTimeout) {
-                send(data, cleanup, onWriteAttempt = { sent = true })
+                send(data, cleanup, onWriteAttempt = { sent = true }, afterSend = afterSend)
                 for (event in subscription.channel) {
                     when (val result = matcher(event)) {
                         is ResponseDisposition.Success -> {
@@ -640,8 +648,8 @@ internal class ExchangeOwner(
         }
     }
 
-    suspend fun simple(data: Bytes, cleanup: Boolean = false) {
-        query(data, "ok", errorMatcher = ::deviceError, cleanup = cleanup) {
+    suspend fun simple(data: Bytes, cleanup: Boolean = false, afterSend: () -> Unit = {}) {
+        query(data, "ok", errorMatcher = ::deviceError, cleanup = cleanup, afterSend = afterSend) {
             if (it is MeshEvent.Ok && it.value == null) Unit else null
         }
     }

@@ -105,7 +105,7 @@ internal class FakeSettingsPort(private val connection: FakeConnection? = null) 
         val mutation: suspend () -> Unit = {
             record("setRadioParamsVerified", "$frequencyKHz,$bandwidthKHz,$spreadingFactor,$codingRate,$clientRepeat,$appliedRadioPresetID")
         }
-        if (restoreAuthority == null) mutation() else restoreAuthority.withWrite(mutation)
+        if (restoreAuthority == null) mutation() else restoreAuthority.withWrite { mutation() }
         return selfInfo()
     }
     override suspend fun setTxPowerVerified(power: Byte): SelfInfo { record("setTxPowerVerified", "$power"); return selfInfo() }

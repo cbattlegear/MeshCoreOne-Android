@@ -289,19 +289,23 @@ class ConnectedDeviceEditor(
         }
     }
 
-    fun preRepeatSettingsRestoreAuthority(expectedToken: SessionToken, expectedDevice: DeviceDTO) = RepeatSnapshotRestoreAuthority { write ->
-        repeatSnapshotAuthority.withAdmission(expectedDevice.id) {
-            val actual = currentRepeatDevice(expectedToken) ?: throw DeviceEditPersistenceConflict()
-            repeatSnapshotAuthority.requireUsable(actual)
-            if (actual.id != expectedDevice.id || actual.radioId != expectedDevice.radioId || actual.publicKey != expectedDevice.publicKey ||
-                actual.frequency != expectedDevice.frequency || actual.bandwidth != expectedDevice.bandwidth ||
-                actual.spreadingFactor != expectedDevice.spreadingFactor || actual.codingRate != expectedDevice.codingRate ||
-                actual.clientRepeat != expectedDevice.clientRepeat ||
-                actual.preRepeatFrequency != expectedDevice.preRepeatFrequency || actual.preRepeatBandwidth != expectedDevice.preRepeatBandwidth ||
-                actual.preRepeatSpreadingFactor != expectedDevice.preRepeatSpreadingFactor || actual.preRepeatCodingRate != expectedDevice.preRepeatCodingRate) {
-                throw DeviceEditPersistenceConflict()
+    fun preRepeatSettingsRestoreAuthority(expectedToken: SessionToken, expectedDevice: DeviceDTO): RepeatSnapshotRestoreAuthority {
+        val identityVersion = repeatSnapshotAuthority.identityVersion(expectedDevice.id)
+        return RepeatSnapshotRestoreAuthority { write ->
+            repeatSnapshotAuthority.withDispatchAdmission(expectedDevice.id) { permit ->
+                val actual = currentRepeatDevice(expectedToken) ?: throw DeviceEditPersistenceConflict()
+                repeatSnapshotAuthority.requireUsable(actual)
+                if (repeatSnapshotAuthority.identityVersion(expectedDevice.id) != identityVersion ||
+                    actual.id != expectedDevice.id || actual.radioId != expectedDevice.radioId || actual.publicKey != expectedDevice.publicKey ||
+                    actual.frequency != expectedDevice.frequency || actual.bandwidth != expectedDevice.bandwidth ||
+                    actual.spreadingFactor != expectedDevice.spreadingFactor || actual.codingRate != expectedDevice.codingRate ||
+                    actual.clientRepeat != expectedDevice.clientRepeat ||
+                    actual.preRepeatFrequency != expectedDevice.preRepeatFrequency || actual.preRepeatBandwidth != expectedDevice.preRepeatBandwidth ||
+                    actual.preRepeatSpreadingFactor != expectedDevice.preRepeatSpreadingFactor || actual.preRepeatCodingRate != expectedDevice.preRepeatCodingRate) {
+                    throw DeviceEditPersistenceConflict()
+                }
+                write(permit)
             }
-            write()
         }
     }
 

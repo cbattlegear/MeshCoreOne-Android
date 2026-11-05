@@ -134,6 +134,14 @@ class SettingsService(
         repeatAttempt: PreRepeatSettingsAttempt? = null,
         restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
     ) = configuration {
+        if (restoreAuthority != null) {
+            require(repeatAttempt == null)
+            restoreAuthority.withWrite { permit ->
+                setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0,
+                    spreadingFactor, codingRate, clientRepeat, sendPermit = permit)
+            }
+            return@configuration
+        }
         val mutation: suspend () -> Unit = {
             if (repeatAttempt == null) {
                 setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate, clientRepeat)
@@ -144,7 +152,7 @@ class SettingsService(
                 repeatAttempt.recordRadioWriteCompleted()
             }
         }
-        if (restoreAuthority == null) mutation() else restoreAuthority.withWrite(mutation)
+        mutation()
     }
 
     suspend fun setTxPower(power: Byte) = operation { configuration { setTxPower(power) } }

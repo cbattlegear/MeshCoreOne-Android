@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
 import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
+import com.meshcoreone.android.core.protocol.session.RadioWritePermit
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.currentCoroutineContext
@@ -86,7 +87,8 @@ class RepeatSnapshotReconciliationRequired :
     IllegalStateException("A cancelled Repeat preparation requires an explicit snapshot clear before reuse")
 
 fun interface RepeatSnapshotRestoreAuthority {
-    suspend fun withWrite(write: suspend () -> Unit)
+    /** Release after the transport send settles, not after its protocol response arrives. */
+    suspend fun withWrite(write: suspend (permit: RadioWritePermit) -> Unit)
 }
 
 /** Process-store custody shared by all editors and delegating persistence wrappers; not durable across restart. */
@@ -95,11 +97,41 @@ class RepeatSnapshotAuthority {
     private data class Pending(val receipt: DeviceWriteSnapshot, val attempt: PreRepeatSettingsAttempt)
     private val pending = mutableMapOf<Identity, Pending>()
     private val admissions = mutableMapOf<UUID, Mutex>()
+    private val identityVersions = mutableMapOf<UUID, Long>()
     private fun DeviceDTO.identity() = Identity(id, radioId, publicKey)
 
     suspend fun <T> withAdmission(deviceId: UUID, action: suspend () -> T): T {
         val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
         return admission.withLock { action() }
+    }
+
+    suspend fun <T> withAdmissions(deviceIds: Collection<UUID>, action: suspend () -> T): T {
+        val ordered = deviceIds.distinct().sorted()
+        suspend fun acquire(index: Int): T =
+            if (index == ordered.size) action()
+            else withAdmission(ordered[index]) { acquire(index + 1) }
+        return acquire(0)
+    }
+
+    suspend fun <T> withDispatchAdmission(deviceId: UUID, action: suspend (permit: RadioWritePermit) -> T): T {
+        val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
+        admission.lock()
+        val permit = RadioWritePermit { admission.unlock() }
+        return try { action(permit) } finally { permit.releaseIfUnclaimed() }
+    }
+
+    @Synchronized fun observeIdentityChange(before: DeviceDTO, after: DeviceDTO) {
+        if (before.identity() != after.identity()) {
+            invalidateIdentity(before.id)
+            if (before.id != after.id) invalidateIdentity(after.id)
+            pending.remove(before.identity())?.let { pending[after.identity()] = it }
+        }
+    }
+
+    @Synchronized fun identityVersion(deviceId: UUID): Long = identityVersions[deviceId] ?: 0L
+
+    @Synchronized fun invalidateIdentity(deviceId: UUID) {
+        identityVersions[deviceId] = Math.addExact(identityVersion(deviceId), 1L)
     }
 
     @Synchronized fun recordCreated(receipt: DeviceWriteSnapshot, attempt: PreRepeatSettingsAttempt) {

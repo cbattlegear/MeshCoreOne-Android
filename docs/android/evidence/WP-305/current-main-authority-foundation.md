@@ -160,8 +160,8 @@ wrapper cannot bypass the fence, and that explicit current-token clear permits f
 enable/off restoring all four later manual RF fields. Existing partial/full,
 equal-DTO ABA and successor receipt protections remain. This is a process-lifetime
 fence, not a persisted quarantine format or evidence of orphan recovery across a
-process restart. Cold connection initialization's existing Repeat-off snapshot
-clear remains unchanged; no schema, Room transaction boundary, runtime authority, RF ACK recovery
+process restart. The later partial-snapshot reconnect correction is described below;
+no schema, Room transaction boundary, runtime authority, RF ACK recovery
 or protected scope is changed by this repair.
 
 Independent runtime review of bdee78e369c60417003f9725d1d0596eb29df2d5
@@ -187,6 +187,65 @@ preservation. Another pauses after capture before actual dispatch and independen
 replaces the full snapshot, each partial field family or clears it; every family must
 refuse stale restore arguments without SET or row changes. These successor controls
 remain unexecuted until fresh exact-head hosted verification.
+
+### Identity writers, actual send settlement and persisted partial snapshots
+
+The exact ce5 diagnostic is run `42005755725`, ref
+`diagnostic/wp-305-repeat-dispatch-ce5b89422`, head
+`ce5b894229de702fec3ee0e638dc2261dce37502`, tree
+`4ea1d9299fd55f0188dbe3107e9ebd01bb3fdc73`, parent
+`bdee78e369c60417003f9725d1d0596eb29df2d5`. Linux job `127172044271`
+completed successfully; the full run still awaited its SwiftData oracle when this
+successor was authored. Its earlier bounded reviews do not cover the following
+newly reported interleavings.
+
+Source inspection confirmed identity reconciliation, deletion, demotion and insertion
+bypassed the ce5 admission. The successor admits those writers before DB work.
+Multi-device operations sort and deduplicate UUIDs. Ghost reconciliation selects
+outside admission/DB ownership, acquires the selected UUID set, then rechecks the
+actual affected set inside the transaction. A changed selection retries cancellably
+up to eight times, then explicitly throws DeviceWriteConflict; it never acquires a
+new UUID mutex under the DB mutex. Demotion generates its successor UUID first.
+Identity changes transfer pending custody, and committed insertion/deletion/identity
+changes advance a process identity version so an authority captured before a full-DTO
+delete/reinsert ABA cannot send. Clear observation remains actual-post-commit only.
+
+The supported writer inventory also includes activation (only active/last-connected
+fields), contact-sync/known-region updates (no identity, RF, Repeat or snapshot field
+changes), and deleteDeviceData (child-data deletion, not device-row deletion).
+BackupDatabaseRestore inserts only previously absent public keys with newly generated
+UUIDs and never updates an existing device row. Direct DAO mutation outside these
+production routes and independent database handles are not claimed to participate.
+
+The real protocol's setRadio waits for OK/error after sending; ce5 therefore held
+admission across that response wait, not merely transmission. The successor passes a
+single-use RadioWritePermit through the actual Settings service into MeshCoreSession
+and its serializer. Admission still precedes protocol-queue acquisition: no queue
+owner waits to acquire admission. The actual transport-send child's finally releases
+the permit after send returns/throws, before the subscription response loop. An
+owned-task completion callback covers queued cancellation and failures before a send.
+After ownership transfers to that task, caller cancellation cannot release the permit
+while its send child can still write. An unclaimed permit is released by the outer
+factory finally. Release is idempotent and means neither firmware ACK nor definitely
+unsent; existing dispatch uncertainty and successful-SET custody markers are unchanged.
+No new NonCancellable production block is introduced.
+
+Repeat-off connection initialization now clears all four pre-Repeat fields even when
+frequency is null. A reopened database alone does not clear imported/partial rows;
+an actual connection reporting active Repeat preserves partial restore fields. This
+is a bounded native correction to the pinned source's frequency-only cleanup, not
+durable quarantine or inferred transmission history.
+
+Test-only `433e1b9109342e022129e8e50ebf76dd02765185` (parent ce5) and
+fixture correction `77e46a61c132dcad586e62ae558a9de4100bac2f` retain all earlier
+assertions and add five controls: actual transport pause with five identity writer
+families; full-DTO delete/reinsert ABA with zero SET; actual MeshCoreSession with
+withheld OK and an admitted full save; cancellation while a non-cancellable test
+transport child can still write; and a real file-DB close/reopen/same-ID reconnect
+for all four single-field snapshots, Repeat off versus active. The fixture correction
+keeps latch cleanup reachable and distinguishes legitimate post-send retirement
+from the strict pre-send row/zero-SET invariants. These are authored controls, not
+execution evidence for the successor or physical-radio acceptance.
 
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive

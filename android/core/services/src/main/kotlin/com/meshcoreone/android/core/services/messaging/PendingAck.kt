@@ -2,6 +2,8 @@
 // Native adaptation: WP-208 immutable ACK snapshots and an owned register-before-send delivery receipt.
 package com.meshcoreone.android.core.services.messaging
 
+import com.meshcoreone.android.core.contracts.domain.DirectAckAttempt
+import com.meshcoreone.android.core.contracts.domain.DirectAckMode
 import com.meshcoreone.android.core.model.SnapshotSet
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
@@ -19,9 +21,12 @@ internal data class PendingAck(
     val publicKey: Bytes? = null,
     val acknowledgement: MeshAcknowledgement? = null,
     val receipt: CompletableDeferred<MeshAcknowledgement> = CompletableDeferred(),
+    val authority: DirectAckAttempt? = null,
 )
 
 internal data class MeshAcknowledgement(val code: Bytes, val tripTime: UInt?)
+
+internal data class AcceptedDirectWire(val requestID: UUID, val info: MessageSentInfo)
 
 internal class DirectSendClaim(
     val id: UUID,
@@ -30,6 +35,8 @@ internal class DirectSendClaim(
     val publicKey: Bytes,
     val text: String,
     val isResend: Boolean,
+    val pendingSendID: UUID? = null,
+    val authorityMode: DirectAckMode = DirectAckMode.SEND,
 ) {
     var timestamp: UInt? = null
     var lastSentInfo: MessageSentInfo? = null
@@ -38,4 +45,8 @@ internal class DirectSendClaim(
     var wireFinished = false
     var sendCountCommitted = false
     var resentPublished = false
+    var nextWireIndex = 0L
+    var floodAttempts = 0L
+    var usingFlood = false
+    var acceptedWire: AcceptedDirectWire? = null
 }

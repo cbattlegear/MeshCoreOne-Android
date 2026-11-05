@@ -28,13 +28,11 @@ class RecoveryPolicyTest {
             val release = CompletableDeferred<Unit>()
             val cancellation = CancellationException("fail-all cancelled after successful FAILED return")
             var writing = false
-            h.store.before = {
-                if (it == "updateMessageStatusUnlessDelivered" && !writing) {
+            h.store.directAckAuthority.afterFailure = {
+                if (!writing) {
                     writing = true
                     entered.complete(Unit); release.await()
-                    assertTrue(h.store.updateMessageStatusUnlessDelivered(
-                        EntityKey(RADIO, message.id), MessageStatus.FAILED,
-                    ))
+                    assertEquals(MessageStatus.FAILED, it.message.status)
                     currentCoroutineContext().cancel(cancellation)
                 }
             }
@@ -78,13 +76,11 @@ class RecoveryPolicyTest {
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             var writing = false
-            h.store.before = {
-                if (it == "updateMessageStatusUnlessDelivered" && !writing) {
+            h.store.directAckAuthority.afterFailure = {
+                if (!writing) {
                     writing = true
                     entered.complete(Unit); release.await()
-                    assertTrue(h.store.updateMessageStatusUnlessDelivered(
-                        EntityKey(RADIO, message.id), MessageStatus.FAILED,
-                    ))
+                    assertEquals(MessageStatus.FAILED, it.message.status)
                     currentCoroutineContext().cancel(CancellationException("cancel before settlement"))
                 }
             }
@@ -124,12 +120,10 @@ class RecoveryPolicyTest {
             val message = h.service.sendDirectMessage("original accepted send", h.contact)
             val code = assertNotNull(h.service.pendingAck(message.id)).ackCodes.first()
             var writing = false
-            h.store.before = {
-                if (it == "updateMessageStatusUnlessDelivered" && !writing) {
+            h.store.directAckAuthority.afterFailure = {
+                if (!writing) {
                     writing = true
-                    assertTrue(h.store.updateMessageStatusUnlessDelivered(
-                        EntityKey(RADIO, message.id), MessageStatus.FAILED,
-                    ))
+                    assertEquals(MessageStatus.FAILED, it.message.status)
                     currentCoroutineContext().cancel(CancellationException("cancel after FAILED commit without ACK"))
                 }
             }
@@ -167,7 +161,7 @@ class RecoveryPolicyTest {
 
     @TestFactory fun successfulFailedWriteCancellation() = listOf("expiry", "fail-all").flatMap { path ->
         listOf(false to true, true to true, false to false, true to false).map { (alreadyFailed, ackDuringWrite) ->
-            native("$path records successful FAILED outcome before caller cancellation; prior FAILED=$alreadyFailed; in-write ACK=$ackDuringWrite") {
+            native("$path cancellation preserves typed own failure or preexisting FAILED; prior FAILED=$alreadyFailed; in-write ACK=$ackDuringWrite") {
                 val h = Harness(this); h.start(); h.service.startEventMonitoring()
                 val message = h.message(if (alreadyFailed) MessageStatus.FAILED else MessageStatus.SENT)
                 val later = h.message()
@@ -179,13 +173,21 @@ class RecoveryPolicyTest {
                 val cancellation = CancellationException("cancel after successful FAILED return")
                 var writing = false
                 var committed = false
-                h.store.before = {
-                    if (it == "updateMessageStatusUnlessDelivered" && !writing) {
+                if (alreadyFailed) h.store.before = {
+                    if (it == "fetchMessage" && !writing) {
                         writing = true
                         entered.complete(Unit); release.await()
                         committed = h.store.updateMessageStatusUnlessDelivered(
                             EntityKey(RADIO, message.id), MessageStatus.FAILED,
                         )
+                        currentCoroutineContext().cancel(cancellation)
+                    }
+                }
+                else h.store.directAckAuthority.afterFailure = {
+                    if (!writing) {
+                        writing = true
+                        entered.complete(Unit); release.await()
+                        committed = it.message.status == MessageStatus.FAILED
                         currentCoroutineContext().cancel(cancellation)
                     }
                 }
@@ -232,6 +234,54 @@ class RecoveryPolicyTest {
         }
     }
 
+    @TestFactory fun typedFailureCommitRecovery() = listOf("inline", "expiry", "fail-all").flatMap { path ->
+        listOf(false, true).map { cancel ->
+            native("$path reconciles journaled own FAILED commit after ${if (cancel) "cancellation" else "storage failure"}") {
+                val h = Harness(this); h.start(); h.service.startEventMonitoring()
+                val message = h.message()
+                val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
+                h.service.installPendingAck(h.tracking(message, code, age = 3600))
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val fault = storageFailure()
+                val cancellation = CancellationException("typed FAILED commit lost return")
+                val original = IllegalStateException("initiating send error")
+                h.store.directAckAuthority.afterFailure = {
+                    entered.complete(Unit); release.await()
+                    assertEquals(MessageStatus.FAILED, it.message.status)
+                    if (cancel) throw cancellation else throw fault
+                }
+                val observed = mutableListOf<MessageStatusEvent>()
+                observe(h, observed)
+                val work = backgroundScope.async {
+                    suspend fun cleanup() = when (path) {
+                        "inline" -> h.service.failMessageAndRethrow(original, message.id)
+                        "expiry" -> h.service.checkExpiredAcks()
+                        else -> h.service.failAllPendingMessages()
+                    }
+                    if (cancel) assertFailsWith<CancellationException> { cleanup() }
+                    else if (path == "inline") assertSame(original, assertFailsWith<Exception> { cleanup() })
+                    else if (path == "fail-all") assertSame(fault, assertFailsWith<PersistenceStoreException> { cleanup() })
+                    else cleanup()
+                }
+                entered.await()
+                h.transport.pushAck(code, 123u); runCurrent()
+                assertEquals(code, h.service.pendingAck(message.id)?.acknowledgement?.code)
+                release.complete(Unit)
+                work.await(); runCurrent()
+                assertEquals(MessageStatus.DELIVERED, h.stored(message.id).status)
+                assertEquals(code.ackCodeUInt32, h.stored(message.id).ackCode)
+                assertEquals(123u, h.stored(message.id).roundTripTime)
+                assertNull(h.service.pendingAck(message.id))
+                assertEquals(listOf<MessageStatusEvent>(
+                    MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u),
+                ), observed)
+                assertTrue(h.service.close().isComplete)
+                h.close()
+            }
+        }
+    }
+
     @TestFactory fun uncertainFailedWrites() = listOf("inline", "expiry", "fail-all").flatMap { path ->
         listOf("commit-then-throw", "throw-before-commit", "already-failed", "competing-writer",
             "competing-after-read", "replacement", "late", "commit-then-cancel", "cancel-before-commit")
@@ -248,10 +298,11 @@ class RecoveryPolicyTest {
                 val writerFailure = if (cancelling) cancellation else fault
                 var writing = false
                 h.store.before = {
-                    if (it == "updateMessageStatusUnlessDelivered" && !writing) {
+                    if ((it == "updateMessageStatusUnlessDelivered" ||
+                            schedule == "already-failed" && it == "fetchMessage") && !writing) {
                         writing = true
                         entered.complete(Unit); release.await()
-                        if (schedule !in listOf("throw-before-commit", "competing-after-read", "cancel-before-commit")) {
+                        if (schedule !in listOf("throw-before-commit", "competing-after-read", "cancel-before-commit", "late")) {
                             h.store.updateMessageStatusUnlessDelivered(EntityKey(RADIO, message.id), MessageStatus.FAILED)
                         }
                         if (schedule != "late") throw writerFailure
@@ -387,7 +438,7 @@ class RecoveryPolicyTest {
             val h = Harness(this); h.start()
             val messages = List(3) { h.message() }
             val tracking = messages.mapIndexed { index, message ->
-                h.tracking(message, Bytes.of(index + 1, 0, 0, 0)).also(h.service::installPendingAck)
+                h.tracking(message, Bytes.of(index + 1, 0, 0, 0)).also { h.service.installPendingAck(it) }
             }
             val observed = mutableListOf<MessageStatusEvent>()
             observe(h, observed)

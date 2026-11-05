@@ -10,6 +10,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.database.MeshCoreDatabase
+import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.ByteWriter
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -101,7 +102,8 @@ class DirectAckFailurePersistenceTest {
                     override val readableDatabase: SupportSQLiteDatabase get() = observe(helper.readableDatabase)
                 }
             }
-        }).allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
+        }).addCallback(DirectAckStorage.callback)
+            .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
         store = RoomPersistenceStore(db, process, clock.wallClock)
         contact = ContactDTO(radioId = radio, publicKey = peer, name = "Peer", lastHeardTimestamp = 0u)
     }
@@ -153,7 +155,10 @@ class DirectAckFailurePersistenceTest {
         }
     }
 
-    private inner class FailedWriter : PersistenceStoreProtocol by store {
+    private inner class FailedWriter : PersistenceStoreProtocol by store, DirectAckAuthority by store,
+        DirectPendingCompletionAuthority by store {
+        private val keys = mutableMapOf<DirectAckAttempt, EntityKey>()
+        private val requests = mutableMapOf<DirectAckAttempt, Pair<DirectAckLease, UUID>>()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val failure = PersistenceStoreException(PersistenceStoreError.SaveFailed("controlled FAILED writer"))
@@ -167,11 +172,29 @@ class DirectAckFailurePersistenceTest {
         var cancelAfterSuccessfulReturn = false
         var cancelledAfterCommit = false
         var holdSuccessfulReturn = false
+        var journalOwnFailure = false
         val successfulReturnEntered = CompletableDeferred<Unit>()
         val releaseSuccessfulReturn = CompletableDeferred<Unit>()
 
-        override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
-            if (status != MessageStatus.FAILED) return store.updateMessageStatusUnlessDelivered(key, status)
+        override suspend fun beginDirectAckAttempt(
+            lease: DirectAckLease, key: EntityKey, requestId: UUID, firstWireRequestId: UUID,
+            predictedAckCode: UInt, mode: DirectAckMode, pendingSendId: UUID?,
+        ): DirectAckBeginResult {
+            val result = store.beginDirectAckAttempt(
+                lease, key, requestId, firstWireRequestId, predictedAckCode, mode, pendingSendId,
+            )
+            val handle = when (result) {
+                is DirectAckBeginResult.Begun -> result.attempt
+                is DirectAckBeginResult.AlreadyBegun -> result.attempt
+                is DirectAckBeginResult.Rejected -> return result
+            }
+            keys[handle] = key
+            requests[handle] = lease to requestId
+            return result
+        }
+
+        override suspend fun recordDirectFailure(attempt: DirectAckAttempt): DirectAckMutationResult {
+            val key = requireNotNull(keys[attempt])
             failedWrites++
             check(failedWrites == 1) { "Unexpected second FAILED writer" }
             entered.complete(Unit)
@@ -183,7 +206,23 @@ class DirectAckFailurePersistenceTest {
                     caller.cancel(cancellation)
                 }
             }
-            val changed = if (commit) store.updateMessageStatusUnlessDelivered(key, status) else false
+            val (lease, request) = requireNotNull(requests[attempt])
+            val observation = store.inspectDirectAckAttempt(lease, request)
+            val current = (observation as? DirectAckObservation.Found)?.receipt?.permission == DirectAckPermission.CURRENT
+            var result: DirectAckMutationResult? = null
+            // Legacy generic-writer negatives remain generic mutations, never typed own-commit proof.
+            val changed = if (!commit) false else if (journalOwnFailure || !throws && current) {
+                result = store.recordDirectFailure(attempt)
+                when (val applied = result) {
+                    is DirectAckMutationResult.Applied -> applied.receipt.message.status == MessageStatus.FAILED
+                    is DirectAckMutationResult.AlreadyApplied -> applied.receipt.message.status == MessageStatus.FAILED
+                    else -> false
+                }
+            } else {
+                val changed = store.updateMessageStatusUnlessDelivered(key, MessageStatus.FAILED)
+                if (!throws) result = store.recordDirectFailure(attempt)
+                changed
+            }
             if (commit) committed = changed
             if (holdSuccessfulReturn) {
                 check(changed) { "Post-commit barrier requires a successful actual Room FAILED return" }
@@ -195,12 +234,15 @@ class DirectAckFailurePersistenceTest {
                 requireNotNull(currentCoroutineContext()[Job]).cancel(cancellation)
             }
             if (throws) throw failure
-            return changed
+            return requireNotNull(result) { "A successful typed barrier needs an actual producer result" }
         }
 
-        override suspend fun updateMessageAck(key: EntityKey, ackCode: UInt, status: MessageStatus, roundTripTime: UInt?) {
-            if (status == MessageStatus.DELIVERED) ackWrites++
-            store.updateMessageAck(key, ackCode, status, roundTripTime)
+        override suspend fun settleDirectAck(
+            attempt: DirectAckAttempt, ackCode: UInt, roundTripTime: UInt?,
+        ): DirectAckMutationResult {
+            val result = store.settleDirectAck(attempt, ackCode, roundTripTime)
+            if (result is DirectAckMutationResult.Applied && result.receipt.delivery != null) ackWrites++
+            return result
         }
     }
 
@@ -316,12 +358,93 @@ class DirectAckFailurePersistenceTest {
         assertTrue(generation.stop().isComplete)
     }
 
+    @Test fun journaledOwnRoomFailureCommitThenThrowStillSettlesTheRecordedAck() = runTest(scheduler) {
+        journaledOwnFailureLostReturn(cancelAtCommit = false)
+    }
+
+    @Test fun journaledOwnRoomFailureCommitThenCallerCancellationStillSettlesTheRecordedAck() = runTest(scheduler) {
+        journaledOwnFailureLostReturn(cancelAtCommit = true)
+    }
+
+    private suspend fun TestScope.journaledOwnFailureLostReturn(cancelAtCommit: Boolean) {
+        val writer = FailedWriter().apply {
+            journalOwnFailure = true
+            cancelAtRoomCommit = cancelAtCommit
+        }
+        val generation = RadioGeneration(if (cancelAtCommit) 25 else 24, writer)
+        val message = sent(generation)
+        val work = async { runCatching { generation.service.failAllPendingMessages() } }
+        runCurrent()
+        registerAckWhileWriterIsHeld(generation, writer)
+        writer.release.complete(Unit)
+        if (cancelAtCommit) {
+            val thrown = assertFailsWith<CancellationException> { work.await() }
+            assertTrue(generateSequence<Throwable>(thrown) { it.cause }.any { it === writer.cancellation })
+            assertTrue(writer.cancelledAfterCommit)
+            assertNull(writer.committed)
+        } else {
+            assertSame(writer.failure, work.await().exceptionOrNull())
+            assertEquals(true, writer.committed)
+        }
+        runCurrent()
+        assertEquals(message.copy(status = MessageStatus.DELIVERED, roundTripTime = 123u),
+            store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(0, generation.service.pendingAckCount)
+        assertEquals(1, writer.ackWrites)
+        assertEquals(1, generation.firmware.directSends)
+        assertEquals(listOf<MessageStatusEvent>(
+            MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u),
+        ), generation.statuses)
+        assertTrue(generation.service.isEventMonitoringActive)
+        assertNull(generation.statusFailure)
+        assertTrue(generation.stop().isComplete)
+    }
+
     @Test fun successfulRoomFailAllReturnThenCallerCancellationStillCommitsTheRecordedAck() = runTest(scheduler) {
         successfulFailureReturnThenCancellation(expiry = false)
     }
 
     @Test fun successfulRoomExpiryReturnThenCallerCancellationStillCommitsTheRecordedAck() = runTest(scheduler) {
         successfulFailureReturnThenCancellation(expiry = true)
+    }
+
+    @Test fun ackAfterServiceObservedOwnFailureAndCallerCancellationUsesThePersistedGrant() = runTest(scheduler) {
+        ackAfterSuccessfulReturn(competingMutation = false)
+    }
+
+    @Test fun sameValueDaoWriteAfterServiceObservedOwnFailureRevokesLateAckAuthority() = runTest(scheduler) {
+        ackAfterSuccessfulReturn(competingMutation = true)
+    }
+
+    private suspend fun TestScope.ackAfterSuccessfulReturn(competingMutation: Boolean) {
+        val writer = FailedWriter().apply { throws = false; cancelAfterSuccessfulReturn = true }
+        val generation = RadioGeneration(if (competingMutation) 27 else 26, writer)
+        val message = sent(generation)
+        val work = async { generation.service.failAllPendingMessages() }
+        runCurrent()
+        assertTrue(writer.entered.isCompleted)
+        writer.release.complete(Unit)
+        assertFailsWith<CancellationException> { work.await() }
+        assertEquals(true, writer.committed)
+        val failed = message.copy(status = MessageStatus.FAILED)
+        assertEquals(failed, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(1, generation.service.pendingAckCount)
+        if (competingMutation) {
+            assertEquals(1, db.messages().setStatus(radio.value, message.id, MessageStatus.FAILED.rawValue))
+            assertEquals(failed, store.fetchMessage(EntityKey(radio, message.id)))
+        }
+        generation.firmware.pushAck(); runCurrent()
+        val expected = if (competingMutation) failed else message.copy(status = MessageStatus.DELIVERED, roundTripTime = 123u)
+        assertEquals(expected, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(0, generation.service.pendingAckCount)
+        assertEquals(if (competingMutation) 0 else 1, writer.ackWrites)
+        assertEquals(1, generation.firmware.directSends)
+        if (competingMutation) assertTrue(generation.statuses.isEmpty()) else assertEquals(listOf<MessageStatusEvent>(
+            MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u),
+        ), generation.statuses)
+        generation.stop()
+        assertEquals(expected, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(1, generation.firmware.directSends)
     }
 
     private suspend fun TestScope.successfulFailureReturnThenCancellation(expiry: Boolean) {

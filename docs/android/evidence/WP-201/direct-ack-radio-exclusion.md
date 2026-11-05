@@ -449,8 +449,13 @@ implementation, prerequisite to the atomic-attempt guard, or promise that
 existing rows become eligible.
 
 1. Establish origin only through a new typed atomic fresh outgoing-DM creation
-   operation. It inserts the message and any initial pending rows together
-   with persisted birth identity and a caller-known stable creation request.
+   operation. It inserts the message with persisted birth identity and a
+   caller-known stable creation request. Preserve the existing message-
+   creation return boundary independently of queue acceptance: do not merge
+   message creation and sequenced pending insertion into one required
+   transaction. A later typed pending attachment must bind exact pending
+   identity/revision without claiming that attachment itself proves no send.
+   Inline sends have no pending row.
    The store issues an opaque receipt/handle bound to issuer, exact message
    incarnation and exact pending identities. Exact creation replay observes
    the original operation, never upserts a replacement. Generic save,
@@ -510,3 +515,89 @@ invocation controls; all creation/callback/queue/transport surfaces; and
 explicit legacy/imported noneligibility. Preserve original successful-send,
 delivery, channel and cleanup assertions. No such tests or follow-up
 implementation have been executed or authorized by this design.
+
+## Separate durable message confirmation snapshot
+
+The separately authorized additive
+`DirectMessageConfirmationEvidenceInspecting` capability exposes
+`inspectDirectMessageConfirmationEvidence(key: EntityKey):
+DirectMessageConfirmationEvidence`. It accepts no code, reconstructed claim,
+lease or mutation handle. Outcomes are `Missing(key)`, `NotEligible(key)`, and
+`Present(key, identity, status, reasons)`. Missing means actual product-row
+absence; NotEligible means an actual non-outgoing-DM row. Missing or malformed
+persisted diagnostic identity is a typed storage failure, not either result.
+
+`DirectMessageConfirmationIdentity(incarnationId: String, revision: Long)`
+preserves the literal persisted incarnation, which storage confirmed is
+`lower(hex(randomblob(32)))`, not a UUID. The value requires 64 hexadecimal
+characters and a nonnegative revision, without truncating, hashing, UUID
+conversion or case normalization. It is publicly constructible diagnostic
+data, never an authenticated handle, and no mutation API accepts it.
+
+Present carries actual status and a defensive nonempty
+`SnapshotSet<DirectMessageConfirmationUncertaintyReason>`. The nine exact
+literals are `TARGET_PROVENANCE_UNPROVEN` plus the eight spellings of the
+separate radio nonfailing reasons. Every current Present includes unproven
+provenance, even when it also carries a known collision or actual DELIVERED
+status. There is deliberately no green/NoConflict/sufficient-provenance
+variant. A diagnostic reason never relabels or fabricates delivery.
+
+Storage reads the current exact radio/message incarnation/revision/status
+and complete retained claim/wire/emission ancestry in one transaction using
+indexed constant-size EXISTS aggregates, not capped diagnostic samples or
+unbounded materialized histories. Target actual code evidence is compared
+against all different claims' retained predicted/actual competitors; other
+claims for the same message still compete. Wildcard, conflict, legacy and
+sticky saturation remain distinct. Retired grants and payload erasure must
+not hide retained positive collision evidence. Existing typed read failures,
+closure and cancellation propagate unchanged.
+
+The target actual set includes valid ACCEPTED physical emissions and genuine
+retained registered-wire accepted bindings, including legacy accepted actuals
+alongside legacy/unproven reasons. Neither target predictions nor a public
+DTO ACK is an actual binding. This is diagnostic collision evidence only,
+not expansion of physical-actual-only settlement eligibility.
+
+The result is a historical snapshot, not an event stream, mutation receipt,
+settlement permission or no-write proof. Consumers own serial requery and
+fence request/graph/session/radio plus diagnostic incarnation/revision.
+Identical DTO values and key equality cannot bind a timeline row to that
+incarnation; unknown binding remains unavailable rather than applying a
+message-specific previous-incarnation claim or an apparent all-clear.
+Replacement discards old identity-specific state. UI preserves actual
+DELIVERED and exposes uncertainty, never infers definitely unsent/FAILED
+from absent diagnostic evidence. The existing radio snapshot/observer and
+atomic failure declarations are untouched.
+
+Eight new value controls cover Missing/NotEligible and exact radio/message
+identity, all status values including DELIVERED, replacement/revision
+distinction, coexistence of known collision with unproven provenance, all nine
+immutable reasons, nonempty construction/copy, full stored-identity literal
+preservation, and malformed identity/revision rejection. Value reconstruction
+is not a restart/reopen storage test. The tests do not establish completeness,
+indexed SQL behavior, status atomicity, observer lifecycle or UI integration.
+All eight are unexecuted under the existing local execution hold; the older
+26 radio value/classifier tests remain unexecuted and unchanged.
+
+### Migration prehistory finding
+
+At coordinator request, storage and service owners separately examined the
+supported pre-authority producer/migration lineage. They report that v1 could
+physically send DMs without authority wire/emission rows, including messages
+later deleted; migration backfills message identities but starts new authority
+history empty. Consequently complete SQL over retained journal rows cannot
+prove complete pre-authority physical history or exclude a late old ACK.
+No actual migration/reopen control has executed for this finding here.
+
+This is a distinct unresolved producer/bootstrap uncertainty policy, not a
+silent change to the frozen atomic failure or settlement API, new TTL or
+manufactured zero-write proof. The message diagnostic always-unproven reason
+explicitly preserves that gap. The coordinator and storage owner have the
+actionable requirement for genuine provenance or conservative prehistory
+handling plus a real file-reopen control. This contract does not certify their
+migration implementation or activate a policy. The coordinator subsequently
+selected durable DB-wide preauthority-history UNKNOWN for untrusted
+pre-journal upgrades, including empty/deleted history, without TTL/reset.
+That requires a separate typed-reason/producer successor; this first message
+snapshot freeze does not silently change the frozen 671 contract or claim
+that the bootstrap policy is implemented.

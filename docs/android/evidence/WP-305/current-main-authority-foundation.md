@@ -20,6 +20,26 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Bounded producer tip prerequisite composition
+
+Exact 79028d017892ff7e24c9ac3432a24c9ecb1558e4 run
+[41979048695](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41979048695)
+finished SUCCESS before this successor was authored; that result is not transferred.
+The successor applies only the producer-attributed 41552-to-ba161421a8b2b67525de240aad73111eaf3d4b3e
+diff for ShowOnceTips.kt, ShowOnceTipsTest.kt and SharedUiComposeTest.kt.
+Producer 2f22fa7d-a4d6-4bd7-bc99-30c458e7f517 confirmed exact custody and no tip overlap
+with its separate historical 65d uncertain-readback repair. Fresh trusted capabilities admitted
+the production path and both test paths. No AppFlags, feature, navigation or staged writer
+is imported, and no completion of the full onboarding foundation is claimed.
+
+The exact three-file slice adds atomic completion plus tip donation, staged/finalized attempt
+identity, atomic removal of stale finalized identity on unattributed completion, and original
+Chats/Nodes/Map host eligibility. All 20 tip methods and 22 SharedUi controls, including
+failure/reopen/reset/backup cases and original assertions, are preserved verbatim from the
+producer endpoint. Existing backup implementation is unchanged. Producer old-base run
+41959590903 is provenance only, not current-base acceptance. This successor requires its own
+fresh exact-head hosted validation; existing active refs and local Gradle hold remain untouched.
+
 ### Current-main ancestry integration
 
 Exact beb97a679707730ee51208c0045cae7bffb0528c run

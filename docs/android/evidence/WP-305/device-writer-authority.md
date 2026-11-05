@@ -330,3 +330,31 @@ START/END markers in this run; that is absent execution, not passing or failed t
 The Settings producer owns this fixture correction and fresh composed execution. The completed
 run is preserved. The independent owned candidate remains suitable for fresh execution of the
 twenty-fifth combined control without modifying the Settings producer's files.
+
+### Different-target alias authority follow-up
+
+The next review found a conditional public-writer race not covered by the same-target test:
+Settings admits removal of one alias while another survives, but a targeted writer removes the
+other alias before CAS. Blind editor rebasing would clear the local default without clearing the
+still-scoped radio. No production direct-writer caller was established; the public contract still
+requires a sound result. No new storage mutex or schema is introduced.
+
+The common contracts enum `KnownRegionRemovalOutcome` has `Removed`, `Retired` and
+`NeedsScopeReconciliation`. A new three-argument awaited editor overload takes the already
+acknowledged radio default. Every authoritative transform, including CAS retries, computes the
+post-removal default and compares its thirty-byte normalized value with that acknowledgment.
+A changed radio transition exits with `NeedsScopeReconciliation` before another save or live
+publication. Real persistence failures and cancellation still propagate; stale generation returns
+`Retired`. The two-argument and legacy persistence-only APIs are unchanged. Expected revalidation
+is not logged as a persistence error. No editor mutex is held while a caller performs radio work.
+
+The production-editor/real-Room/fake-protocol-radio control
+`differentAliasWriterRequiresRadioReadmissionBeforeEditorCanClearTheLastScope` exercises both
+alias orders, scoped and disabled baselines, with four actual stale CAS rejections. Scoped cases
+assert the refusal, unchanged live state, preserved target channel and actual still-scoped radio
+readback, then use real Settings radio write/readback and awaited editor acknowledgment before
+readmission. Disabled cases retain their disabled radio/default without an unnecessary refusal.
+All final Room/live/radio/channel values and the original operational token are asserted.
+This tests the editor boundary and explicit caller readmission, not the separately owned actual
+Settings removal queue integration. The Settings producer owns that queue's bounded full replan
+and exact consumer callback wiring. All predecessor assertions and diagnostics remain untouched.

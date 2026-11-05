@@ -465,3 +465,34 @@ discriminate the stamp. The repository double separately asserts the intended du
 path-hash edit; these publications are explicitly not claimed to be second Room transactions
 or evidence that a delayed older OCV callback is durably current. The real-Room control retains
 all original assertions and covers actual two-write serialization/live-durable A consistency.
+
+### Authoritative pre-Repeat snapshot preservation
+
+Follow-up assignment `call_Luaxw1qTcmASs8Iyde8eXw8G` is based on preserved
+`3b8c90fdde293bee98f5cd1db08a8c4b3b0206cc`; its diagnostic ref/run remains immutable.
+At Settings composition `7bd0e43776fdb69d557e26a87923fd3767994aba`, `startEnableRepeat`
+decides whether to save from its asynchronously observed DTO. A same-session observation can
+still report no snapshot after an earlier snapshot committed and Repeat RF was applied.
+The old editor transform then unconditionally replaced the restoration fields with Repeat RF.
+This is a storage-authority decision, not a reason to require synchronous UI observation.
+
+Both awaited and legacy editor save paths now preserve the authoritative row when **any**
+pre-Repeat field is present. The predicate runs inside each `editDevice` transform, including
+conditional-save conflict retries; it is not checked only against the initial live DTO.
+All-null rows still take the original four-field snapshot. Partial snapshots remain partial:
+no absent field is filled from current Repeat RF, and the existing per-field native restore
+fallback and explicit clear path are unchanged. No model codec, schema, runtime, radio,
+Settings consumer or OCV publication changes are included.
+
+Two new real-Room production-editor methods retain all prior controls. The stale same-session
+observation control captures no snapshot, awaits the first real save, applies Repeat RF with
+the production editor under the same token, then saves again through both awaited and Job APIs.
+It asserts the entire durable/live DTO retains the original restoration RF. The conflict
+control pauses after the absent-snapshot ticket is fetched, commits a competing complete or
+single-field partial snapshot plus Repeat RF through real Room CAS, and asserts the initial
+CAS loses and the retry preserves the full winner. Complete and frequency-only, bandwidth-only,
+SF-only and CR-only families are exercised, including null preservation. Each expected winner
+is explicitly unequal to the old unconditional transform, making the final assertions
+discriminating. This is device-authority/persistence evidence, not execution of the separately
+owned Settings holder or physical radio. Source count is now 32 writer methods / 16 persistence
+methods; fresh exact-candidate execution is required.

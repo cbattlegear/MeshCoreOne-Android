@@ -212,10 +212,16 @@ class ConnectedDeviceEditor(
 
     fun updateDefaultFloodScopeName(name: String?): Job? = edit("defaultFloodScope") { it.copy(defaultFloodScopeName = name) }
 
-    fun savePreRepeatSettings(): Job? = edit("preRepeat") { it.savingPreRepeatSettings() }
+    fun savePreRepeatSettings(): Job? = edit("preRepeat") { it.preservingOrSavingPreRepeatSettings() }
 
     suspend fun savePreRepeatSettings(expectedToken: SessionToken): Boolean =
-        sessionEdit("preRepeat", expectedToken) { it.savingPreRepeatSettings() }
+        sessionEdit("preRepeat", expectedToken) { it.preservingOrSavingPreRepeatSettings() }
+
+    private fun DeviceDTO.preservingOrSavingPreRepeatSettings(): DeviceDTO =
+        // Partial imported snapshots retain their native per-field restore fallback.
+        if (preRepeatFrequency != null || preRepeatBandwidth != null ||
+            preRepeatSpreadingFactor != null || preRepeatCodingRate != null
+        ) this else savingPreRepeatSettings()
 
     fun clearPreRepeatSettings(): Job? = edit("clearPreRepeat") { it.clearingPreRepeatSettings() }
 

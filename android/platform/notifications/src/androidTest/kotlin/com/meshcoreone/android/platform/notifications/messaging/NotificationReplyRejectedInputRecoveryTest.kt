@@ -33,7 +33,7 @@ class NotificationReplyRejectedInputRecoveryTest {
 
     @Test
     fun rejectedIdentitiesExposeExactReadableTextButNeverBecomeAdmissionReady() {
-        val exactText = "  reply\nexact  "
+        val exactText = "  reply\nexact \uD83D\uDE80  "
         val stale = adapter.parseDelivery(addInput(identity(staleStoreId), exactText))
         assertEquals(
             NotificationReplyDeliveryParsing.Rejected(ParseFailure.STALE_INSTALLATION, exactText, InputStatus.READABLE),
@@ -50,6 +50,18 @@ class NotificationReplyRejectedInputRecoveryTest {
             malformed,
         )
         assertFalse(malformed is NotificationReplyDeliveryParsing.ReadyForAdmission)
+
+        for ((intent, reason) in listOf(
+            identity(expectedStoreId).apply { removeExtra(EXTRA_TOKEN) } to ParseFailure.MISSING_IDENTITY,
+            identity(expectedStoreId).putExtra(EXTRA_TOKEN, "not-a-uuid") to ParseFailure.MALFORMED_IDENTITY,
+            identity(expectedStoreId).setData(Uri.parse("meshcore-notification://wrong")) to
+                ParseFailure.MALFORMED_IDENTITY,
+        )) {
+            assertEquals(
+                NotificationReplyDeliveryParsing.Rejected(reason, exactText, InputStatus.READABLE),
+                adapter.parseDelivery(addInput(intent, exactText)),
+            )
+        }
 
         assertEquals(
             NotificationReplyDeliveryParsing.ReadyForAdmission(expectedStoreId, token, exactText),
@@ -105,7 +117,12 @@ class NotificationReplyRejectedInputRecoveryTest {
         }
 
     private fun malformedParcelable(intent: Intent): Intent {
-        val resultIntent = Intent().putExtra(NotificationActionReceiver.REMOTE_INPUT_KEY, Intent("not-text"))
+        val resultIntent = Intent().putExtra(
+            REMOTE_INPUT_RESULTS_DATA,
+            Bundle().apply {
+                putParcelable(NotificationActionReceiver.REMOTE_INPUT_KEY, Intent("not-text"))
+            },
+        )
         return Intent(intent).setClipData(ClipData.newIntent(REMOTE_INPUT_RESULTS_LABEL, resultIntent))
     }
 
@@ -113,5 +130,6 @@ class NotificationReplyRejectedInputRecoveryTest {
         const val EXTRA_STORE = "mc1.notification.issued-reply.store"
         const val EXTRA_TOKEN = "mc1.notification.issued-reply.token"
         const val REMOTE_INPUT_RESULTS_LABEL = "android.remoteinput.results"
+        const val REMOTE_INPUT_RESULTS_DATA = "android.remoteinput.resultsData"
     }
 }

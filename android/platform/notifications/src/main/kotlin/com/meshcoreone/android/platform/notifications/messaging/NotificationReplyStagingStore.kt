@@ -64,7 +64,19 @@ class NotificationReplyStagingStore internal constructor(
         val sequence: Long,
         val action: IssuedAction,
         val maxReplyCodeUnits: Int? = null,
+        val publicationAttempt: PublicationAttempt? = null,
     )
+
+    data class PublicationAttempt(val attemptId: UUID, val ownerId: UUID)
+
+    sealed interface PublicationResult {
+        /** One app-controlled attempt only; NOT evidence of Android publication or display. */
+        data class NewlyClaimed(val record: IssuedRecord) : PublicationResult
+        /** Never permits publication, even for the same attempt/owner after a lost return. */
+        data class Observed(val record: IssuedRecord) : PublicationResult
+        data class Rejected(val reason: Failure) : PublicationResult
+        data class Indeterminate(val token: UUID) : PublicationResult
+    }
 
     /** Separate immutable caller-selected policy, with no expiry, eviction or production defaults. */
     data class IssuanceLimits(val maxRecords: Int, val maxRecordBytes: Long, val maxTotalRecordBytes: Long) {
@@ -184,6 +196,8 @@ class NotificationReplyStagingStore internal constructor(
         ENROLLMENT_NOT_BOUND, ENROLLMENT_MISMATCH,
         REPLY_RESERVATIONS_NOT_INITIALIZED, INVALID_REPLY_TEXT_BOUND,
         REPLY_RESERVATION_CONSUMED, REPLY_TEXT_BOUND_EXCEEDED,
+        PUBLICATION_NOT_INITIALIZED, PUBLICATION_REQUIRES_EMPTY_GENERATION, PUBLICATION_REQUIRED,
+        ISSUED_TOKEN_UNCLAIMED,
     }
 
     // Neither the current payload nor a display-time full key proves the radio's prefix destination.
@@ -334,12 +348,18 @@ class NotificationReplyStagingStore internal constructor(
                     if (expectedStoreId != null && state.storeId != expectedStoreId) {
                         return@transaction StageResult.Rejected(Failure.IDENTITY_MISMATCH)
                     }
+                    if (db.version >= 6 && issuedToken == null) {
+                        return@transaction StageResult.Rejected(Failure.PUBLICATION_REQUIRED)
+                    }
                     val issued = if (issuedToken == null) null else {
                         if (db.version < 3) {
                             return@transaction StageResult.Rejected(Failure.ISSUANCE_NOT_INITIALIZED)
                         }
                         readIssuance(db, state.storeId).records.firstOrNull { it.action.token == issuedToken }
                             ?: return@transaction StageResult.Rejected(Failure.ISSUED_TOKEN_NOT_FOUND)
+                    }
+                    if (db.version >= 6 && issued?.publicationAttempt == null) {
+                        return@transaction StageResult.Rejected(Failure.ISSUED_TOKEN_UNCLAIMED)
                     }
                     val post = issued?.action?.post ?: suppliedPost
                         ?: return@transaction StageResult.Rejected(Failure.INVALID_IDENTITY)
@@ -536,7 +556,7 @@ class NotificationReplyStagingStore internal constructor(
             2 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy")
             3 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy",
                 "reply_issued_actions", "reply_issuance_policy")
-            4, 5 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy",
+            4, 5, 6 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy",
                 "reply_issued_actions", "reply_issuance_policy", "reply_enrollment",
                 "reply_unbound_policy", "reply_unbound_text")
             else -> corrupt()
@@ -615,9 +635,11 @@ class NotificationReplyStagingStore internal constructor(
                     !row.digest(state.storeId).contentEquals(cursor.getBlob(10))
                 ) corrupt()
                 decodePayload(row.payload)
+                if (db.version >= 6 && row.issuedToken == null) corrupt()
                 if (row.issuedToken != null) {
                     val issued = issuance[row.issuedToken] ?: corrupt()
                     if (issued.action.post != row.post || issued.action.payload != decodePayload(row.payload) ||
+                        db.version >= 6 && issued.publicationAttempt == null ||
                         issued.maxReplyCodeUnits?.let { row.text.size / Char.SIZE_BYTES > it } == true
                     ) corrupt()
                 }
@@ -830,10 +852,68 @@ class NotificationReplyStagingStore internal constructor(
         return registerIssuedBound(expectedStoreId, proposal, maxReplyCodeUnits)
     }
 
+    /** No potentially exposed old tokens can cross this explicit generation-local opt-in. */
+    suspend fun initializePublicationAttempts(expectedStoreId: UUID): InitializeResult = withContext(Dispatchers.IO) {
+        if (!limits.isValid()) return@withContext InitializeResult.Failed(Failure.INVALID_LIMITS)
+        var commitAttempted = false
+        try {
+            database { db -> transaction(db) {
+                val state = load(db)
+                if (state.storeId != expectedStoreId) throw StoreFailure(Failure.IDENTITY_MISMATCH)
+                if (expectedEnrollment == null) throw StoreFailure(Failure.ENROLLMENT_MISMATCH)
+                if (db.version < 5) throw StoreFailure(Failure.REPLY_RESERVATIONS_NOT_INITIALIZED)
+                if (db.version == 5) {
+                    if (state.rows.isNotEmpty() || readIssuance(db, state.storeId).records.isNotEmpty()) {
+                        throw StoreFailure(Failure.PUBLICATION_REQUIRES_EMPTY_GENERATION)
+                    }
+                    db.execSQL("ALTER TABLE reply_issued_actions ADD COLUMN publication_attempt_id TEXT")
+                    db.execSQL("ALTER TABLE reply_issued_actions ADD COLUMN publication_owner_id TEXT")
+                    db.version = 6
+                }
+                load(db)
+                commitAttempted = true
+                InitializeResult.Ready
+            } }
+        } catch (error: StoreFailure) {
+            InitializeResult.Failed(error.reason)
+        } catch (_: SQLiteDatabaseCorruptException) {
+            InitializeResult.Failed(Failure.CORRUPT_STORAGE)
+        } catch (_: SQLiteException) {
+            if (commitAttempted) InitializeResult.Indeterminate
+            else InitializeResult.Failed(Failure.STORAGE_UNAVAILABLE)
+        } catch (_: SecurityException) {
+            if (commitAttempted) InitializeResult.Indeterminate
+            else InitializeResult.Failed(Failure.STORAGE_UNAVAILABLE)
+        }
+    }
+
+    /**
+     * Single transaction creates bounded issuance AND its permanent app publication attempt.
+     * Existing/lost-return/restarted calls NEVER obtain another attempt. The caller must own the
+     * entire non-retrying platform operation; a receipt cannot atomically transact Android IPC.
+     */
+    suspend fun reservePublicationAttempt(
+        expectedStoreId: UUID,
+        proposal: IssuedAction,
+        maxReplyCodeUnits: Int,
+        attempt: PublicationAttempt,
+    ): PublicationResult {
+        if (maxReplyCodeUnits <= 0 || maxReplyCodeUnits > Int.MAX_VALUE / Char.SIZE_BYTES) {
+            return PublicationResult.Rejected(Failure.INVALID_REPLY_TEXT_BOUND)
+        }
+        return when (val result = registerIssuedBound(expectedStoreId, proposal, maxReplyCodeUnits, attempt)) {
+            is IssuanceResult.Reserved -> PublicationResult.NewlyClaimed(result.record)
+            is IssuanceResult.AlreadyReserved -> PublicationResult.Observed(result.record)
+            is IssuanceResult.Rejected -> PublicationResult.Rejected(result.reason)
+            is IssuanceResult.Indeterminate -> PublicationResult.Indeterminate(result.token)
+        }
+    }
+
     private suspend fun registerIssuedBound(
         expectedStoreId: UUID,
         proposal: IssuedAction,
         maxReplyCodeUnits: Int?,
+        publicationAttempt: PublicationAttempt? = null,
     ): IssuanceResult =
         withContext(Dispatchers.IO) {
             if (!limits.isValid()) return@withContext IssuanceResult.Rejected(Failure.INVALID_LIMITS)
@@ -859,6 +939,12 @@ class NotificationReplyStagingStore internal constructor(
                         if (db.version < 3) {
                             return@transaction IssuanceResult.Rejected(Failure.ISSUANCE_NOT_INITIALIZED)
                         }
+                        if (publicationAttempt != null && db.version < 6) {
+                            return@transaction IssuanceResult.Rejected(Failure.PUBLICATION_NOT_INITIALIZED)
+                        }
+                        if (db.version >= 6 && maxReplyCodeUnits == null) {
+                            return@transaction IssuanceResult.Rejected(Failure.PUBLICATION_REQUIRED)
+                        }
                         if (maxReplyCodeUnits != null && (db.version < 5 || expectedEnrollment == null)) {
                             return@transaction IssuanceResult.Rejected(Failure.REPLY_RESERVATIONS_NOT_INITIALIZED)
                         }
@@ -868,14 +954,22 @@ class NotificationReplyStagingStore internal constructor(
                             return@transaction when {
                                 prior.action != proposal || prior.maxReplyCodeUnits != maxReplyCodeUnits ->
                                     IssuanceResult.Rejected(Failure.ISSUANCE_CONFLICT)
+                                publicationAttempt != null && prior.publicationAttempt != null ->
+                                    IssuanceResult.AlreadyReserved(prior)
+                                publicationAttempt != prior.publicationAttempt ->
+                                    IssuanceResult.Rejected(Failure.ISSUANCE_CONFLICT)
                                 maxReplyCodeUnits != null && state.rows.any { it.issuedToken == proposal.token } ->
                                     IssuanceResult.Rejected(Failure.REPLY_RESERVATION_CONSUMED)
                                 else -> IssuanceResult.AlreadyReserved(prior)
                             }
                         }
                         val record = IssuedRecord(
-                            state.storeId, issued.records.size.toLong() + 1, proposal, maxReplyCodeUnits,
+                            state.storeId, issued.records.size.toLong() + 1, proposal,
+                            maxReplyCodeUnits, publicationAttempt,
                         )
+                        if (publicationAttempt != null && issued.records.any {
+                            it.publicationAttempt?.attemptId == publicationAttempt.attemptId
+                        }) return@transaction IssuanceResult.Rejected(Failure.ISSUANCE_CONFLICT)
                         val bytes = issuanceContentBytes(record)
                         if (bytes > issued.policy.maxRecordBytes ||
                             bytes > issued.policy.maxTotalRecordBytes - issued.contentBytes
@@ -901,9 +995,13 @@ class NotificationReplyStagingStore internal constructor(
                             textBytes(proposal.logicalNotificationId.value), textBytes(encoded), bytes,
                             issuanceDigest(record))
                         db.execSQL(
-                            if (db.version >= 5) "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?,?)"
+                            if (db.version >= 6) "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+                            else if (db.version >= 5) "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?,?)"
                             else "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?)",
-                            if (db.version >= 5) values + maxReplyCodeUnits else values,
+                            if (db.version >= 6) values.plus(elements = arrayOf<Any?>(
+                                maxReplyCodeUnits, publicationAttempt?.attemptId?.toString(),
+                                publicationAttempt?.ownerId?.toString(),
+                            )) else if (db.version >= 5) values + maxReplyCodeUnits else values,
                         )
                         val count = issued.records.size.toLong() + 1
                         val total = issued.contentBytes + bytes
@@ -921,16 +1019,20 @@ class NotificationReplyStagingStore internal constructor(
                 if (commitAttempted) afterIssuanceCommit?.invoke()
                 result
             } catch (error: StoreFailure) {
-                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
+                if (commitAttempted && publicationAttempt != null) IssuanceResult.Indeterminate(proposal.token)
+                else if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
                 else IssuanceResult.Rejected(error.reason)
             } catch (_: SQLiteDatabaseCorruptException) {
-                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
+                if (commitAttempted && publicationAttempt != null) IssuanceResult.Indeterminate(proposal.token)
+                else if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
                 else IssuanceResult.Rejected(Failure.CORRUPT_STORAGE)
             } catch (_: SQLiteException) {
-                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
+                if (commitAttempted && publicationAttempt != null) IssuanceResult.Indeterminate(proposal.token)
+                else if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
                 else IssuanceResult.Rejected(Failure.STORAGE_UNAVAILABLE)
             } catch (_: SecurityException) {
-                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
+                if (commitAttempted && publicationAttempt != null) IssuanceResult.Indeterminate(proposal.token)
+                else if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
                 else IssuanceResult.Rejected(Failure.STORAGE_UNAVAILABLE)
             }
         }
@@ -972,7 +1074,8 @@ class NotificationReplyStagingStore internal constructor(
         ))
         checkColumns(db, "reply_issued_actions", listOf(
             "sequence", "token", "post_id", "version", "action", "logical_id", "payload", "content_bytes", "digest",
-        ) + if (db.version >= 5) listOf("max_reply_code_units") else emptyList())
+        ) + (if (db.version >= 5) listOf("max_reply_code_units") else emptyList()) +
+            (if (db.version >= 6) listOf("publication_attempt_id", "publication_owner_id") else emptyList()))
         val state = db.rawQuery("SELECT * FROM reply_issuance_policy", null).use { cursor ->
             if (!cursor.moveToFirst() || (0..5).any { cursor.getType(it) != Cursor.FIELD_TYPE_INTEGER } ||
                 cursor.getType(6) != Cursor.FIELD_TYPE_BLOB || cursor.getLong(0) != 1L
@@ -989,6 +1092,7 @@ class NotificationReplyStagingStore internal constructor(
         }
         val records = mutableListOf<IssuedRecord>()
         val tokens = mutableSetOf<UUID>()
+        val attempts = mutableSetOf<UUID>()
         var bytes = 0L
         db.rawQuery("SELECT * FROM reply_issued_actions ORDER BY sequence", null).use { cursor ->
             while (cursor.moveToNext()) {
@@ -1006,10 +1110,22 @@ class NotificationReplyStagingStore internal constructor(
                     if (cursor.getType(9) != Cursor.FIELD_TYPE_INTEGER) corrupt()
                     exactInt(cursor, 9).also { if (it <= 0 || it > Int.MAX_VALUE / Char.SIZE_BYTES) corrupt() }
                 }
-                val record = IssuedRecord(storeId, cursor.getLong(0), action, bound)
+                val attempt = if (db.version < 6) null else {
+                    if (cursor.isNull(10) != cursor.isNull(11)) corrupt()
+                    if (cursor.isNull(10)) null else {
+                        if (cursor.getType(10) != Cursor.FIELD_TYPE_STRING ||
+                            cursor.getType(11) != Cursor.FIELD_TYPE_STRING
+                        ) corrupt()
+                        PublicationAttempt(uuid(cursor.getString(10)), uuid(cursor.getString(11))).also {
+                            if (!attempts.add(it.attemptId)) corrupt()
+                        }
+                    }
+                }
+                val record = IssuedRecord(storeId, cursor.getLong(0), action, bound, attempt)
                 val size = issuanceContentBytes(record)
                 if (record.sequence != records.size.toLong() + 1 || !tokens.add(action.token) ||
                     !action.post.isValid() || action.logicalNotificationId.value.isEmpty() ||
+                    db.version >= 6 && bound == null ||
                     bound != null && reservedReplyBytes(record) > limits.maxRecordBytes ||
                     size != cursor.getLong(7) || size > state.first.maxRecordBytes ||
                     size > state.first.maxTotalRecordBytes - bytes ||
@@ -1026,7 +1142,8 @@ class NotificationReplyStagingStore internal constructor(
     private fun issuanceHeader(record: IssuedRecord): String =
         "issued-v1|${record.storeId}|${record.sequence}|${record.action.token}|" +
             "${record.action.post.version}|${record.action.post.postId}|${record.action.post.action}" +
-            (record.maxReplyCodeUnits?.let { "|reply-code-units:$it" } ?: "")
+            (record.maxReplyCodeUnits?.let { "|reply-code-units:$it" } ?: "") +
+            (record.publicationAttempt?.let { "|publication-attempt:${it.attemptId}|owner:${it.ownerId}" } ?: "")
 
     private fun outstandingReservations(db: SQLiteDatabase, storeId: UUID): List<IssuedRecord> {
         if (db.version < 5) return emptyList()

@@ -99,6 +99,27 @@ Its old actions have no reserved reply quota. A producer adopting the bounded AP
 validate exact store/action/bound from Reserved/AlreadyReserved before exposing Android's
 PendingIntent and must never treat the registry-only API as equivalent.
 
+### Publication fence remains absent
+
+A positive reservation receipt describes the database transaction, not a lease extending
+through Android PendingIntent construction, notification publication or later IPC. An
+already issued action can submit and consume its reservation after an AlreadyReserved
+transaction returns but before a producer constructs or publishes a replacement action.
+Checking again merely moves that race. The storage API has no protocol spanning those
+external operations and cannot by itself promise that a newly exposed action still has
+unused quota. Its consumed-token rejection applies when consumption is already visible
+inside the reservation transaction, not to all later publication.
+
+The first bounded producer successor `cec1dfdaf2e8ff90daf14108b41b78a0a478bf14`
+missed this interval and is not accepted. The initial storage-owner source review also
+missed that integration race and was explicitly corrected; it is not acceptance evidence.
+Producer successor `56e4ac5b6f1c62ac3b42e0ab9482a5974e213838` instead returns
+ExposureHeld on exact bounded reservation success and constructs no bounded PendingIntent.
+That is a source contract, not execution evidence. Actual bounded action exposure remains
+blocked pending a reviewed combined publication/admission fence; registry-only prepare
+must not be used as a fallback. The storage quota controls remain useful but do not finish
+the end-to-end before-exposure guarantee.
+
 ## Repeated, unknown and old input; real failure limits
 
 Unknown and old-generation tokens cannot spend a current reservation or supply a replacement
@@ -156,7 +177,43 @@ or bypass an execution runtime. No direct Gradle or retained-owner recovery was 
 | `git diff --check` | Passed before source freeze |
 | `python tools\android-port\controller\validate.py` | Passed: manifest valid |
 | `python tools\android-port\portmap.py` | Passed: provenance inventory generated |
-| `:platform:notifications:testDebugUnitTest` for this successor | Not run locally; exact-candidate hosted verification pending |
+| `:platform:notifications:testDebugUnitTest` for exact capacity composition41e361 | Passed on hosted Linux: 288 discovered/run/passed, zero failures/errors/skips; not run locally |
+
+The supported exact-commit command
+`python tools\android-port\local\check.py --commit e1d7d42dc0c4dd0cfcff8cd10f7c29c8f0317c16`
+refused execution: `Installed execution runtime is old or mismatched: controller/authority.py`.
+No product tests ran through that command and no runtime installation or owner bypass followed.
+
+Independent coordinator source review of exact `e1d7d42` found no additional substantive
+storage issue; this does not establish Android publication fencing or execution.
+Discovery owner a0 published separate capacity-only composition
+`41e361a033ab658ffb369d893530d28c9188e460`, tree
+`60e0fdb5124be76f917be4aa62fe949bf220ab01`, parents
+`d59773a10df7cfd462ddcbc7fe3ccc698ca859e7` and
+`e1d7d42dc0c4dd0cfcff8cd10f7c29c8f0317c16`, on unique ref
+`diagnostic-wp401-capacity-41e361a0`. All notification source/test blobs match exact e1d7,
+with no producer adapter mixed in. Hosted [run41973722094](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41973722094)
+completed **SUCCESS**, with all six jobs successful. The original Linux job127067704291
+log proves 288 notification cases discovered/run/passed and zero failures/errors/skips.
+All 141 journal method names have actual base and `[31]` executions at configured API37/31:
+Capacity29/58, Enrollment31/62, Staging28/56, Lifecycle16/32, Admission13/26 and
+Issuance24/48, plus six baseline cases. The actual notification task ran without a
+cache/UP-TO-DATE suffix. Discovery owner a0 independently parsed the original hosted log;
+the storage owner also confirmed terminal exact head, successful jobs and the original
+notification report/source bindings.
+
+The compiler captured nine exact test-source blobs and 24 remapped build/source inputs.
+These include CapacityTest `d941e0e61bbe206313b6d0e0033125bad0c10bdb`,
+EnrollmentStore `723ef711a093b77df2a861419e9b56b2abda5eae`, StagingStore
+`eb9147b5a280dbc65ba2650f40aca2e4fdc34f26` and approved diagnostic build mapping
+`9c5e1f4f6ed16f68ff629e6768afdd9185d2da61`. All previous 112 journal method sources
+remain identical to the earlier nonce candidate. No duplicate CI-result bundle is
+committed or required. This documentation successor does not alter those Kotlin/test bytes.
+
+This exact run verifies the storage candidate, not the later bounded producer56e4,
+receiver/UI integration, a combined publication fence, authenticated foreground witness,
+physical Android process survival or RF-origin/dispatch authority. All exposure and
+activation holds above remain in force.
 
 The earlier successful `3fdd4862` / run41968603305 proves the be849 nonce-enrollment
 source only, NOT schema5 capacity reservations. Neither its 230 executions nor the separate

@@ -1311,80 +1311,90 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         }
     }
 
-    @Test fun observedRepeatOffStaysOffWhenSnapshotClearFailsAndANewCycleRecovers() = runTest {
-        val clearEntered = CompletableDeferred<Unit>()
-        val clearRelease = CompletableDeferred<Unit>()
-        var failClear = true
-        val held = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
-                if (failClear && expected.device.preRepeatFrequency != null && dto.preRepeatFrequency == null) {
-                    clearEntered.complete(Unit)
-                    clearRelease.await()
-                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Repeat clear unavailable"))
+    @Test fun observedRepeatOffStaysOffWhenLaterPersistenceFailsAndANewCycleRecovers() = runTest {
+        for (failurePoint in listOf("clear", "radio-projection")) {
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var failPersistence = true
+            val held = object : PersistenceStoreProtocol by store {
+                override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                    val clearsSnapshot = expected.device.preRepeatFrequency != null && dto.preRepeatFrequency == null
+                    val projectsRestoredRf = !expected.device.clientRepeat && !dto.clientRepeat &&
+                        expected.device.frequency != dto.frequency && dto.preRepeatFrequency != null
+                    if (failPersistence && if (failurePoint == "clear") clearsSnapshot else projectsRestoredRf) {
+                        entered.complete(Unit)
+                        release.await()
+                        throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Repeat $failurePoint unavailable"))
+                    }
+                    return store.saveDeviceIfUnchanged(dto, expected)
                 }
-                return store.saveDeviceIfUnchanged(dto, expected)
             }
+            try {
+                withRepeat(held) { h, holder, failures, radio ->
+                    val before = assertNotNull(h.manager.connectedDevice)
+                    val token = assertNotNull(h.sessions.current).token
+                    holder.onRepeatToggled(true)
+                    holder.confirmEnableRepeatMode()
+                    h.eventually("initial Repeat enable is observed and acknowledged") {
+                        !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
+                    }
+                    holder.onRepeatToggled(false)
+                    h.eventually("off observation arrives before the held $failurePoint fails") {
+                        entered.isCompleted && holder.state.value.device?.clientRepeat == false
+                    }
+                    assertTrue(holder.state.value.isApplyingRepeat)
+                    assertFalse(holder.state.value.isRepeatEnabled)
+                    val durableOff = assertNotNull(store.fetchDevice(before.id))
+                    assertFalse(durableOff.clientRepeat)
+                    assertNotNull(durableOff.preRepeatFrequency)
+                    if (failurePoint == "radio-projection") {
+                        assertEquals(before.frequency, radio.frequency, "Actual restore was verified before either publication")
+                        assertTrue(durableOff.frequency != before.frequency, "The later RF projection has not committed")
+                    }
+
+                    release.complete(Unit)
+                    h.eventually("$failurePoint failure reaches the actual action") {
+                        !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
+                    }
+                    assertEquals(token, holder.state.value.sessionToken)
+                    assertFalse(holder.state.value.isRepeatEnabled, "Later persistence cannot undo the observed Repeat-off")
+                    assertFalse(assertNotNull(holder.state.value.device).clientRepeat)
+                    assertNotNull(holder.state.value.errorMessage)
+                    assertNotNull(store.fetchDevice(before.id)?.preRepeatFrequency, "Failure cannot silently discard the baseline")
+
+                    failPersistence = false
+                    holder.onRepeatToggled(true)
+                    holder.confirmEnableRepeatMode()
+                    h.eventually("a new cycle reconciles retirement and clears the visible error") {
+                        !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
+                    }
+                    assertTrue(holder.state.value.isRepeatEnabled)
+                    assertNull(holder.state.value.errorMessage)
+                    val fresh = assertNotNull(store.fetchDevice(before.id))
+                    assertEquals(before.frequency, fresh.preRepeatFrequency)
+                    assertEquals(before.bandwidth, fresh.preRepeatBandwidth)
+                    assertEquals(before.spreadingFactor, fresh.preRepeatSpreadingFactor)
+                    assertEquals(before.codingRate, fresh.preRepeatCodingRate)
+                    holder.onRepeatToggled(false)
+                    h.eventually("the fresh cycle restores RF and clears its snapshot") {
+                        !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == false
+                    }
+                    val after = assertNotNull(store.fetchDevice(before.id))
+                    assertFalse(holder.state.value.isRepeatEnabled)
+                    assertNull(holder.state.value.errorMessage)
+                    assertEquals(before.frequency, after.frequency)
+                    assertEquals(before.bandwidth, after.bandwidth)
+                    assertEquals(before.spreadingFactor, after.spreadingFactor)
+                    assertEquals(before.codingRate, after.codingRate)
+                    assertNull(after.preRepeatFrequency)
+                    assertNull(after.preRepeatBandwidth)
+                    assertNull(after.preRepeatSpreadingFactor)
+                    assertNull(after.preRepeatCodingRate)
+                    assertEquals(after, h.manager.connectedDevice)
+                    assertEquals(listOf(1, 0, 1, 0), radio.radioWrites.map { it[11].toInt() })
+                }
+            } finally { release.complete(Unit) }
         }
-        try {
-            withRepeat(held) { h, holder, failures, radio ->
-                val before = assertNotNull(h.manager.connectedDevice)
-                val token = assertNotNull(h.sessions.current).token
-                holder.onRepeatToggled(true)
-                holder.confirmEnableRepeatMode()
-                h.eventually("initial Repeat enable is observed and acknowledged") {
-                    !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
-                }
-                holder.onRepeatToggled(false)
-                h.eventually("verified off observation arrives before the held clear fails") {
-                    clearEntered.isCompleted && holder.state.value.device?.clientRepeat == false
-                }
-                assertTrue(holder.state.value.isApplyingRepeat)
-                assertFalse(holder.state.value.isRepeatEnabled)
-                assertFalse(assertNotNull(store.fetchDevice(before.id)).clientRepeat)
-                assertNotNull(store.fetchDevice(before.id)?.preRepeatFrequency)
-
-                clearRelease.complete(Unit)
-                h.eventually("snapshot clear failure reaches the actual action") {
-                    !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
-                }
-                assertEquals(token, holder.state.value.sessionToken)
-                assertFalse(holder.state.value.isRepeatEnabled, "A failed clear cannot undo the verified, observed Repeat-off")
-                assertFalse(assertNotNull(holder.state.value.device).clientRepeat)
-                assertNotNull(holder.state.value.errorMessage)
-                assertNotNull(store.fetchDevice(before.id)?.preRepeatFrequency, "The failure must not silently discard the baseline")
-
-                failClear = false
-                holder.onRepeatToggled(true)
-                holder.confirmEnableRepeatMode()
-                h.eventually("a new cycle reconciles retirement and clears the visible error") {
-                    !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
-                }
-                assertTrue(holder.state.value.isRepeatEnabled)
-                assertNull(holder.state.value.errorMessage)
-                val fresh = assertNotNull(store.fetchDevice(before.id))
-                assertEquals(before.frequency, fresh.preRepeatFrequency)
-                assertEquals(before.bandwidth, fresh.preRepeatBandwidth)
-                assertEquals(before.spreadingFactor, fresh.preRepeatSpreadingFactor)
-                assertEquals(before.codingRate, fresh.preRepeatCodingRate)
-                holder.onRepeatToggled(false)
-                h.eventually("the fresh cycle restores RF and clears its snapshot") {
-                    !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == false
-                }
-                val after = assertNotNull(store.fetchDevice(before.id))
-                assertFalse(holder.state.value.isRepeatEnabled)
-                assertNull(holder.state.value.errorMessage)
-                assertEquals(before.frequency, after.frequency)
-                assertEquals(before.bandwidth, after.bandwidth)
-                assertEquals(before.spreadingFactor, after.spreadingFactor)
-                assertEquals(before.codingRate, after.codingRate)
-                assertNull(after.preRepeatFrequency)
-                assertNull(after.preRepeatBandwidth)
-                assertNull(after.preRepeatSpreadingFactor)
-                assertNull(after.preRepeatCodingRate)
-                assertEquals(after, h.manager.connectedDevice)
-                assertEquals(listOf(1, 0, 1, 0), radio.radioWrites.map { it[11].toInt() })
-            }
-        } finally { clearRelease.complete(Unit) }
     }
 
     @Test fun repeatWaitsForSnapshotAndClearFailuresReachTheActualActionBeforeRetry() = runTest {

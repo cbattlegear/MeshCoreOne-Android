@@ -57,8 +57,10 @@ class PathHashModeStateHolder(
     fun dismissError() = mutable.update { it.copy(errorMessage = null) }
 
     fun onModeSelected(mode: UByte) {
-        if (mutable.value.isApplying || (mode == mutable.value.selectedMode && failedMode == null)) return
-        apply(mode)
+        if (mutable.value.isApplying) return
+        val service = settingsService()
+        if (mode == mutable.value.selectedMode && failedMode == null && service?.pathHashModeNeedsRecovery != true) return
+        apply(mode, service)
     }
 
     private fun apply(mode: UByte, service: SettingsRadioPort? = settingsService()) {

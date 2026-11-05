@@ -25,6 +25,7 @@ import com.meshcoreone.android.feature.nodes.deps.NodesAdvertisementService
 import com.meshcoreone.android.feature.nodes.deps.NodesClock
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
+import com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesNotificationCleanup
@@ -39,6 +40,8 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 
@@ -78,6 +81,16 @@ internal fun AppContainer.createNodesFeatureDependencies(): NodesFeatureDependen
     )
 
 private class AppNodesSession(private val container: AppContainer) : NodesSession {
+    override fun connectionSnapshots() = combine(
+        container.sessions.currentSessions,
+        container.connectionManager.snapshot,
+        container.appState.servicesVersion,
+        container.appState.sessionStateChangeCount,
+    ) { graph, _, _, _ ->
+        NodesConnectionSnapshot(currentRadioId(), graph, connectedDevice(), connectionState())
+    }.distinctUntilChanged()
+
+    override fun connectionIdentity(): Any? = container.sessions.current
     override fun connectionState() = container.appState.connectionState
     override fun connectedDevice() = container.appState.connectedDevice
     override fun currentRadioId() = container.appState.currentRadioId

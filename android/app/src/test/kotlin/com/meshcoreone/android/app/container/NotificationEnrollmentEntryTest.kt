@@ -4,7 +4,6 @@ package com.meshcoreone.android.app.container
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.Lifecycle
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -314,12 +313,13 @@ class NotificationEnrollmentEntryTest {
             assertEquals(WitnessObservation.UnknownOrLost, requireNotNull(real.witness).observe())
         }
 
-        private fun retireHost(dispose: Boolean) {
-            compose.runOnUiThread {
-                if (dispose) host.get().setContent {} else host.pause()
-            }
-            compose.waitForIdle()
+    }
+
+    private fun retireHost(dispose: Boolean) {
+        compose.runOnUiThread {
+            if (dispose) host.get().setContent {} else host.pause()
         }
+        compose.waitForIdle()
     }
 
     private fun copy() = EnrollmentWarningCopy(

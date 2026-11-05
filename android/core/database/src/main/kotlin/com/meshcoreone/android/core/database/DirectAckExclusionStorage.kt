@@ -9,7 +9,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import java.util.UUID
 
-@Entity(tableName = "direct_ack_emissions", primaryKeys = ["radioId", "claimId", "wireId"])
+@Entity(tableName = "direct_ack_emissions", primaryKeys = ["radioId", "claimId", "wireId", "markRequestId"])
 data class DirectAckEmissionEntity(
     val radioId: UUID,
     val claimId: UUID,
@@ -30,8 +30,11 @@ data class DirectAckRadioExclusionEntity(
 
 @Dao
 interface DirectAckExclusionDao {
-    @Query("SELECT * FROM direct_ack_emissions WHERE radioId = :radio AND claimId = :claim AND wireId = :wire")
-    suspend fun emission(radio: UUID, claim: UUID, wire: UUID): DirectAckEmissionEntity?
+    @Query("""
+        SELECT * FROM direct_ack_emissions
+        WHERE radioId = :radio AND claimId = :claim AND wireId = :wire AND markRequestId = :mark
+    """)
+    suspend fun emission(radio: UUID, claim: UUID, wire: UUID, mark: UUID): DirectAckEmissionEntity?
 
     @Upsert suspend fun emission(row: DirectAckEmissionEntity)
 
@@ -74,11 +77,11 @@ interface DirectAckExclusionDao {
     @Query("""
         SELECT EXISTS(
             SELECT 1 FROM direct_ack_wires w
-            JOIN direct_ack_emissions e
+            LEFT JOIN direct_ack_emissions e
               ON e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId
             WHERE w.radioId = :radio AND w.claimId = :claim
-              AND e.state = 'ACCEPTED'
-              AND e.actualCode = :code AND w.acceptedCode = :code
+              AND w.acceptedCode = :code
+              AND (e.state IS NULL OR (e.state = 'ACCEPTED' AND e.actualCode = :code))
         )
     """)
     suspend fun acceptedCurrentWire(radio: UUID, claim: UUID, code: Long): Boolean
@@ -118,7 +121,7 @@ object DirectAckExclusionStorage {
                 "CREATE TABLE IF NOT EXISTS direct_ack_emissions (" +
                     "radioId TEXT NOT NULL,claimId TEXT NOT NULL,wireId TEXT NOT NULL,issuer TEXT NOT NULL," +
                     "markRequestId TEXT NOT NULL,predictedCode INTEGER NOT NULL,state TEXT NOT NULL," +
-                    "actualCode INTEGER,resolutionRequestId TEXT,PRIMARY KEY(radioId,claimId,wireId))",
+                    "actualCode INTEGER,resolutionRequestId TEXT,PRIMARY KEY(radioId,claimId,wireId,markRequestId))",
             )
             db.execSQL(
                 "CREATE TABLE IF NOT EXISTS direct_ack_radio_exclusions (" +

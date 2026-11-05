@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.database
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
@@ -13,6 +14,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -121,6 +127,89 @@ class DirectAckExclusionStorageTest {
             exclusions.emission(marker.copy(state = "CONFLICT"))
             assertTrue(exclusions.unresolvedCompetitor(radio, current))
             assertTrue(exclusions.conflictedClaim(radio, claim))
+        } finally { db.close() }
+    }
+
+    @Test fun separateHandlesSerializeEvidenceAndNeverReuseAnEarlierCleanSnapshot() = runTest {
+        val name = "ack-exclusion-handles-${UUID.randomUUID()}.db"
+        val first = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .addCallback(DirectAckStorage.callback).build()
+        val second = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .addCallback(DirectAckStorage.callback).build()
+        val radio = UUID.randomUUID()
+        val claim = UUID.randomUUID()
+        val competitor = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        try {
+            first.openHelper.writableDatabase
+            second.openHelper.writableDatabase
+            assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val secondStarted = CompletableDeferred<Unit>()
+            withContext(Dispatchers.IO) { withTimeout(30_000) {
+                val heldTransaction = async(Dispatchers.IO) {
+                    first.withTransaction {
+                        assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
+                        entered.complete(Unit)
+                        release.await()
+                        assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
+                    } }
+                }
+                entered.await()
+                val competingWrite = async(Dispatchers.IO) {
+                    secondStarted.complete(Unit)
+                    second.withTransaction {
+                        second.directAcks().wire(DirectAckWireEntity(radio, competitor, wire, 123, null))
+                        second.directAckExclusions().emission(DirectAckEmissionEntity(
+                            radio, competitor, wire, UUID.randomUUID(), UUID.randomUUID(),
+                            123, "MAY_HAVE_WRITTEN", null, null,
+                        ))
+                    }
+                }
+                secondStarted.await()
+                release.complete(Unit)
+                heldTransaction.await()
+                competingWrite.await()
+            }
+            first.withTransaction {
+                assertTrue(first.directAckExclusions().unresolvedCompetitor(radio, claim))
+                assertTrue(first.directAckExclusions().competingCode(radio, claim, 123))
+            }
+        } finally {
+            first.close()
+            second.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test fun laterDefinitelyUnsentPhysicalCallCannotClearEarlierMayHaveWrittenOnSameWire() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .addCallback(DirectAckStorage.callback).build()
+        val radio = UUID.randomUUID()
+        val claim = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        val current = UUID.randomUUID()
+        try {
+            db.directAcks().wire(DirectAckWireEntity(radio, claim, wire, 123, null))
+            val first = DirectAckEmissionEntity(radio, claim, wire, UUID.randomUUID(), UUID.randomUUID(),
+                123, "MAY_HAVE_WRITTEN", null, null)
+            val second = first.copy(markRequestId = UUID.randomUUID())
+            val exclusions = db.directAckExclusions()
+            exclusions.emission(first)
+            exclusions.emission(second)
+            assertEquals(2, exclusions.count(radio).toInt())
+            exclusions.emission(second.copy(state = "DEFINITELY_UNSENT", resolutionRequestId = UUID.randomUUID()))
+            assertTrue(exclusions.unresolvedCompetitor(radio, current))
+            assertEquals(first, exclusions.emission(radio, claim, wire, first.markRequestId))
+            assertFalse(exclusions.acceptedCurrentWire(radio, claim, 123))
+            db.directAcks().wire(DirectAckWireEntity(radio, claim, wire, 123, 456))
+            exclusions.emission(first.copy(state = "ACCEPTED", actualCode = 456, resolutionRequestId = UUID.randomUUID()))
+            assertFalse(exclusions.unresolvedCompetitor(radio, current))
+            assertTrue(exclusions.acceptedCurrentWire(radio, claim, 456))
+            assertFalse(exclusions.acceptedCurrentWire(radio, claim, 123))
+            assertTrue(exclusions.competingCode(radio, current, 123))
+            assertTrue(exclusions.competingCode(radio, current, 456))
         } finally { db.close() }
     }
 }

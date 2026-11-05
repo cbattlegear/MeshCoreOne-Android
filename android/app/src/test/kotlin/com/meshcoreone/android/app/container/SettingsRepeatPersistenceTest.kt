@@ -1311,6 +1311,77 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun delayedEnableObservationCannotMasqueradeAsOffProofForAFailedDisable() = runTest {
+        val observedDevice = MutableStateFlow<DeviceDTO?>(null)
+        val observation = MutableStateFlow(SettingsDeviceObservation(null))
+        var forwarding: Job? = null
+        var failRestore = true
+        try {
+            withRepeat(store, beforeRestoreWrite = {
+                if (failRestore) throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Restore admission unavailable"))
+            }, connectionOverride = { actual ->
+                forwarding = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    actual.deviceObservations.collect {
+                        observedDevice.value = it.device
+                        observation.value = it
+                    }
+                }
+                object : SettingsConnection by actual {
+                    override val connectedDevice = observedDevice
+                    override val deviceObservations = observation
+                }
+            }) { h, holder, failures, radio ->
+                forwarding?.cancel()
+                forwarding?.join()
+                val token = assertNotNull(h.sessions.current).token
+                val before = assertNotNull(h.manager.connectedDevice)
+                assertFalse(assertNotNull(holder.state.value.device).clientRepeat)
+                holder.onRepeatToggled(true)
+                holder.confirmEnableRepeatMode()
+                h.eventually("actual enable acknowledges while its observation is withheld") {
+                    !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == true
+                }
+                assertTrue(holder.state.value.isRepeatEnabled)
+                assertFalse(assertNotNull(holder.state.value.device).clientRepeat)
+                val repeating = assertNotNull(store.fetchDevice(before.id))
+                assertNotNull(repeating.preRepeatFrequency)
+
+                holder.onRepeatToggled(false)
+                h.eventually("disable fails before it can verify or send off") {
+                    !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
+                }
+                assertEquals(token, holder.state.value.sessionToken)
+                assertTrue(holder.state.value.isRepeatEnabled, "An old false observation is not this action's off proof")
+                assertNotNull(holder.state.value.errorMessage)
+                assertEquals(repeating, store.fetchDevice(before.id))
+                assertEquals(repeating, h.manager.connectedDevice)
+                assertEquals(listOf(1), radio.radioWrites.map { it[11].toInt() }, "Failed admission cannot send Repeat-off")
+
+                failRestore = false
+                holder.onRepeatToggled(false)
+                h.eventually("fresh disable verifies off and clears its snapshot") {
+                    !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false
+                }
+                val after = assertNotNull(store.fetchDevice(before.id))
+                observedDevice.value = after
+                observation.value = SettingsDeviceObservation(after, token)
+                h.eventually("holder observes the actual restored RF") { holder.state.value.device == after }
+                assertFalse(holder.state.value.isRepeatEnabled)
+                assertNull(holder.state.value.errorMessage)
+                assertEquals(before.frequency, after.frequency)
+                assertEquals(before.bandwidth, after.bandwidth)
+                assertEquals(before.spreadingFactor, after.spreadingFactor)
+                assertEquals(before.codingRate, after.codingRate)
+                assertNull(after.preRepeatFrequency)
+                assertNull(after.preRepeatBandwidth)
+                assertNull(after.preRepeatSpreadingFactor)
+                assertNull(after.preRepeatCodingRate)
+                assertEquals(after, h.manager.connectedDevice)
+                assertEquals(listOf(1, 0), radio.radioWrites.map { it[11].toInt() })
+            }
+        } finally { forwarding?.cancel(); forwarding?.join() }
+    }
+
     @Test fun observedRepeatOffStaysOffWhenLaterPersistenceFailsAndANewCycleRecovers() = runTest {
         for (failurePoint in listOf("clear", "radio-projection")) {
             val entered = CompletableDeferred<Unit>()

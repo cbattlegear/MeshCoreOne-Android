@@ -9,6 +9,16 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import java.util.UUID
 
+private const val MALFORMED_PHYSICAL_EVIDENCE = """
+    predictedCode NOT BETWEEN 0 AND 4294967295
+    OR actualCode NOT BETWEEN 0 AND 4294967295
+    OR state NOT IN ('MAY_HAVE_WRITTEN','DEFINITELY_UNSENT','ACCEPTED','CONFLICT','CONFLICT_UNSENT')
+    OR (state = 'MAY_HAVE_WRITTEN' AND (actualCode IS NOT NULL OR resolutionRequestId IS NOT NULL))
+    OR (state = 'DEFINITELY_UNSENT' AND (actualCode IS NOT NULL OR resolutionRequestId IS NULL))
+    OR (state = 'ACCEPTED' AND (actualCode IS NULL OR resolutionRequestId IS NULL))
+    OR (state IN ('CONFLICT','CONFLICT_UNSENT') AND resolutionRequestId IS NULL)
+"""
+
 @Entity(tableName = "direct_ack_emissions", primaryKeys = ["radioId", "claimId", "wireId", "markRequestId"])
 data class DirectAckEmissionEntity(
     val radioId: UUID,
@@ -33,6 +43,7 @@ data class DirectAckRadioConfirmationRow(
     val conflictingPhysicalEvidence: Boolean,
     val untrackedLegacyAncestry: Boolean,
     val stickySaturation: Boolean,
+    val malformedPhysicalEvidence: Boolean,
 )
 
 @Dao
@@ -52,7 +63,9 @@ interface DirectAckExclusionDao {
                       AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
                       AND o.maximum = 1 AND o.pendingId IS NULL)) AS untrackedLegacyAncestry,
             EXISTS(SELECT 1 FROM direct_ack_radio_exclusions
-                WHERE radioId = :radio AND saturated != 0) AS stickySaturation
+                WHERE radioId = :radio AND saturated != 0) AS stickySaturation,
+            EXISTS(SELECT 1 FROM direct_ack_emissions
+                WHERE radioId = :radio AND ($MALFORMED_PHYSICAL_EVIDENCE)) AS malformedPhysicalEvidence
     """)
     suspend fun confirmationEvidence(radio: UUID): DirectAckRadioConfirmationRow
 
@@ -100,7 +113,7 @@ interface DirectAckExclusionDao {
         SELECT EXISTS(
             SELECT 1 FROM direct_ack_emissions
             WHERE radioId = :radio AND claimId != :claim
-              AND (state NOT IN ('ACCEPTED','DEFINITELY_UNSENT') OR (state = 'ACCEPTED' AND actualCode IS NULL))
+              AND (state NOT IN ('ACCEPTED','DEFINITELY_UNSENT') OR ($MALFORMED_PHYSICAL_EVIDENCE))
         ) OR EXISTS(
             SELECT 1 FROM direct_ack_wires w
             WHERE w.radioId = :radio AND w.claimId != :claim
@@ -118,6 +131,8 @@ interface DirectAckExclusionDao {
             JOIN direct_ack_wires w ON w.radioId = e.radioId AND w.claimId = e.claimId AND w.requestId = e.wireId
             JOIN direct_ack_operations o ON o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
             WHERE e.radioId = :radio AND e.claimId = :claim AND e.state = 'ACCEPTED' AND e.actualCode = :code
+              AND e.resolutionRequestId IS NOT NULL
+              AND e.predictedCode BETWEEN 0 AND 4294967295 AND e.actualCode BETWEEN 0 AND 4294967295
               AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
               AND o.maximum = 1 AND o.pendingId IS NULL
         )
@@ -136,7 +151,7 @@ interface DirectAckExclusionDao {
         SELECT EXISTS(
             SELECT 1 FROM direct_ack_emissions
             WHERE radioId = :radio AND claimId = :claim
-              AND (state NOT IN ('ACCEPTED','DEFINITELY_UNSENT') OR (state = 'ACCEPTED' AND actualCode IS NULL))
+              AND (state NOT IN ('ACCEPTED','DEFINITELY_UNSENT') OR ($MALFORMED_PHYSICAL_EVIDENCE))
         ) OR EXISTS(
             SELECT 1 FROM direct_ack_wires w
             WHERE w.radioId = :radio AND w.claimId = :claim

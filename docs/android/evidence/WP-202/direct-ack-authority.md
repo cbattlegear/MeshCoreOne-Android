@@ -667,6 +667,51 @@ are observed. Cross-handle/raw-writer observation and UI refresh semantics are
 being coordinated separately. No stream, synchronous freshness, App integration,
 accessible live warning, or runtime acceptance is claimed by this snapshot.
 
+### Malformed physical-evidence fail-closed repair (source-only)
+
+Further independent review found that immutable dfe/4384 could ignore a
+DEFINITELY_UNSENT row with an actual code or without a resolution identity,
+and could accept an ACCEPTED row without a resolution identity. The separate
+3f179 confirmation snapshot had equivalent blind spots. These predecessors
+remain immutable and have not received transferred acceptance.
+
+The successor shares an explicit SQL malformed-physical predicate across
+target/competitor unresolved classification and the complete confirmation
+aggregate. Every physical row must have UInt-range prediction/actual codes,
+a recognized state, and the correct actual/resolution shape for that state.
+The accepted-target query additionally requires a resolution identity and
+valid prediction/actual ranges. The public complete-radio snapshot and new
+exclusion settlement both reject any malformed physical evidence in that
+radio with the existing typed `PersistenceStoreError.InvalidData`, without
+changing product or evidence. This includes malformed target rows even when
+another target emission supplies valid matching acceptance. Other radios
+are unaffected.
+
+This supersedes 3f179's authored unknown-state/null-actual warning result:
+malformation now explicitly fails as typed InvalidData, not a successful
+NoPersistedWildcard or delivery. Valid MAY/conflict/legacy/saturation evidence
+retains its typed wildcard semantics; genuine definitely-unsent evidence with
+null actual and nonnull resolution remains excluded from uncertainty.
+
+`DirectAckMalformedEvidenceTest` authors a twelve-case raw-SQL corruption matrix
+on both the target and a competing claim: unsent with actual/missing resolution;
+accepted with missing resolution/null/negative/overflow actual; prediction
+underflow/overflow; unknown state; MAY with actual/resolution; and conflict
+without resolution. It asserts explicit warning/settlement InvalidData,
+unchanged product/incarnation/operation history, no delivery, and radio
+isolation, plus a malformed-target/second-valid-acceptance control and a valid
+zero-write positive permitting genuine target settlement. These are authored
+real Room controls, not execution evidence. No schema/entity metadata,
+legacy failure API, consumer file, held source or genuine schema bytes change.
+
+The same successor imports the previously omitted canonical base
+`DirectAckAuthority.kt` KDoc bytes from WP-201 7af7eefe, blob
+`aee117e9a012ed5f33d9519e04807fe7c78b06bf`. The earlier exact 7af/783 byte
+claims concerned `DirectAckRadioExclusion.kt` only; the base authority file
+still inherited blob `bfdc036b`. The import changes documentation, not
+declarations or implementation, and prevents a composition from falsely
+claiming the entire older contract tree was already canonical.
+
 ### Separate accepted-code mismatch repair
 
 This successor is based on the fixture-only `94af032ee0a7bbe21fee822c86f63edac8745187`

@@ -439,6 +439,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     override suspend fun inspectDirectAckRadioConfirmationEvidence(radioId: RadioId): DirectAckRadioConfirmationEvidence =
         context.read("inspectDirectAckRadioConfirmationEvidence") {
             val row = database.directAckExclusions().confirmationEvidence(radioId.value)
+            if (row.malformedPhysicalEvidence) invalidData("Malformed persisted radio emission evidence")
             val reasons = linkedSetOf<DirectAckRadioConfirmationWildcardReason>()
             if (row.unresolvedPhysicalEmission) reasons += DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION
             if (row.conflictingPhysicalEvidence) reasons += DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE
@@ -479,6 +480,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             ?: return@transaction DirectAckRadioSettlementResult.Rejected(DirectAckRejection.INVALID_HANDLE)
         val radio = issued.lease.token.radioId.value
         val dao = database.directAcks()
+        if (database.directAckExclusions().confirmationEvidence(radio).malformedPhysicalEvidence) {
+            invalidData("Malformed persisted radio emission evidence")
+        }
         val claim = dao.claim(radio, issued.request)
             ?: return@transaction DirectAckRadioSettlementResult.Rejected(DirectAckRejection.MISSING)
         if (claim.leaseId != issued.lease.request) {

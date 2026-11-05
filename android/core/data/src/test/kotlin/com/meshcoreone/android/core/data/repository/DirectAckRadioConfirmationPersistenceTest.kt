@@ -109,13 +109,15 @@ class DirectAckRadioConfirmationPersistenceTest {
         assertTrue(failures.isEmpty())
     }
 
-    @Test fun conflictIsDistinctFromUnresolvedAndMalformedUnknownStateFailsClosedToWildcard() = runTest {
+    @Test fun conflictIsDistinctFromUnresolvedAndMalformedPhysicalStateFailsWithTypedInvalidData() = runTest {
         val conflict = physical("CONFLICT_UNSENT")
         assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE), reasons())
         db.directAckExclusions().emission(conflict.copy(state = "UNRECOGNIZED_STATE"))
-        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION), reasons())
+        assertEquals(PersistenceStoreError.InvalidData,
+            assertFailsWith<PersistenceStoreException> { evidence() }.error)
         db.directAckExclusions().emission(conflict.copy(state = "ACCEPTED", actualCode = null))
-        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION), reasons())
+        assertEquals(PersistenceStoreError.InvalidData,
+            assertFailsWith<PersistenceStoreException> { evidence() }.error)
     }
 
     @Test fun fullAggregateFindsWildcardBeyondDiagnosticCap() = runTest(timeout = 180.seconds) {

@@ -8,6 +8,7 @@ import androidx.room.withTransaction
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotAuthority
 import com.meshcoreone.android.core.contracts.domain.RxLogRetention
 import com.meshcoreone.android.core.database.DatabaseValueException
 import com.meshcoreone.android.core.database.MeshCoreDatabase
@@ -83,6 +84,7 @@ internal class RoomRepositoryContext(
     private val mutex = shared.mutex
     internal val deviceRevisions get() = shared.deviceRevisions
     internal val deviceAuthorityRevisions get() = shared.deviceAuthorityRevisions
+    internal val repeatSnapshotAuthority get() = shared.repeatSnapshotAuthority
     private val flushOwner = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + flushOwner)
     private val pendingRx = LinkedHashMap<EntityKey, RxLogEntryEntity>()
@@ -348,6 +350,7 @@ internal class RoomRepositoryContext(
             val mutex = Mutex()
             val deviceRevisions = mutableMapOf<UUID, Long>()
             val deviceAuthorityRevisions = mutableMapOf<UUID, Long>()
+            val repeatSnapshotAuthority = RepeatSnapshotAuthority()
         }
         val databaseStates = WeakHashMap<MeshCoreDatabase, DatabaseState>()
     }

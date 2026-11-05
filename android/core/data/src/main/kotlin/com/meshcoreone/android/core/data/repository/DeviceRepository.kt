@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
 import java.util.UUID
 
 internal class DeviceRepository(private val context: RoomRepositoryContext) : DevicePersisting, DeviceEditPersisting {
+    override val repeatSnapshotAuthority get() = context.repeatSnapshotAuthority
     private class RetiredWrite : RuntimeException()
 
     private fun RepositoryTransaction.changed(id: UUID, authority: Boolean = true) {
@@ -76,6 +77,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
                 resetRemovedRegionScopes(dto.radioId, removed)
                 changed(dto.id, authority = dto.publicKey != expected.device.publicKey)
                 afterCommit {
+                    repeatSnapshotAuthority.observeCommittedClear(dto)
                     var receiptFailure: Throwable? = null
                     try {
                         expected.onCommittedSnapshot(DeviceWriteSnapshot(
@@ -122,8 +124,10 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
 
     override suspend fun saveDevice(dto: DeviceDTO) = context.write("saveDevice") {
         val existing = database.devices().byId(dto.id)
-        database.devices().upsert(existing?.applying(dto) ?: dto.toEntity())
+        val stored = existing?.applying(dto) ?: dto.toEntity()
+        database.devices().upsert(stored)
         changed(dto.id)
+        afterCommit { repeatSnapshotAuthority.observeCommittedClear(stored.toDTO()) }
         save()
     }
 

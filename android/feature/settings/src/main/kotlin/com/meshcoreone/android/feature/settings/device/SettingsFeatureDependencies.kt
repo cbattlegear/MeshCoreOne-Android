@@ -186,6 +186,9 @@ class PairingCancelledException : Exception("Pairing cancelled")
 
 /** Persistence-backed device edits the sections trigger (`ConnectionManager`/`DeviceService`). */
 interface DeviceSettingsStorePort {
+    suspend fun validatePreRepeatSettings(expectedToken: SessionToken?) {
+        throw UnsupportedOperationException("Repeat snapshot restore validation is not supported")
+    }
     suspend fun updateOcvSettings(deviceId: java.util.UUID, preset: String, customArray: String?)
     fun savePreRepeatSettings()
     fun clearPreRepeatSettings()

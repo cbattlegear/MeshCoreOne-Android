@@ -124,6 +124,37 @@ zero additional SET on disable and working fresh enable/off after an explicit
 current-token snapshot clear. This test-only discriminator precedes the production
 repair; it is not claimed to have reproduced until exact hosted execution.
 
+The production successor explicitly fences conflict-retained, definitely-unsent
+snapshots rather than weakening the creation receipt's CAS. Its process-store-owned
+RepeatSnapshotAuthority lives beside revisions in RoomRepositoryContext.DatabaseState
+and is shared through DeviceEditPersisting delegation by stores on the same actual
+Room database object, editors and wrappers, keyed by stable device UUID, radio ID
+and public key. Only the shared-state field/getter/import are added to the context;
+its transaction, read/write and runtime lease semantics remain unchanged. The creation
+receipt and its attempt are registered synchronously in the actual post-commit
+callback, before ordinary publication/caller unwind or abort entry. A suspended,
+cancelled or conflicting cleanup cannot leave an unregistered creation.
+
+Every authoritative snapshot-save transform checks that custody, including retries;
+the real restore consumer validates it before deriving RF or sending SET. A pending,
+UNKNOWN or definitely-unsent creation cannot be reused. An actual successful SET
+return is recorded separately because ChannelWriteDispatch remains UNKNOWN on
+success; cancellation's MAY_HAVE_WRITTEN likewise permits retaining legitimate
+restoration data. Neither dispatch entry alone nor an RF/DTO/revision/ABA change
+resolves uncertainty. Only an actual committed all-four-fields-null clear releases
+an unissued fence. Clear observation uses the stored DTO, not proposed values.
+No callback suspends or re-enters Room, and the registry never holds its monitor
+while acquiring the attempt monitor.
+
+The actual regression also checks a separate editor over a delegating persistence
+wrapper cannot bypass the fence, and that explicit current-token clear permits fresh
+enable/off restoring all four later manual RF fields. Existing partial/full,
+equal-DTO ABA and successor receipt protections remain. This is a process-lifetime
+fence, not a persisted quarantine format or evidence of orphan recovery across a
+process restart. Cold connection initialization's existing Repeat-off snapshot
+clear remains unchanged; no schema, Room transaction boundary, runtime authority, RF ACK recovery
+or protected scope is changed by this repair.
+
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive
 cancellation before SET, then a later manual RF edit and fresh enable/off would

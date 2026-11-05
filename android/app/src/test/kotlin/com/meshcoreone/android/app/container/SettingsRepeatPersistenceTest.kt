@@ -10,6 +10,9 @@ import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotReconciliationRequired
+import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
+import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -33,11 +36,39 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
+    @Test fun separateStoresAndEditorsOnTheSameRoomDatabaseShareTheUnsentSnapshotFenceAndCommittedClear() = runTest {
+        withRepeat(store) { h, _, _, _ ->
+            val token = assertNotNull(h.sessions.current).token
+            val original = assertNotNull(h.manager.connectedDevice)
+            val alternate = RoomPersistenceStore(db, backgroundScope)
+            try {
+                assertTrue(store.repeatSnapshotAuthority === alternate.repeatSnapshotAuthority)
+                val wrapped = object : PersistenceStoreProtocol by alternate {}
+                val sibling = ConnectedDeviceEditor(
+                    h.container.deviceAccess, wrapped, wrapped, { null },
+                    RadioPresetMatcher { _, _, _, _ -> emptySet() }, backgroundScope, { java.time.Instant.EPOCH },
+                )
+                assertTrue(h.container.deviceEditor.savePreRepeatSettings(token, PreRepeatSettingsAttempt(token)))
+                assertIs<RepeatSnapshotReconciliationRequired>(
+                    runCatching { sibling.savePreRepeatSettings(token, PreRepeatSettingsAttempt(token)) }.exceptionOrNull(),
+                )
+                assertIs<RepeatSnapshotReconciliationRequired>(
+                    runCatching { sibling.validatePreRepeatSettings(token) }.exceptionOrNull(),
+                )
+                assertEquals(original.savingPreRepeatSettings(), store.fetchDevice(original.id))
+                assertTrue(sibling.clearPreRepeatSettings(token))
+                assertTrue(h.container.deviceEditor.validatePreRepeatSettings(token))
+                assertEquals(original, store.fetchDevice(original.id))
+            } finally { alternate.close() }
+        }
+    }
+
     @Test fun conflictedUnsentSnapshotCannotRestoreOldRfAfterAnInterveningWriteAndFreshEnable() = runTest {
         for (aba in listOf(false, true)) {
             val committed = CompletableDeferred<Job>()
@@ -105,11 +136,24 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         assertNotNull(holder.state.value.errorMessage)
                         assertEquals(1, radio.radioWrites.size, "A fenced fresh enable cannot send SET")
                         assertEquals(manual, store.fetchDevice(before.id))
+                        val wrapped = object : PersistenceStoreProtocol by store {}
+                        val sibling = ConnectedDeviceEditor(
+                            h.container.deviceAccess, wrapped, wrapped, { null },
+                            RadioPresetMatcher { _, _, _, _ -> emptySet() }, backgroundScope, { java.time.Instant.EPOCH },
+                        )
+                        assertIs<RepeatSnapshotReconciliationRequired>(
+                            runCatching { sibling.savePreRepeatSettings(token, PreRepeatSettingsAttempt(token)) }.exceptionOrNull(),
+                            "A separate editor and delegating wrapper share the process-store fence",
+                        )
+                        assertIs<RepeatSnapshotReconciliationRequired>(
+                            runCatching { sibling.validatePreRepeatSettings(token) }.exceptionOrNull(),
+                        )
                         holder.onRepeatToggled(false)
                         h.eventually("fenced restoration releases its busy state") { !holder.state.value.isApplyingRepeat }
                         assertEquals(1, radio.radioWrites.size, "A fenced restore cannot use the abandoned baseline either")
                         assertEquals(manual, store.fetchDevice(before.id))
                         assertTrue(h.container.deviceEditor.clearPreRepeatSettings(token), "Explicit current-token clear resolves the ambiguity")
+                        assertTrue(sibling.validatePreRepeatSettings(token))
                         h.eventually("explicit resolution is observed") { holder.state.value.device?.preRepeatFrequency == null }
                         holder.onRepeatToggled(true)
                         holder.confirmEnableRepeatMode()

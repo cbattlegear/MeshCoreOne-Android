@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceWriteView
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
+import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteConflict
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
@@ -102,6 +103,9 @@ class ConnectedDeviceEditor(
     private val clearDefaultFloodScope: suspend () -> Unit = {},
 ) {
     private val sessionEdits = Mutex()
+    private val repeatSnapshotAuthority
+        get() = (devices as? DeviceEditPersisting
+            ?: throw UnsupportedOperationException("Repeat snapshots require versioned device persistence")).repeatSnapshotAuthority
     val connectedDevice: DeviceDTO? get() = access.connectedDevice
 
     fun updateDevice(info: SelfInfo, appliedRadioPresetID: String?): Job? {
@@ -241,6 +245,7 @@ class ConnectedDeviceEditor(
         var created = false
         val saved = sessionEdit("prepareRepeat", expectedToken, onCommittedSnapshot = {
             attempt.recordCommitted(it, created)
+            if (created) repeatSnapshotAuthority.recordCreated(it, attempt)
         }) { current ->
             created = current.preRepeatFrequency == null && current.preRepeatBandwidth == null &&
                 current.preRepeatSpreadingFactor == null && current.preRepeatCodingRate == null && !current.clientRepeat
@@ -262,11 +267,30 @@ class ConnectedDeviceEditor(
         return true
     }
 
-    private fun DeviceDTO.preservingOrSavingPreRepeatSettings(): DeviceDTO =
+    suspend fun validatePreRepeatSettings(expectedToken: SessionToken): Boolean = try {
+        sessionEdits.withLock {
+            val original = access.currentDevice(expectedToken) ?: return@withLock false
+            val actual = devices.fetchDevice(original.id) ?: return@withLock false
+            currentCoroutineContext().ensureActive()
+            val current = access.currentDevice(expectedToken) ?: return@withLock false
+            if (actual.id != current.id || actual.radioId != current.radioId || actual.publicKey != current.publicKey) return@withLock false
+            repeatSnapshotAuthority.requireUsable(actual)
+            true
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        diagnostics.report("device.restoreRepeat", failure)
+        throw failure
+    }
+
+    private fun DeviceDTO.preservingOrSavingPreRepeatSettings(): DeviceDTO {
+        repeatSnapshotAuthority.requireUsable(this)
         // Partial imported snapshots retain their native per-field restore fallback.
-        if (preRepeatFrequency != null || preRepeatBandwidth != null ||
+        return if (preRepeatFrequency != null || preRepeatBandwidth != null ||
             preRepeatSpreadingFactor != null || preRepeatCodingRate != null
         ) this else savingPreRepeatSettings()
+    }
 
     fun clearPreRepeatSettings(): Job? = edit("clearPreRepeat") { it.clearingPreRepeatSettings() }
 

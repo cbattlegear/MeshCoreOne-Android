@@ -230,6 +230,10 @@ class AppSettingsFeature private constructor(
             }
         },
         deviceStore = object : DeviceSettingsStorePort {
+            override suspend fun validatePreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
+                val token = expectedToken ?: throw SettingsNotConnectedException()
+                if (!container.deviceEditor.validatePreRepeatSettings(token)) throw SettingsNotConnectedException()
+            }
             override suspend fun updateOcvSettings(deviceId: UUID, preset: String, customArray: String?) {
                 live().deviceService.updateOCVSettings(deviceId, preset, customArray)
             }

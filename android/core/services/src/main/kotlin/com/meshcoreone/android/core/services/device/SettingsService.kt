@@ -138,6 +138,7 @@ class SettingsService(
             require(repeatAttempt.token == context.token)
             setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate,
                 clientRepeat, repeatAttempt.startRadioDispatch())
+            repeatAttempt.recordRadioWriteCompleted()
         }
     }
 

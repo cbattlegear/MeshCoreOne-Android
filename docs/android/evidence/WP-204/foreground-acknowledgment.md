@@ -4,9 +4,8 @@
 
 Repository: `cbattlegear/MeshCoreOne-Android`.
 Worktree branch: `cbattlegear-foreground-enrollment-acknowledgment`.
-Exact base and current `HEAD`: `94493a7248f8ad4a4a72f9751946339418174679`.
-The verifier/test/evidence candidate is still uncommitted and has no immutable
-candidate SHA.
+Exact base: `94493a7248f8ad4a4a72f9751946339418174679`.
+Verifier and test source commit: `007ed6bf7c66c5988dcf8416a8fcbd98a0bebb73`.
 Frozen Swift reference: `db14559b39d32322b06477c6ae676112f583db50`.
 This is Android-only enrollment infrastructure, not Swift parity and not an
 activation of notification delivery or ingress.
@@ -61,7 +60,7 @@ preserved and not bypassed.
 
 Passed:
 
-- `python tools\android-port\controller\ci.py preflight --local --state C:\Users\camer\AppData\Local\MeshCoreOne\toolchains\windows-existing-sdk-r02-65a1304729d745f3a9b0d72d085661f5\environment.json --output C:\Users\camer\AppData\Local\Temp\MeshCoreOne-foreground-ack-preflight-81828d74eebf46ffa663fc87b25c2946` (exit 0; pinned Python 3.12.4).
+- `$output = Join-Path $env:TEMP ('MeshCoreOne-foreground-ack-preflight-' + [guid]::NewGuid().ToString('N')); python tools\android-port\controller\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` (exit 0; pinned Python 3.12.4).
 - `python tools\android-port\controller\validate.py` (manifest/ownership validation).
 - `python tools\android-port\portmap.py` (exit code 0; traceability report generated to stdout).
 - `git diff --check`.
@@ -72,8 +71,8 @@ Not run:
 - Kotlin compilation and Robolectric tests. A separate hard `gradle-execution`
   owner remained active for commit `3c5297acdc083df21ec08afd7654aeaaa103ee59`;
   this work did not invoke Gradle or disturb its lock.
-- Exact-candidate hosted diagnostic. The source candidate has not yet been
-  committed/published, so no hosted run can verify these changes yet.
+- Exact-candidate hosted diagnostic. The immutable source commit is available,
+  but its hosted diagnostic has not yet run.
 - Physical AndroidKeystore, reboot, process-death, power-loss, restore-device,
   foreground UI, notification ingress or radio tests.
 

@@ -308,3 +308,15 @@ failure and cancellation controls remain intact. The separate preview fixture
 setup failures in this run were already repaired by the supported preview
 mutation. These changes are source-checked assertions pending a new immutable
 hosted run, not passing runtime evidence.
+
+The exact `542ffa448cc235106cca8003eed19a6b3f0e06fe`
+[run 41967931135](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41967931135)
+completed with `core:data` 646 tests / 4 failures. The remaining failures are
+the three `LegacyImportLifecycleTest` methods and
+`ParityPhoneTimestampClampOriginalPredicateTest`'s real-import method, all at
+the same canonical-trigger check. Both classes inherit `RepositoryTest`,
+whose separate in-memory builder also omitted the production callback.
+That shared builder now installs `DirectAckStorage.callback`; all original
+import, timestamp and repeated-restore assertions remain unchanged.
+The preceding repair did not establish whole-run acceptance. This additional
+fixture correction requires its own exact-head hosted execution.

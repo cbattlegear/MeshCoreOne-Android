@@ -383,6 +383,35 @@ controls: the new forwarding fixture declared `List` instead of the contract's
 The successor corrects those two fixture signatures/call sites without changing
 any assertion. This compile failure is not negative behavioral evidence.
 
+The original logs separately confirm the same two fixture compilation errors for
+R24 positive `4512e0990d44265bdaf85308ffe7f9cea8032656` / `42036737253`,
+R25 positive `189cb89636c7b8754067c43ae1e511173afc4a2c` / `42038690266`,
+and R25 Run-only negative `d12e910c461d68d537221499297bb6cc2813a9cf` /
+`42038722949`. None is behavioral negative evidence for the new controls.
+
+### r26 corrected offline, unchanged-wire and reload schedules
+
+Exact `7318573c84a02a36322dd02b17950de720c9259c`, run `42038962081`,
+passed all six jobs. Original-log audit matched the compiled candidate sources
+and every selected declaration: 84 mounted, 45 execution, 4 batch-card,
+14 saved-list and 8 AppContainer/Room methods (155 total). Tools 795/795 and
+App 2012/2012 passed with zero failures, errors or skips. This establishes that
+candidate's production-equivalent feature fixtures, not the subsequently added
+actual mounted Tools-entry boundary.
+
+Identical-test negative `3c3e62e0373ac51c6137f257741d9ddcd18fc6aa`,
+run `42038990065`, restored four production files from `725` and discovered
+795 Tools executions with 10 assertion failures, zero errors/skips: the four
+offline entry/open-draft controls, both retained-route offline Run controls,
+both mounted one-hop Auto Return controls, the single/batch pending/completed
+one-hop holder family, and the overlapping rename/delete fixture-store control.
+Their assertion lines were respectively 2104/682, 666, 601, 502 and 292 in
+that exact candidate. Mandatory later notifications, shortcuts, widgets and
+Room-verification reports were absent; the aggregate failed. This is a real
+behavioral negative, not another compile failure or full-suite acceptance.
+
+### Actual production Tools-entry withdrawal boundary
+
 The actual Tools-entry successor mounts the production dependency adapter and
 real AppContainer/Room/ConnectionManager. Its two same/different-radio controls
 disconnect that manager without changing a Compose connection value, manually
@@ -398,3 +427,12 @@ registry-token StateFlow emitted under the existing publication/withdrawal lock,
 not the earlier manager snapshot. It leaves AppState's global counter semantics
 unchanged. This actual mounted boundary needs fresh exact execution; the manually
 published feature-level fixtures do not establish it.
+
+Reviewed production candidate `d16eed685988fe348a045ee59f84b020efb1aab1` /
+run `42042377663` and identical-test snapshot-only
+`21885199e1b08658c993cec9237951a13a9d204c` / `42042382972` remain immutable
+diagnostics. The subsequent fixture explicitly waits for the actual asynchronous
+Room-backed saved-row publication, scopes clear confirmation to the dialog,
+and additionally asserts the connected route is runnable and fresh B clear
+actually empties it. No previous assertion is removed or relaxed. Those fixture
+bytes need their own exact run; no result is transferred from r26 or r27.

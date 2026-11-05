@@ -90,7 +90,11 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
                 }
             }
             compose.onNodeWithText("Saved").performClick()
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithText(saved.name).fetchSemanticsNodes().isNotEmpty()
+            }
             compose.onNodeWithText(saved.name).performClick()
+            compose.onNodeWithText("Run Trace").performScrollTo().assertIsEnabled()
             compose.onNodeWithText("Add Hop").performScrollTo().performClick()
             input().performTextReplacement("A1")
             val oldText = assertNotNull(input().fetchSemanticsNode().config[SemanticsActions.SetText].action)
@@ -147,7 +151,8 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
             compose.onNodeWithText("Done").performScrollTo().performClick()
             input().assertDoesNotExist()
             compose.onNodeWithText("Clear Path").performScrollTo().performClick()
-            compose.onNode(hasText("Clear Path") and hasClickAction()).performClick()
+            compose.onNode(hasText("Clear Path") and hasClickAction() and hasAnyAncestor(isDialog())).performClick()
+            compose.onNodeWithText("Add a hop to start building your path.").assertIsDisplayed()
             compose.onNodeWithText("Add Hop").performScrollTo().performClick()
             input().performTextReplacement("Fresh B after clear")
             assertDraft("Fresh B after clear")

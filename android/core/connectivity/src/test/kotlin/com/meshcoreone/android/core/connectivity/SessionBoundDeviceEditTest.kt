@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.connectivity.support.runtimeScenario
 import com.meshcoreone.android.core.connectivity.support.selfInfo
 import com.meshcoreone.android.core.connectivity.support.testDevice
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
+import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceWriteView
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
@@ -31,8 +32,33 @@ class SessionBoundDeviceEditTest {
         var device: DeviceDTO? = testDevice()
         var token: SessionToken? = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), device!!.radioId)
         var beforeReplace: () -> Unit = {}
+        var beforeTransform: () -> Unit = {}
         override val connectedDevice get() = device
         override val connectedDeviceToken get() = token
+        override var ocvPublicationRevision = 0L
+            private set
+        override fun captureDeviceWriteView(expectedToken: SessionToken?): ConnectedDeviceWriteView? =
+            (if (expectedToken == null) device else currentDevice(expectedToken))
+                ?.let { ConnectedDeviceWriteView(it, ocvPublicationRevision) }
+        override fun publishOCVSettings(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? {
+            val live = currentDevice(expectedToken) ?: return null
+            if (live.id != device.id || live.radioId != device.radioId) return null
+            val revision = ocvPublicationRevision
+            val edit = replaceConnectedDevice(
+                live.copy(ocvPreset = device.ocvPreset, customOCVArrayString = device.customOCVArrayString), expectedToken,
+            ) ?: return null
+            if (ocvPublicationRevision == revision) ocvPublicationRevision++
+            return edit
+        }
+        override fun transformConnectedDevice(
+            expectedToken: SessionToken?,
+            transform: (DeviceDTO) -> DeviceDTO,
+        ): ConnectedDeviceEdit? {
+            val hook = beforeTransform
+            beforeTransform = {}
+            hook()
+            return super.transformConnectedDevice(expectedToken, transform)
+        }
         override fun currentDevice(expectedToken: SessionToken): DeviceDTO? {
             beforeReplace()
             return device.takeIf { token == expectedToken }
@@ -43,6 +69,9 @@ class SessionBoundDeviceEditTest {
             beforeReplace()
             val current = this.device ?: return null
             if (token != expectedToken || current.id != device.id || current.radioId != device.radioId) return null
+            if (current.ocvPreset != device.ocvPreset || current.customOCVArrayString != device.customOCVArrayString) {
+                ocvPublicationRevision++
+            }
             this.device = device
             return ConnectedDeviceEdit(expectedToken, 1, current.knownRegions)
         }
@@ -56,6 +85,45 @@ class SessionBoundDeviceEditTest {
         assertTrue(editor.updateDevice(selfInfo(preset), preset.id, access.token!!))
         assertEquals(preset.id, access.device!!.appliedRadioPresetID)
         assertEquals(access.device, devices.rows[access.device!!.id])
+    }
+
+    @Test fun publicationRevisionDistinguishesEqualOcvAndAbaAtTheActualEditorMerge() = runtimeScenario {
+        for (aba in listOf(false, true)) {
+            for (maskRevision in listOf(false, true)) {
+                val access = Access()
+                val original = access.device!!.copy(ocvPreset = "A", customOCVArrayString = "curve-A")
+                access.device = original
+                val readalong = original.copy(ocvPreset = "B", customOCVArrayString = "curve-B")
+                devices.saveDevice(readalong)
+                val editorAccess = object : ConnectedDeviceAccess by access {
+                    // Negative control recreates value-only publication without changing the editor.
+                    override val ocvPublicationRevision: Long
+                        get() = if (maskRevision) 0L else access.ocvPublicationRevision
+                }
+                val editor = ConnectedDeviceEditor(
+                    editorAccess, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant },
+                )
+                val token = access.token!!
+                var publications = 0
+                access.beforeTransform = {
+                    if (aba) {
+                        editor.updateOCVSettings(readalong, token)
+                        publications++
+                    }
+                    editor.updateOCVSettings(original, token)
+                    publications++
+                    assertEquals(original, access.device)
+                    assertEquals(publications.toLong(), access.ocvPublicationRevision)
+                }
+                assertTrue(editor.updatePathHashMode(2u, token))
+                assertEquals(if (aba) 2 else 1, publications)
+                assertEquals(publications.toLong() + if (maskRevision) 1L else 0L, access.ocvPublicationRevision)
+                val expectedLive = (if (maskRevision) readalong else original).copy(pathHashMode = 2u)
+                assertEquals(expectedLive, access.device, "aba=$aba maskRevision=$maskRevision")
+                // This is a live-publication merge control, not a second durable OCV transaction.
+                assertEquals(readalong.copy(pathHashMode = 2u), devices.rows[original.id])
+            }
+        }
     }
 
     @Test fun disconnectBetweenReadAndReplacementDoesNotPersist() = runtimeScenario {

@@ -27,6 +27,9 @@ data class DeviceWriteSnapshot(
 
 class DeviceWriteConflict : IllegalStateException("Device write authority changed")
 
+/** Captured atomically with the live OCV publication revision, including equal-valued publications. */
+data class ConnectedDeviceWriteView(val device: DeviceDTO, val ocvRevision: Long)
+
 /** A verified radio scope must still match the projected persisted default when removing a region. */
 enum class KnownRegionRemovalOutcome { Removed, Retired, NeedsScopeReconciliation }
 

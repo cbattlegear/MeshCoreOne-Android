@@ -395,7 +395,7 @@ class OnboardingFlowCoordinatorTest {
         override val demo: FakeDemo = FakeDemo(),
         override val region: FakeRegion = FakeRegion(RegionSelection("US", RegionSelection.Source.LOCATION),
             mapOf(null to listOf(OnboardingPresetOption("p", "P", 915.0)))),
-        override val presets: FakePresets = FakePresets(),
+        override val presets: OnboardingPresetPort = FakePresets(),
     ) : OnboardingFeatureDependencies {
         override fun openAppSettings() = Unit
         @androidx.compose.runtime.Composable
@@ -426,6 +426,74 @@ class OnboardingFlowCoordinatorTest {
         assertTrue(flow.onboarding.hasCompletedOnboarding)
         assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
         assertEquals(OnboardingStep.PAIR, flow.currentStep)
+    }
+
+    @Test fun presetReplacementWhileApplyingCannotCompleteForTheSuccessor() {
+        val first = OnboardingPresetTarget(UUID.randomUUID(), 1, UUID.randomUUID())
+        val release = CompletableDeferred<Unit>()
+        var received: OnboardingPresetTarget? = null
+        val port = object : OnboardingPresetPort {
+            override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
+            var target = first
+            override fun currentTarget() = target
+            override suspend fun apply(presetId: String): OnboardingPresetOutcome = error("Use captured target")
+            override suspend fun apply(presetId: String, expectedTarget: OnboardingPresetTarget?): OnboardingPresetOutcome {
+                received = expectedTarget
+                release.await()
+                return OnboardingPresetOutcome.Applied
+            }
+        }
+        val deps = Deps(presets = port)
+        val flow = OnboardingFlowCoordinator(scope, deps)
+        flow.preset.apply("p")
+        assertEquals(first, received)
+        assertTrue(flow.preset.state.value.isApplying)
+        port.target = first.copy(generation = 2)
+        release.complete(Unit)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertFalse(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(0, flow.preset.state.value.commitTick)
+        assertNotNull(flow.preset.state.value.error)
+    }
+
+    @Test fun presetSealRejectsReplacementAfterValidationAndFreshTargetCanComplete() {
+        val first = OnboardingPresetTarget(UUID.randomUUID(), 1, UUID.randomUUID())
+        val received = mutableListOf<OnboardingPresetTarget?>()
+        val port = object : OnboardingPresetPort {
+            override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
+            var target = first
+            var replaceAtSeal = true
+            override fun currentTarget() = target
+            override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+            override fun sealCompletion(
+                target: OnboardingPresetTarget?,
+                attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+            ): Boolean {
+                received += target
+                if (replaceAtSeal) {
+                    this.target = first.copy(generation = 2)
+                    return false
+                }
+                return target == this.target && attempt.trySeal()
+            }
+        }
+        val deps = Deps(presets = port)
+        val flow = OnboardingFlowCoordinator(scope, deps)
+        flow.preset.apply("p")
+        assertEquals(listOf(first), received)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertFalse(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(0, flow.preset.state.value.commitTick)
+        assertNotNull(flow.preset.state.value.error)
+        port.replaceAtSeal = false
+        flow.preset.apply("p")
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+        assertTrue(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(listOf(first, port.target), received)
+        assertEquals(OnboardingCompletionReceipt.Preset("p", port.target), flow.onboarding.completionReceipt)
+        assertEquals(1, flow.preset.state.value.commitTick)
     }
 
     @Test fun noDeviceWaitsForDurableCompletionAndRejectsDuplicateConfirmation() {

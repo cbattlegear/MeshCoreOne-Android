@@ -34,6 +34,43 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
+    @Test fun onboardingConfiguratorBindsSealsAndPresetAdmissionToTheOriginalRuntimeToken() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val configurator = com.meshcoreone.android.app.container.onboarding.AppStateRadioConfigurator(h.container)
+            val original = assertNotNull(h.manager.connectedDevice)
+            val first = assertNotNull(configurator.currentTarget())
+            val accepted = com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt()
+            assertTrue(configurator.sealCompletion(first, accepted))
+            assertTrue(accepted.isSealed)
+            assertFalse(configurator.sealCompletion(first, accepted))
+            h.manager.disconnect()
+            h.manager.connect(h.target(original.id))
+            h.settle()
+            val successor = assertNotNull(h.manager.connectedDevice)
+            val next = assertNotNull(configurator.currentTarget())
+            assertNotEquals(first, next)
+            val stale = com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt()
+            assertFalse(configurator.sealCompletion(first, stale))
+            assertFalse(stale.isSealed)
+            assertFalse(configurator.sealCompletion(null, stale))
+            val preset = com.meshcoreone.android.core.services.device.RadioPresets.all.first()
+            val failure = runCatching { configurator.applyPreset(preset, first) }.exceptionOrNull()
+            assertTrue(failure is com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException)
+            assertEquals(
+                com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError.NotConnected,
+                failure.error,
+            )
+            assertEquals(successor, store.fetchDevice(original.id))
+            assertEquals(successor, h.manager.connectedDevice)
+            val fresh = com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt()
+            assertTrue(configurator.sealCompletion(next, fresh))
+            assertTrue(fresh.isSealed)
+        } finally { h.container.close() }
+    }
+
     @Test fun differentAliasWriterRequiresRadioReadmissionBeforeEditorCanClearTheLastScope() = runTest {
         val paused = PausedStore(store)
         val h = ContainerHarness(this, store, persistenceOverride = paused)
@@ -737,6 +774,123 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             assertNotEquals(before.id, live.id)
             assertEquals(live, store.fetchActiveDevice())
             assertTrue(h.manager.connectionState.isOperational)
+        } finally { release.complete(Unit); h.container.close() }
+    }
+
+    @Test fun twoCommittedOcvWritesReturningToTheOriginalValueCannotBeRepublishedAsTheIntermediateValue() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val session = h.sessions.current!!
+            session.deviceService.updateOCVSettings(before.id, "A", "curve-A")
+            val original = assertNotNull(h.manager.connectedDevice)
+            val originalView = assertNotNull(h.container.deviceAccess.captureDeviceWriteView(session.token))
+            var firstWriteCommitted = false
+            var secondWriteCommitted = false
+            paused.beforeSnapshot = {
+                session.deviceService.updateOCVSettings(before.id, "B", "curve-B")
+                assertEquals("B", store.fetchDevice(before.id)!!.ocvPreset)
+                assertEquals("B", h.manager.connectedDevice!!.ocvPreset)
+                firstWriteCommitted = true
+                paused.afterSave = {
+                    assertEquals("B", store.fetchDevice(before.id)!!.ocvPreset)
+                    session.deviceService.updateOCVSettings(before.id, "A", "curve-A")
+                    secondWriteCommitted = true
+                    assertEquals("A", store.fetchDevice(before.id)!!.ocvPreset)
+                    assertEquals("A", h.manager.connectedDevice!!.ocvPreset)
+                }
+            }
+            assertTrue(h.container.deviceEditor.updateDevice(original.info(), "aba-preset", session.token))
+            assertTrue(firstWriteCommitted)
+            assertTrue(secondWriteCommitted)
+            val expected = original.updating(original.info()).copy(appliedRadioPresetID = "aba-preset")
+            assertEquals(expected, store.fetchDevice(before.id))
+            assertEquals(expected, h.manager.connectedDevice)
+            assertTrue(h.container.deviceAccess.ocvPublicationRevision > originalView.ocvRevision,
+                "Equal final OCV values do not erase the intervening publications")
+            val revision = h.container.deviceAccess.ocvPublicationRevision
+            session.deviceService.updateOCVSettings(before.id, "A", "curve-A")
+            assertTrue(h.container.deviceAccess.ocvPublicationRevision > revision,
+                "Even an equal-valued accepted OCV publication advances its revision")
+            assertEquals(expected, store.fetchDevice(before.id))
+            assertEquals(expected, h.manager.connectedDevice)
+            assertEquals(session.token, h.manager.snapshot.value.token)
+        } finally { h.container.close() }
+    }
+
+    @Test fun awaitedPreRepeatSnapshotAndClearFinishOnlyAfterTheirActualRoomCommits() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val release = CompletableDeferred<Unit>()
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = h.sessions.current!!.token
+            val entered = CompletableDeferred<Unit>()
+            paused.beforeSave = { entered.complete(Unit); release.await() }
+            val snapshot = async { h.container.deviceEditor.savePreRepeatSettings(token) }
+            entered.await()
+            assertFalse(snapshot.isCompleted)
+            assertEquals(before, store.fetchDevice(before.id))
+            assertEquals(before, h.manager.connectedDevice)
+            release.complete(Unit)
+            assertTrue(snapshot.await())
+            val saved = before.savingPreRepeatSettings()
+            assertEquals(saved, store.fetchDevice(before.id))
+            assertEquals(saved, h.manager.connectedDevice)
+            assertTrue(h.container.deviceEditor.clearPreRepeatSettings(token))
+            assertEquals(saved.clearingPreRepeatSettings(), store.fetchDevice(before.id))
+            assertEquals(store.fetchDevice(before.id), h.manager.connectedDevice)
+        } finally { release.complete(Unit); h.container.close() }
+    }
+
+    @Test fun awaitedPreRepeatSnapshotPropagatesRoomFailureWithoutPublishingASnapshot() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_pre_repeat BEFORE UPDATE ON devices " +
+                    "BEGIN SELECT RAISE(FAIL, 'pre-repeat persistence failure'); END",
+            )
+            try {
+                val failure = runCatching { h.container.deviceEditor.savePreRepeatSettings(h.sessions.current!!.token) }
+                    .exceptionOrNull()
+                assertTrue(failure is com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)
+                assertEquals(before, store.fetchDevice(before.id))
+                assertEquals(before, h.manager.connectedDevice)
+            } finally { db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_pre_repeat") }
+        } finally { h.container.close() }
+    }
+
+    @Test fun awaitedPreRepeatSnapshotCannotRetargetASuccessorWhileItsSaveIsPaused() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val release = CompletableDeferred<Unit>()
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = h.sessions.current!!.token
+            val entered = CompletableDeferred<Unit>()
+            paused.beforeSave = { entered.complete(Unit); release.await() }
+            val snapshot = async { h.container.deviceEditor.savePreRepeatSettings(token) }
+            entered.await()
+            h.manager.disconnect()
+            h.manager.connect(h.target(before.id))
+            h.settle()
+            val successor = assertNotNull(h.manager.connectedDevice)
+            assertNotEquals(token, h.manager.snapshot.value.token)
+            release.complete(Unit)
+            assertFalse(snapshot.await())
+            assertEquals(successor, store.fetchDevice(before.id))
+            assertEquals(successor, h.manager.connectedDevice)
+            assertFalse(successor.hasPreRepeatSettings)
         } finally { release.complete(Unit); h.container.close() }
     }
 

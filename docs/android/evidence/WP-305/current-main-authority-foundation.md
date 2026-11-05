@@ -20,7 +20,64 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
-### Wired staged Flags prerequisite on the current-main foundation
+### Token-bound preset consumer and OCV publication composition
+
+The successor of b8d23c92df00851dbd3f0d0312066adb13597c5d wires the actual preset
+completion consumer, rather than stopping at an available staged writer. It extracts
+800df719216f378459883ed87b33b4fd4c652c7a's OnboardingPresetTarget,
+currentTarget/apply(expectedTarget)/sealCompletion contracts, AppStateRadioConfigurator
+token binding and minimal feature target guard/sealer/receipt hooks. Applying captures
+the initiating target before launching; the app awaits updateDevice and updatePathHashMode
+with the original service token. Completion uses the runtime's existing session-validated
+attempt CAS. A changed target cannot select a successor on return or authorize its seal.
+The Preset receipt is added only now that its real target-bound consumer is present;
+the broad historical retained-flow/navigation/publication subsystem is not imported.
+
+The three producer adapter target controls are transferred exactly; the entire adapter
+test blob remains identical to 800df719. Two new feature controls exercise replacement
+while radio apply is suspended and replacement at the seal after validation, including a
+fresh-target positive retry and its exact receipt. A new real-manager/Room harness control
+checks the actual configurator target mapping, one-shot seal, old/null-target rejection,
+stale preset admission and unchanged successor fields, followed by a fresh valid seal.
+
+Runtime/device owner 36c8c079-3643-4bc2-876b-f4c80c3bdf4d supplied immutable
+1d22679c4a757f9dd129f673c3a749a834f74d8e and corrected
+3b8c90fdde293bee98f5cd1db08a8c4b3b0206cc. Only their bounded OCV access/runtime/
+adapter/contract/test delta and two awaited pre-Repeat editor overloads are composed.
+The editor adaptation retains this foundation's actual commit callback, runtime authority
+lease and deferred notification outside every write lock. Existing unrelated current-main
+contact contracts and notification behavior are preserved.
+
+The runtime captures a device and its OCV publication revision atomically; changed
+replacement and every accepted explicit OCV publication, even equal-valued publication,
+advance the revision. The editor merges the latest live OCV fields if that revision changed,
+instead of inferring publication identity from DTO equality. The producer's exact
+SessionBoundDeviceEditTest and DeviceFixtures blobs are preserved. Its four-case
+production-editor/access-boundary control distinguishes equal-valued and A/B/A
+publication using paired normal-revision and masked-revision controls. This is explicitly
+not a second durable Room commit. The separate real-Room A/B/A control preserves actual
+write/serialization assertions, but the existing actual onCommitted foundation already
+closes its delayed-publication window: that Room control would pass without the stamp
+and is not credited as a discriminating stamp regression. The producer agreed with this
+review correction and recorded it in 3b8c90 before transfer.
+
+The three awaited pre-Repeat Room controls preserve commit acknowledgement, persistence
+failure and stale-generation rejection. Settings consumer integration remains with its
+owner; providing primitives does not establish that its separate Repeat flow is wired.
+No DeviceRepository, Room context/schema, Settings collector, RadioSessionContainer,
+controller/workflow, protected source or diagnostic ref is changed.
+
+Fresh trusted related-consumer/test admissions accepted these paths. The pinned
+validate.py, portmap.py, verification_config.py and git diff --check commands described
+below passed again after composition. Exact Git comparison confirmed all three 800
+Flags/adapter test blobs and both 3b8 OCV test/fixture blobs. This remains source-only
+until independent successor review and a fresh exact-head hosted diagnostic complete.
+Producer review of b8d23 found no consequential issue within that bounded staging delta;
+it did not accept raw process-flag versus feature receipt navigation, stale pairing/WiFi/
+Back scheduling, full runtime/Room/UI behavior or the full onboarding draft. Those
+limitations are not relabeled by this composition.
+
+### b8d23 wired staged Flags prerequisite
 
 The successor of c3cd86d0e2660574bf89ca5318c82fe84112c971 transfers exactly two
 producer-approved files from 800df719216f378459883ed87b33b4fd4c652c7a:
@@ -68,7 +125,7 @@ passed. `C:\Python312\python.exe tools\android-port\controller\validate.py`,
 Local Gradle remains held by local-check:f516a7e271f444dd9cb2efcc8b995a16.
 
 Exact c3cd run 41982352370 remains active while this successor is authored; its ref is
-unchanged and no duplicate is dispatched. This wired successor requires independent
+unchanged and no duplicate is dispatched. That wired successor required independent
 source review and its own fresh exact-head hosted verification. Device-token preset
 consumer/receipt integration, Settings Repeat snapshot integration and the separately
 owned OCV ABA repair are not supplied or accepted by this slice. No full onboarding,

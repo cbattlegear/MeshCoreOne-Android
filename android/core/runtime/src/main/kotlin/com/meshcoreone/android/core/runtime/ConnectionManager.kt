@@ -135,11 +135,13 @@ class ConnectionManager(
     private val breaker = ConnectionCircuitBreaker(clock)
     private var rebuildFailures = 0
     private var deviceValue: DeviceDTO? = null
+    private var ocvRevision = 0L
     private var repeatRanges: SnapshotList<FrequencyRange> = SnapshotList.empty()
     private var platformValue = DevicePlatform.UNKNOWN
     private var cleanSync: Pair<RadioId, Instant>? = null
     private var attemptedSync: Pair<RadioId, Instant>? = null
     val connectedDevice: DeviceDTO? get() = synchronized(lock) { deviceValue }
+    val ocvPublicationRevision: Long get() = synchronized(lock) { ocvRevision }
     val isSimulatorConnection: Boolean get() = synchronized(lock) {
         pendingTarget == ConnectionTarget.Simulator || (active ?: retained)?.target == ConnectionTarget.Simulator
     }
@@ -1704,6 +1706,23 @@ class ConnectionManager(
         deviceValue
     }
 
+    fun captureDeviceWriteView(expectedToken: SessionToken?): ConnectedDeviceWriteView? = synchronized(lock) {
+        val device = if (expectedToken == null) deviceValue else currentDevice(expectedToken)
+        device?.let { ConnectedDeviceWriteView(it, ocvRevision) }
+    }
+
+    fun publishOCVSettings(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? = synchronized(lock) {
+        val live = currentDevice(expectedToken) ?: return@synchronized null
+        if (live.id != device.id || live.radioId != device.radioId) return@synchronized null
+        val unchanged = live.ocvPreset == device.ocvPreset && live.customOCVArrayString == device.customOCVArrayString
+        val nextRevision = Math.incrementExact(ocvRevision)
+        val edit = replaceConnectedDevice(live.copy(
+            ocvPreset = device.ocvPreset, customOCVArrayString = device.customOCVArrayString,
+        )) ?: return@synchronized null
+        if (unchanged) ocvRevision = nextRevision
+        edit
+    }
+
     fun transformConnectedDevice(
         expectedToken: SessionToken?,
         transform: (DeviceDTO) -> DeviceDTO,
@@ -1719,6 +1738,9 @@ class ConnectionManager(
         if (!isCurrent(owner) || current.id != device.id || current.radioId != device.radioId) return@synchronized null
         val token = owner.token ?: return@synchronized null
         val sequence = Math.incrementExact(owner.deviceEditSequence)
+        if (current.ocvPreset != device.ocvPreset || current.customOCVArrayString != device.customOCVArrayString) {
+            ocvRevision = Math.incrementExact(ocvRevision)
+        }
         owner.deviceEditSequence = sequence
         deviceValue = device
         owner.device = device

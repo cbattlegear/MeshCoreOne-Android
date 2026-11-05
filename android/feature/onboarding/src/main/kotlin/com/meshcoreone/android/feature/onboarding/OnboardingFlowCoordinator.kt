@@ -21,7 +21,13 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     val region = RegionStepCoordinator(scope, deps.region, { deps.permissions.snapshot.value.location == PermissionStatus.GRANTED }) {
         onboarding.append(OnboardingStep.PRESET)
     }
-    val preset = PresetStepCoordinator(scope, deps.region, deps.presets) { onboarding.completeOnboarding() }
+    val preset = PresetStepCoordinator(scope, deps.region, deps.presets, onCompleted = ::completePreset)
+
+    private suspend fun completePreset() {
+        onboarding.completeOnboardingWithReceipt(
+            preset.completionReceipt(), preset.completionTargetGuard(), preset.completionSealer(),
+        )
+    }
 
     private val clearing = MutableStateFlow(false)
     val isClearingPairings: StateFlow<Boolean> = clearing.asStateFlow()

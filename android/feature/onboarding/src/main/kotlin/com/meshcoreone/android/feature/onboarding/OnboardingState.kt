@@ -14,6 +14,7 @@ enum class OnboardingStep(val rawValue: String) {
 }
 
 sealed interface OnboardingCompletionReceipt {
+    data class Preset(val presetId: String, val target: OnboardingPresetTarget?) : OnboardingCompletionReceipt
     data object WithoutDevice : OnboardingCompletionReceipt
     data object Restored : OnboardingCompletionReceipt
 }
@@ -103,6 +104,12 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     suspend fun completeOnboardingWithSeal(
         requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean,
+    ) = completeOnboardingWithReceipt(OnboardingCompletionReceipt.WithoutDevice, requireCurrent, seal)
+
+    suspend fun completeOnboardingWithReceipt(
+        receipt: OnboardingCompletionReceipt,
+        requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean,
     ) {
         val attempt = OnboardingCompletionAttempt()
         synchronized(completionLock) {
@@ -126,7 +133,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             synchronized(completionLock) {
                 check(pendingAttempt === attempt) { "Onboarding attempt was retired" }
                 pendingAttempt = null
-                completionReceipt = OnboardingCompletionReceipt.WithoutDevice
+                completionReceipt = receipt
                 completed.value = true
             }
         } finally {

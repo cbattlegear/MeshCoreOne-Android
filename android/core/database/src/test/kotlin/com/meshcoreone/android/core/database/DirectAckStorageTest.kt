@@ -37,7 +37,7 @@ class DirectAckStorageTest {
         val incarnation = assertNotNull(db.directAcks().incarnation(row.radioId, row.id, "message"))
         return DirectAckClaimEntity(
             UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), incarnation.incarnation, incarnation.revision, "FAILED", "SEND",
-            row.statusRawValue, true, null, null, row,
+            row.statusRawValue, true, null, null, row.radioId, row.id, row,
         ).also { db.directAcks().claim(it) }
     }
 
@@ -98,6 +98,8 @@ class DirectAckStorageTest {
             )
             assertFalse(assertNotNull(db.directAcks().claim(first.radioId, a.requestId)).current)
             assertFalse(assertNotNull(db.directAcks().claim(second.radioId, b.requestId)).current)
+            assertNull(assertNotNull(db.directAcks().claim(first.radioId, a.requestId)).snapshot)
+            assertNull(assertNotNull(db.directAcks().claim(second.radioId, b.requestId)).snapshot)
             assertNull(db.directAcks().incarnation(first.radioId, first.id, "message"))
             assertNotEquals(b.incarnation,
                 assertNotNull(db.directAcks().incarnation(second.radioId, second.id, "message")).incarnation)
@@ -120,7 +122,7 @@ class DirectAckStorageTest {
                     val entity = entities.getJSONObject(i)
                     val table = entity.getString("tableName")
                     old.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
-                    val indices = entity.getJSONArray("indices")
+                    val indices = if (entity.has("indices")) entity.getJSONArray("indices") else org.json.JSONArray()
                     for (j in 0 until indices.length()) {
                         old.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
                     }

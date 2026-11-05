@@ -57,6 +57,7 @@ class DirectAckAuthorityPersistenceTest {
         val lease: DirectAckLease,
         val request: UUID,
         val wire: UUID,
+        val intent: DirectAckIntent,
         val attempt: DirectAckAttempt,
         val row: MessageDTO,
     )
@@ -72,10 +73,14 @@ class DirectAckAuthorityPersistenceTest {
         target.saveMessage(row)
         val request = UUID.randomUUID()
         val wire = UUID.randomUUID()
-        val result = assertIs<DirectAckBeginResult.Begun>(
-            target.beginDirectAckAttempt(issued, entity(id = row.id), request, wire, 123u, mode, pendingId),
+        val capture = assertIs<DirectAckIntentResult.Captured>(
+            target.captureDirectAckIntent(issued, entity(id = row.id), request, mode, pendingId),
         )
-        return Claim(issued, request, wire, result.attempt, row)
+        assertEquals(row, capture.receipt.message)
+        val result = assertIs<DirectAckBeginResult.Begun>(
+            target.beginDirectAckAttempt(capture.intent, wire, 123u),
+        )
+        return Claim(issued, request, wire, capture.intent, result.attempt, row)
     }
 
     private suspend fun observed(claim: Claim, target: RoomPersistenceStore = store): DirectAckReceipt =
@@ -83,6 +88,270 @@ class DirectAckAuthorityPersistenceTest {
 
     private fun rejected(result: DirectAckMutationResult, reason: DirectAckRejection = DirectAckRejection.INVALIDATED) {
         assertEquals(reason, assertIs<DirectAckMutationResult.Rejected>(result).reason)
+    }
+
+    private suspend fun capture(
+        row: MessageDTO,
+        lease: DirectAckLease,
+        request: UUID = UUID.randomUUID(),
+        pendingId: UUID? = null,
+    ) = assertIs<DirectAckIntentResult.Captured>(
+        store.captureDirectAckIntent(lease, entity(id = row.id), request, DirectAckMode.SEND, pendingId),
+    )
+
+    @Test fun issuedIntentRejectsBeforeBeginTextMutationSameValueUpdateAndIdenticalDtoAba() = runTest {
+        val lease = activate()
+        for (mutation in listOf<suspend (MessageDTO) -> Unit>(
+            { store.saveMessage(it.copy(text = "replacement wire payload")) },
+            { db.messages().upsert(it.toEntity()) },
+            { db.messages().delete(RADIO_A.value, it.id); db.messages().insert(it.toEntity()) },
+            { db.openHelper.writableDatabase.execSQL("INSERT OR REPLACE INTO messages SELECT * FROM messages") },
+        )) {
+            val row = message()
+            store.saveMessage(row)
+            val request = UUID.randomUUID()
+            val issued = capture(row, lease, request)
+            assertEquals(row, issued.receipt.message)
+            assertIs<DirectAckIntentResult.AlreadyCaptured>(
+                store.captureDirectAckIntent(lease, entity(id = row.id), request, DirectAckMode.SEND, null),
+            )
+            mutation(row)
+            val independent = store.fetchMessage(entity(id = row.id))
+            assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckBeginResult.Rejected>(
+                store.beginDirectAckAttempt(issued.intent, UUID.randomUUID(), 123u),
+            ).reason)
+            assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckIntentResult.Rejected>(
+                store.captureDirectAckIntent(lease, entity(id = row.id), request, DirectAckMode.SEND, null),
+            ).reason)
+            assertIs<DirectAckObservation.Rejected>(store.inspectDirectAckAttempt(lease, request))
+            assertEquals(independent, store.fetchMessage(entity(id = row.id)))
+        }
+    }
+
+    @Test fun issuedIntentRejectsSameIdPendingReplacementAndGenericPreflightAfterCapture() = runTest {
+        val lease = activate()
+        for (mutation in listOf<suspend (PendingSendDTO) -> Unit>(
+            { store.upsertPendingSend(it) },
+            { db.pendingSends().delete(RADIO_A.value, it.id); db.pendingSends().upsert(it.toEntity()) },
+            { db.openHelper.writableDatabase.execSQL("UPDATE pending_sends SET attemptCount = COALESCE(attemptCount,0) + 1") },
+            { db.openHelper.writableDatabase.execSQL("INSERT OR REPLACE INTO pending_sends SELECT * FROM pending_sends") },
+        )) {
+            val row = message()
+            val queued = pending(messageID = row.id)
+            store.saveMessage(row)
+            store.upsertPendingSend(queued)
+            val request = UUID.randomUUID()
+            val issued = capture(row, lease, request, queued.id)
+            assertEquals(queued, issued.receipt.pending)
+            mutation(queued)
+            assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckBeginResult.Rejected>(
+                store.beginDirectAckAttempt(issued.intent, UUID.randomUUID(), 123u),
+            ).reason)
+            val history = assertIs<DirectAckIntentObservation.Found>(store.inspectDirectAckIntent(lease, request)).receipt
+            assertEquals(queued.id, history.pendingSendId)
+            assertNull(history.pending)
+            assertNotEquals(DirectAckPermission.CURRENT, history.permission)
+            assertEquals(row, store.fetchMessage(entity(id = row.id)))
+        }
+    }
+
+    @Test fun captureAfterOldCacheWindowIssuesActualPayloadAndPreparationMustPrecedeCapture() = runTest {
+        val lease = activate()
+        val earlier = message(text = "earlier unguarded wire A")
+        val current = earlier.copy(text = "actual wire B", timestamp = earlier.timestamp + 1u)
+        store.saveMessage(earlier)
+        val cached = assertNotNull(store.fetchMessage(entity(id = earlier.id)))
+        store.saveMessage(current)
+        val queued = pending(messageID = earlier.id, attempt = 1)
+        store.upsertPendingSend(queued)
+        val issued = capture(earlier, lease, pendingId = queued.id)
+        val wireInputs = assertNotNull(issued.receipt.message)
+        assertEquals(current, wireInputs)
+        assertNotEquals(cached.text, wireInputs.text)
+        assertEquals(queued, issued.receipt.pending)
+        val begun = assertIs<DirectAckBeginResult.Begun>(
+            store.beginDirectAckAttempt(issued.intent, UUID.randomUUID(), 456u),
+        )
+        assertEquals(current, begun.receipt.message)
+        assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(begun.attempt, 456u, 7u))
+        assertEquals(current.copy(status = MessageStatus.DELIVERED, ackCode = 456u, roundTripTime = 7u),
+            store.fetchMessage(entity(id = earlier.id)))
+    }
+
+    private fun assertPayloadColumnsNull(table: String, messageId: UUID, vararg prefixes: String) {
+        db.openHelper.readableDatabase.query(
+            "SELECT * FROM $table WHERE radioId = ? AND messageId = ?",
+            arrayOf(RADIO_A.value.toString().uppercase(), messageId.toString().uppercase()),
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst(), "$table tombstone must remain")
+            do {
+                val payloadColumns = cursor.columnNames.filter { name -> prefixes.any { prefix -> name.startsWith(prefix) } }
+                assertTrue(payloadColumns.isNotEmpty(), "$table payload columns must be checked")
+                for (column in payloadColumns) assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow(column)), "$table.$column")
+            } while (cursor.moveToNext())
+        }
+    }
+
+    @Test fun messageDeleteRedactionReplaceAndConversationDevicePathsEraseAllHistoricalPayloads() = runTest {
+        val lease = activate()
+        for (erase in listOf<suspend (MessageDTO, DeviceDTO) -> Unit>(
+            { row, _ -> store.deleteMessage(entity(id = row.id)) },
+            { row, _ -> db.messages().delete(RADIO_A.value, row.id) },
+            { row, _ -> db.openHelper.writableDatabase.execSQL(
+                "DELETE FROM messages WHERE radioId = ? AND id = ?",
+                arrayOf(RADIO_A.value.toString().uppercase(), row.id.toString().uppercase())) },
+            { row, _ -> store.deleteMessagesForContact(entity(id = assertNotNull(row.contactID))) },
+            { _, device -> store.deleteDeviceData(device.id) },
+            { _, device -> store.deleteDeviceAndData(device.id) },
+            { row, _ -> store.saveMessage(row.copy(text = "redacted replacement")) },
+            { row, _ -> store.saveMessage(row.copy(contactID = null, channelIndex = 1u)) },
+            { row, _ -> db.openHelper.writableDatabase.execSQL(
+                "UPDATE messages SET text = '' WHERE radioId = ? AND id = ?",
+                arrayOf(RADIO_A.value.toString().uppercase(), row.id.toString().uppercase())) },
+            { _, _ -> db.openHelper.writableDatabase.execSQL("INSERT OR REPLACE INTO messages SELECT * FROM messages") },
+            { row, _ -> db.messages().delete(RADIO_A.value, row.id); db.messages().insert(row.toEntity()) },
+        )) {
+            val row = message(text = "must not survive in authority history").copy(
+                linkPreviewImageData = key(0x71), linkPreviewIconData = key(0x72), pathNodes = key(0x73),
+            )
+            val queued = pending(messageID = row.id).copy(messageText = row.text)
+            val device = device()
+            store.saveDevice(device)
+            store.upsertPendingSend(queued)
+            val claim = begin(row, pendingId = queued.id, lease = lease)
+            val noWireRequest = UUID.randomUUID()
+            val noWire = assertIs<DirectPendingCaptureResult.Captured>(
+                store.captureDirectPendingCompletion(lease, entity(id = row.id), queued.id, noWireRequest,
+                    DirectPendingCompletionReason.ZeroAttempts(0)),
+            )
+            assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(claim.attempt, 123u, 7u))
+            erase(row, device)
+            val history = observed(claim)
+            assertNull(history.message)
+            assertNull(assertNotNull(history.delivery).message)
+            assertEquals(123u, history.delivery?.ackCode)
+            assertEquals(7u, history.delivery?.roundTripTime)
+            assertNotEquals(DirectAckPermission.CURRENT, history.permission)
+            val intentHistory = assertIs<DirectAckIntentObservation.Found>(
+                store.inspectDirectAckIntent(lease, claim.request),
+            ).receipt
+            assertNull(intentHistory.message)
+            assertNull(intentHistory.pending)
+            assertEquals(queued.id, intentHistory.pendingSendId)
+            val completionHistory = assertIs<DirectPendingCompletionObservation.Found>(
+                store.inspectDirectPendingCompletion(lease, noWireRequest),
+            ).receipt
+            assertNull(completionHistory.message)
+            assertNull(completionHistory.pending)
+            assertEquals(queued.id, completionHistory.pendingSendId)
+            assertIs<DirectPendingCompletionResult.Rejected>(
+                store.completeDirectPendingWithoutDispatch(noWire.completion, UUID.randomUUID()),
+            )
+            assertIs<DirectAckBeginResult.Rejected>(store.beginDirectAckAttempt(claim.intent, claim.wire, 123u))
+            assertIs<DirectAckIntentResult.Rejected>(
+                store.captureDirectAckIntent(lease, entity(id = row.id), claim.request, DirectAckMode.SEND, queued.id),
+            )
+            val replay = assertIs<DirectAckMutationResult.AlreadyApplied>(store.settleDirectAck(claim.attempt, 123u, 7u))
+            assertNull(replay.receipt.message)
+            assertNull(replay.receipt.delivery?.message)
+            assertNotEquals(DirectAckPermission.CURRENT, replay.receipt.permission)
+            assertPayloadColumnsNull("direct_ack_claims", row.id, "snapshot_")
+            assertPayloadColumnsNull("direct_ack_deliveries", row.id, "snapshot_")
+            assertPayloadColumnsNull("direct_ack_intents", row.id, "message_", "pending_")
+            assertPayloadColumnsNull("direct_pending_completions", row.id, "message_", "pending_")
+        }
+    }
+
+    @Test fun ownNoDispatchCompletionErasesPendingSnapshotWithoutRecreatingItOnReplay() = runTest {
+        val lease = activate()
+        val row = message()
+        val queued = pending(messageID = row.id).copy(messageText = "erase pending payload")
+        store.saveMessage(row)
+        store.upsertPendingSend(queued)
+        val request = UUID.randomUUID()
+        val captured = assertIs<DirectPendingCaptureResult.Captured>(
+            store.captureDirectPendingCompletion(lease, entity(id = row.id), queued.id, request,
+                DirectPendingCompletionReason.ZeroAttempts(0)),
+        )
+        val completion = UUID.randomUUID()
+        val committed = assertIs<DirectPendingCompletionResult.Applied>(
+            store.completeDirectPendingWithoutDispatch(captured.completion, completion),
+        ).receipt
+        assertEquals(row, committed.message)
+        assertEquals(queued.id, committed.pendingSendId)
+        assertNull(committed.pending)
+        assertEquals(completion, committed.completedRequestId)
+        assertNotEquals(DirectPendingCompletionPermission.CURRENT, committed.permission)
+        store.upsertPendingSend(queued)
+        val replay = assertIs<DirectPendingCompletionResult.AlreadyApplied>(
+            store.completeDirectPendingWithoutDispatch(captured.completion, completion),
+        ).receipt
+        assertNull(replay.pending)
+        assertEquals(listOf(queued), store.fetchPendingSendsForMessage(entity(id = row.id)))
+        assertPayloadColumnsNull("direct_pending_completions", row.id, "pending_")
+        store.deleteMessage(entity(id = row.id))
+        val erased = assertIs<DirectPendingCompletionObservation.Found>(
+            store.inspectDirectPendingCompletion(lease, request),
+        ).receipt
+        assertNull(erased.message)
+        assertNull(erased.pending)
+        assertEquals(completion, erased.completedRequestId)
+    }
+
+    @Test fun intentCommitThenCallerCancellationReplaysOnlyOriginalCaptureAndConsumedBegin() = runTest {
+        val lease = activate()
+        val row = message()
+        store.saveMessage(row)
+        val request = UUID.randomUUID()
+        val caller = Job()
+        assertFailsWith<CancellationException> {
+            withContext(caller) {
+                capture(row, lease, request)
+                caller.cancel()
+                ensureActive()
+            }
+        }
+        val recovered = assertIs<DirectAckIntentResult.AlreadyCaptured>(
+            store.captureDirectAckIntent(lease, entity(id = row.id), request, DirectAckMode.SEND, null),
+        )
+        assertEquals(row, recovered.receipt.message)
+        assertEquals(DirectAckPermission.CURRENT, recovered.receipt.permission)
+        val wire = UUID.randomUUID()
+        assertIs<DirectAckBeginResult.Begun>(store.beginDirectAckAttempt(recovered.intent, wire, 123u))
+        assertIs<DirectAckBeginResult.AlreadyBegun>(store.beginDirectAckAttempt(recovered.intent, wire, 123u))
+        assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckIntentResult.Rejected>(
+            store.captureDirectAckIntent(lease, entity(id = row.id), request, DirectAckMode.SEND, null),
+        ).reason)
+    }
+
+    @Test fun intentForeignContextRestoreRollbackAndGenerationCannotRenewCapturedBindings() = runTest {
+        val lease = activate()
+        val row = message()
+        store.saveMessage(row)
+        val request = UUID.randomUUID()
+        val issued = capture(row, lease, request)
+        val other = newStore(db)
+        try {
+            assertEquals(DirectAckRejection.INVALID_HANDLE, assertIs<DirectAckBeginResult.Rejected>(
+                other.beginDirectAckAttempt(issued.intent, UUID.randomUUID(), 123u),
+            ).reason)
+            assertFailsWith<CancellationException> {
+                store.withBackupRestore { _, _ -> throw CancellationException("Controlled restore rollback") }
+            }
+            val retained = assertIs<DirectAckIntentResult.AlreadyCaptured>(
+                store.captureDirectAckIntent(lease, entity(id = row.id), request, DirectAckMode.SEND, null),
+            )
+            assertEquals(DirectAckPermission.CURRENT, retained.receipt.permission)
+            store.withBackupRestore { _, _ -> Unit }
+            assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckBeginResult.Rejected>(
+                store.beginDirectAckAttempt(issued.intent, UUID.randomUUID(), 123u),
+            ).reason)
+            val fresh = capture(row, lease)
+            activate(other, token.copy(generation = Generation(2)))
+            assertEquals(DirectAckRejection.STALE_LEASE, assertIs<DirectAckBeginResult.Rejected>(
+                store.beginDirectAckAttempt(fresh.intent, UUID.randomUUID(), 123u),
+            ).reason)
+        } finally { other.close() }
     }
 
     @Test fun ownFailureAndMatchingAckCommitAtomicallyWithExactTupleReplay() = runTest {
@@ -106,21 +375,20 @@ class DirectAckAuthorityPersistenceTest {
         assertIs<DirectAckActivationResult.AlreadyActivated>(store.activateDirectAckSession(token, activation))
         val claim = begin(lease = lease)
         assertIs<DirectAckBeginResult.AlreadyBegun>(
-            store.beginDirectAckAttempt(lease, entity(id = claim.row.id), claim.request, claim.wire, 123u,
-                DirectAckMode.SEND, null),
+            store.beginDirectAckAttempt(claim.intent, claim.wire, 123u),
         )
         assertEquals(DirectAckRejection.CONFLICT, assertIs<DirectAckBeginResult.Rejected>(
-            store.beginDirectAckAttempt(lease, entity(id = claim.row.id), claim.request, claim.wire, 124u,
-                DirectAckMode.SEND, null),
+            store.beginDirectAckAttempt(claim.intent, claim.wire, 124u),
         ).reason)
+        val next = assertIs<DirectAckIntentResult.Captured>(
+            store.captureDirectAckIntent(lease, entity(id = claim.row.id), UUID.randomUUID(), DirectAckMode.SEND, null),
+        )
         val successor = assertIs<DirectAckBeginResult.Begun>(
-            store.beginDirectAckAttempt(lease, entity(id = claim.row.id), UUID.randomUUID(), UUID.randomUUID(), 456u,
-                DirectAckMode.SEND, null),
+            store.beginDirectAckAttempt(next.intent, UUID.randomUUID(), 456u),
         )
         rejected(store.settleDirectAck(claim.attempt, 123u, 1u))
         assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckBeginResult.Rejected>(
-            store.beginDirectAckAttempt(lease, entity(id = claim.row.id), claim.request, claim.wire, 123u,
-                DirectAckMode.SEND, null),
+            store.beginDirectAckAttempt(claim.intent, claim.wire, 123u),
         ).reason)
         assertIs<DirectAckMutationResult.Applied>(store.recordDirectFailure(successor.attempt))
         assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(successor.attempt, 456u, 2u))

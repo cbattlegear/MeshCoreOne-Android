@@ -18,6 +18,7 @@ import androidx.room.TypeConverters
         DirectAckIncarnationEntity::class, DirectAckLeaseEntity::class, DirectAckClaimEntity::class,
         DirectAckDeliveryEntity::class, DirectAckWireEntity::class, DirectAckOperationEntity::class,
         DirectPendingCompletionEntity::class,
+        DirectAckIntentEntity::class,
     ],
     version = 2,
     exportSchema = true,

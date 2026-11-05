@@ -145,3 +145,72 @@ remain the consumer owner's work against this producer. Old Boolean-wrapper
 tests are not evidence of typed producer calls. No durable ACK ingress,
 restart recovery, device/radio, whole-WP, release, signing or merge acceptance
 is claimed.
+
+## Independent P1 successor: issued intent and erasure
+
+The normal overlay-free predecessor
+[run 41960514028](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41960514028),
+exact candidate `84094ff1fa0413884d403e25674de652b574e748`, failed
+`:core:database:testDebugUnitTest`: 52 tests, one failure,
+`DirectAckStorageTest.exportedV1MigratesThroughRoomWithoutChangingAnyMessageColumn`,
+`org.json.JSONException`. The genuine v1 `link_preview_data` entity omits optional
+`indices`. The fixture now treats only an absent property as an empty array;
+a present malformed property still throws. Migration and every-column equality
+assertions remain intact. This is a source repair, not a passing migration claim.
+
+Independent source review also found that the original key-only begin could bind
+a replacement message after the consumer had already cached earlier wire inputs.
+It found that invalidation alone retained deleted/redacted payload snapshots.
+These are real defects in the predecessor, not accepted limitations.
+
+The exact WP-201 successor `3726b4448f574ba4aaa04a1043eb8bc01bdc9aba`,
+integrated as `46dd00d6a`, replaces the unsafe begin overload with persisted
+`captureDirectAckIntent` / `inspectDirectAckIntent` and
+`beginDirectAckAttempt(intent, firstWireRequestId, predictedAckCode)`.
+Preparation writes finish before capture. The issued message/pending snapshots,
+not any earlier fetch, supply wire inputs. Begin revalidates the original
+incarnations and message/pending mutation revisions atomically, consumes outstanding intents
+for that message, and creates the claim/code. Exact begin replay checks its
+already-persisted claim rather than trying to recapture a changed row.
+
+Nullable embedded snapshots now have independent nonpayload identity headers.
+Message delete, key replacement, raw replacement and payload-field changes null
+all message/pending snapshots in intent, claim, delivery and no-dispatch history
+in the same SQLite mutation transaction. Status, ACK, retry, failure-seen and
+send-count bookkeeping are not payload redaction. Pending UPDATE/DELETE/REPLACE
+nulls pending snapshots in intent/no-dispatch history; its owning message snapshot
+remains until message erasure. Own no-dispatch completion explicitly stores
+`pending = null`, never reinserting the deleted DTO after trigger erasure.
+Exact tuple/operation replay retains IDs, code/RTT and commit identity with
+non-CURRENT permission and nullable erased payload, never a fake DTO or new grant.
+This is logical SQL-visible erasure, not a forensic free-page wiping guarantee.
+
+The deletion trace covers message/dependents, contact conversation, direct DAO/raw
+message deletion, message replacement/redaction, and device-data/device-and-data
+deletion through their message/pending DML. Channel conversations cannot acquire
+direct-message grants; changing a direct message into a channel message is itself
+a payload mutation. A device-record-only delete, contact-record-only delete or
+ghost-identity change intentionally retains conversation data in the published
+source; this repair does not invent a cascade. Other-radio/channel queue semantics
+are unchanged.
+
+The original 20 repository controls are adapted to issued capture/begin. Seven
+additional actual-Room methods are authored: before-begin text/same-value/identical
+DTO ABA, same-ID pending replacement/preflight, fresh issued inputs after an old
+cache window, eleven deletion/redaction/replace routes across every history, own
+pending completion erasure/replay, cancellation-after-capture recovery, and
+foreign-context/restore/generation fencing. Their assertions are not discovered
+or passing evidence. The consumer owns actual wire derivation and service barriers.
+
+The tracked genuine v2 predecessor remains byte-for-byte unchanged at the digest
+above. This still-unmerged main-v1-to-v2 lane now needs a guarded tracked-schema
+refresh to generate its changed 25-entity model; neither deleting the predecessor
+nor handwriting a schema is permitted. The separate tooling owners are preparing
+that diagnostic. No active ref was advanced. Shared Windows paging/memory
+exhaustion interrupted initial Git/Python operations. A later bounded source-only
+pass using pinned Python 3.12.4 completed documented same-host preflight,
+`validate.py`, `portmap.py` and `git diff --check` with exit 0.
+Trusted `reserve.py admit` also confirmed the migration and schema boundary test
+operations. These source results do not prove Kotlin/Room behavior. No current Kotlin/Room execution,
+new export, publication or acceptance is claimed. The retained local Gradle
+execution-owner gate remains untouched.

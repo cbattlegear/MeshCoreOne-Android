@@ -26,6 +26,9 @@ import com.meshcoreone.android.feature.chats.composer.ui.recoveredDraftLabels
 import com.meshcoreone.android.feature.chats.composer.ui.RecoveredDraftList
 import com.meshcoreone.android.feature.chats.composer.ui.RecoveryContinuityLabels
 import com.meshcoreone.android.feature.chats.composer.ui.RecoveryContinuityNotice
+import com.meshcoreone.android.feature.chats.composer.ui.RecoveryContinuityInteraction
+import com.meshcoreone.android.feature.chats.composer.ui.RecoveryContinuityBinding
+import com.meshcoreone.android.feature.chats.composer.ui.ForegroundRecoveryAction
 import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryKey
 import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryText
 import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryList
@@ -71,6 +74,169 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
     )
 
     private enum class UnboundCopyOutcome { EXACT, SOURCE_CHANGED, NEWER_DRAFT, TYPED_THEN_CLEARED }
+
+    private data class WarningOperation(val operationId: UUID, val storeId: UUID, val creationNonce: UUID)
+    private data class WarningObservation(val revision: Long, val retainedHistory: String)
+    private data class WarningPresentation(val fixtureId: Int)
+    private data class WarningRequest(
+        val operation: WarningOperation,
+        val acknowledgmentId: UUID,
+        val expectedCurrent: WarningObservation?,
+    )
+
+    @Test fun mountedForegroundActionBindsRenderedWarningCompleteRequestAndObservationOnce() {
+        mountedForegroundInteraction(changeEvidence = false)
+    }
+
+    @Test fun mountedForegroundActionResetsForEvidenceOperationVersionAndRenderedCopyChanges() {
+        mountedForegroundInteraction(changeEvidence = true)
+    }
+
+    private fun mountedForegroundInteraction(changeEvidence: Boolean) {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.get().actionBar?.hide()
+        host.windowFocusChanged(true)
+        val observation = WarningObservation(3, "complete prior record fixture")
+        val request = WarningRequest(
+            WarningOperation(UUID(0, 601), UUID(0, 602), UUID(0, 603)), UUID(0, 604), observation,
+        )
+        var nextPresentation = 1
+        val binding = mutableStateOf(RecoveryContinuityBinding(
+            request, observation, "loss-warning-v1", WarningPresentation(nextPresentation++),
+        ))
+        val warningText = mutableStateOf("Physically lost text cannot be recovered. Unsaved text can be lost when the process stops.")
+        val working = mutableStateOf(false)
+        val ready = mutableStateOf(false)
+        val mounted = mutableStateOf(true)
+        val actions = mutableListOf<ForegroundRecoveryAction<WarningRequest, WarningObservation, WarningPresentation>>()
+        val invalidated = mutableListOf<WarningPresentation>()
+        var inspections = 0
+        val acknowledgment = "I understand that a new generation does not recover lost text."
+        val create = "Create a new notification action generation"
+        val inspect = "Inspect readable text for manual copy"
+        try {
+            host.get().setContent {
+                MeshCoreTheme {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+                        if (mounted.value) {
+                            RecoveryContinuityInteraction(
+                                binding = binding.value,
+                                labels = RecoveryContinuityLabels(
+                                    UiText.Verbatim("Notification continuity unavailable"),
+                                    UiText.Verbatim("Previous installation continuity cannot be established."),
+                                    UiText.Verbatim(warningText.value),
+                                    UiText.Verbatim("Readable text remains unbound and copy-only. Nothing is sent."),
+                                    UiText.Verbatim(acknowledgment), UiText.Verbatim(create), UiText.Verbatim(inspect),
+                                ),
+                                working = working.value, creationAvailable = ready.value, failure = null,
+                                onForegroundAction = { actions += it },
+                                onInvalidatePresentation = { invalidated += it },
+                                onInspectRecoveredText = { inspections++ },
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
+                }
+            }
+            fun node(text: String): SemanticsNodeInteraction {
+                compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text))
+                return compose.onNodeWithText(text)
+            }
+            node(create).assertIsNotEnabled()
+            node(inspect).performClick()
+            assertEquals(1, inspections)
+            assertTrue(actions.isEmpty())
+            node(acknowledgment).performClick()
+            node(create).assertIsNotEnabled()
+            compose.runOnIdle { ready.value = true }
+            node(create).assertIsEnabled()
+            if (changeEvidence) {
+                val changed = binding.value.observation.copy(revision = 4, retainedHistory = "changed record fixture")
+                compose.runOnIdle {
+                    binding.value = binding.value.copy(
+                        observation = changed, request = request.copy(expectedCurrent = changed),
+                        presentation = WarningPresentation(nextPresentation++),
+                    )
+                }
+                node(create).assertIsNotEnabled()
+                node(acknowledgment).performClick()
+                compose.runOnIdle {
+                    binding.value = binding.value.copy(request = binding.value.request.copy(
+                        operation = request.operation.copy(creationNonce = UUID(0, 605)),
+                    ), presentation = WarningPresentation(nextPresentation++))
+                }
+                node(create).assertIsNotEnabled()
+                node(acknowledgment).performClick()
+                compose.runOnIdle {
+                    binding.value = binding.value.copy(
+                        warningVersion = "loss-warning-v2", presentation = WarningPresentation(nextPresentation++),
+                    )
+                }
+                node(create).assertIsNotEnabled()
+                node(acknowledgment).performClick()
+                compose.runOnIdle {
+                    warningText.value = "Changed loss warning: physically lost text cannot be recovered."
+                    binding.value = binding.value.copy(presentation = WarningPresentation(nextPresentation++))
+                }
+                node(create).assertIsNotEnabled()
+                node(acknowledgment).performClick()
+            }
+            compose.runOnIdle { working.value = true }
+            node(create).assertIsNotEnabled()
+            compose.runOnIdle { working.value = false }
+            node(create).assertIsEnabled()
+            assertTrue(actions.isEmpty())
+            compose.runOnIdle { host.pause() }
+            val beforePause = binding.value.presentation
+            compose.runOnIdle { host.resume().visible().windowFocusChanged(true) }
+            node(create).assertIsNotEnabled()
+            assertEquals(1, invalidated.count { it == beforePause })
+            compose.runOnIdle {
+                binding.value = binding.value.copy(presentation = WarningPresentation(nextPresentation++))
+            }
+            node(create).assertIsNotEnabled()
+            node(acknowledgment).performClick()
+            node(create).performClick()
+            assertEquals(1, actions.size)
+            val action = actions.single()
+            assertSame(binding.value.request, action.binding.request)
+            assertEquals(binding.value, action.binding)
+            assertEquals(warningText.value, action.warning.lostTextWarning)
+            assertEquals(acknowledgment, action.warning.acknowledgment)
+            assertEquals(create, action.warning.createNewGeneration)
+            assertTrue(action.isCurrentForegroundInteraction())
+            node(create).assertIsNotEnabled()
+            compose.waitForIdle()
+            assertEquals(1, actions.size)
+            if (changeEvidence) {
+                compose.runOnIdle {
+                    binding.value = binding.value.copy(
+                        warningVersion = "loss-warning-v3", presentation = WarningPresentation(nextPresentation++),
+                    )
+                }
+                compose.waitForIdle()
+                assertFalse(action.isCurrentForegroundInteraction())
+                node(create).assertIsNotEnabled()
+                node(acknowledgment).performClick()
+                node(create).performClick()
+                assertEquals(2, actions.size)
+            } else {
+                compose.runOnIdle { host.pause() }
+                assertFalse(action.isCurrentForegroundInteraction())
+                compose.runOnIdle { host.resume().visible().windowFocusChanged(true) }
+            }
+            val last = actions.last()
+            compose.runOnIdle { mounted.value = false }
+            compose.waitForIdle()
+            assertFalse(last.isCurrentForegroundInteraction())
+            assertEquals(1, invalidated.count { it == last.binding.presentation })
+            compose.runOnIdle { mounted.value = true }
+            node(create).assertIsNotEnabled()
+            assertEquals(if (changeEvidence) 2 else 1, actions.size)
+        } finally {
+            host.pause().stop().destroy()
+        }
+    }
 
     @Test fun mountedNotRetainedNoticeCopiesOnlyExplicitLiveTextWithoutClaimingRetention() =
         mountedTransientRecovery(TransientRetention.NOT_RETAINED)

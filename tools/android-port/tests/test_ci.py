@@ -383,6 +383,7 @@ class SourceDispositionTests(unittest.TestCase):
             self.assertEqual(commands.call_count, 2)
             command, _, log = commands.call_args_list[-1].args
             self.assertEqual(log.name, "gradle-scaffold-preflight.log")
+            self.assertNotIn(":platform:notifications:testDebugUnitTest", command)
             tasks = []
             for argument in command[3:]:
                 if argument.startswith("-"):

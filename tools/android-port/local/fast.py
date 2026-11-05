@@ -147,7 +147,8 @@ def main():
     from controller.errors import PortError
     from controller.module_junit import (
         REPORT_LOCATIONS, bounded_directory, check_module_tests,
-        module_method_inventory, module_sources, remapped_tasks, validate_remapped_compilation,
+        module_method_inventory, module_sources, remapped_tasks, select_remapped_tasks,
+        validate_remapped_compilation,
     )
 
     stages = args.stages.split(",")
@@ -188,7 +189,7 @@ def main():
                 print(f"===== PASS: {stage} =====", flush=True)
                 continue
             project = args.repo / "android"
-            tasks = list(dict.fromkeys([*ci.TASKS[stage], *remapped_tasks(args.repo)]))
+            tasks = select_remapped_tasks(ci.TASKS[stage], remapped_tasks(args.repo))
             directories = {project / relative for relative, _ in SUITES.values()}
             for module in module_sources(args.repo):
                 directories.update(project / module / relative for relative in REPORT_LOCATIONS)

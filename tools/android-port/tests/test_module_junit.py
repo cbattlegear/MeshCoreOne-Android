@@ -438,12 +438,6 @@ class SdkFamilyTest {
                     patch.object(ci_environment, "candidate_environment", return_value={}), \
                     patch.object(ci_environment, "verify_wrapper"), \
                     patch.object(ci, "validate_candidate_task_graph", return_value={"tasks": 1}), \
-                    patch.object(ci, "TASKS", {
-                        **ci.TASKS, "scaffold": [
-                            task for task in ci.TASKS["scaffold"]
-                            if notifications or task != ":platform:notifications:testDebugUnitTest"
-                        ],
-                    }), \
                     patch.object(ci_evidence, "collect_suites", return_value={}), \
                     patch.object(ci_evidence, "collect_lint", return_value={}), \
                     patch.object(ci_evidence, "validate_graph_runtime"), \

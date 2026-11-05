@@ -287,11 +287,9 @@ def candidate_plan(
         graph_error = str(error)
     selection = select_paths(paths, requested, modules=modules, graph_error=graph_error)
     if "scaffold" in selection["scopes"]:
-        from .module_junit import remapped_tasks
+        from .module_junit import remapped_tasks, select_remapped_tasks
 
-        selection["tasks"] = list(dict.fromkeys([
-            *selection["tasks"], *remapped_tasks(repo, head),
-        ]))
+        selection["tasks"] = select_remapped_tasks(selection["tasks"], remapped_tasks(repo, head))
     return {
         "schema_version": 1, "kind": "local-affected-only", "base": base, "head": head,
         "tree": git(repo, "rev-parse", head + "^{tree}"), "paths": paths,

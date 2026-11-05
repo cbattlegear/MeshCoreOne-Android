@@ -550,6 +550,12 @@ that build requires a reviewed profile update. An unrelated instrumentation tree
 does not become JVM test evidence.
 
 Affected and full selection explicitly request `:platform:notifications:testDebugUnitTest`.
+For immutable historical candidates without this module, full affected plans,
+hosted CI and the default fast route remove only that known remapped runner from
+the shared baseline; the task constants remain unchanged. A full hosted log may
+omit it only when the trusted exact-candidate planner establishes its absence.
+Present approved mappings still add the mandatory runner; unapproved mappings
+cannot turn into an absent-module exemption.
 Its existing JUnit and compiled-source collectors must discover every declared
 remapped and conventional `src/test`/`src/testDebug` Kotlin test methods,
 including new candidate methods, plus the six mandatory delivery/payload/dispatcher

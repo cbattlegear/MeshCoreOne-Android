@@ -270,6 +270,56 @@ class LocalScopeBindingTests(unittest.TestCase):
         self.assertTrue(full["full_scaffold"])
         self.assertIn(":platform:notifications:testDebugUnitTest", full["tasks"])
 
+    def test_absent_notification_full_plan_and_reader_use_unmodified_task_inventories(self):
+        from controller.local_scope import SCOPED_TASKS, TASKS
+        from controller.repair_acceptance import validate_build_log
+        from test_repair_acceptance import build_log
+
+        notification_task = ":platform:notifications:testDebugUnitTest"
+        original = list(TASKS["scaffold"])
+        self.assertIn(notification_task, original)
+        affected = candidate_plan(self.repo, self.base, self.head)
+        self.assertFalse(affected["full_scaffold"])
+        self.assertNotIn(notification_task, affected["tasks"])
+        self.write("android/gradle.properties", "org.gradle.parallel=false\n")
+        head = self.commit()
+        full = candidate_plan(self.repo, self.base, head)
+        self.assertTrue(full["full_scaffold"])
+        self.assertNotIn(notification_task, full["tasks"])
+
+        def plan(scopes):
+            self.assertEqual(scopes, list(SCOPED_TASKS))
+            return candidate_plan(self.repo, self.base, head, scopes)
+
+        log = build_log(["core/services"], tasks=full["tasks"])
+        with self.assertRaises(PortError):
+            validate_build_log(log, ["core/services"])
+        proof = validate_build_log(log, ["core/services"], plan_for_scopes=plan)
+        self.assertTrue(proof["positive_discovery"])
+        for malformed in (
+            {"scopes": ["scaffold"], "tasks": full["tasks"]},
+            {"scopes": list(SCOPED_TASKS), "tasks": full["tasks"] + [full["tasks"][0]]},
+        ):
+            with self.subTest(plan=malformed), self.assertRaises(PortError):
+                validate_build_log(log, ["core/services"], plan_for_scopes=lambda scopes: malformed)
+        for tasks in (
+            [task for task in full["tasks"] if task != ":app:assembleDebug"],
+            full["tasks"] + [":platform:notifications:unsafeTask"],
+            full["tasks"] + [full["tasks"][0]],
+        ):
+            with self.subTest(tasks=tasks), self.assertRaises(PortError):
+                validate_build_log(
+                    build_log(["core/services"], tasks=tasks), ["core/services"], plan_for_scopes=plan,
+                )
+        notification_fixture(self.write)
+        head = self.commit()
+        present = plan(list(SCOPED_TASKS))
+        self.assertIn(notification_task, present["tasks"])
+        with self.assertRaises(PortError):
+            validate_build_log(log, ["core/services"], plan_for_scopes=plan)
+        self.assertEqual(TASKS["scaffold"], original)
+        self.assertIs(SCOPED_TASKS["scaffold"], TASKS["scaffold"])
+
     def test_remapped_runner_survives_dependency_parser_full_fallback(self):
         notification_fixture(self.write)
         self.write("android/core/model/src/main/kotlin/Model.kt", "base")

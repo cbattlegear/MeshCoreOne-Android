@@ -826,9 +826,26 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
     if (
         report.get("result") != "success" or report.get("strict_verification") is not True
         or not isinstance(tasks, list) or not all(isinstance(task, str) for task in tasks)
-        or len(set(tasks)) != len(tasks) or not set(TASKS["scaffold"]).issubset(tasks)
-        or not set(tasks).issubset({task for values in SCOPED_TASKS.values() for task in values})
+        or len(set(tasks)) != len(tasks)
     ):
+        raise PortError("Hosted affected verification did not execute the declared strict task set")
+    required = set(TASKS["scaffold"])
+    allowed = {task for values in SCOPED_TASKS.values() for task in values}
+    if not required.issubset(tasks) and plan_for_scopes is not None:
+        from .module_junit import JVM_REMAPPED_TASKS, select_remapped_tasks
+
+        plan = plan_for_scopes(list(SCOPED_TASKS))
+        if (
+            not isinstance(plan, dict) or plan.get("scopes") != list(SCOPED_TASKS)
+            or not isinstance(plan.get("tasks"), list)
+            or not all(isinstance(task, str) for task in plan["tasks"])
+            or len(set(plan["tasks"])) != len(plan["tasks"])
+        ):
+            raise PortError("Missing/malformed trusted full-scaffold candidate task plan")
+        remapped = [task for task in plan["tasks"] if task in JVM_REMAPPED_TASKS.values()]
+        required = set(select_remapped_tasks(TASKS["scaffold"], remapped))
+        allowed = set(select_remapped_tasks(allowed, remapped))
+    if not required.issubset(tasks) or not set(tasks).issubset(allowed):
         raise PortError("Hosted affected verification did not execute the declared strict task set")
     inventory = report.get("unit_test_methods", {})
     if not isinstance(inventory, dict):

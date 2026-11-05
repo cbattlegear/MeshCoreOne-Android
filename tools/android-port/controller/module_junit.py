@@ -25,6 +25,10 @@ JVM_REMAPS = {
         "runner": "testDebugUnitTest",
     },
 }
+JVM_REMAPPED_TASKS = {
+    module: ":" + module.replace("/", ":") + ":" + profile["runner"]
+    for module, profile in JVM_REMAPS.items()
+}
 NOTIFICATION_CASES = {
     ("com.meshcoreone.android.platform.notifications.messaging." + suite, method)
     for suite, methods in {
@@ -103,9 +107,16 @@ def module_sources(repo: Path, revision=None):
 
 def remapped_tasks(repo, revision=None):
     return [
-        ":" + module.replace("/", ":") + ":" + JVM_REMAPS[module]["runner"]
+        JVM_REMAPPED_TASKS[module]
         for module in module_sources(repo, revision) if module in JVM_REMAPS
     ]
+
+
+def select_remapped_tasks(tasks, remapped):
+    return list(dict.fromkeys([
+        *(task for task in tasks if task not in JVM_REMAPPED_TASKS.values() or task in remapped),
+        *remapped,
+    ]))
 
 
 def check_module_inputs(repo, modules, revision=None):

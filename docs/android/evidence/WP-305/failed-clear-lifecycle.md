@@ -48,8 +48,17 @@ revisions/RF edits are preserved; identity changes, changed snapshots, equal-val
 snapshot ABA and still-active Repeat fail closed rather than erasing new data.
 Every preparation transform and actual restore admission also checks the fence.
 The existing committed-all-null observer alone removes retirement records.
-A genuinely active successor token retains its independently observed restoration
-snapshot; a retired token cannot mark or clear its successor.
+The originating token authorizes registration, but retirement gates every session
+for that stable identity. A new generation is not evidence that the old baseline
+became usable. A matching inactive successor may reconcile the clear; an active,
+different-identity or ABA successor retains its row and is fenced until an actual
+explicit clear. A retired token cannot mark or clear its successor.
+
+This generation rule addresses follow-up assignment
+`call_qQ5rYy9mBmkNb9KtH9uUeBFn`. The earlier token-keyed custody in `ff5ae2607`
+through `ed529370` is preserved as historical source, not accepted as complete:
+an active same-radio reconnect could preserve the consumed snapshot while a fresh
+token missed the original marker.
 
 The follow-up assignment `call_zQ8R1MzuLby9k36HgDAalPfY` examines a late
 registration race: the send admission ends before readback, so a sibling can
@@ -93,8 +102,20 @@ runtime authority and bounded CAS retry remain in place.
   manual-RF/enable/off cycle. Nonempty and equal-value ABA families require the
   typed fence, unchanged row and no extra SET until an actual explicit clear,
   followed by the same positive cycle.
+- `failedClearRetirementSurvivesASameRadioReconnectBeforeTheNextCycle`: actual
+  held/failed clear after durable off, same-radio active reconnect with a new
+  token (so initialization really retains the old snapshot), retired-token
+  refusal, later manual RF and a fresh enable/off cycle. The new cycle must save
+  and restore the later manual baseline, not the consumed one.
 
-All twenty original Repeat/preset method bodies are retained. The test helper's
+All twenty original Repeat/preset methods are retained. Nineteen original bodies
+remain exact. `retiredSnapshotOrClearCannotMutateASameRadioSuccessorOrItsDurableSnapshot`
+keeps every original retirement timing, no-SET, full-row/live and snapshot assertion,
+and strengthens the active-successor clear family: first require the typed
+consumed-baseline fence with no row changes, then commit an explicit clear and
+retain the original fresh-action positive assertion. Accepting that consumed
+baseline merely because its token changed would contradict the assigned repair.
+The test helper's
 restore-authority decorator forwards the new hook to the actual editor authority.
 The five normal-preset controls and null-token scope guard remain unchanged.
 
@@ -145,6 +166,10 @@ Late-registration test-only predecessor
 `f9ee60a45375b214ebda1f554917afedff6199be` retains the earlier repair's production
 and adds only the new actual-readback control/local test hook. Its expected
 failure is a source hypothesis until executed, not reproduced-test credit.
+Generation-custody test-only predecessor
+`16607b4fbd13fc50d66ea9e4b1d78301d4451923` preserves `ed529370` production and
+adds the reconnect/different-identity controls and the stronger existing-control
+tail. Its execution likewise remains separate from the final identity-scoped fix.
 
 No Kotlin execution, hardware, signing, iOS UI or whole-WP acceptance is claimed
 for the repaired candidate by the source checks or prior #585 greens.

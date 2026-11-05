@@ -100,11 +100,10 @@ fun interface RepeatSnapshotRestoreAuthority {
 class RepeatSnapshotAuthority {
     private data class Identity(val id: UUID, val radioId: RadioId, val publicKey: Bytes)
     private data class Pending(val receipt: DeviceWriteSnapshot, val attempt: PreRepeatSettingsAttempt)
-    private data class ClearKey(val identity: Identity, val token: SessionToken?)
-    private data class ClearRequest(val device: DeviceDTO, val identityVersion: Long, val snapshotVersion: Long)
+    private data class ClearRequest(val device: DeviceDTO, val token: SessionToken, val identityVersion: Long, val snapshotVersion: Long)
     private data class CommittedClear(val identityVersion: Long, val snapshotVersion: Long)
     private val pending = mutableMapOf<Identity, Pending>()
-    private val clearRequests = mutableMapOf<ClearKey, ClearRequest>()
+    private val clearRequests = mutableMapOf<Identity, ClearRequest>()
     private val committedClears = mutableMapOf<Identity, CommittedClear>()
     private val admissions = mutableMapOf<UUID, Mutex>()
     private val identityVersions = mutableMapOf<UUID, Long>()
@@ -123,23 +122,23 @@ class RepeatSnapshotAuthority {
             cleared.snapshotVersion > snapshotVersion &&
             (snapshotVersions[device.id] ?: 0L) == cleared.snapshotVersion
         ) return
-        clearRequests.putIfAbsent(ClearKey(device.identity(), token), ClearRequest(
-            device, identityVersion, snapshotVersion,
+        clearRequests.putIfAbsent(device.identity(), ClearRequest(
+            device, token, identityVersion, snapshotVersion,
         ))
     }
 
     @Synchronized fun snapshotVersion(deviceId: UUID): Long = snapshotVersions[deviceId] ?: 0L
 
-    @Synchronized fun hasClearRequest(device: DeviceDTO, token: SessionToken?): Boolean =
-        clearRequests.containsKey(ClearKey(device.identity(), token))
+    @Synchronized fun hasClearRequest(device: DeviceDTO): Boolean = clearRequests.containsKey(device.identity())
 
-    @Synchronized fun requireNoClearRequest(device: DeviceDTO, token: SessionToken?) {
-        if (hasClearRequest(device, token)) throw RepeatSnapshotClearRequired()
+    @Synchronized fun requireNoClearRequest(device: DeviceDTO) {
+        if (hasClearRequest(device)) throw RepeatSnapshotClearRequired()
     }
 
-    @Synchronized fun reconcilingClearRequest(device: DeviceDTO, token: SessionToken?): DeviceDTO {
-        val request = clearRequests[ClearKey(device.identity(), token)] ?: return device
-        if (device.clientRepeat || !device.sameSnapshot(request.device) ||
+    @Synchronized fun reconcilingClearRequest(device: DeviceDTO): DeviceDTO {
+        val request = clearRequests[device.identity()] ?: return device
+        if (device.clientRepeat || device.identity() != request.device.identity() ||
+            device.radioId != request.token.radioId || !device.sameSnapshot(request.device) ||
             identityVersion(device.id) != request.identityVersion ||
             (snapshotVersions[device.id] ?: 0L) != request.snapshotVersion
         ) throw RepeatSnapshotClearRequired()
@@ -180,11 +179,7 @@ class RepeatSnapshotAuthority {
             invalidateIdentity(before.id)
             if (before.id != after.id) invalidateIdentity(after.id)
             pending.remove(before.identity())?.let { pending[after.identity()] = it }
-            val moved = clearRequests.filterKeys { it.identity == before.identity() }
-            for ((key, request) in moved) {
-                clearRequests.remove(key)
-                clearRequests[key.copy(identity = after.identity())] = request
-            }
+            clearRequests.remove(before.identity())?.let { clearRequests[after.identity()] = it }
         }
     }
 
@@ -214,7 +209,7 @@ class RepeatSnapshotAuthority {
                 identityVersion(device.id), snapshotVersions[device.id] ?: 0L,
             )
             pending.remove(device.identity())
-            clearRequests.keys.removeAll { it.identity == device.identity() }
+            clearRequests.remove(device.identity())
         } else committedClears.remove(device.identity())
     }
 }

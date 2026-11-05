@@ -48,13 +48,18 @@ import com.meshcoreone.android.core.protocol.lpp.LPPSensorType
 import com.meshcoreone.android.core.protocol.lpp.LPPValue
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesClock
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodeHistoryStore
+import com.meshcoreone.android.feature.remotenodes.history.ChartDataPoint
+import com.meshcoreone.android.feature.remotenodes.history.NeighborChart
 import com.meshcoreone.android.feature.remotenodes.status.FakeFaults
 import com.meshcoreone.android.feature.remotenodes.status.NodeStatusStateHolder
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
 import kotlin.time.Duration
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -202,13 +207,16 @@ class RemoteLocaleMeasurementComposeTest {
                 assertEquals(expected, discoveredReads)
             }
         }
-        activity.get().setContent {
-            ResourceLocale {
-                RemoteNodeHistoryRoute(
-                    key, RadioId(UUID(0, 1)), false, store, Modifier, { _, _, _, _, _, _, _ -> }, clock,
-                )
+        fun installHistoryRoute() {
+            activity.get().setContent {
+                ResourceLocale {
+                    RemoteNodeHistoryRoute(
+                        key, RadioId(UUID(0, 1)), false, store, Modifier, { _, _, _, _, _, _, _ -> }, clock,
+                    )
+                }
             }
         }
+        installHistoryRoute()
         compose.onNode(hasText(": 77.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(text(L.remoteNodesHistoryAll)).performScrollTo().performClick().assertIsSelected()
         val slider = SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)
@@ -237,6 +245,115 @@ class RemoteLocaleMeasurementComposeTest {
             .performScrollTo().assertIsDisplayed()
         compose.onNode(hasTestTag("remote-error")).performScrollTo().assertIsDisplayed()
         assertReads(2)
+        val beforeRecreation = activity.get()
+        activity.recreate()
+        assertTrue("The host must be recreated", beforeRecreation !== activity.get())
+        installHistoryRoute()
+        compose.waitForIdle()
+        compose.onNodeWithText(text(L.remoteNodesHistoryAll)).performScrollTo().assertIsSelected()
+        compose.onNode(hasText(": 20.5 \u00b0C", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(": 25.5 \u00b0C", substring = true)).assertDoesNotExist()
+        compose.onNode(hasTestTag("remote-error")).performScrollTo().assertIsDisplayed()
+        assertReads(2)
+    }
+
+    @Test fun neighborSelectionSurvivesAResolvedTitleChangeForTheSamePrefix() {
+        val prefix = Bytes.of(0x01, 0x02)
+        val points = listOf(
+            ChartDataPoint(UUID(0, 1), now.minusSeconds(7_200), 4.0),
+            ChartDataPoint(UUID(0, 2), now.minusSeconds(3_600), 9.0),
+        )
+        val neighbor = NeighborChart(prefix, "Alpha", points)
+        val chart = mutableStateOf(neighbor.asStableMetricChart())
+        activity.get().setContent {
+            ResourceLocale {
+                Column(Modifier.verticalScroll(rememberScrollState())) { RemoteMetricChart(chart.value) }
+            }
+        }
+        val slider = SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)
+        compose.onNode(slider and hasContentDescription("Alpha.", substring = true))
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
+        compose.onNode(hasText("Alpha: 4.0 dB", substring = true)).assertIsDisplayed()
+        compose.runOnIdle {
+            chart.value = neighbor.copy(name = "Beta").asStableMetricChart()
+        }
+        compose.onNode(hasText("Beta: 4.0 dB", substring = true)).assertIsDisplayed()
+        compose.onNode(hasText("Beta: 9.0 dB", substring = true)).assertDoesNotExist()
+    }
+
+    @Test fun historyStoreTransitionsFenceLateResultsAndClockChangesReload() {
+        val lateA = CompletableDeferred<SnapshotList<NodeStatusSnapshotDTO>>()
+        var readsA = 0
+        var readsB = 0
+        var readsC = 0
+        fun report(value: Double) = listOf(
+            NodeStatusSnapshotDTO(
+                nodePublicKey = key, timestamp = now.minusSeconds(3_600),
+                telemetryEntries = listOf(TelemetrySnapshotEntry(1, "Temperature", value)).snapshot(),
+            ),
+        ).snapshot()
+        fun historyStore(
+            authority: Any = Any(),
+            onSnapshots: suspend () -> SnapshotList<NodeStatusSnapshotDTO>,
+        ): RemoteNodeHistoryStore = object : RemoteNodeHistoryStore {
+            override val authorityIdentity = authority
+            override suspend fun fetchNodeStatusSnapshots(nodePublicKey: Bytes, since: Instant?) = onSnapshots()
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? = null
+            override suspend fun fetchContacts(radioId: RadioId) = SnapshotList.empty<ContactDTO>()
+            override suspend fun fetchDiscoveredNodes(radioId: RadioId) = SnapshotList.empty<DiscoveredNodeDTO>()
+        }
+        val authorityA = Any()
+        val storeA = historyStore(authorityA) {
+            readsA++
+            withContext(NonCancellable) { lateA.await() }
+        }
+        val sameAuthorityWrapper = historyStore(authorityA) { readsA++; report(10.5) }
+        val storeB = historyStore { readsB++; report(20.5) }
+        val storeC = historyStore { readsC++; report(30.5) }
+        val store = mutableStateOf<RemoteNodeHistoryStore?>(storeA)
+        val activeClock = mutableStateOf(clock)
+
+        fun installHistoryRoute() {
+            activity.get().setContent {
+                ResourceLocale {
+                    RemoteNodeHistoryRoute(
+                        key, RadioId(UUID(0, 1)), false, store.value, Modifier,
+                        { _, _, _, _, _, _, _ -> }, activeClock.value,
+                    )
+                }
+            }
+        }
+        installHistoryRoute()
+        compose.waitUntil(5_000) { readsA == 1 }
+        compose.runOnIdle { store.value = sameAuthorityWrapper }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("A fresh wrapper for the same authority must not reload", 1, readsA) }
+
+        compose.runOnIdle { store.value = storeB }
+        compose.waitUntil(5_000) { readsB == 1 }
+        compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { lateA.complete(report(5.5)) }
+        compose.waitForIdle()
+        compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(": 41.9 \u00b0F", substring = true)).assertDoesNotExist()
+
+        compose.runOnIdle { store.value = null }
+        compose.onNodeWithText(activity.get().getString(L.remoteNodesSettingsNoService))
+            .performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).assertDoesNotExist()
+
+        compose.runOnIdle { store.value = storeC }
+        compose.waitUntil(5_000) { readsC == 1 }
+        compose.onNode(hasText(": 86.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
+
+        val changedClock = object : RemoteNodesClock {
+            override val now: Instant get() = this@RemoteLocaleMeasurementComposeTest.now.plusSeconds(60)
+            override val elapsed = Duration.ZERO
+            override suspend fun sleep(duration: Duration) = error("Rendering must not sleep")
+        }
+        compose.runOnIdle { activeClock.value = changedClock }
+        compose.waitUntil(5_000) { readsC == 2 }
+        compose.onNode(hasText(": 86.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
     }
 
     @Test fun sameTimestampChartsKeepTheirOwnSelectionWhenLocaleReordersThemAndResetForAnotherNode() {

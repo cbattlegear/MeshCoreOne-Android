@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -471,7 +472,9 @@ private fun AddContactDialog(
             AlertDialog(
                 onDismissRequest = scanHolder::resetToScanner,
                 confirmButton = {
+                    val primaryLabel = nodesString(confirmation.primaryAccessibilityLabel)
                     TextButton(
+                        modifier = Modifier.semantics { contentDescription = primaryLabel },
                         enabled = confirmation.isPrimaryEnabled,
                         onClick = {
                             scope.launch {
@@ -485,7 +488,13 @@ private fun AddContactDialog(
                                 }
                             }
                         },
-                    ) { Text(nodesString(confirmation.primaryButtonTitle)) }
+                    ) {
+                        if (confirmation.isAdding) {
+                            CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
+                        } else {
+                            Text(nodesString(confirmation.primaryButtonTitle))
+                        }
+                    }
                 },
                 dismissButton = {
                     TextButton(onClick = scanHolder::resetToScanner) { Text(stringResource(C.contactsScanScanAgain)) }

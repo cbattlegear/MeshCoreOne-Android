@@ -30,6 +30,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
@@ -572,6 +573,116 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
 
         @Test
         fun mountedScanAddReplacesSameKeyAndRadioBeforeListFetchIncludesContact() = verifyAdmission("same-key", scan = true)
+
+        @Test
+        fun mountedNewScanConfirmationBindsAddAndImportingState() = verifyScanConfirmationImport(fails = false)
+
+        @Test
+        fun mountedFailedScanImportRestoresTheEnabledAddLabelWithoutProgress() = verifyScanConfirmationImport(fails = true)
+
+        @Test
+        fun mountedExistingScanConfirmationNamesTheStoredTargetAndOpensWithoutImport() {
+            val harness = Harness().connect()
+            val stored = Fixtures.contact(
+                radioId = checkNotNull(harness.session.radioId),
+                name = "Stored node",
+                nickname = "Saved alias",
+            )
+            harness.store.contacts += stored
+            val opened = mutableListOf<ContactDTO>()
+            openScanConfirmation(harness, "Claimed name", stored.publicKey, opened)
+            val context = controller.get()
+            val view = awaitAction(context.getString(C.contactsAddView))
+            assertEquals(
+                listOf(C.contactsAddViewAccessibility(context.resources, stored.displayName)),
+                view.config[SemanticsProperties.ContentDescription],
+                "View must name the saved target, not the QR's claimed name",
+            )
+            assertFalse(view.config.contains(SemanticsProperties.Disabled))
+            assertFalse(view.config.contains(SemanticsProperties.ProgressBarRangeInfo))
+            assertTrue(harness.contactService.calls.isEmpty())
+            click(view)
+            awaitCondition { opened.isNotEmpty() }
+            assertEquals(listOf(stored), opened)
+            assertEquals(listOf(stored), harness.store.contacts)
+            assertTrue(harness.contactService.calls.isEmpty(), "Viewing a saved contact must not import it again")
+        }
+
+        private fun verifyScanConfirmationImport(fails: Boolean) {
+            val harness = Harness().connect()
+            val key = Fixtures.repeated(0xAB)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val persist = harness.contactService.addBehavior
+            harness.contactService.addBehavior = { radio, frame ->
+                entered.complete(Unit)
+                release.await()
+                if (fails) error("held import failed")
+                persist(radio, frame)
+            }
+            val opened = mutableListOf<ContactDTO>()
+            openScanConfirmation(harness, "Scanned node", key, opened)
+            val context = controller.get()
+            val addLabel = context.getString(C.contactsAddAdd)
+            val add = awaitAction(addLabel)
+            assertEquals(listOf(addLabel), add.config[SemanticsProperties.ContentDescription])
+            assertFalse(add.config.contains(SemanticsProperties.Disabled))
+            assertFalse(add.config.contains(SemanticsProperties.ProgressBarRangeInfo))
+            assertTrue(harness.contactService.calls.isEmpty())
+            click(add)
+            awaitCondition { entered.isCompleted }
+            val importingLabel = context.getString(C.contactsScanImporting)
+            val importing = allSemanticsNodes().single {
+                it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() } == listOf(importingLabel)
+            }
+            assertTrue(isDisplayed(importing))
+            assertTrue(importing.config.contains(SemanticsProperties.Disabled))
+            val progress = allSemanticsNodes().single { it.config.contains(SemanticsProperties.ProgressBarRangeInfo) }
+            assertEquals(ProgressBarRangeInfo.Indeterminate, progress.config[SemanticsProperties.ProgressBarRangeInfo])
+            assertTrue(
+                generateSequence(progress) { it.parent }.any { it.id == importing.id },
+                "Import progress must belong to the disabled primary action, not an unrelated spinner",
+            )
+            assertTrue(isDisplayed(progress))
+            assertEquals(listOf("add:Scanned node"), harness.contactService.calls)
+            assertTrue(opened.isEmpty(), "A held import must not navigate before persistence completes")
+            assertTrue(harness.store.contacts.isEmpty())
+            release.complete(Unit)
+            if (fails) {
+                val retry = awaitAction(addLabel)
+                assertEquals(listOf(addLabel), retry.config[SemanticsProperties.ContentDescription])
+                assertFalse(retry.config.contains(SemanticsProperties.Disabled))
+                assertFalse(allSemanticsNodes().any { it.config.contains(SemanticsProperties.ProgressBarRangeInfo) })
+                assertTrue(opened.isEmpty())
+                assertTrue(harness.store.contacts.isEmpty())
+            } else {
+                awaitCondition { opened.isNotEmpty() }
+                assertEquals(listOf(harness.store.contacts.single()), opened)
+                assertEquals(key, opened.single().publicKey)
+                assertEquals("Scanned node", opened.single().name)
+            }
+            assertEquals(listOf("add:Scanned node"), harness.contactService.calls)
+        }
+
+        private fun openScanConfirmation(
+            harness: Harness,
+            claimedName: String,
+            key: Bytes,
+            opened: MutableList<ContactDTO>,
+        ) {
+            Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
+            val navigation = object : NodesNavigation by NodesNavigation.NONE {
+                override fun openContact(contact: ContactDTO) { opened += contact }
+            }
+            mount { NodesListScreen(harness.dependencies, navigation) }
+            val context = controller.get()
+            click(awaitAction(context.getString(C.contactsListAddContact)))
+            click(awaitAction(context.getString(C.contactsAddScanQR)))
+            val field = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetText) }
+            setText(field, harness.codec.exportContactUri(claimedName, key, ContactType.CHAT))
+            click(awaitAction(context.getString(C.contactsAddView)))
+            awaitText(if (harness.store.contacts.isEmpty()) claimedName else harness.store.contacts.single().displayName)
+        }
 
         @Test
         fun mountedManualAddRejectsReplacementBeforeTheDialogRecomposes() {

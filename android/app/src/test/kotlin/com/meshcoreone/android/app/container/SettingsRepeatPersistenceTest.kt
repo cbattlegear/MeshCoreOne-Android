@@ -706,7 +706,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
 
     @Test fun persistedPartialSnapshotsAreClearedOnlyByAnActualRepeatOffReconnect() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        for (field in listOf("frequency", "bandwidth", "sf", "cr")) for (active in listOf(false, true)) {
+        for (field in listOf("frequency", "bandwidth", "sf", "cr", "failed-cleanup"))
+            for (active in if (field == "failed-cleanup") listOf(false) else listOf(false, true)) {
             val name = "repeat-reopen-${UUID.randomUUID()}.db"
             fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
                 .allowMainThreadQueries().setQueryExecutor(Executor { it.run() }).setTransactionExecutor(Executor { it.run() }).build()
@@ -714,7 +715,15 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             val first = RoomPersistenceStore(firstDb, backgroundScope)
             lateinit var persisted: DeviceDTO
             try {
-                withRepeat(first, room = first) { h, _, _, _ ->
+                val failedCleanup = object : PersistenceStoreProtocol by first {
+                    override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                        if (expected.device.preRepeatFrequency != null && dto.preRepeatFrequency == null) {
+                            throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Cleanup unavailable before reopen"))
+                        }
+                        return first.saveDeviceIfUnchanged(dto, expected)
+                    }
+                }
+                withRepeat(if (field == "failed-cleanup") failedCleanup else first, room = first) { h, _, _, _ ->
                     val token = assertNotNull(h.sessions.current).token
                     val attempt = PreRepeatSettingsAttempt(token)
                     assertTrue(h.container.deviceEditor.savePreRepeatSettings(token, attempt))
@@ -723,12 +732,13 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         "frequency" -> created.clearingPreRepeatSettings().copy(preRepeatFrequency = 868_000u)
                         "bandwidth" -> created.clearingPreRepeatSettings().copy(preRepeatBandwidth = 125_000u)
                         "sf" -> created.clearingPreRepeatSettings().copy(preRepeatSpreadingFactor = 9u)
+                        "failed-cleanup" -> created
                         else -> created.clearingPreRepeatSettings().copy(preRepeatCodingRate = 6u)
                     }
-                    first.saveDevice(persisted)
-                    assertIs<DeviceEditPersistenceConflict>(
-                        runCatching { h.container.deviceEditor.abortPreRepeatSettings(token, attempt) }.exceptionOrNull(),
-                    )
+                    if (field != "failed-cleanup") first.saveDevice(persisted)
+                    val failure = runCatching { h.container.deviceEditor.abortPreRepeatSettings(token, attempt) }.exceptionOrNull()
+                    if (field == "failed-cleanup") assertIs<PersistenceStoreException>(failure)
+                    else assertIs<DeviceEditPersistenceConflict>(failure)
                     assertIs<RepeatSnapshotReconciliationRequired>(
                         runCatching { first.repeatSnapshotAuthority.requireUsable(persisted) }.exceptionOrNull(),
                     )
@@ -740,7 +750,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             try {
                 assertTrue(first.repeatSnapshotAuthority !== reopened.repeatSnapshotAuthority)
                 assertEquals(persisted, reopened.fetchDevice(persisted.id), "Reopening alone must preserve imported/partial rows")
-                withRepeat(reopened, room = reopened, connectExisting = persisted.id, initiallyRepeating = active) { h, _, _, radio ->
+                withRepeat(reopened, room = reopened, connectExisting = persisted.id, initiallyRepeating = active) { h, holder, _, radio ->
                     val current = assertNotNull(h.manager.connectedDevice)
                     val actual = assertNotNull(reopened.fetchDevice(persisted.id))
                     assertEquals(current, actual)
@@ -751,6 +761,28 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     assertEquals(expected.preRepeatSpreadingFactor, actual.preRepeatSpreadingFactor, "$field / active=$active")
                     assertEquals(expected.preRepeatCodingRate, actual.preRepeatCodingRate, "$field / active=$active")
                     assertTrue(radio.radioWrites.isEmpty(), "Reconnect cleanup is persistence only")
+                    if (field == "failed-cleanup") {
+                        h.sessions.current!!.settingsService.setRadioParamsVerified(868_000u, 125_000u, 9u, 6u, false)
+                        h.eventually("new process observes later manual RF") { holder.state.value.device?.frequency == 868_000u }
+                        holder.onRepeatToggled(true)
+                        holder.confirmEnableRepeatMode()
+                        h.eventually("new process prepares a fresh baseline rather than reusing the failed cleanup") {
+                            !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
+                        }
+                        assertEquals(868_000u, reopened.fetchDevice(persisted.id)?.preRepeatFrequency)
+                        holder.onRepeatToggled(false)
+                        h.eventually("new process restores only its fresh baseline") {
+                            !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false &&
+                                h.manager.connectedDevice?.preRepeatFrequency == null
+                        }
+                        val restored = assertNotNull(reopened.fetchDevice(persisted.id))
+                        assertEquals(868_000u, restored.frequency)
+                        assertEquals(125_000u, restored.bandwidth)
+                        assertEquals(9.toUByte(), restored.spreadingFactor)
+                        assertEquals(6.toUByte(), restored.codingRate)
+                        assertEquals(listOf(0, 1, 0), radio.radioWrites.map { it[11].toInt() })
+                        assertNull(holder.state.value.errorMessage)
+                    }
                 }
             } finally { reopened.close(); reopenedDb.close(); assertTrue(context.deleteDatabase(name)) }
         }
@@ -1067,6 +1099,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
     }
 
     @Test fun failedDefinitelyUnsentCleanupCanBeRetriedThroughTheActualRepeatAction() = runTest {
+        for (reconnect in listOf(false, true)) {
         val committed = CompletableDeferred<Job>()
         val hold = CompletableDeferred<Unit>()
         var armed = false
@@ -1113,7 +1146,30 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 assertTrue(cleanupFailures >= 2)
                 assertTrue(radio.radioWrites.isEmpty())
                 assertNotNull(holder.state.value.errorMessage)
+                if (reconnect) {
+                    h.manager.disconnect()
+                    assertIs<PersistenceStoreException>(
+                        runCatching { h.manager.connect(h.target(before.id)) }.exceptionOrNull(),
+                        "An unavailable activation clear must not publish a usable stale baseline",
+                    )
+                    assertNull(h.sessions.current)
+                    assertEquals(before.savingPreRepeatSettings().preRepeatFrequency, store.fetchDevice(before.id)?.preRepeatFrequency)
+                }
                 rejectCleanup = false
+                if (reconnect) {
+                    h.manager.connect(h.target(before.id))
+                    h.eventually("successful successor activation clears the actual off-state snapshot") {
+                        h.sessions.current?.token != null && h.sessions.current?.token != token &&
+                            h.appState.canRunSettingsStartupReads && holder.state.value.sessionToken == h.sessions.current?.token &&
+                            holder.state.value.device?.preRepeatFrequency == null
+                    }
+                    assertNull(store.fetchDevice(before.id)?.preRepeatFrequency)
+                    assertNull(store.fetchDevice(before.id)?.preRepeatBandwidth)
+                    assertNull(store.fetchDevice(before.id)?.preRepeatSpreadingFactor)
+                    assertNull(store.fetchDevice(before.id)?.preRepeatCodingRate)
+                    assertTrue(radio.radioWrites.isEmpty())
+                }
+                val currentToken = assertNotNull(h.sessions.current).token
                 h.sessions.current!!.settingsService.setRadioParamsVerified(868_000u, 125_000u, 9u, 6u, false)
                 h.eventually("later manual RF is observed before retry") {
                     holder.state.value.device?.frequency == 868_000u && h.manager.connectedDevice?.frequency == 868_000u
@@ -1141,11 +1197,12 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 assertEquals(manual.spreadingFactor, restored.spreadingFactor)
                 assertEquals(manual.codingRate, restored.codingRate)
                 assertEquals(restored, h.manager.connectedDevice)
-                assertEquals(token, h.sessions.current?.token)
+                assertEquals(currentToken, h.sessions.current?.token)
                 assertEquals(listOf(0, 1, 0), radio.radioWrites.map { it[11].toInt() })
                 assertNull(holder.state.value.errorMessage)
             }
         } finally { rejectCleanup = false; hold.complete(Unit) }
+        }
     }
 
     @Test fun abortPreservesExistingSnapshotsAcceptsWatermarkAbaAndRefusesSnapshotAbaOrRetiredReceipts() = runTest {

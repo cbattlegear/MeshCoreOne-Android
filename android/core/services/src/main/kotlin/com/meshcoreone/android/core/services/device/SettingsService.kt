@@ -79,6 +79,8 @@ class SettingsService(
                 for (event in channel) {
                     if (!context.isCurrent) break
                     val persistence = when (val update = event.event) {
+                        is SettingsEvent.DeviceUpdated -> update.persistence
+                        is SettingsEvent.ClientRepeatUpdated -> update.persistence
                         is SettingsEvent.PathHashModeUpdated -> update.persistence
                         is SettingsEvent.DefaultFloodScopeUpdated -> update.persistence
                         else -> null
@@ -86,8 +88,10 @@ class SettingsService(
                     if (event.event is SettingsEvent.DefaultFloodScopeUpdated &&
                         synchronized(eventLock) { revision != subscriptionRevision }
                     ) continue
+                    // Verified RF publications still describe this radio after its UI waiter is cancelled.
+                    val committedRadio = event.event is SettingsEvent.DeviceUpdated || event.event is SettingsEvent.ClientRepeatUpdated
                     if (persistence != null && synchronized(eventLock) {
-                            subscription !== this@Subscription || persistence.isCancelled
+                            subscription !== this@Subscription || (persistence.isCancelled && !committedRadio)
                         }) continue
                     emit(event)
                 }
@@ -277,6 +281,7 @@ class SettingsService(
 
     private suspend fun <T> acknowledged(
         defaultScope: Boolean = false,
+        additionalCompletions: List<CompletableDeferred<Unit>> = emptyList(),
         action: suspend (CompletableDeferred<Unit>, Subscription) -> T,
     ): T {
         val completion = CompletableDeferred<Unit>()
@@ -296,11 +301,16 @@ class SettingsService(
                 action(completion, owner)
             }
             completion.await()
+            additionalCompletions.forEach { it.await() }
             context.requireCurrent()
             return result
         } finally {
-            synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
+            synchronized(eventLock) {
+                owner.pendingPersistence.remove(completion)
+                owner.pendingPersistence.removeAll(additionalCompletions.toSet())
+            }
             completion.cancel()
+            additionalCompletions.forEach { it.cancel() }
         }
     }
 
@@ -575,6 +585,23 @@ class SettingsService(
         actual
     }
 
+    /** Settings completion follows both token-bound publications, not just the verified wire reply. */
+    suspend fun setRadioParamsPersisted(
+        frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
+        clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
+        expectedDevice: DeviceDTO? = null,
+    ): SelfInfo = context.operation {
+        val repeatCompletion = clientRepeat?.let { CompletableDeferred<Unit>() }
+        acknowledged(additionalCompletions = listOfNotNull(repeatCompletion)) { completion, owner ->
+            expectedDevice?.let { verifyQueuedRadioBaseline(it) }
+            val actual = writeRadioAndVerify(
+                frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, repeatCompletion, owner,
+            )
+            publish(SettingsEvent.DeviceUpdated(actual, appliedRadioPresetID, completion), completion, owner)
+            actual
+        }
+    }
+
     private suspend fun verifyQueuedRadioBaseline(expected: DeviceDTO) {
         if (expected.radioId != context.token.radioId) throw SettingsServiceException(SettingsServiceError.NotConnected)
         val actual = configuration { sendAppStart() }
@@ -589,6 +616,8 @@ class SettingsService(
 
     private suspend fun writeRadioAndVerify(
         frequency: UInt, bandwidth: UInt, sf: UByte, cr: UByte, clientRepeat: Boolean?,
+        repeatCompletion: CompletableDeferred<Unit>? = null,
+        owner: Subscription? = null,
     ): SelfInfo {
         writeRadio(frequency, bandwidth, sf, cr, clientRepeat)
         val actual = configuration { sendAppStart() }
@@ -603,7 +632,7 @@ class SettingsService(
         if (clientRepeat != null) {
             val actualRepeat = configuration { queryDevice() }.clientRepeat
             if (actualRepeat != clientRepeat) verification("clientRepeat=$clientRepeat", "clientRepeat=$actualRepeat")
-            publish(SettingsEvent.ClientRepeatUpdated(clientRepeat))
+            publish(SettingsEvent.ClientRepeatUpdated(clientRepeat, repeatCompletion), repeatCompletion, owner)
         }
         return actual
     }
@@ -620,11 +649,24 @@ class SettingsService(
     }
 
     suspend fun setTxPowerVerified(power: Byte): SelfInfo = operation {
+        val actual = writeTxPowerAndVerify(power)
+        publish(SettingsEvent.DeviceUpdated(actual, null))
+        actual
+    }
+
+    suspend fun setTxPowerPersisted(power: Byte): SelfInfo = context.operation {
+        acknowledged { completion, owner ->
+            val actual = writeTxPowerAndVerify(power)
+            publish(SettingsEvent.DeviceUpdated(actual, null, completion), completion, owner)
+            actual
+        }
+    }
+
+    private suspend fun writeTxPowerAndVerify(power: Byte): SelfInfo {
         configuration { setTxPower(power) }
         val actual = configuration { sendAppStart() }
         if (actual.txPower != power) verification(power.toString(), actual.txPower.toString())
-        publish(SettingsEvent.DeviceUpdated(actual, null))
-        actual
+        return actual
     }
 
     suspend fun setOtherParamsVerified(

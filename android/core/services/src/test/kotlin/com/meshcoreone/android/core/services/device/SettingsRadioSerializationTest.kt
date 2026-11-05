@@ -10,13 +10,150 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsRadioSerializationTest {
+    @Test fun cancellingTheUiWaiterDoesNotDiscardItsAlreadyVerifiedCurrentSessionPublications() = runTest {
+        val fixture = settingsFixture()
+        val events = fixture.settings.events()
+        try {
+            val write = request { fixture.settings.setRadioParamsPersisted(915_000u, 125_000u, 7u, 5u, true) }
+            reply(fixture, 2, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u, true), okPacket())
+            reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket())
+            reply(fixture, 4, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = true))
+            assertFalse(write.isCompleted)
+            write.cancel()
+            runCurrent()
+            assertFailsWith<CancellationException> { write.await() }
+            val received = mutableListOf<SettingsEvent>()
+            val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                events.events.collect { received += it.event }
+            }
+            try {
+                runCurrent()
+                assertEquals(2, received.size)
+                val repeat = assertIs<SettingsEvent.ClientRepeatUpdated>(received.first())
+                val device = assertIs<SettingsEvent.DeviceUpdated>(received.last())
+                assertTrue(repeat.enabled)
+                assertEquals(915.0, device.info.radioFrequency)
+                assertTrue(assertNotNull(repeat.persistence).isCancelled)
+                assertTrue(assertNotNull(device.persistence).isCancelled)
+                assertEquals(token(), fixture.signals.snapshot.value.token)
+                assertEquals(4, fixture.radio.sent.size, "Cancelled acknowledgement cannot invent rollback traffic")
+            } finally { collector.cancel() }
+        } finally { events.close(); fixture.close() }
+    }
+
+    @Test fun persistedRadioWaitsForBothPublicationsWithoutHoldingTheRadioOperationLock() = runTest {
+        val fixture = settingsFixture()
+        val events = fixture.settings.events()
+        val repeat = CompletableDeferred<SettingsEvent.ClientRepeatUpdated>()
+        val device = CompletableDeferred<SettingsEvent.DeviceUpdated>()
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            events.events.collect {
+                when (val event = it.event) {
+                    is SettingsEvent.ClientRepeatUpdated -> repeat.complete(event)
+                    is SettingsEvent.DeviceUpdated -> device.complete(event)
+                    else -> error("Unexpected radio event ${it.event}")
+                }
+            }
+        }
+        try {
+            val write = request { fixture.settings.setRadioParamsPersisted(915_000u, 125_000u, 7u, 5u, true) }
+            reply(fixture, 2, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u, true), okPacket())
+            reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket())
+            reply(fixture, 4, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = true))
+            assertFalse(write.isCompleted)
+            assertNotNull(device.await().persistence).complete(Unit)
+            runCurrent()
+            assertFalse(write.isCompleted, "RF persistence alone cannot hide a missing Repeat acknowledgement")
+            val read = request { fixture.settings.queryDevice() }
+            reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = true))
+            assertEquals(true, read.await().clientRepeat)
+            assertFalse(write.isCompleted, "A waiting consumer must not hold the radio lock")
+            assertNotNull(repeat.await().persistence).complete(Unit)
+            assertEquals(915.0, write.await().radioFrequency)
+        } finally { events.close(); collector.cancel(); fixture.close() }
+    }
+
+    @Test fun failureOfEitherPersistedRadioPublicationReachesTheCallerAndCanBeRetried() = runTest {
+        for (failRepeat in listOf(false, true)) {
+            val fixture = settingsFixture()
+            val events = fixture.settings.events()
+            val failure = IllegalStateException("Radio persistence unavailable")
+            var rejecting = true
+            val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                events.events.collect {
+                    val completion = when (val event = it.event) {
+                        is SettingsEvent.ClientRepeatUpdated -> assertNotNull(event.persistence)
+                        is SettingsEvent.DeviceUpdated -> assertNotNull(event.persistence)
+                        else -> error("Unexpected radio event $event")
+                    }
+                    if (rejecting && (it.event is SettingsEvent.ClientRepeatUpdated) == failRepeat) {
+                        completion.completeExceptionally(failure)
+                    } else completion.complete(Unit)
+                }
+            }
+            try {
+                val write = backgroundScope.async {
+                    runCatching { fixture.settings.setRadioParamsPersisted(915_000u, 125_000u, 7u, 5u, true) }
+                }
+                reply(fixture, 2, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u, true), okPacket())
+                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket())
+                reply(fixture, 4, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = true))
+                val actual = assertIs<IllegalStateException>(write.await().exceptionOrNull())
+                assertSame(failure, generateSequence<Throwable>(actual) { it.cause }.last())
+                rejecting = false
+                val retry = request { fixture.settings.setRadioParamsPersisted(915_000u, 125_000u, 7u, 5u, true) }
+                reply(fixture, 5, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u, true), okPacket())
+                reply(fixture, 6, PacketBuilder.appStart("MCore"), selfPacket())
+                reply(fixture, 7, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = true))
+                assertEquals(915.0, retry.await().radioFrequency)
+            } finally { events.close(); collector.cancel(); fixture.close() }
+        }
+    }
+
+    @Test fun powerWaitsForItsConsumerAndReplacingThatConsumerFailsTheOriginalWait() = runTest {
+        for (replace in listOf(false, true)) {
+            val fixture = settingsFixture()
+            val events = fixture.settings.events()
+            val device = CompletableDeferred<SettingsEvent.DeviceUpdated>()
+            val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                events.events.collect { device.complete(assertIs<SettingsEvent.DeviceUpdated>(it.event)) }
+            }
+            try {
+                val power = request { fixture.settings.setTxPowerPersisted(10) }
+                reply(fixture, 2, PacketBuilder.setTxPower(10), okPacket())
+                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(txPower = 10))
+                val completion = assertNotNull(device.await().persistence)
+                assertFalse(power.isCompleted)
+                if (replace) {
+                    fixture.settings.events().close()
+                    assertEquals(
+                        SettingsServiceError.NotConnected,
+                        assertFailsWith<SettingsServiceException> { power.await() }.error,
+                    )
+                } else {
+                    completion.complete(Unit)
+                    assertEquals(10.toByte(), power.await().txPower)
+                }
+            } finally { events.close(); collector.cancel(); fixture.close() }
+        }
+    }
+
     @Test fun queuedWriteRejectsActualRfOrRepeatChangesBeforeMutationWithoutWaitingForPublishedEvents() = runTest {
         for ((rfChanges, oldRepeat, newRepeat) in listOf(
             Triple(true, false, false), Triple(false, false, true), Triple(false, true, false),

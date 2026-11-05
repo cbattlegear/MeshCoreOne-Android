@@ -34,6 +34,25 @@ class RadioPresetStateHolderTest {
     private fun started(): RadioPresetStateHolder { holder.start(); scheduler.runCurrent(); return holder }
 
     @Test
+    fun `an observed existing snapshot never skips the authoritative awaited save`() {
+        connection.deviceFlow.value = connection.deviceFlow.value!!.copy(preRepeatFrequency = 868_000u)
+        started()
+        val saved = CompletableDeferred<Unit>()
+        store.beforeRepeatEdit = { saved.await() }
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+        assertTrue(state.isApplyingRepeat && gate.inFlight.value)
+        assertEquals(listOf("getSelfInfo"), service.calls)
+        assertTrue(store.calls.isEmpty())
+        saved.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(listOf("savePreRepeat"), store.calls)
+        assertTrue(state.isRepeatEnabled)
+        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
+    }
+
+    @Test
     fun `repeat cannot send before durable snapshot and failed storage is visible and retryable by action`() {
         started()
         val saved = CompletableDeferred<Unit>()

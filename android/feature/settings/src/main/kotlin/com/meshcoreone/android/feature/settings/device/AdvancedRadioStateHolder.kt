@@ -71,6 +71,7 @@ class AdvancedRadioStateHolder(
     private val failures = SettingsFailureRouter(env, retryAlert)
     private var observing: Job? = null
     private var lastHash: List<Any?>? = null
+    private var appliedTarget: SettingsRadioTarget? = null
     val state: StateFlow<AdvancedRadioState> = mutable.asStateFlow()
     val retryAlertState: StateFlow<RetryAlertState> = retryAlert.state
     val retry: RetryAlertController get() = retryAlert
@@ -81,8 +82,20 @@ class AdvancedRadioStateHolder(
         observing = env.scope.launch {
             launch { connection.connectionState.collect { s -> mutable.update { it.copy(connectionState = s) } } }
             connection.deviceObservations.collect { observed ->
+                val target = appliedTarget
+                val current = if (target?.token != null && target.token == observed.sessionToken) {
+                    try {
+                        target.currentDevice(observed.device, observed.sessionToken)
+                    } catch (failure: SettingsNotConnectedException) {
+                        mutable.update { it.copy(errorMessage = env.describe(failure)) }
+                        return@collect
+                    }
+                } else {
+                    appliedTarget = null
+                    observed.device
+                }
                 mutable.update { it.copy(sessionToken = observed.sessionToken) }
-                onDevice(observed.device)
+                onDevice(current)
             }
         }
     }
@@ -195,6 +208,15 @@ class AdvancedRadioStateHolder(
             )
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             service.setTxPowerVerified(request.power)
+            target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
+            // A queued observation can predate these committed writes; retain the exact-token read boundary.
+            appliedTarget = target
+            mutable.update {
+                it.copy(
+                    frequency = frequencyToSend.toDouble() / 1000.0,
+                    frequencyText = formatFrequencyMHz(frequencyToSend),
+                )
+            }
         } catch (cancelled: CancellationException) {
             release()
             throw cancelled

@@ -250,6 +250,8 @@ class RadioSettingsSessionTargetTest {
             assertEquals(current, r.a.radioExpectations.last())
             assertTrue(r.b.calls.isEmpty())
             assertTrue(r.advanced.state.value.showSuccess)
+            assertEquals(expectedFrequency.toDouble() / 1000.0, r.advanced.state.value.frequency)
+            assertEquals(formatFrequencyMHz(expectedFrequency), r.advanced.state.value.frequencyText)
         }
     }
 

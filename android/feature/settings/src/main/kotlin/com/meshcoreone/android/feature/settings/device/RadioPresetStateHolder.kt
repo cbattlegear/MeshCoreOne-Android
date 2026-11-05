@@ -236,7 +236,7 @@ class RadioPresetStateHolder(
     private fun enableRepeatMode(target: SettingsRadioTarget) {
         val device = target.device
         val presetId = catalog.nearestRepeatPreset(device.frequency)?.id ?: return
-        startEnableRepeat(target, presetId, snapshotSaved = device.preRepeatFrequency != null)
+        startEnableRepeat(target, presetId)
     }
 
     private fun withRepeatTarget(renderedToken: SessionToken?, action: (SettingsRadioTarget) -> Unit) {
@@ -250,18 +250,14 @@ class RadioPresetStateHolder(
         }
     }
 
-    private fun startEnableRepeat(target: SettingsRadioTarget, presetId: String, snapshotSaved: Boolean) {
+    private fun startEnableRepeat(target: SettingsRadioTarget, presetId: String) {
         if (mutable.value.isApplying || mutable.value.isApplyingRepeat || writeGate.inFlight.value) return
         mutable.update { it.copy(isApplyingRepeat = true, errorMessage = null) }
         writeGate.set(true)
         env.scope.launch {
-            var saved = snapshotSaved
             try {
                 target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-                if (!saved) {
-                    deviceStore.savePreRepeatSettings(target.token)
-                    saved = true
-                }
+                deviceStore.savePreRepeatSettings(target.token)
                 currentCoroutineContext().ensureActive()
                 val current = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
                 setRepeatToggle(true)
@@ -277,7 +273,7 @@ class RadioPresetStateHolder(
                 throw cancelled
             } catch (failure: Exception) {
                 setRepeatToggle(connection.connectedDevice.value?.clientRepeat ?: false)
-                val message = failures.route(failure) { startEnableRepeat(target, presetId, saved) }
+                val message = failures.route(failure) { startEnableRepeat(target, presetId) }
                 mutable.update { it.copy(selectedPresetId = currentMatchingPresetId(), errorMessage = message ?: it.errorMessage) }
             } finally {
                 releaseRepeat()

@@ -31,8 +31,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -43,6 +46,179 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun manualRadioWaitsForActualConsumerAndIgnoresAnOlderObservationButAcceptsALaterChange() = runTest {
+        val rfEntered = CompletableDeferred<Unit>()
+        val rfRelease = CompletableDeferred<Unit>()
+        val powerEntered = CompletableDeferred<Unit>()
+        val powerRelease = CompletableDeferred<Unit>()
+        val observationEntered = CompletableDeferred<Unit>()
+        val observationRelease = CompletableDeferred<Unit>()
+        var armed = false
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (armed && dto.frequency == 868_100u) {
+                    if (dto.txPower == 10.toByte() && !powerEntered.isCompleted) {
+                        powerEntered.complete(Unit)
+                        powerRelease.await()
+                    } else if (dto.txPower != 10.toByte() && !rfEntered.isCompleted) {
+                        rfEntered.complete(Unit)
+                        rfRelease.await()
+                    }
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        var dependencies: SettingsFeatureDependencies? = null
+        try {
+            withSettings(held, exposeDependencies = { dependencies = it }) { h, _, _, radio ->
+                val d = assertNotNull(dependencies)
+                var holdObservation = true
+                val connection = object : SettingsConnection by d.connection {
+                    override val deviceObservations = d.connection.deviceObservations.onEach {
+                        val device = it.device
+                        if (holdObservation && device != null && device.frequency == 868_100u && device.txPower != 10.toByte()) {
+                            holdObservation = false
+                            observationEntered.complete(Unit)
+                            observationRelease.await()
+                        }
+                    }
+                }
+                val failures = mutableListOf<Throwable>()
+                val gate = RadioWriteGate()
+                val advanced = AdvancedRadioStateHolder(
+                    SettingsEnvironment(backgroundScope, describe = { failures += it; UiText.Verbatim("Radio failed") }),
+                    connection, d.settingsService, gate,
+                )
+                val states = mutableListOf<AdvancedRadioState>()
+                val collecting = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    advanced.state.collect { states += it }
+                }
+                advanced.start()
+                try {
+                    h.eventually("manual Settings observes the actual ready device") { advanced.state.value.hasLoaded }
+                    val before = assertNotNull(h.manager.connectedDevice)
+                    val token = assertNotNull(advanced.state.value.sessionToken)
+                    advanced.onFrequencyTextChanged("868.1")
+                    advanced.onBandwidthSelected(125_000u)
+                    advanced.onSpreadingFactorSelected(9)
+                    advanced.onCodingRateSelected(7)
+                    advanced.onTxPowerTextChanged("10")
+                    armed = true
+                    advanced.apply(token)
+                    h.eventually("RF event held at the real AppState Room consumer") { rfEntered.isCompleted }
+                    assertTrue(advanced.state.value.isApplying && gate.inFlight.value)
+                    assertFalse(advanced.state.value.showSuccess)
+                    assertTrue(radio.powerWrites.isEmpty(), "Power cannot overtake the RF persistence acknowledgement")
+                    assertEquals(before, store.fetchDevice(before.id))
+                    rfRelease.complete(Unit)
+                    h.eventually("older RF-only observation and real power persistence both held") {
+                        observationEntered.isCompleted && powerEntered.isCompleted
+                    }
+                    assertTrue(advanced.state.value.isApplying && gate.inFlight.value)
+                    assertFalse(advanced.state.value.showSuccess)
+                    assertEquals(before.txPower, store.fetchDevice(before.id)!!.txPower)
+                    assertEquals(1, radio.powerWrites.size)
+                    powerRelease.complete(Unit)
+                    h.eventually("verified radio and power commit before showing success") {
+                        advanced.state.value.showSuccess && !advanced.state.value.isApplying
+                    }
+                    val committed = assertNotNull(store.fetchDevice(before.id))
+                    assertEquals(868_100u, committed.frequency)
+                    assertEquals(125_000u, committed.bandwidth)
+                    assertEquals(9u.toUByte(), committed.spreadingFactor)
+                    assertEquals(7u.toUByte(), committed.codingRate)
+                    assertEquals(10.toByte(), committed.txPower)
+                    assertEquals(committed, h.manager.connectedDevice)
+                    assertFalse(gate.inFlight.value)
+                    val afterSuccess = states.size
+                    val completedAt = testScheduler.currentTime
+                    observationRelease.complete(Unit)
+                    h.eventually("old queued observation drains without resetting the committed form", virtualBudgetMillis = 0) {
+                        advanced.state.value.device == committed
+                    }
+                    val drained = states.drop(afterSuccess)
+                    assertTrue(drained.isNotEmpty(), "The older observation must actually be consumed")
+                    assertTrue(drained.all { it.showSuccess && it.frequency == 868.1 && it.txPower == 10 })
+                    assertEquals("868.100", advanced.state.value.frequencyText)
+                    assertEquals("10", advanced.state.value.txPowerText)
+                    assertFalse(advanced.state.value.settingsModified)
+                    assertEquals(token, advanced.state.value.sessionToken)
+
+                    armed = false
+                    val later = async {
+                        h.sessions.current!!.settingsService.setRadioParamsVerified(867_300u, 125_000u, 9u, 7u)
+                    }
+                    h.eventually("a genuinely later actual radio change clears success and reloads the form", virtualBudgetMillis = 0) {
+                        later.isCompleted && advanced.state.value.frequency == 867.3 && !advanced.state.value.showSuccess
+                    }
+                    later.await()
+                    assertEquals(completedAt, testScheduler.currentTime, "The later change, not the success timer, clears the checkmark")
+                    assertEquals("867.300", advanced.state.value.frequencyText)
+                    assertEquals(10, advanced.state.value.txPower)
+                    assertEquals(867_300u, store.fetchDevice(before.id)!!.frequency)
+                    assertEquals(2, radio.radioWrites.size)
+                    assertEquals(1, radio.powerWrites.size)
+                    assertTrue(failures.isEmpty())
+                } finally { advanced.stop(); collecting.cancel() }
+            }
+        } finally {
+            rfRelease.complete(Unit)
+            powerRelease.complete(Unit)
+            observationRelease.complete(Unit)
+        }
+    }
+
+    @Test fun manualRadioPersistenceFailureReachesTheActualActionAndCanBeRetried() = runTest {
+        var fail = false
+        val rejected = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (fail && dto.txPower == 10.toByte()) {
+                    throw com.meshcoreone.android.core.contracts.domain.PersistenceStoreException(
+                        com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.SaveFailed("Radio power unavailable"),
+                    )
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        var dependencies: SettingsFeatureDependencies? = null
+        withSettings(rejected, exposeDependencies = { dependencies = it }) { h, _, _, radio ->
+            val d = assertNotNull(dependencies)
+            val failures = mutableListOf<Throwable>()
+            val advanced = AdvancedRadioStateHolder(
+                SettingsEnvironment(backgroundScope, describe = { failures += it; UiText.Verbatim("Radio failed") }),
+                d.connection, d.settingsService, RadioWriteGate(),
+            )
+            advanced.start()
+            try {
+                h.eventually("manual Settings ready for actual persistence failure") { advanced.state.value.hasLoaded }
+                val before = assertNotNull(h.manager.connectedDevice)
+                fail = true
+                advanced.onTxPowerTextChanged("10")
+                advanced.apply()
+                h.eventually("actual power persistence failure reaches Settings") {
+                    failures.isNotEmpty() && !advanced.state.value.isApplying
+                }
+                assertFalse(advanced.state.value.showSuccess)
+                assertNotNull(advanced.state.value.errorMessage)
+                assertTrue(failures.single() is com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)
+                assertEquals(before.txPower, store.fetchDevice(before.id)!!.txPower)
+                assertEquals(1, radio.powerWrites.size)
+                fail = false
+                advanced.dismissError()
+                advanced.onTxPowerTextChanged("10")
+                advanced.apply()
+                h.eventually("actual Settings power retry commits and succeeds") {
+                    advanced.state.value.showSuccess && !advanced.state.value.isApplying
+                }
+                assertEquals(10.toByte(), store.fetchDevice(before.id)!!.txPower)
+                assertEquals(10.toByte(), h.manager.connectedDevice!!.txPower)
+                assertEquals(2, radio.powerWrites.size)
+                assertNull(advanced.state.value.errorMessage)
+            } finally { advanced.stop() }
+        }
+    }
+
     @Test fun repeatWaitsForActualRoomSnapshotAndClearFailuresReachTheActualAction() = runTest {
         val saveEntered = CompletableDeferred<Unit>()
         val saveRelease = CompletableDeferred<Unit>()
@@ -984,7 +1160,9 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
 
     private class ScopeRadio {
         val radioWrites = mutableListOf<Bytes>()
+        val powerWrites = mutableListOf<Bytes>()
         private var radioParams: Bytes? = null
+        private var txPower: Byte? = null
         private var repeatEnabled = false
         var mode: String? = null
         var key: Bytes? = null
@@ -1005,8 +1183,18 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                         repeatEnabled = command[11] != 0u.toUByte()
                         listOf(Bytes.of(0))
                     }
-                    0x01 -> radioParams?.let {
-                        listOf(radio.selfPacket().slice(0, 48) + it + Bytes.utf8("TestNode"))
+                    0x0c -> {
+                        powerWrites += command
+                        txPower = command[1].toByte()
+                        listOf(Bytes.of(0))
+                    }
+                    0x01 -> if (radioParams == null && txPower == null) null else {
+                        val self = radio.selfPacket().toByteArray()
+                        txPower?.let { self[2] = it }
+                        val packet = Bytes(self)
+                        listOf(radioParams?.let {
+                            packet.slice(0, 48) + it + Bytes.utf8("TestNode")
+                        } ?: packet)
                     }
                     0x16 -> if (radioParams != null) listOf(
                         Bytes.of(13, 11, 50, 8) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +

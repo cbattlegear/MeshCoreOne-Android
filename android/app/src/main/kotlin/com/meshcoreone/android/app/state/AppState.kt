@@ -540,7 +540,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                     when (val event = wrapped.event) {
                         is SettingsEvent.DeviceUpdated -> {
                             val presetId = event.appliedRadioPresetID
-                            persistSessionDeviceEdit(if (presetId == null) "device settings" else "radio preset") {
+                            persistSessionDeviceEdit(if (presetId == null) "device settings" else "radio preset", event.persistence) {
                                 connection.updateDevice(event.info, presetId, wrapped.token)
                             }
                         }
@@ -553,7 +553,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                                 accepted
                             }
                         }
-                        is SettingsEvent.ClientRepeatUpdated -> persistSessionDeviceEdit("client repeat") {
+                        is SettingsEvent.ClientRepeatUpdated -> persistSessionDeviceEdit("client repeat", event.persistence) {
                             connection.updateClientRepeat(event.enabled, wrapped.token)
                         }
                         is SettingsEvent.PathHashModeUpdated -> {

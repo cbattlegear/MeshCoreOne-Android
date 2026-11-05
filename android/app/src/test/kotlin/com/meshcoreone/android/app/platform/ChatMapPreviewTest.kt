@@ -388,7 +388,10 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.runOnUiThread { host.setContent { MeshCoreTheme(motionScale = 0f) { Column {
                 repeat(2) { AppMessageContent(content, message, ::report, onMap = {}) }
             } } } }
-            compose.waitUntil(10_000) { requests.size == 1 }
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                requests.size == 1
+            }
             compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
             assertEquals(1, calls)
             compose.runOnIdle { first.complete(null) }
@@ -396,13 +399,19 @@ class ChatMapPreviewTest : RoomProcessTest() {
                 compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true).fetchSemanticsNodes().size == 2
             }
             compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true)[0].performClick()
-            compose.waitUntil(10_000) { secondRead.isCompleted }
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                secondRead.isCompleted
+            }
             compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
             assertEquals(1, calls)
             assertEquals(1, requests.size)
             assertFalse(secondStarted.isCompleted)
             compose.runOnIdle { releaseRead.complete(Unit) }
-            compose.waitUntil(10_000) { secondStarted.isCompleted }
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                secondStarted.isCompleted
+            }
             assertEquals(2, calls)
             assertEquals(2, requests.size)
             compose.runOnIdle { second.complete(bitmap()) }
@@ -436,7 +445,10 @@ class ChatMapPreviewTest : RoomProcessTest() {
             }
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithContentDescription(retry, useUnmergedTree = true).performClick()
-            compose.waitUntil(10_000) { secondRead.isCompleted }
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                secondRead.isCompleted
+            }
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
             compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
             assertEquals(1, calls)

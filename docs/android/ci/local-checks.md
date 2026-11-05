@@ -438,6 +438,7 @@ Unicode escapes are translated once using JLS 3.3 eligibility (translated-output
 backslash parity and preceding escape origin); malformed eligible escapes fail
 closed, and ineligible escapes remain literal. This precedes Java-aware tokenization: block comments
 do not nest, line comments end at CR or LF, and strings have no Kotlin templates.
+Kotlin line comments also end at the earliest CR or LF.
 Java identifier-part/ignorable characters are indexed using Unicode categories;
 identifier-ignorable characters do not distinguish canonical names. Unrelated
 grouped Kotlin annotations are permitted only during symbol-only indexing;
@@ -449,6 +450,8 @@ inside `android/` retain exact path/blob checks without directory containment.
 Ordinary superclass resolution retains its module-local scope. Approved
 JVM-remapped `src/androidTest` coverage uses this proof too.
 Unremapped native-only coverage cannot use this exception without that proof.
+Shared native-only instrumentation paths outside a hosted module retain their
+ordinary no-resolver parsing; this does not grant the shadow exception.
 This rejects repository-source ambiguity; it is not an execution of Kotlin's
 classpath resolver or proof about generated/external dependency bytes. Those
 remain subject to the existing trusted build/dependency and compiler-input gates.

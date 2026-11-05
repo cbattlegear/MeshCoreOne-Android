@@ -900,10 +900,9 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     def comment(index):
         if text.startswith("//", index):
             end = text.find("\n", index)
-            if java_source:
-                carriage = text.find("\r", index)
-                if carriage >= 0 and (end < 0 or carriage < end):
-                    end = carriage
+            carriage = text.find("\r", index)
+            if carriage >= 0 and (end < 0 or carriage < end):
+                end = carriage
             return len(text) if end < 0 else end
         depth, index = 1, index + 2
         while index < len(text) and depth:
@@ -1661,8 +1660,8 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 if "/src/androidTest/" not in path:
                     require_compiled(path, blob)
                 text = object_bytes(repo, blob).decode("utf-8")
-                module = re.match(r"android/((?:core|feature|platform)/[^/]+|app)/", path)[1]
-                remapped = path in (compiled_sources or {}).get(module, {})
+                module = re.match(r"android/((?:core|feature|platform)/[^/]+|app)/", path)
+                remapped = module is not None and path in (compiled_sources or {}).get(module[1], {})
                 if remapped:
                     require_compiled(path, blob)
                 resolver = lineage(path) if "/src/androidTest/" not in path or remapped else None

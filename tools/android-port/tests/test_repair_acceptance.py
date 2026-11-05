@@ -1091,6 +1091,47 @@ class RepairExecutionTests(unittest.TestCase):
                 ), self.assertRaises(PortError):
                     validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
 
+    def test_notification_shadow_rejects_kotlin_cr_commented_canonical_source(self):
+        for ending in ("\r", "\r\n", "\n"):
+            for whole in (False, True):
+                path = "android/core/model/src/main/kotlin/ShadowNotificationManager.kt"
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                    TEST: self.notification_shadow_source().encode(),
+                    path: (
+                        "package org.robolectric.shadows\n// ignored" + ending
+                        + "open class ShadowNotificationManager {}"
+                    ).encode(),
+                }, whole=whole)
+                del compiled["core/maps"][path]
+                with self.subTest(ending=ending, whole=whole), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaisesRegex(PortError, "shadows the external Robolectric identity"):
+                    validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_unremapped_shared_native_sources_preserve_proof_and_plain_suite_behavior(self):
+        for root in ("ui-tests", "accessibility-tests", "screenshot-tests"):
+            for shadow in (False, True):
+                source = (
+                    self.notification_shadow_source() if shadow else
+                    "package sample\nclass MapTest { @Test fun keepsListReachable() {} }"
+                )
+                manifest, scope, blobs, contents, executed, _ = self.lineage_inputs({
+                    TEST: source.encode(),
+                }, whole=True)
+                path = "android/" + root + "/src/androidTest/kotlin/MapTest.kt"
+                blobs[path] = blobs.pop(TEST)
+                coverage = scope["coverage"][0]
+                coverage["path"], coverage["hosted_methods"] = path, []
+                coverage["native_methods"] = ["sample.MapTest#keepsListReachable"]
+                with self.subTest(root=root, shadow=shadow), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ):
+                    if shadow:
+                        with self.assertRaisesRegex(PortError, "immutable candidate source proof|inherited Kotlin JUnit"):
+                            validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, {})
+                    else:
+                        validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, {})
+
     def test_notification_shadow_external_inventory_requires_immutable_actual_blobs(self):
         base = TEST.replace("MapTest.kt", "UnrelatedShadow.kt")
         for whole in (False, True):

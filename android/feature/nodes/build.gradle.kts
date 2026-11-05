@@ -6,7 +6,12 @@ import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.testing.Test
+import org.gradle.api.tasks.testing.TestDescriptor
+import org.gradle.api.tasks.testing.TestListener
+import org.gradle.api.tasks.testing.TestResult
 import org.gradle.process.CommandLineArgumentProvider
+import java.io.PrintWriter
+import java.io.StringWriter
 
 plugins {
     id("mesh.android.feature")
@@ -46,6 +51,22 @@ class NodesRobolectricSdkArguments(
 }
 
 tasks.withType<Test>().configureEach {
+    val failureLogger = logger
+    addTestListener(object : TestListener {
+        override fun beforeSuite(suite: TestDescriptor) = Unit
+        override fun afterSuite(suite: TestDescriptor, result: TestResult) = Unit
+        override fun beforeTest(testDescriptor: TestDescriptor) = Unit
+        override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+            if (result.resultType == TestResult.ResultType.FAILURE) {
+                failureLogger.error("WP311_NODES_FAILURE|${testDescriptor.className}|${testDescriptor.name}")
+                result.exceptions.forEach { failure ->
+                    val stack = StringWriter()
+                    PrintWriter(stack).use { failure.printStackTrace(it) }
+                    failureLogger.error(stack.toString())
+                }
+            }
+        }
+    })
     dependsOn(prepareRobolectricSdks)
     testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")

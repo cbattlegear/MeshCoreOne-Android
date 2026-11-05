@@ -4,9 +4,11 @@ package com.meshcoreone.android.core.services.messaging
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
 import java.util.UUID
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
-    DirectAckAuthority, DirectPendingCompletionAuthority {
+    DirectAckAuthority, DirectPendingCompletionAuthority, DirectAckRadioExclusionAuthority {
     private class Lease(val token: SessionToken, val requestID: UUID) : DirectAckLease
     private class Attempt(
         val lease: Lease,
@@ -27,6 +29,7 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
     ) : DirectAckIntent
     private val intents = mutableMapOf<UUID, Intent>()
     var afterFailure: (suspend (DirectAckReceipt) -> Unit)? = null
+    var afterEmissionMark: (suspend (DirectAckEmissionReceipt) -> Unit)? = null
     private class Completion(
         val lease: Lease,
         var receipt: DirectPendingCompletionReceipt,
@@ -34,6 +37,160 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         val pendingRevision: Long,
     ) : DirectPendingCompletion
     private val completions = mutableMapOf<UUID, Completion>()
+    private class Emission(
+        val attempt: Attempt,
+        var receipt: DirectAckEmissionReceipt,
+        val resolutions: MutableMap<UUID, DirectAckEmissionResolution> = mutableMapOf(),
+    ) : DirectAckEmissionHandle
+    private val emissions = mutableMapOf<UUID, Emission>()
+    private val saturatedRadios = mutableSetOf<RadioId>()
+    private val radioMutations = Mutex()
+
+    suspend fun seedAcceptedFixture(attempt: DirectAckAttempt) {
+        val value = requireNotNull(resolve(attempt))
+        value.receipt.wires.forEach { wire ->
+            val marker = markDirectAckWireMayHaveWritten(attempt, wire.requestId, UUID.randomUUID())
+            check(marker is DirectAckEmissionMarkResult.Marked)
+            check(resolveDirectAckWireEmission(marker.handle, UUID.randomUUID(),
+                DirectAckEmissionResolution.Accepted(wire.predictedAckCode)) is DirectAckEmissionMutationResult.Applied)
+        }
+    }
+
+    override suspend fun markDirectAckWireMayHaveWritten(
+        attempt: DirectAckAttempt, wireRequestId: UUID, emissionRequestId: UUID,
+    ): DirectAckEmissionMarkResult = radioMutations.withLock {
+        val value = resolve(attempt)
+            ?: return@withLock DirectAckEmissionMarkResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        emissions[emissionRequestId]?.let {
+            return@withLock if (it.attempt === value && it.receipt.evidence.wireRequestId == wireRequestId) {
+                DirectAckEmissionMarkResult.AlreadyMarked(it, it.receipt)
+            } else DirectAckEmissionMarkResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        rejection(value)?.let { return@withLock DirectAckEmissionMarkResult.Rejected(it.reason) }
+        val wire = value.receipt.wires.firstOrNull { it.requestId == wireRequestId }
+            ?: return@withLock DirectAckEmissionMarkResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        store.authorityAccess("markDirectAckWireMayHaveWritten")
+        rejection(value)?.let { return@withLock DirectAckEmissionMarkResult.Rejected(it.reason) }
+        val radio = value.receipt.key.radioId
+        if (radio in saturatedRadios ||
+            emissions.values.count { it.receipt.evidence.radioId == radio } >=
+            DirectAckRadioEvidenceLimits.MAX_TRACKED_WIRES_PER_RADIO) {
+            saturatedRadios += radio
+            return@withLock DirectAckEmissionMarkResult.CoveredBySaturation(DirectAckRadioSaturationReceipt(radio))
+        }
+        val receipt = DirectAckEmissionReceipt(emissionRequestId, DirectAckRadioWireEvidence(
+            radio, value.receipt.requestId, wireRequestId, emissionRequestId,
+            wire.predictedAckCode, DirectAckRadioWireOutcome.MayHaveWritten,
+        ))
+        val emission = Emission(value, receipt)
+        emissions[emissionRequestId] = emission
+        afterEmissionMark?.invoke(receipt)
+        DirectAckEmissionMarkResult.Marked(emission, receipt)
+    }
+
+    override suspend fun inspectDirectAckWireEmission(
+        attempt: DirectAckAttempt, wireRequestId: UUID, emissionRequestId: UUID,
+    ): DirectAckEmissionObservation = radioMutations.withLock {
+        val value = resolve(attempt)
+            ?: return@withLock DirectAckEmissionObservation.Rejected(DirectAckRejection.INVALID_HANDLE)
+        emissions[emissionRequestId]?.let {
+            return@withLock if (it.attempt === value && it.receipt.evidence.wireRequestId == wireRequestId) {
+                DirectAckEmissionObservation.Found(it.receipt)
+            } else DirectAckEmissionObservation.Rejected(DirectAckRejection.CONFLICT)
+        }
+        if (value.receipt.key.radioId in saturatedRadios) {
+            DirectAckEmissionObservation.CoveredBySaturation(DirectAckRadioSaturationReceipt(value.receipt.key.radioId))
+        } else DirectAckEmissionObservation.NotFound
+    }
+
+    override suspend fun resolveDirectAckWireEmission(
+        handle: DirectAckEmissionHandle, resolutionRequestId: UUID, resolution: DirectAckEmissionResolution,
+    ): DirectAckEmissionMutationResult = radioMutations.withLock {
+        val emission = (handle as? Emission)?.takeIf { emissions[it.receipt.emissionRequestId] === it }
+            ?: return@withLock DirectAckEmissionMutationResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        emission.resolutions[resolutionRequestId]?.let {
+            return@withLock if (it == resolution) DirectAckEmissionMutationResult.AlreadyApplied(emission.receipt)
+            else DirectAckEmissionMutationResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        store.authorityAccess("resolveDirectAckWireEmission")
+        val prior = emission.receipt.evidence.outcome
+        val next = when (resolution) {
+            DirectAckEmissionResolution.DefinitelyUnsent -> DirectAckRadioWireOutcome.DefinitelyUnsent
+            is DirectAckEmissionResolution.Accepted -> DirectAckRadioWireOutcome.Accepted(resolution.ackCode)
+        }
+        val outcome = if (prior == DirectAckRadioWireOutcome.MayHaveWritten || prior == next) next
+        else DirectAckRadioWireOutcome.Conflict(
+            (prior as? DirectAckRadioWireOutcome.Accepted)?.ackCode
+                ?: (prior as? DirectAckRadioWireOutcome.Conflict)?.firstAcceptedAckCode
+                ?: (next as? DirectAckRadioWireOutcome.Accepted)?.ackCode,
+            prior == DirectAckRadioWireOutcome.DefinitelyUnsent || next == DirectAckRadioWireOutcome.DefinitelyUnsent ||
+                (prior as? DirectAckRadioWireOutcome.Conflict)?.definitelyUnsentObserved == true,
+        )
+        emission.receipt = emission.receipt.copy(evidence = emission.receipt.evidence.copy(outcome = outcome))
+        emission.resolutions[resolutionRequestId] = resolution
+        if (resolution is DirectAckEmissionResolution.Accepted) {
+            val value = emission.attempt
+            value.receipt = value.receipt.copy(
+                phase = if (permission(value) == DirectAckPermission.CURRENT &&
+                    value.receipt.phase == DirectAckPhase.REGISTERED) DirectAckPhase.ACCEPTED else value.receipt.phase,
+                wires = value.receipt.wires.map {
+                    if (it.requestId == emission.receipt.evidence.wireRequestId && it.acceptedAckCode == null) {
+                        it.copy(acceptedAckCode = resolution.ackCode)
+                    } else it
+                }.snapshot(),
+            )
+        }
+        if (outcome is DirectAckRadioWireOutcome.Conflict) DirectAckEmissionMutationResult.Conflict(emission.receipt)
+        else DirectAckEmissionMutationResult.Applied(emission.receipt)
+    }
+
+    private fun radioEvidence(radio: RadioId): DirectAckRadioEvidenceSnapshot {
+        val marked = emissions.values.map { it.receipt.evidence }.filter { it.radioId == radio }
+        val legacy = attempts.values.filter { it.receipt.key.radioId == radio }.flatMap { attempt ->
+            attempt.receipt.wires.filter { wire ->
+                marked.none { it.claimRequestId == attempt.receipt.requestId && it.wireRequestId == wire.requestId }
+            }.map { wire ->
+                DirectAckRadioWireEvidence(radio, attempt.receipt.requestId, wire.requestId, wire.requestId,
+                    wire.predictedAckCode, wire.acceptedAckCode?.let { DirectAckRadioWireOutcome.Accepted(it) }
+                        ?: DirectAckRadioWireOutcome.LegacyUnknown)
+            }
+        }
+        val all = marked + legacy
+        return DirectAckRadioEvidenceSnapshot(radio,
+            all.take(DirectAckRadioEvidenceLimits.MAX_DIAGNOSTIC_WIRES_PER_RADIO).snapshot(), when {
+                radio in saturatedRadios -> DirectAckRadioEvidenceCoverage.SATURATED
+                all.size > DirectAckRadioEvidenceLimits.MAX_DIAGNOSTIC_WIRES_PER_RADIO -> DirectAckRadioEvidenceCoverage.TRUNCATED
+                else -> DirectAckRadioEvidenceCoverage.COMPLETE
+            })
+    }
+
+    override suspend fun inspectDirectAckRadioEvidence(radioId: RadioId): DirectAckRadioEvidenceObservation =
+        radioMutations.withLock { DirectAckRadioEvidenceObservation.Found(radioEvidence(radioId)) }
+
+    override suspend fun settleDirectAckExcludingRadioHistory(
+        attempt: DirectAckAttempt, ackCode: UInt, roundTripTime: UInt?,
+    ): DirectAckRadioSettlementResult = radioMutations.withLock {
+        val value = resolve(attempt)
+            ?: return@withLock DirectAckRadioSettlementResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        value.receipt.delivery?.let {
+            return@withLock if (it.ackCode == ackCode && it.roundTripTime == roundTripTime) {
+                DirectAckRadioSettlementResult.Settled(DirectAckRadioSettlementReceipt.AlreadyApplied(receipt(value)))
+            } else DirectAckRadioSettlementResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        rejection(value)?.let { return@withLock DirectAckRadioSettlementResult.Rejected(it.reason) }
+        store.authorityAccess("updateMessageAck")
+        rejection(value)?.let { return@withLock DirectAckRadioSettlementResult.Rejected(it.reason) }
+        val reasons = DirectAckRadioEvidenceAssessment.nonsettlingReasons(
+            value.receipt.requestId, ackCode, radioEvidence(value.receipt.key.radioId),
+        )
+        if (reasons.isNotEmpty()) return@withLock DirectAckRadioSettlementResult.Nonsettling(reasons)
+        val message = requireNotNull(store.messages[value.receipt.key]).copy(
+            status = MessageStatus.DELIVERED, ackCode = ackCode, roundTripTime = roundTripTime,
+        )
+        commit(value, message, DirectAckPhase.DELIVERED)
+        value.receipt = value.receipt.copy(delivery = DirectAckDelivery(ackCode, roundTripTime, message))
+        DirectAckRadioSettlementResult.Settled(DirectAckRadioSettlementReceipt.Applied(receipt(value)))
+    }
 
     private fun permission(attempt: Attempt): DirectAckPermission = when {
         currentLeases[attempt.lease.token.radioId] !== attempt.lease ||

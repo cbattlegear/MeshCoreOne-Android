@@ -203,7 +203,7 @@ class SourceSendTest {
             val m = h.message(MessageStatus.DELIVERED, text = "Test message",
                 timestamp = h.clock.wallClock.instant().epochSecond.toUInt())
             val ackCode = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
-            h.service.installPendingAck(h.tracking(m, code = ackCode))
+            h.installAcceptedPendingAck(h.tracking(m, code = ackCode))
             h.transport.expectedAckOverride = ackCode
             h.transport.suggestedTimeout = 5000u
             h.transport.acknowledge = true
@@ -219,7 +219,7 @@ class SourceSendTest {
             val m = h.message(MessageStatus.PENDING, text = "Test message",
                 timestamp = h.clock.wallClock.instant().epochSecond.toUInt())
             val ackCode = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
-            h.service.installPendingAck(h.tracking(m, code = ackCode))
+            h.installAcceptedPendingAck(h.tracking(m, code = ackCode))
             h.transport.expectedAckOverride = ackCode
             h.transport.suggestedTimeout = 5000u
             h.transport.acknowledge = true
@@ -252,7 +252,7 @@ class SourceSendTest {
             val ackCode = Bytes.of(0xDD, 0x11, 0x22, 0x33)
             val m = h.message(MessageStatus.DELIVERED, text = "Test message",
                 timestamp = h.clock.wallClock.instant().epochSecond.toUInt()).copy(ackCode = ackCode.ackCodeUInt32)
-            h.store.saveMessage(m); h.service.installPendingAck(h.tracking(m, code = ackCode, delivered = true))
+            h.store.saveMessage(m); h.installAcceptedPendingAck(h.tracking(m, code = ackCode, delivered = true))
             assertFailsWith<MessageServiceException> { h.service.failMessageAndRethrow(com.meshcoreone.android.core.protocol.config.MeshCoreException.NotConnected(), m.id) }
             assertEquals(MessageStatus.DELIVERED, h.stored(m.id).status); h.close()
         },
@@ -261,7 +261,7 @@ class SourceSendTest {
             val ackCode = Bytes.of(0xFE, 0xED, 0xFA, 0xCE)
             val m = h.message(MessageStatus.DELIVERED, text = "Test message",
                 timestamp = h.clock.wallClock.instant().epochSecond.toUInt()).copy(ackCode = ackCode.ackCodeUInt32)
-            h.store.saveMessage(m); h.service.installPendingAck(h.tracking(m, code = ackCode))
+            h.store.saveMessage(m); h.installAcceptedPendingAck(h.tracking(m, code = ackCode))
             h.service.finalizeSend(m.id, CONTACT, TARGET, null, 0u); assertEquals(MessageStatus.DELIVERED, h.stored(m.id).status); h.close()
         },
         original("MessageServiceSendTests", "retry exhaustion leaves the DM .sent with its pending entry alive, never prematurely .failed") {
@@ -344,7 +344,7 @@ class SourceSendTest {
             val dispatcher = EventDispatcher()
             val h = Harness(this, sessionTimeout = 5.0, eventDispatcher = dispatcher); h.start()
             val m = h.message(text = "Test message", timestamp = h.clock.wallClock.instant().epochSecond.toUInt())
-            val t = h.tracking(m); h.service.installPendingAck(t)
+            val t = h.tracking(m); h.installAcceptedPendingAck(t)
             h.service.startEventMonitoring()
             assertEquals(1, dispatcher.subscriberCount)
             repeat(500) { dispatcher.dispatch(MeshEvent.Advertisement(Bytes.of(it % 256))) }
@@ -357,7 +357,7 @@ class SourceSendTest {
             val dispatcher = EventDispatcher()
             val h = Harness(this, sessionTimeout = 5.0, eventDispatcher = dispatcher); h.start()
             val m = h.message(text = "Test message", timestamp = h.clock.wallClock.instant().epochSecond.toUInt())
-            val t = h.tracking(m, code = Bytes.of(0x11, 0x22, 0x33, 0x44)); h.service.installPendingAck(t)
+            val t = h.tracking(m, code = Bytes.of(0x11, 0x22, 0x33, 0x44)); h.installAcceptedPendingAck(t)
             h.service.startEventMonitoring(); assertEquals(1, dispatcher.subscriberCount)
             h.service.stopEventMonitoring(); assertFalse(h.service.isEventMonitoringActive); assertEquals(0, dispatcher.subscriberCount)
             h.service.startEventMonitoring(); assertEquals(1, dispatcher.subscriberCount)

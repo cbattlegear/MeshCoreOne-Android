@@ -72,7 +72,7 @@ class RecoveryPolicyTest {
             val h = Harness(this); h.start(); h.service.startEventMonitoring()
             val message = h.message()
             val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
-            h.service.installPendingAck(h.tracking(message, code))
+            h.installAcceptedPendingAck(h.tracking(message, code))
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             var writing = false
@@ -166,8 +166,8 @@ class RecoveryPolicyTest {
                 val message = h.message(if (alreadyFailed) MessageStatus.FAILED else MessageStatus.SENT)
                 val later = h.message()
                 val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
-                h.service.installPendingAck(h.tracking(message, code, age = 3600))
-                h.service.installPendingAck(h.tracking(later, Bytes.of(5, 6, 7, 8)))
+                h.installAcceptedPendingAck(h.tracking(message, code, age = 3600))
+                h.installAcceptedPendingAck(h.tracking(later, Bytes.of(5, 6, 7, 8)))
                 val entered = CompletableDeferred<Unit>()
                 val release = CompletableDeferred<Unit>()
                 val cancellation = CancellationException("cancel after successful FAILED return")
@@ -240,7 +240,7 @@ class RecoveryPolicyTest {
                 val h = Harness(this); h.start(); h.service.startEventMonitoring()
                 val message = h.message()
                 val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
-                h.service.installPendingAck(h.tracking(message, code, age = 3600))
+                h.installAcceptedPendingAck(h.tracking(message, code, age = 3600))
                 val entered = CompletableDeferred<Unit>()
                 val release = CompletableDeferred<Unit>()
                 val fault = storageFailure()
@@ -289,7 +289,7 @@ class RecoveryPolicyTest {
                 val h = Harness(this); h.start(); h.service.startEventMonitoring()
                 val message = h.message(if (schedule == "already-failed") MessageStatus.FAILED else MessageStatus.SENT)
                 val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
-                h.service.installPendingAck(h.tracking(message, code, age = if (path == "expiry") 3600 else 0))
+                h.installAcceptedPendingAck(h.tracking(message, code, age = if (path == "expiry") 3600 else 0))
                 val entered = CompletableDeferred<Unit>()
                 val release = CompletableDeferred<Unit>()
                 val fault = storageFailure()
@@ -386,7 +386,7 @@ class RecoveryPolicyTest {
                         if (schedule == "commit-then-cancel") {
                             val other = h.message(MessageStatus.SENT)
                             val otherCode = Bytes.of(5, 6, 7, 8)
-                            h.service.installPendingAck(h.tracking(other, otherCode))
+                            h.installAcceptedPendingAck(h.tracking(other, otherCode))
                             h.transport.pushAck(otherCode, 456u); runCurrent()
                             assertEquals(MessageStatus.DELIVERED, h.stored(other.id).status)
                             assertEquals(listOf<MessageStatusEvent>(
@@ -412,8 +412,8 @@ class RecoveryPolicyTest {
         native("expiry retains only the failed entry and retries without duplicate failure events") {
             val h = Harness(this); h.start()
             val first = h.message(); val later = h.message()
-            val tracking = h.service.installPendingAck(h.tracking(first, age = 60))
-            h.service.installPendingAck(h.tracking(later, Bytes.of(5, 6, 7, 8), age = 60))
+            val tracking = h.installAcceptedPendingAck(h.tracking(first, age = 60))
+            h.installAcceptedPendingAck(h.tracking(later, Bytes.of(5, 6, 7, 8), age = 60))
             val observed = mutableListOf<MessageStatusEvent>()
             observe(h, observed)
             val fault = storageFailure(); var writes = 0
@@ -437,7 +437,7 @@ class RecoveryPolicyTest {
             val h = Harness(this); h.start()
             val messages = List(3) { h.message() }
             val tracking = messages.mapIndexed { index, message ->
-                h.service.installPendingAck(h.tracking(message, Bytes.of(index + 1, 0, 0, 0)))
+                h.installAcceptedPendingAck(h.tracking(message, Bytes.of(index + 1, 0, 0, 0)))
             }
             val observed = mutableListOf<MessageStatusEvent>()
             observe(h, observed)
@@ -471,7 +471,7 @@ class RecoveryPolicyTest {
         },
         native("unreconciled fail-all persistence errors survive in the teardown report") {
             val h = Harness(this); h.start()
-            val message = h.message(); h.service.installPendingAck(h.tracking(message))
+            val message = h.message(); h.installAcceptedPendingAck(h.tracking(message))
             val fault = storageFailure()
             h.store.faults["updateMessageStatusUnlessDelivered"] = fault
             assertSame(fault, assertFailsWith<PersistenceStoreException> { h.service.failAllPendingMessages() })
@@ -483,7 +483,7 @@ class RecoveryPolicyTest {
         },
         native("overlapping fail-all retry observes failure accounting before taking the mutation lock") {
             val h = Harness(this); h.start()
-            val message = h.message(); h.service.installPendingAck(h.tracking(message))
+            val message = h.message(); h.installAcceptedPendingAck(h.tracking(message))
             val fault = storageFailure()
             val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
             var writes = 0
@@ -520,7 +520,7 @@ class RecoveryPolicyTest {
             val h = Harness(this); h.start(); h.service.startEventMonitoring()
             val message = h.message()
             val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
-            h.service.installPendingAck(h.tracking(message, code))
+            h.installAcceptedPendingAck(h.tracking(message, code))
             val failureEntered = CompletableDeferred<Unit>()
             val releaseFailure = CompletableDeferred<Unit>()
             val ackEntered = CompletableDeferred<Unit>()
@@ -571,7 +571,7 @@ class RecoveryPolicyTest {
                 val h = Harness(this); h.start(); h.service.startEventMonitoring()
                 val message = h.message(if (alreadyFailed) MessageStatus.FAILED else MessageStatus.SENT)
                 val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
-                h.service.installPendingAck(h.tracking(message, code, age = if (cleanupPath == "expiry") 3600 else 0))
+                h.installAcceptedPendingAck(h.tracking(message, code, age = if (cleanupPath == "expiry") 3600 else 0))
                 val entered = CompletableDeferred<Unit>()
                 val release = CompletableDeferred<Unit>()
                 val restoreFailure = storageFailure()
@@ -641,8 +641,8 @@ class RecoveryPolicyTest {
         native("cancelling fail all keeps uncommitted tracking and does not fail later entries") {
             val h = Harness(this); h.start()
             val first = h.message(); val later = h.message()
-            h.service.installPendingAck(h.tracking(first))
-            h.service.installPendingAck(h.tracking(later, Bytes.of(5, 6, 7, 8)))
+            h.installAcceptedPendingAck(h.tracking(first))
+            h.installAcceptedPendingAck(h.tracking(later, Bytes.of(5, 6, 7, 8)))
             val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
             h.store.before = {
                 if (it == "updateMessageStatusUnlessDelivered") { entered.complete(Unit); release.await() }
@@ -662,8 +662,8 @@ class RecoveryPolicyTest {
         native("ownership replacement during fail all prevents later writes and stale notifications") {
             val h = Harness(this); h.start()
             val first = h.message(); val later = h.message()
-            h.service.installPendingAck(h.tracking(first))
-            h.service.installPendingAck(h.tracking(later, Bytes.of(5, 6, 7, 8)))
+            h.installAcceptedPendingAck(h.tracking(first))
+            h.installAcceptedPendingAck(h.tracking(later, Bytes.of(5, 6, 7, 8)))
             val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
             h.store.before = {
                 if (it == "updateMessageStatusUnlessDelivered") { entered.complete(Unit); release.await() }

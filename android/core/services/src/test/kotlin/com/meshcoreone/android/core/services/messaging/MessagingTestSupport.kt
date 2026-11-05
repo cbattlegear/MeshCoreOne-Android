@@ -403,6 +403,12 @@ internal class Harness(
         assertEquals(localPublicKey, session.currentSelfInfo?.publicKey)
     }
     fun stored(id: UUID): MessageDTO = assertNotNull(store.messages[EntityKey(RADIO, id)])
+    // Source ACK-only fixtures represent earlier accepted sends, not new physical transport invocations.
+    suspend fun installAcceptedPendingAck(tracking: PendingAck): PendingAck {
+        val installed = service.installPendingAck(tracking)
+        installed.authority?.let { store.directAckAuthority.seedAcceptedFixture(it) }
+        return installed
+    }
     suspend fun message(
         status: MessageStatus = MessageStatus.SENT, channel: UByte? = null,
         text: String = "hello", timestamp: UInt = 100u,

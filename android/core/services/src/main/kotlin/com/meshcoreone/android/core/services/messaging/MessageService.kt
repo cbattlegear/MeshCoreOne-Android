@@ -56,6 +56,8 @@ class MessageService(
     private val directPendingCompletionAuthority: DirectPendingCompletionAuthority? =
         dataStore as? DirectPendingCompletionAuthority,
     private val channelTransmission: suspend (UByte, suspend () -> Unit) -> Unit = { _, transmit -> transmit() },
+    private val directAckRadioExclusionAuthority: DirectAckRadioExclusionAuthority? =
+        directAckAuthority as? DirectAckRadioExclusionAuthority ?: dataStore as? DirectAckRadioExclusionAuthority,
 ) : MessagingSendPort {
     init { require(localPublicKey.size == ProtocolLimits.PUBLIC_KEY_SIZE) }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
@@ -80,11 +82,17 @@ class MessageService(
         val operations = mutableMapOf<String, UUID>()
         val predictedCodes = mutableMapOf<UUID, Bytes>()
         val acceptedCodes = mutableMapOf<UUID, Bytes>()
+        val acceptedEmissions = mutableMapOf<UUID, AcceptedEmission>()
         val possiblyEmittedCodes = mutableMapOf<UUID, Bytes?>()
         val confirmedCodes = mutableSetOf<Bytes>()
         val bufferedAcknowledgements = mutableListOf<MeshAcknowledgement>()
         var acknowledgementBufferOverflow = false
     }
+    private class AcceptedEmission(
+        val handle: DirectAckEmissionHandle?,
+        val info: MessageSentInfo,
+        val resolutionID: UUID = UUID.randomUUID(),
+    )
     private val directAuthorities = mutableMapOf<UUID, DirectAuthorityState>()
     private val inFlightDirectEmissions = mutableSetOf<DirectAuthorityState>()
     private val inlineDirectRequests = mutableSetOf<UUID>()
@@ -141,6 +149,9 @@ class MessageService(
 
     private fun authority(): DirectAckAuthority =
         directAckAuthority ?: throw authorityFailure("capability unavailable")
+
+    private fun radioAuthority(): DirectAckRadioExclusionAuthority =
+        directAckRadioExclusionAuthority ?: throw authorityFailure("radio exclusion capability unavailable")
 
     private fun mutationReceipt(result: DirectAckMutationResult): DirectAckReceipt =
         when (result) {
@@ -283,27 +294,95 @@ class MessageService(
         state: DirectAuthorityState, wireID: UUID, dispatch: MessageWriteDispatch?,
         transmit: suspend () -> MessageSentInfo,
     ): MessageSentInfo {
+        val emissionID = UUID.randomUUID()
+        val prediction = synchronized(lock) { state.predictedCodes[wireID] }
+            ?: throw authorityFailure("unregistered physical wire")
+        val marked = try {
+            radioAuthority().markDirectAckWireMayHaveWritten(state.attempt, wireID, emissionID)
+        } catch (failure: PersistenceStoreException) {
+            remember("ackMark.${state.requestID}.$wireID.$emissionID", failure)
+            throw failure
+        }
+        fun checkedHandle(receipt: DirectAckEmissionReceipt, handle: DirectAckEmissionHandle): DirectAckEmissionHandle {
+            val evidence = receipt.evidence
+            if (receipt.emissionRequestId != emissionID || evidence.emissionRequestId != emissionID ||
+                evidence.radioId != token.radioId || evidence.claimRequestId != state.requestID ||
+                evidence.wireRequestId != wireID || evidence.predictedAckCode != prediction.ackCodeUInt32 ||
+                evidence.outcome != DirectAckRadioWireOutcome.MayHaveWritten) {
+                throw authorityFailure("physical marker tuple mismatch")
+            }
+            return handle
+        }
+        val handle = when (marked) {
+            is DirectAckEmissionMarkResult.Marked -> checkedHandle(marked.receipt, marked.handle)
+            is DirectAckEmissionMarkResult.AlreadyMarked -> checkedHandle(marked.receipt, marked.handle)
+            is DirectAckEmissionMarkResult.CoveredBySaturation -> {
+                if (marked.receipt.radioId != token.radioId) throw authorityFailure("wrong saturation radio")
+                remember("ackSaturation", authorityFailure("Persisted radio history is saturated; delivery remains unproven"))
+                null
+            }
+            is DirectAckEmissionMarkResult.Rejected -> throw authorityFailure(marked.reason.name)
+        }
+        checkIdentity("directWire.marked")
         synchronized(lock) {
             state.possiblyEmittedCodes[wireID] = null
             inFlightDirectEmissions += state
         }
         try {
-            return transmit().also { info ->
-                synchronized(lock) { state.possiblyEmittedCodes[wireID] = info.expectedAck }
+            currentCoroutineContext()[NotificationActionReceipt]?.wireStarted()
+            val info = transmit()
+            currentCoroutineContext()[NotificationActionReceipt]?.accepted()
+            val accepted = AcceptedEmission(handle, info)
+            synchronized(lock) {
+                state.possiblyEmittedCodes[wireID] = info.expectedAck
+                state.acceptedEmissions[wireID] = accepted
+                activeDirectClaims.values.firstOrNull { it.id == state.requestID }?.let {
+                    it.lastSentInfo = info
+                    it.acceptedWire = AcceptedDirectWire(wireID, info)
+                }
             }
+            resolveDirectAcceptance(accepted)
+            return info
         } catch (cancelled: CancellationException) {
             if (dispatch?.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
-                synchronized(lock) { state.possiblyEmittedCodes.remove(wireID) }
+                if (handle != null) {
+                    try {
+                        withContext(NonCancellable) {
+                            requireEmissionResolution(radioAuthority().resolveDirectAckWireEmission(
+                                handle, UUID.randomUUID(), DirectAckEmissionResolution.DefinitelyUnsent,
+                            ))
+                        }
+                        synchronized(lock) { state.possiblyEmittedCodes.remove(wireID) }
+                    } catch (failure: Exception) {
+                        remember("ackUnsent.$emissionID", failure)
+                        cancelled.addSuppressed(failure)
+                    }
+                }
             }
             throw cancelled
-        } catch (rejected: MeshCoreException.DeviceError) {
-            synchronized(lock) { state.possiblyEmittedCodes.remove(wireID) }
-            throw rejected
         } finally {
             synchronized(lock) {
                 inFlightDirectEmissions -= state
                 retainRetiredEmission(state)
             }
+        }
+    }
+
+    private fun requireEmissionResolution(result: DirectAckEmissionMutationResult): DirectAckEmissionReceipt =
+        when (result) {
+            is DirectAckEmissionMutationResult.Applied -> result.receipt
+            is DirectAckEmissionMutationResult.AlreadyApplied -> result.receipt
+            is DirectAckEmissionMutationResult.Conflict -> throw authorityFailure("physical emission conflict")
+            is DirectAckEmissionMutationResult.Rejected -> throw authorityFailure(result.reason.name)
+        }
+
+    private suspend fun resolveDirectAcceptance(accepted: AcceptedEmission) {
+        val handle = accepted.handle ?: return
+        val receipt = requireEmissionResolution(radioAuthority().resolveDirectAckWireEmission(
+            handle, accepted.resolutionID, DirectAckEmissionResolution.Accepted(accepted.info.expectedAck.ackCodeUInt32),
+        ))
+        if (receipt.evidence.outcome != DirectAckRadioWireOutcome.Accepted(accepted.info.expectedAck.ackCodeUInt32)) {
+            throw authorityFailure("physical accepted binding missing")
         }
     }
 
@@ -320,6 +399,7 @@ class MessageService(
             }
 
     private suspend fun recordDirectAcceptance(state: DirectAuthorityState, wireID: UUID, info: MessageSentInfo) {
+        synchronized(lock) { state.acceptedEmissions[wireID] }?.let { resolveDirectAcceptance(it) }
         val receipt = mutationReceipt(authority().recordDirectSendAccepted(state.attempt, wireID, info.expectedAck.ackCodeUInt32))
         if (receipt.wires.none { it.requestId == wireID && it.acceptedAckCode == info.expectedAck.ackCodeUInt32 }) {
             throw authorityFailure("accepted wire binding missing")
@@ -639,8 +719,6 @@ class MessageService(
             }
             found?.copy(isDelivered = true, acknowledgement = MeshAcknowledgement(code, tripTime))?.also {
                 pendingAcks[it.messageID] = it
-                activeDirectClaims[it.messageID]?.acknowledgement = it.acknowledgement
-                it.receipt.complete(requireNotNull(it.acknowledgement))
             }
         }
         overflows.forEach {
@@ -717,10 +795,29 @@ class MessageService(
             return
         }
         val result = try {
-            authority().settleDirectAck(
+            when (val settled = radioAuthority().settleDirectAckExcludingRadioHistory(
                 attempt ?: throw authorityFailure("unregistered acknowledgement"),
                 ack.code.ackCodeUInt32, ack.tripTime,
-            )
+            )) {
+                is DirectAckRadioSettlementResult.Settled -> when (val applied = settled.receipt) {
+                    is DirectAckRadioSettlementReceipt.Applied -> DirectAckMutationResult.Applied(applied.receipt)
+                    is DirectAckRadioSettlementReceipt.AlreadyApplied -> DirectAckMutationResult.AlreadyApplied(applied.receipt)
+                }
+                is DirectAckRadioSettlementResult.Nonsettling -> {
+                    synchronized(lock) {
+                        pendingAcks[messageID]?.takeIf {
+                            it.receipt === tracking.receipt && it.authority === attempt && it.acknowledgement == ack
+                        }?.let {
+                            pendingAcks[messageID] = it.copy(isDelivered = false, acknowledgement = null)
+                        }
+                    }
+                    remember("ackAmbiguous.$messageID", authorityFailure(
+                        "Radio exclusion denied delivery: ${settled.reasons.joinToString { it.name }}",
+                    ))
+                    return
+                }
+                is DirectAckRadioSettlementResult.Rejected -> DirectAckMutationResult.Rejected(settled.reason)
+            }
         } catch (failure: PersistenceStoreException) {
             if (uncertainWrite != null) {
                 remember("ackUncertain.$messageID", uncertainWrite.cause)
@@ -761,6 +858,13 @@ class MessageService(
         checkOwnership("commitAcknowledgement.refetched")
         if (committed?.status != MessageStatus.DELIVERED || committed.ackCode != delivery.ackCode ||
             committed.roundTripTime != delivery.roundTripTime) throw authorityFailure("delivery readback changed")
+        synchronized(lock) {
+            if (pendingAcks[messageID]?.receipt === tracking.receipt) {
+                activeDirectClaims[messageID]?.takeIf { directAuthorities[messageID]?.attempt === tracking.authority }
+                    ?.acknowledgement = ack
+                tracking.receipt.complete(ack)
+            }
+        }
         if (committed?.status == MessageStatus.DELIVERED) {
             try {
                 dataStore.updateContactLastMessage(key(tracking.contactID), clock.wallClock.instant())
@@ -1136,12 +1240,14 @@ class MessageService(
             message
         }
 
-    private suspend fun <T> notificationWire(block: suspend (MessageWriteDispatch?) -> T): T {
+    private suspend fun <T> notificationWire(
+        deferWireStart: Boolean = false, block: suspend (MessageWriteDispatch?) -> T,
+    ): T {
         val receipt = currentCoroutineContext()[NotificationActionReceipt]
-        if (receipt == null) return block(null)
+        if (receipt == null) return block(MessageWriteDispatch())
         val dispatch = MessageWriteDispatch()
         val ownsOutcome = receipt.state == NotificationActionReceipt.State.READY
-        if (ownsOutcome) receipt.wireStarted()
+        if (ownsOutcome && !deferWireStart) receipt.wireStarted()
         try {
             val result = block(dispatch)
             if (ownsOutcome) receipt.accepted()
@@ -1165,7 +1271,7 @@ class MessageService(
     }
 
     private suspend fun <T> inlineWire(block: suspend (MessageWriteDispatch?) -> T): T =
-        notificationWire(block)
+        notificationWire(block = block)
 
     override suspend fun sendDirectMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO =
         withFreshNotificationAction("sendDirectMessage") {
@@ -1194,7 +1300,7 @@ class MessageService(
                         val info = withPoolBackoff(3u) {
                             dmOperations.withLock {
                                 checkIdentity("sendDirectMessage.wire")
-                                inlineWire { dispatch ->
+                                notificationWire(deferWireStart = true) { dispatch ->
                                     val timestamp = Instant.ofEpochSecond(captured.timestamp.toLong())
                                     directWire(registration.first, registration.second, dispatch) {
                                         if (dispatch == null) session.sendMessage(selected.publicKey, captured.text, timestamp)
@@ -1396,6 +1502,14 @@ class MessageService(
         var flood = synchronized(lock) { claim.usingFlood }
         while (attempts < config.maxAttempts && (!flood || floods < config.maxFloodAttempts)) {
             checkIdentity("retryDirectMessage")
+            val uncommittedAck = synchronized(lock) {
+                pendingAcks[id]?.takeIf {
+                    it.acknowledgement != null && directAuthorities[id]?.requestID == claim.id
+                }
+            }
+            if (uncommittedAck != null) {
+                reconcileAcknowledgement(id, expectedAttempt = uncommittedAck.authority)
+            }
             synchronized(lock) { claim.acceptedWire }?.let {
                 recordDirectAcceptance(directAuthority(id), it.requestID, it.info)
             }
@@ -1450,7 +1564,7 @@ class MessageService(
                     dmOperations.withLock {
                         checkIdentity("retryDirectMessage.wire")
                         if (unacknowledgedRetirement(claim)) null
-                        else completedDirect(claim) ?: notificationWire { dispatch ->
+                        else completedDirect(claim) ?: notificationWire(deferWireStart = true) { dispatch ->
                             val timestamp = Instant.ofEpochSecond(stamp.toLong())
                             directWire(authorityState, wireID, dispatch) {
                                 if (dispatch == null) {
@@ -1490,6 +1604,11 @@ class MessageService(
                 }
                 if (outcome is DeadlineOutcome.Value) {
                     completedDirect(claim)?.let { return it }
+                }
+                if (pendingAck(id)?.let {
+                    it.authority === authorityState.attempt && it.acknowledgement != null
+                } == true) {
+                    reconcileAcknowledgement(id, expectedAttempt = authorityState.attempt)
                 }
                 completedDirect(claim)?.let { return it }
                 if (unacknowledgedRetirement(claim)) return null
@@ -1547,13 +1666,7 @@ class MessageService(
             if (current?.acknowledgement != null) reconcileAcknowledgementLocked(messageID, cleanup = false)
             else if (current == null || current.isDelivered) synchronized(lock) { pendingAcks.remove(messageID) }
             else if (sentInfo != null) {
-                val acknowledgement = MeshAcknowledgement(sentInfo.expectedAck, null)
-                synchronized(lock) {
-                    pendingAcks[messageID] = current.copy(isDelivered = true, acknowledgement = acknowledgement)
-                    current.receipt.complete(acknowledgement)
-                    activeDirectClaims[messageID]?.acknowledgement = acknowledgement
-                }
-                reconcileAcknowledgementLocked(messageID, cleanup = false, verifyRadioIdentity = false)
+                throw authorityFailure("send acceptance is not recipient acknowledgement")
             } else {
                 if (noDispatch) {
                     val changed = dataStore.clearRetryingToSent(key(messageID))

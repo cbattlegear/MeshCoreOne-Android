@@ -3,7 +3,6 @@ package com.meshcoreone.android.app.container
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -62,7 +61,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
     @Test fun contactWatermarkBetweenTicketAndSaveIsMergedWithoutLosingUnrelatedFields() = runTest {
         var armed = false
         var conflicts = 0
-        val interleaving = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val interleaving = object : PersistenceStoreProtocol by store {
             override suspend fun fetchDeviceWriteSnapshot(id: java.util.UUID) = store.fetchDeviceWriteSnapshot(id)
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                 if (armed && dto.pathHashMode == 2u.toUByte()) {
@@ -94,7 +93,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var armed = false
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val held = object : PersistenceStoreProtocol by store {
             override suspend fun fetchDeviceWriteSnapshot(id: java.util.UUID) = store.fetchDeviceWriteSnapshot(id)
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                 if (armed && dto.pathHashMode == 2u.toUByte()) {
@@ -201,7 +200,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         val release = CompletableDeferred<Unit>()
         var armed = false
         val commits = mutableListOf<UByte>()
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val held = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                 val saved = if (armed && dto.pathHashMode == 2u.toUByte()) {
                     armed = false

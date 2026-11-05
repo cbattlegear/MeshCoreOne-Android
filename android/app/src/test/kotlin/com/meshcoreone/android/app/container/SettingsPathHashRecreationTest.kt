@@ -12,7 +12,6 @@ import com.meshcoreone.android.MainActivity
 import com.meshcoreone.android.app.navigation.AppSettingsContent
 import com.meshcoreone.android.app.navigation.SettingsDetail
 import com.meshcoreone.android.core.contracts.AppTab
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -42,7 +41,7 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
         val release = CompletableDeferred<Unit>()
         val finished = CompletableDeferred<Unit>()
         var armed = false
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val held = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                 if (armed && dto.pathHashMode == 2u.toUByte()) {
                     armed = false

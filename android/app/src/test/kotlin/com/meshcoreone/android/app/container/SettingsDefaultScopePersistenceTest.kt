@@ -4,7 +4,6 @@ package com.meshcoreone.android.app.container
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.navigation.removeSettingsKnownRegion
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -64,7 +63,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var armed = false
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val held = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                 if (armed && dto.defaultFloodScopeName == "EU868") {
                     armed = false
@@ -136,7 +135,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var armed = false
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val held = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                 if (armed && "EU868" !in dto.knownRegions) {
                     armed = false
@@ -176,7 +175,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         val release = CompletableDeferred<Unit>()
         var armed = false
         val commits = mutableListOf<String?>()
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val held = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                 if (armed && dto.defaultFloodScopeName == "EU868") {
                     armed = false
@@ -247,7 +246,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
     @Test fun contactWatermarkConflictPreservesUnrelatedFieldsBeforeScopeSuccess() = runTest {
         var armed = false
         var rejected = 0
-        val interleaving = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val interleaving = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
                 if (armed && dto.defaultFloodScopeName == "EU868") {
                     armed = false

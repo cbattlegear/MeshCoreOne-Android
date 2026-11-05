@@ -22,6 +22,7 @@ data class DeviceWriteSnapshot(
     val revision: Long,
     val authorityRevision: Long = revision,
     val isCurrent: () -> Boolean = { true },
+    val withAuthority: suspend (suspend () -> Boolean) -> Boolean = { it() },
 )
 
 class DeviceWriteConflict : IllegalStateException("Device write authority changed")
@@ -83,6 +84,7 @@ suspend fun DevicePersisting.editDevice(
     isCurrent: () -> Boolean = { true },
     onSaveFailure: (PersistenceStoreException) -> Nothing = { throw it },
     onCommitted: (DeviceDTO) -> Unit = {},
+    withAuthority: suspend (suspend () -> Boolean) -> Boolean = { it() },
     transform: (DeviceDTO) -> DeviceDTO,
 ): DeviceDTO? {
     val persistence = this as? DeviceEditPersisting
@@ -100,7 +102,7 @@ suspend fun DevicePersisting.editDevice(
         require(updated.isActive == snapshot.device.isActive && updated.lastConnected == snapshot.device.lastConnected)
         val caller = currentCoroutineContext()
         val committed = withContext(NonCancellable) {
-            val guarded = snapshot.copy(isCurrent = {
+            val guarded = snapshot.copy(withAuthority = withAuthority, isCurrent = {
                 caller.ensureActive()
                 isCurrent()
             })

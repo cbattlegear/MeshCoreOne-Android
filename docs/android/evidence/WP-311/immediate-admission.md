@@ -120,6 +120,12 @@ retires the mismatched operation before dropping its active identity. Success an
 fetch controls require loading and sync state to stop without waiting for the screen effect,
 prohibit stale publication, preserve A-only advertisement cleanup and require fresh B success.
 
+The Sync button's interaction subtree and coroutine scope are graph/radio-owned as well. Its
+captured click validates that owner before starting work, and its retired semantics callback cannot
+acquire B's click handler during recomposition. Mounted same-radio and different-radio controls
+retain A's actual Sync callback, quietly rebind, require no A/B command or advertisement effects
+from it and then require a fresh B click to sync and render B's fetched contact.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

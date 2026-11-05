@@ -153,19 +153,23 @@ internal fun NodesListScreen(
                 onClick = { showShare = true },
                 enabled = dependencies.session.connectedDevice() != null,
             ) { Text(stringResource(C.contactsListShareMyContact)) }
-            Button(
-                onClick = {
-                    if (radioId != null) scope.launch {
-                        if (dependencies.session.connectionState() == DeviceConnectionState.READY) holder.syncContacts(radioId)
-                        else holder.seed {
-                            it.copy(errorMessage = com.meshcoreone.android.feature.nodes.deps.NodesMessage.res(C.contactsListConnectToSync))
+            key(connection, radioId) {
+                val syncScope = rememberCoroutineScope()
+                Button(
+                    onClick = {
+                        if (radioId != null) syncScope.launch {
+                            dependencies.session.ensureContactConnection(connection, radioId)
+                            if (dependencies.session.connectionState() == DeviceConnectionState.READY) holder.syncContacts(radioId)
+                            else holder.seed {
+                                it.copy(errorMessage = com.meshcoreone.android.feature.nodes.deps.NodesMessage.res(C.contactsListConnectToSync))
+                            }
                         }
-                    }
-                },
-                enabled = !state.isSyncing,
-            ) {
-                if (state.isSyncing) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
-                else Text(stringResource(C.contactsListSyncNodes))
+                    },
+                    enabled = !state.isSyncing,
+                ) {
+                    if (state.isSyncing) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
+                    else Text(stringResource(C.contactsListSyncNodes))
+                }
             }
             Box {
                 Button(onClick = { sortMenu = true }) { Text(stringResource(C.contactsListSort)) }

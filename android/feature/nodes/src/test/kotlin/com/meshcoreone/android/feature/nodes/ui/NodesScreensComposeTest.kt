@@ -598,6 +598,47 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         fun mountedOpenChatMenuRetiresOnSameRadioSessionReplacement() = verifyActionOwner(sameRadio = true, delete = false, menuHeld = true)
 
         @Test
+        fun mountedRetainedSyncCannotStartReplacementSessionSync() = verifySyncControlOwner(sameRadio = true)
+
+        @Test
+        fun mountedRetainedSyncCannotStartReplacementRadioSync() = verifySyncControlOwner(sameRadio = false)
+
+        private fun verifySyncControlOwner(sameRadio: Boolean) {
+            val harness = Harness().connect()
+            val oldRadio = checkNotNull(harness.session.radioId)
+            val old = Fixtures.contact(radioId = oldRadio, name = "Old")
+            harness.store.contacts += old
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            awaitText(old.name)
+            val label = controller.get().getString(C.contactsListSyncNodes)
+            val oldNode = awaitAction(label)
+            val retainedClick = checkNotNull(oldNode.config[SemanticsActions.OnClick].action)
+            val replacement = Harness().connect(if (sameRadio) oldRadio else Fixtures.radio())
+            val fresh = Fixtures.contact(radioId = checkNotNull(replacement.session.radioId), name = "Fresh")
+            replacement.store.contacts += fresh
+            harness.session.radioId = replacement.session.radioId
+            harness.session.device = replacement.session.device
+            harness.session.contacts = replacement.contactService
+            harness.session.adverts = replacement.adverts
+            harness.session.servicesStore = replacement.store
+            harness.session.offlineStore = replacement.store
+            awaitCondition { actionNode(label)?.id?.let { it != oldNode.id } == true }
+            controller.get().runOnUiThread { assertTrue(retainedClick.invoke()) }
+            advanceFrames()
+            assertTrue(harness.contactService.calls.isEmpty(), "Retained A Sync must not send through A")
+            assertTrue(replacement.contactService.calls.isEmpty(), "Retained A Sync must not start B")
+            assertTrue(harness.adverts.syncingFlags.isEmpty())
+            assertTrue(replacement.adverts.syncingFlags.isEmpty())
+            assertTrue(ShadowDialog.getLatestDialog()?.isShowing != true)
+            click(awaitAction(label))
+            awaitCondition { replacement.adverts.syncingFlags == listOf(true, false) }
+            awaitText(fresh.name)
+            assertEquals(listOf("sync"), replacement.contactService.calls)
+            assertTrue(harness.contactService.calls.isEmpty())
+            assertTrue(harness.adverts.syncingFlags.isEmpty())
+        }
+
+        @Test
         fun mountedSameRadioReplacementAllowsFreshSyncWhileRetainingAdmission() {
             val harness = Harness().connect()
             val radio = checkNotNull(harness.session.radioId)

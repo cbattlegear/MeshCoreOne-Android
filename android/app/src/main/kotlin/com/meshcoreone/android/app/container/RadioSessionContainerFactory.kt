@@ -2,6 +2,7 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.runtime.FactoryOwnership
+import com.meshcoreone.android.core.runtime.ConnectionError
 import com.meshcoreone.android.core.runtime.RuntimeServiceFactory
 import com.meshcoreone.android.core.runtime.RuntimeServiceInputs
 import com.meshcoreone.android.core.runtime.RuntimeServices
@@ -72,6 +73,9 @@ class SessionRegistry {
 
     fun publish(container: RadioSessionContainer) = synchronized(lock) {
         createdCount += 1
+        // Teardown can finish while the factory's created callback is still running.
+        // Serialize this monotonic retirement check with withdraw so it cannot be undone by late publication.
+        if (container.isTornDown) throw ConnectionError.FactoryOwnershipViolation()
         live = container
     }
 

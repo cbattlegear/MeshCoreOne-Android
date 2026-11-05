@@ -4,11 +4,23 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.core.runtime.RuntimeDiagnostic
 import com.meshcoreone.android.core.contracts.domain.ConnectionIssue
 import com.meshcoreone.android.core.model.PersistenceKeys
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.session.SessionCorrelationException
 import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
 import kotlinx.coroutines.CancellationException
 
 internal suspend fun ContainerHarness.connectForegroundSettings() {
+    val configure = links.configureRadio
+    links.configureRadio = { radio ->
+        configure(radio)
+        val respond = radio.respond
+        radio.respond = { command ->
+            respond(command) ?: if (command[0] == 0x1f.toUByte()) {
+                // Empty indexed slots are real ChannelInfo replies, not unmatched generic ERROR 2.
+                listOf(Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48)))
+            } else null
+        }
+    }
     container.foreground.activityStarted()
     try {
         manager.connect(target())

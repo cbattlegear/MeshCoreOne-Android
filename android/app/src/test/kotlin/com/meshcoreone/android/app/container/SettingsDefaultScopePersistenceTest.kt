@@ -82,6 +82,24 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 frames.map { it[0] }.filter { it == scopeOpcode || it == 3u.toUByte() },
             )
             assertTrue(frames.none { it[0] == 0x1fu.toUByte() }, "Scope ERROR 2 must never query channel existence")
+            val timeline = h.container.chatsFeature.timeline(TimelineConversation.Channel(channel))
+            val applied = radio.activeScopes.size
+            timeline.syncChannelFloodScope(channel)
+            assertEquals(applied, radio.activeScopes.size, "Timeline reuses the actual inline transmission's successful scope")
+            val other = ChannelDTO(radioId = device.radioId, index = 2u, name = "Other scope")
+                .withFloodScope(ChannelFloodScope.Region("US915"))
+            store.saveChannel(other)
+            h.container.chatsFeature.timeline(TimelineConversation.Channel(other)).syncChannelFloodScope(other)
+            timeline.syncChannelFloodScope(channel)
+            timeline.syncChannelFloodScope(channel)
+            assertEquals(
+                listOf(
+                    PacketBuilder.setFloodScope(FloodScope.Region("US915").scopeKey()),
+                    PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey()),
+                ),
+                radio.activeScopes.drop(applied),
+                "Another conversation invalidates actual scope, while repeated unchanged opens remain deduplicated",
+            )
         }
     }
 

@@ -87,6 +87,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -127,11 +129,18 @@ class RadioSessionContainer private constructor(
 
     internal fun toolEvents(): Flow<MeshEvent> = session.events()
 
-    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope) {
+    private var appliedChannelScope: ResolvedFloodScope? = null
+
+    // Both callers enter this generation's Settings scope queue before applying or transmitting.
+    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope, force: Boolean = false) {
+        if (!force && appliedChannelScope == scope) return
+        appliedChannelScope = null
         when (scope) {
             ResolvedFloodScope.Unscoped -> session.setFloodScopeUnscoped()
             is ResolvedFloodScope.Scope -> session.setFloodScope(scope.scope)
         }
+        currentCoroutineContext().ensureActive()
+        appliedChannelScope = scope
     }
 
     override val dataStore: PersistenceStoreProtocol = env.store
@@ -196,7 +205,7 @@ class RadioSessionContainer private constructor(
                     try {
                         applyChannelFloodScope(ChannelFloodScopeResolver.resolve(
                             channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
-                        ))
+                        ), force = true)
                     } catch (failure: MeshCoreException) {
                         // Scope preparation is not a channel write's ERROR 2 or pool-backoff attempt.
                         throw MessageServiceException(MessageServiceError.SendFailed("Channel scope application failed"), failure)

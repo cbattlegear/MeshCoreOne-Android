@@ -181,3 +181,13 @@ original exception without invoking the save-failure mapper or retrying. Its add
 real-Room method checks exception identity, one transform/callback, no save-failure callback, and
 the committed row/revision. The original twelve methods remain intact. This is transferred source,
 not executed evidence; the running `2713871` diagnostic cannot cover this successor.
+
+Exploratory exact `fbf12f347` run `41945162289` failed after 1,936 App tests with four failures:
+the producer's `reconnectStateAndLiveClearCannotCrossAnActualRoomCommitLease` fixture timed out,
+two independently owned preset path-hash fixtures reported expected mode 1/readback 0, and the
+standalone onboarding suppressed-readback assertion failed. The persistence class emitted a real
+class SUCCESS marker, not individual method evidence. No failure is removed or reclassified as
+passing. The producer's state/clear fixture is changed from a held Room transaction to the actual
+submitted transaction-executor boundary already used by the cancellation and storage controls;
+all blocked-state, commit, live-clear and persisted-row assertions remain. This is a new candidate,
+not a revision of either diagnostic ref.

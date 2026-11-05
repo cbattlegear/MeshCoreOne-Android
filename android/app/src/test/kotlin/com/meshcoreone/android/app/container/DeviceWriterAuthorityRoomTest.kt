@@ -611,26 +611,31 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
     }
 
     @Test fun reconnectStateAndLiveClearCannotCrossAnActualRoomCommitLease() = runTest {
-        val paused = PausedStore(store)
-        val h = ContainerHarness(this, store, persistenceOverride = paused)
-        val transactionEntered = CompletableDeferred<Unit>()
-        val authorityEntered = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        var holder: kotlinx.coroutines.Deferred<Unit>? = null
+        val transactionRequested = CompletableDeferred<Unit>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val pauseNext = AtomicBoolean(false)
+        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val executor = java.util.concurrent.Executor { command ->
+            if (pauseNext.compareAndSet(true, false)) {
+                transactionRequested.complete(Unit)
+                worker.execute { release.await(); command.run() }
+            } else command.run()
+        }
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(
+            androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>(),
+            com.meshcoreone.android.core.database.MeshCoreDatabase::class.java,
+        ).allowMainThreadQueries().setQueryExecutor { it.run() }.setTransactionExecutor(executor).build()
+        val repository = RoomPersistenceStore(database, backgroundScope)
+        val paused = PausedStore(repository)
+        val h = ContainerHarness(this, repository, persistenceOverride = paused)
         try {
             h.manager.connect(h.target())
             h.settle()
             val before = assertNotNull(h.manager.connectedDevice)
             val token = h.sessions.current!!.token
-            paused.beforeSave = {
-                holder = async(Dispatchers.IO) {
-                    db.withTransaction { transactionEntered.complete(Unit); release.await() }
-                }
-                transactionEntered.await()
-            }
-            paused.onWriteAuthority = { authorityEntered.complete(Unit) }
+            paused.beforeSave = { pauseNext.set(true) }
             val update = async { h.container.deviceEditor.updatePathHashMode(2u, token) }
-            authorityEntered.await()
+            transactionRequested.await()
             val stateSubmitted = CompletableDeferred<Unit>()
             val stateChange = async {
                 stateSubmitted.complete(Unit)
@@ -648,14 +653,20 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             assertFalse(clear.isCompleted)
             assertTrue(h.manager.connectionState.isConnected)
             assertEquals(before, h.manager.connectedDevice)
-            release.complete(Unit)
+            release.countDown()
             assertTrue(update.await())
             stateChange.await()
             clear.await()
-            assertNotNull(holder).await()
-            assertEquals(before.copy(pathHashMode = 2u), store.fetchDevice(before.id))
+            assertEquals(before.copy(pathHashMode = 2u), repository.fetchDevice(before.id))
             assertNull(h.manager.connectedDevice, "The later clear wins only after committed publication")
-        } finally { release.complete(Unit); h.container.close() }
+        } finally {
+            release.countDown()
+            worker.shutdown()
+            assertTrue(worker.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS))
+            h.container.close()
+            repository.close()
+            database.close()
+        }
     }
 
     @Test fun queuedTimeoutAndPairingRetirementRejectTheSuccessorRuntimeUnderTheActualAuthorityGate() = runTest {

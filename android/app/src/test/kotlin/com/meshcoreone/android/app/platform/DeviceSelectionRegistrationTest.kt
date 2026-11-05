@@ -42,6 +42,8 @@ import com.meshcoreone.android.core.model.DeviceIdentity
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.services.simulator.DemoModeManager
+import com.meshcoreone.android.core.services.simulator.InMemoryDemoModeDefaults
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -63,6 +65,10 @@ import org.robolectric.Shadows.shadowOf
 class DeviceSelectionRegistrationTest : RoomProcessTest() {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
+    private companion object {
+        val demoDefaults = InMemoryDemoModeDefaults()
+    }
+
     private suspend fun TestScope.withSettings(
         persistence: PersistenceStoreProtocol = store,
         systemLinks: SystemLinkProbe = NoSystemLinks,
@@ -75,6 +81,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         requests: RequestedPermissions = RequestedPermissions(),
         test: suspend (ContainerHarness, AppSettingsFeature) -> Unit,
     ) {
+        DemoModeManager.installStandardDefaults(demoDefaults)
         val platform = OnboardingPlatform(
             WriteBehindOnboardingFlags(emptyMap(), backgroundScope, { _, _ -> }),
             permissionFacts, requests = requests, scans = scans, openAppSettings = openSettings, sdkInt = permissionFacts.sdk,

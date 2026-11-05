@@ -452,6 +452,19 @@ Only resolved `@Implementation` function annotations are admitted inside this
 collaborator; test/lifecycle/rule annotations, unknown or additional bases,
 aliases, ambiguous names, inherited enclosing classes and bodyless declarations
 remain fail-closed. Other nested inherited suites retain the existing checks.
+When the evidence reader uses this exception, it checks the exact immutable
+candidate's Kotlin and Java source declarations, including main sources and other
+modules, not just the selected Kotlin test compiler map. A declaration shadowing
+any of the four canonical Android/Robolectric identities or their package prefixes
+(including an object, interface, record, enum or type alias) rejects the exception,
+irrespective of its file path or whether the substitute declares tests. Java
+Unicode escapes are normalized before tokenization. Missing, stale or mismatched
+compiled/source blobs also fail; an unrelated same-simple-name declaration is not
+a collision. Approved JVM-remapped `src/androidTest` coverage uses this proof too.
+This rejects repository-source ambiguity; it is not an execution of Kotlin's
+classpath resolver or proof about generated/external dependency bytes. Those
+remain subject to the existing trusted build/dependency and compiler-input gates.
+Source-only parsing does not prove external classpath identity.
 Named test identities, nonzero execution, skipped-case refusal and immutable
 compiled-source equality are unchanged. A source-reader repair still requires
 independent trusted-reader review/admission before product acceptance.

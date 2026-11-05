@@ -812,3 +812,11 @@ legitimate saturation-covered acceptance. These controls are not replaced by
 DTO/value reconstruction or the 38 existing unexecuted tests. No execution,
 compilation, migration, schema or public generic behavior change occurred
 here.
+
+The coordinator explicitly approved this bounded contract clarification.
+Nonpayload acceptance binding evidence must survive product deletion, lease
+retirement and file reopen while existing payload-erasure rules remain.
+Denied acceptance must not create an accepted fact; replay must preserve the
+original operation semantics without regranting permission. Genuine delivery,
+proven historical replay and the sticky-saturation exception keep precedence.
+No missing historical binding may be manufactured during migration or read.

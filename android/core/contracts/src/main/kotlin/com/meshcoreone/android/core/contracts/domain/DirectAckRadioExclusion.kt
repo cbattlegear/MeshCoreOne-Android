@@ -634,6 +634,10 @@ sealed interface DirectAckRadioFailureResult {
  * establish a match for that binding without deleting its history or regranting mutation authority.
  * Keep generic eligibility, results and public receipt shape unchanged; internal evidence is not
  * a synthetic wire or delivery receipt. Commit-then-throw replay must not lose committed bindings.
+ * Retain nonpayload binding evidence across product deletion, lease retirement and file reopen;
+ * preserve existing payload erasure. Denied acceptance creates no accepted fact, and exact replay
+ * preserves the original operation's meaning without renewing permission or fabricating history.
+ * Existing genuine delivery/proven replay precedence and sticky-saturation exceptions still apply.
  * Do not fabricate a marker or legacy ancestry, silently discard the accepted binding, or repair
  * rows during assessment. Distinct genuine accepted and unsent physical invocations sharing one
  * logical wire are valid: an unsent retry does not contradict or erase an earlier accepted send.

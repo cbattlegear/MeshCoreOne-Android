@@ -29,9 +29,28 @@ private class Delegate : BLEReconnectionDelegate {
     var failureHook: suspend () -> Unit = {}
     var queryHook: suspend () -> Unit = {}
     var notifyHook: suspend () -> Unit = {}
+    var transitionHook: suspend () -> Unit = {}
+    var authority = 0L
     override suspend fun setConnectionState(state: DeviceConnectionState) { this.state = state }
     override suspend fun clearConnectedDevice() { cleared = true }
-    override suspend fun teardownSessionForReconnect() { teardowns++; order += "teardown" }
+    override fun captureConnectionAuthority(): () -> Boolean {
+        val captured = authority
+        return { authority == captured }
+    }
+    override suspend fun transitionConnection(
+        state: DeviceConnectionState,
+        clearDevice: Boolean,
+        isCurrent: () -> Boolean,
+    ): Boolean {
+        transitionHook()
+        if (!isCurrent()) return false
+        this.state = state
+        if (clearDevice) cleared = true
+        return true
+    }
+    override suspend fun teardownSessionForReconnect(isCurrent: () -> Boolean) {
+        if (isCurrent()) { teardowns++; order += "teardown" }
+    }
     override suspend fun rebuildSession(deviceId: UUID) {
         rebuilds += deviceId
         rebuildHook()
@@ -268,6 +287,64 @@ class SourceReconnectionCoordinatorTest {
 
     @TestFactory
     fun nativeReviewCases() = listOf(
+        nativeCase("cancellation waiting for entry authority releases the teardown receipt and claim") {
+            withCoordinator { c, d ->
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                d.transitionHook = { entered.complete(Unit); release.await() }
+                val id = UUID.randomUUID()
+                val entry = backgroundScope.async { c.handleEnteringAutoReconnect(id) }
+                entered.await()
+                entry.cancelAndJoin()
+                assertNull(c.reconnectingDeviceId)
+                assertFalse(c.rebuildInFlight)
+                d.transitionHook = {}
+                c.handleEnteringAutoReconnect(id)
+                c.handleReconnectionComplete(id)
+                assertEquals(listOf(id), d.rebuilds)
+                assertEquals(1, d.teardowns)
+            }
+        },
+        nativeCase("cancellation waiting for completion authority clears rebuilding and permits the next completion") {
+            withCoordinator { c, d ->
+                val id = UUID.randomUUID()
+                c.handleEnteringAutoReconnect(id)
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                d.transitionHook = { entered.complete(Unit); release.await() }
+                val completion = backgroundScope.async { c.handleReconnectionComplete(id) }
+                entered.await()
+                completion.cancelAndJoin()
+                assertFalse(c.rebuildInFlight)
+                d.transitionHook = {}
+                c.handleReconnectionComplete(id)
+                assertEquals(listOf(id), d.rebuilds)
+                assertNull(c.reconnectingDeviceId)
+            }
+        },
+        nativeCase("a timeout queued on authority cannot erase a successor runtime or retire its reconnect claim") {
+            withCoordinator(timeout = 1.seconds) { c, d ->
+                val id = UUID.randomUUID()
+                c.handleEnteringAutoReconnect(id)
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                d.transitionHook = { entered.complete(Unit); release.await() }
+                runCurrent(); advanceTimeBy(1000); runCurrent()
+                assertTrue(entered.isCompleted)
+                d.authority++
+                d.state = DeviceConnectionState.READY
+                val successor = UUID.randomUUID()
+                d.transitionHook = {}
+                c.handleEnteringAutoReconnect(successor)
+                val generation = c.reconnectGeneration
+                release.complete(Unit); runCurrent()
+                assertEquals(successor, c.reconnectingDeviceId)
+                assertEquals(generation, c.reconnectGeneration)
+                assertEquals(DeviceConnectionState.CONNECTING, d.connectionState)
+                assertFalse(d.cleared)
+                assertEquals(0, d.notifications)
+            }
+        },
         nativeCase("refreshing a claimed reconnect timeout does not replace its pending teardown receipt") {
             withCoordinator { c, d ->
                 val gate = CompletableDeferred<Unit>()

@@ -125,3 +125,41 @@ The corrective source passes `C:\Python312\python.exe .\tools\android-port\contr
 `C:\Python312\python.exe .\tools\android-port\portmap.py`,
 `C:\Python312\python.exe .\tools\android-port\controller\verification_config.py` and
 `git diff --check`. These are source controls, not Kotlin compilation or Android test execution.
+
+### Guarded reconnection retirement correction
+
+Independent review of immutable `8eefab22eec5652d3b8435a72a27441320d8405c` found that
+new suspending state setters preceded the coordinator's cleanup boundaries, and a queued timeout
+could retire its reconnect claim before waiting on unconditional state/clear operations. Pairing
+cleanup had the same check-before-suspension problem. The original `4a01` no-findings review was
+subsequently withdrawn because its tree binding was incorrect; neither review is an acceptance gate.
+
+The corrective delegate captures runtime revision and owner identity and submits one guarded
+state/device transition. The runtime reacquires its authority gate before checking that captured
+identity and the original reconnect cycle/timer. The timeout retires its claim inside that guarded
+operation, not before waiting. A stale timeout does not clear a successor or emit a lost notification.
+Entry/completion transitions now run inside cleanup boundaries; cancellation resolves the entry's
+teardown receipt and clears rebuilding state. Teardown also checks its original claim under the
+runtime gate. Pairing cleanup checks its captured runtime and operational state under the same gate.
+Three deterministic coordinator controls cover entry/completion cancellation and queued timeout
+supersession; a production manager/Room control queues a switch ahead of both timeout and pairing
+retirement and asserts that both old operations reject the successor.
+
+The persistence producer transferred its exact six-hunk stronger-boundaries test patch: rollback
+guards now inspect staged SQL device/channel state before refusal, and the lease test observes the
+actual Room transaction-executor request, not just lease entry. All twelve test methods are preserved.
+These successor controls are authored, not executed. The isolated exact `8eef` hosted diagnostic
+is run `41943682256` on `diagnostic-device-authority-8eefab22e-7dc0b9a1`; it remains unmodified and
+cannot execute this corrective successor. No second CI-result bundle is retained.
+
+That exact `8eef` diagnostic failed at `:app:compileDebugKotlin`: the producer's token-overload
+plumbing omitted the `SessionToken` import in `AppStatePlaceholder.kt` (lines 83/87/89/92/94,
+with cascading overrides-nothing errors). The successor adds the actual contracts-domain import.
+Both target Room suites were absent, not passing or failing. Controller/workflow policy and
+Swift codec jobs passed; downstream mandatory JUnit absence remains unverified execution.
+The production-editor cancellation control now also observes an actual submitted Room transaction
+command before cancelling, rather than treating lease entry as sufficient queue evidence.
+
+Per-method quiet listener support was requested for only the two authority classes. Trusted
+admission refused `android/app/build.gradle.kts` / `modify-related-consumer` for WP-305; no build
+file was edited. The concrete blocker was handed to the Project for an admitted support owner.

@@ -80,7 +80,7 @@ class RuntimePairingPort(
     }
 
     override suspend fun markDisconnected() {
-        if (!manager.connectionState.isOperational) manager.setConnectionState(DeviceConnectionState.DISCONNECTED)
+        manager.markDisconnectedIfNotOperational()
     }
 
     override suspend fun clearPersistedConnection(deviceId: UUID) = manager.clearPersistedConnection(deviceId)

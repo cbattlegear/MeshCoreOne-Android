@@ -867,6 +867,34 @@ class ConnectionManager(
     override suspend fun clearConnectedDevice() {
         mutateDeviceAuthority { deviceValue = null; repeatRanges = SnapshotList.empty() }
     }
+    override fun captureConnectionAuthority(): () -> Boolean {
+        val captured = synchronized(lock) { Triple(revision, active, retained) }
+        val owner = captured.second ?: captured.third
+        return {
+            synchronized(lock) {
+                !closed && revision == captured.first && (active ?: retained) === owner
+            }
+        }
+    }
+
+    override suspend fun transitionConnection(
+        state: DeviceConnectionState,
+        clearDevice: Boolean,
+        isCurrent: () -> Boolean,
+    ): Boolean = mutateDeviceAuthority {
+        if (!isCurrent()) false else {
+            if (clearDevice) { deviceValue = null; repeatRanges = SnapshotList.empty() }
+            publishLocked(state = state, token = if (state == DeviceConnectionState.DISCONNECTED) null else values.value.token)
+            true
+        }
+    }
+
+    suspend fun markDisconnectedIfNotOperational(): Boolean {
+        val current = captureConnectionAuthority()
+        return transitionConnection(DeviceConnectionState.DISCONNECTED, false) {
+            current() && !connectionState.isOperational
+        }
+    }
     override suspend fun notifyAutoReconnectStarted() = observer.onAutoReconnectStarted()
     override suspend fun notifyConnectionLost() {
         observer.onConnectionLost()
@@ -878,9 +906,9 @@ class ConnectionManager(
         return platform.state(owner.target).autoReconnecting
     }
 
-    override suspend fun teardownSessionForReconnect() {
+    override suspend fun teardownSessionForReconnect(isCurrent: () -> Boolean) {
         val old = mutateDeviceAuthority {
-            active?.also {
+            active?.takeIf { isCurrent() }?.also {
                 active = null
                 retained = it
                 deviceValue = null

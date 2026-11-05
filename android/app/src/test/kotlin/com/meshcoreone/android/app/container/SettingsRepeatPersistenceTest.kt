@@ -865,6 +865,119 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun committedSiblingClearDuringRestoreReadbackCannotResurrectAnObsoleteRetirement() = runTest {
+        println("WP305_REPEAT_CLEAR|late-registration|START")
+        for (replacement in listOf("clear", "nonempty", "aba")) {
+            withRepeat(store) { h, holder, _, radio ->
+                val token = assertNotNull(h.sessions.current).token
+                val before = assertNotNull(h.manager.connectedDevice)
+                holder.onRepeatToggled(true)
+                holder.confirmEnableRepeatMode()
+                h.eventually("Repeat active before held restoration readback") {
+                    !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
+                }
+                assertTrue(h.container.deviceEditor.validatePreRepeatSettings(token))
+                val repeating = assertNotNull(h.manager.connectedDevice)
+                val authority = h.container.deviceEditor.preRepeatSettingsRestoreAuthority(token, repeating)
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                var armed = true
+                radio.beforeRadioReadback = {
+                    if (armed && radio.radioWrites.size >= 2) {
+                        armed = false
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                }
+                val restore = async {
+                    assertNotNull(h.sessions.current).settingsService.setRadioParamsPersisted(
+                        before.frequency, before.bandwidth, before.spreadingFactor, before.codingRate, false,
+                        restoreAuthority = authority,
+                    )
+                }
+                val alternate = RoomPersistenceStore(db, backgroundScope)
+                try {
+                    val sibling = ConnectedDeviceEditor(
+                        h.container.deviceAccess, alternate, alternate, { null },
+                        RadioPresetMatcher { _, _, _, _ -> emptySet() }, backgroundScope, { java.time.Instant.EPOCH },
+                    )
+                    h.eventually("actual restore send settled but readback is held") { entered.isCompleted }
+                    assertEquals(2, radio.radioWrites.size)
+                    assertFalse(store.repeatSnapshotAuthority.hasClearRequest(repeating, token))
+                    assertTrue(sibling.clearPreRepeatSettings(token), "The actual sibling clear commits while readback is held")
+                    val cleared = assertNotNull(store.fetchDevice(before.id))
+                    assertEquals(repeating.clearingPreRepeatSettings(), cleared)
+                    assertEquals(cleared, h.manager.connectedDevice)
+                    if (replacement != "clear") {
+                        val replaced = if (replacement == "aba") repeating else repeating.copy(
+                            preRepeatFrequency = if (before.frequency == 868_000u) 915_000u else 868_000u,
+                        )
+                        store.saveDevice(replaced)
+                        h.container.deviceEditor.updateDevice(replaced)
+                    }
+                    release.complete(Unit)
+                    restore.await()
+                    val settled = assertNotNull(store.fetchDevice(before.id))
+                    assertFalse(settled.clientRepeat)
+                    assertEquals(before.frequency, settled.frequency)
+                    val writes = radio.radioWrites.toList()
+                    if (replacement == "clear") {
+                        assertTrue(sibling.validatePreRepeatSettings(token), "A committed all-null snapshot is already retired")
+                        assertTrue(sibling.savePreRepeatSettings(token), "The late callback cannot fence fresh preparation")
+                        assertTrue(sibling.clearPreRepeatSettings(token))
+                    } else {
+                        assertIs<RepeatSnapshotClearRequired>(
+                            runCatching { sibling.validatePreRepeatSettings(token) }.exceptionOrNull(),
+                        )
+                        assertIs<RepeatSnapshotClearRequired>(
+                            runCatching { sibling.savePreRepeatSettings(token) }.exceptionOrNull(),
+                        )
+                        assertEquals(settled, store.fetchDevice(before.id), "A nonempty or ABA successor snapshot is never discarded")
+                        val explicitClear = settled.clearingPreRepeatSettings()
+                        store.saveDevice(explicitClear)
+                        h.container.deviceEditor.updateDevice(explicitClear)
+                        assertTrue(sibling.validatePreRepeatSettings(token))
+                    }
+                    assertEquals(writes, radio.radioWrites, "Retirement reconciliation never invents radio traffic")
+                    val manualFrequency = if (before.frequency == 868_000u) 915_000u else 868_000u
+                    assertNotNull(h.sessions.current).settingsService.setRadioParamsPersisted(
+                        manualFrequency, before.bandwidth, before.spreadingFactor, before.codingRate, false,
+                    )
+                    h.eventually("fresh manual RF is observed after late retirement") {
+                        holder.state.value.device?.frequency == manualFrequency
+                    }
+                    holder.onRepeatToggled(true)
+                    holder.confirmEnableRepeatMode()
+                    h.eventually("fresh cycle enables after late retirement") {
+                        !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
+                    }
+                    assertEquals(manualFrequency, store.fetchDevice(before.id)!!.preRepeatFrequency)
+                    holder.onRepeatToggled(false)
+                    h.eventually("fresh cycle restores after late retirement") {
+                        !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false
+                    }
+                    val after = assertNotNull(store.fetchDevice(before.id))
+                    assertEquals(manualFrequency, after.frequency)
+                    assertEquals(before.bandwidth, after.bandwidth)
+                    assertEquals(before.spreadingFactor, after.spreadingFactor)
+                    assertEquals(before.codingRate, after.codingRate)
+                    assertNull(after.preRepeatFrequency)
+                    assertNull(after.preRepeatBandwidth)
+                    assertNull(after.preRepeatSpreadingFactor)
+                    assertNull(after.preRepeatCodingRate)
+                    assertEquals(after, h.manager.connectedDevice)
+                    assertEquals(listOf(1, 0, 0, 1, 0), radio.radioWrites.map { it[11].toInt() })
+                } finally {
+                    release.complete(Unit)
+                    restore.cancel()
+                    restore.join()
+                    alternate.close()
+                }
+            }
+            println("WP305_REPEAT_CLEAR|late-registration|$replacement|END|SUCCESS")
+        }
+    }
+
     @Test fun confirmedRestoreRetirementIsSharedAcrossEditorsAndRejectsSnapshotAba() = runTest {
         println("WP305_REPEAT_CLEAR|shared-retirement|START")
         for (aba in listOf(false, true)) {
@@ -1263,6 +1376,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         private var repeat = false
         var repeatOnNextConnection = false
         var beforeRadioSend: suspend () -> Unit = {}
+        var beforeRadioReadback: suspend () -> Unit = {}
         var withholdNextAck = false
         private var pendingAck: FirmwareRadio? = null
         val hasPendingAck get() = pendingAck != null
@@ -1282,7 +1396,10 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             repeat = repeatOnNextConnection
             repeatOnNextConnection = false
             radio.firmwareVersion = 11u
-            radio.beforeSend = { command -> if (command[0] == 0x0b.toUByte()) beforeRadioSend() }
+            radio.beforeSend = { command ->
+                if (command[0] == 0x0b.toUByte()) beforeRadioSend()
+                if (command[0] == 0x01.toUByte()) beforeRadioReadback()
+            }
             radio.respond = { command ->
                 when (command[0].toInt()) {
                     0x0b -> {

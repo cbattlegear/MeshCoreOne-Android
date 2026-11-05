@@ -1,5 +1,6 @@
 // AndroidOnly: WP-303 The runtime service factory: one graph per connection generation, built only after its prerequisites exist.
 // AndroidOnly: WP-311 Observable registry publication retires mounted contact interactions on quiet graph replacement.
+// AndroidOnly: WP-314 Observable registry ownership for the mounted Tools trace binding.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.runtime.FactoryOwnership
@@ -7,6 +8,7 @@ import com.meshcoreone.android.core.runtime.ConnectionError
 import com.meshcoreone.android.core.runtime.RuntimeServiceFactory
 import com.meshcoreone.android.core.runtime.RuntimeServiceInputs
 import com.meshcoreone.android.core.runtime.RuntimeServices
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,11 +65,13 @@ class RadioSessionContainerFactory(
 class SessionRegistry {
     private val lock = Any()
     private val live = MutableStateFlow<RadioSessionContainer?>(null)
+    private val tokens = MutableStateFlow<SessionToken?>(null)
     private var createdCount = 0
     private var tornDownCount = 0
 
     val current: RadioSessionContainer? get() = synchronized(lock) { live.value }
     val currentSessions: StateFlow<RadioSessionContainer?> = live.asStateFlow()
+    val currentToken = tokens.asStateFlow()
 
     /** Containers created since process start (leak accounting). */
     val created: Int get() = synchronized(lock) { createdCount }
@@ -82,10 +86,14 @@ class SessionRegistry {
         // Serialize this monotonic retirement check with withdraw so it cannot be undone by late publication.
         if (container.isTornDown) throw ConnectionError.FactoryOwnershipViolation()
         live.value = container
+        tokens.value = container.token
     }
 
     fun withdraw(container: RadioSessionContainer) = synchronized(lock) {
         tornDownCount += 1
-        if (live.value === container) live.value = null
+        if (live.value === container) {
+            live.value = null
+            tokens.value = null
+        }
     }
 }

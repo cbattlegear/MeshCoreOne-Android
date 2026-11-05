@@ -279,3 +279,18 @@ more value-only assertions; sixteen methods are now authored but none has been
 executed here. No public API or generated Room
 schema bytes are changed by that reported storage follow-up; export remains a
 separate pending validation gate.
+
+## Nullable fresh-baseline assertion compiler repair
+
+The storage owner reported hosted run `41964501226`, integrated candidate
+`ac2bac8`, failing `:core:contracts:compileTestKotlin` at
+`DirectAckAuthorityTest.kt:105:44`: the fresh resend baseline assertion accessed
+the now-nullable historical message without a nonnull guard. This successor adds
+`assertNotNull(registered.message)` before asserting the same literal ACK code
+`7u`. It strengthens the fresh-payload expectation without changing the existing
+oracle, production contracts or erased-history behavior.
+
+Trusted related-test and WP-owned evidence admissions were rechecked. Source
+validation is distinct from the still-required integrated compiler/test rerun.
+The owner's reported schema artifact `13386339538` is external context only;
+neither its bytes nor Room suite acceptance were validated in this worktree.

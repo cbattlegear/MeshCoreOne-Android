@@ -71,7 +71,8 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.testTag
+import androidx.compose.ui.platform.testTag as modifierTestTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -300,7 +301,7 @@ private fun PointsSection(state: LineOfSightState, holder: LineOfSightStateHolde
             if (!state.isRelocating && hasClearableState) {
                 TextButton(
                     onClick = holder::clear,
-                    modifier = Modifier.heightIn(min = 48.dp).testTag("los-clear-all"),
+                    modifier = Modifier.heightIn(min = 48.dp).modifierTestTag("los-clear-all"),
                 ) {
                     Text(stringResource(AppToolsStrings.toolsLineOfSightClear))
                 }

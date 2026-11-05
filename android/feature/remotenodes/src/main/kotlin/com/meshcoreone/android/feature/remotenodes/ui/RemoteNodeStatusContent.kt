@@ -149,7 +149,10 @@ internal fun RemoteNodeStatusContent(
                         key(row.entry.publicKeyPrefix) {
                             val name = remoteText(row.displayName)
                             Column(Modifier.semantics(mergeDescendants = true) {}) {
-                                RemoteValue(name, remoteText(row.snrText))
+                                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                    Text(name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(remoteText(row.snrText), Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyLarge)
+                                }
                                 Text(stringResource(L.remoteNodesHistoryNotSeen))
                                 if (row.matchKind == NodeNameMatchKind.FALLBACK) RemoteNodePossibleMatch(name)
                             }

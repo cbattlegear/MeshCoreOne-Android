@@ -412,9 +412,6 @@ class RemoteNeighborConfidenceComposeTest {
                 value.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
                 assertEquals(fontScale, layouts.single().layoutInput.density.fontScale, 0f)
                 val layout = layouts.single()
-                if (layout.hasVisualOverflow) {
-                    println("Disappeared SNR layout: $layout")
-                }
                 assertFalse(
                     "$name SNR '$snr': widthOverflow=${layout.didOverflowWidth}, " +
                         "heightOverflow=${layout.didOverflowHeight}, size=${layout.size}, " +

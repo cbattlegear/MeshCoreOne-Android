@@ -20,6 +20,12 @@ and fallback indicator. `NeighborRows.disappeared` already produces that SNR.
 The mounted `RemoteNodeStatusContent` now consumes it, retaining native stacked
 text and the unchanged possible-match control. The row merges name, SNR and
 not-seen text for accessibility, without swallowing the separate fallback action.
+The SNR text explicitly occupies the available row width: hosted native layout
+diagnostics exposed an intrinsic-width text box narrower than its measured
+paragraph (80 versus 360 px at default English font), so the row no longer
+depends on that shrink-wrapped text measurement. The strict overflow assertion
+is retained. Feature test failures use the existing repository's full-exception
+logging pattern so measurements are visible directly in authoritative job logs.
 
 ## Discriminating regression
 

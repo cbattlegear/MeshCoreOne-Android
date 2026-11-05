@@ -153,7 +153,7 @@ class NativeMessagingTest {
                 withContext(NonCancellable) { sending.cancelAndJoin(); h.close() }
             }
         },
-        native("olderConfirmedTrackerSurvivesOnlyLaterHistorySaturation") {
+        native("historySaturationDoesNotTreatOlderTrackersAsProvenDisjoint") {
             val h = Harness(this, MessageServiceConfig(maxAttempts = 1, minTimeout = 0.0))
             h.start(); h.service.startEventMonitoring()
             h.transport.acknowledge = false
@@ -177,19 +177,22 @@ class NativeMessagingTest {
                 val olderTracker = assertNotNull(h.service.pendingAck(older.id))
                 val events = h.service.statusEvents()
                 h.transport.pushAck(olderCode, 555u); runCurrent()
-                assertEquals(beforeOlder.copy(status = MessageStatus.DELIVERED, roundTripTime = 555u), h.stored(older.id))
-                assertEquals(MeshAcknowledgement(olderCode, 555u), olderTracker.receipt.await())
-                assertNull(h.service.pendingAck(older.id))
+                assertEquals(beforeOlder, h.stored(older.id))
+                assertFalse(olderTracker.receipt.isCompleted)
+                assertSame(olderTracker.receipt, assertNotNull(h.service.pendingAck(older.id)).receipt)
                 h.transport.pushAck(actual, 321u); runCurrent()
                 assertEquals(beforeLater, h.stored(later.id))
                 assertFalse(sending.isCompleted)
                 assertEquals(68, h.sends(CommandCode.SEND_MESSAGE).size)
                 assertFalse(assertNotNull(h.service.pendingAck(later.id)).receipt.isCompleted)
-                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
-                    it.operation.startsWith("ackAmbiguous.") && it.cause.message.orEmpty().contains("history overflow")
-                })
-                assertEquals(listOf(MessageStatusEvent.StatusResolved(older.id, MessageStatus.DELIVERED, 555u)),
-                    statuses(h.service, events))
+                val ambiguities = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                    .filter { it.operation.startsWith("ackAmbiguous.") }
+                assertEquals(2, ambiguities.size)
+                ambiguities.forEach {
+                    assertEquals("Direct ACK authority: ACK correlation history overflow; delivery remains unproven",
+                        assertIs<PersistenceStoreError.SaveFailed>(assertIs<PersistenceStoreException>(it.cause).error).reason)
+                }
+                assertTrue(statuses(h.service, events).isEmpty())
             } finally {
                 withContext(NonCancellable) { sending.cancelAndJoin(); h.close() }
             }
@@ -220,12 +223,66 @@ class NativeMessagingTest {
             val second = async { h.service.sendDirectMessage("unresolved second", h.contact) }
             runCurrent()
             val secondID = h.store.messages.values.single { it.id != first.id }.id
+            val beforeFirst = h.stored(first.id)
+            val beforeSecond = h.stored(secondID)
+            val firstTracker = assertNotNull(h.service.pendingAck(first.id))
+            val secondTracker = assertNotNull(h.service.pendingAck(secondID))
             h.transport.pushAck(firstCode, 123u); runCurrent()
-            assertEquals(MessageStatus.DELIVERED, h.stored(first.id).status)
+            assertEquals(beforeFirst, h.stored(first.id))
+            assertEquals(beforeSecond, h.stored(secondID))
+            assertFalse(firstTracker.receipt.isCompleted)
+            assertFalse(secondTracker.receipt.isCompleted)
             assertEquals(0, h.service.bufferedAcknowledgementCount(secondID))
             gate.complete(Unit); runCurrent(); second.await()
+            assertEquals(beforeFirst, h.stored(first.id))
+            h.transport.pushAck(firstCode, 123u); runCurrent()
+            assertEquals(beforeFirst.copy(status = MessageStatus.DELIVERED, roundTripTime = 123u), h.stored(first.id))
+            assertEquals(MessageStatus.DELIVERED, h.stored(first.id).status)
+            assertEquals(MeshAcknowledgement(firstCode, 123u), firstTracker.receipt.await())
+            assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
             assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
             h.close()
+        },
+        native("laterEmittedUnknownOrMatchingCodeCannotDeliverAnOlderConfirmedTracker") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            h.transport.acknowledge = false
+            val actual = Bytes.of(9, 8, 7, 6)
+            h.transport.expectedAckOverride = actual
+            val first = h.service.sendDirectMessage("confirmed older", h.contact)
+            val gate = CompletableDeferred<Unit>()
+            h.transport.acceptanceGate = gate
+            val second = backgroundScope.async {
+                assertFailsWith<MessageServiceException> { h.service.sendDirectMessage("later different prediction", h.contact) }
+            }
+            try {
+                runCurrent()
+                val secondID = h.store.messages.values.single { it.id != first.id }.id
+                val beforeFirst = h.stored(first.id)
+                val beforeSecond = h.stored(secondID)
+                val firstTracker = assertNotNull(h.service.pendingAck(first.id))
+                val secondTracker = assertNotNull(h.service.pendingAck(secondID))
+                assertFalse(actual in secondTracker.ackCodes)
+                assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
+                val events = h.service.statusEvents()
+                h.transport.pushAck(actual, 999u); runCurrent()
+                assertEquals(beforeFirst, h.stored(first.id))
+                assertEquals(beforeSecond, h.stored(secondID))
+                assertFalse(firstTracker.receipt.isCompleted)
+                assertFalse(secondTracker.receipt.isCompleted)
+                assertNull(assertNotNull(h.service.pendingAck(first.id)).acknowledgement)
+                assertNull(assertNotNull(h.service.pendingAck(secondID)).acknowledgement)
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation.startsWith("ackAmbiguous.")
+                })
+                assertTrue(statuses(h.service, events).isEmpty())
+                gate.complete(Unit); runCurrent(); second.await()
+                h.transport.pushAck(actual, 888u); runCurrent()
+                assertEquals(beforeFirst, h.stored(first.id))
+                assertFalse(firstTracker.receipt.isCompleted)
+                assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
+            } finally {
+                withContext(NonCancellable) { gate.complete(Unit); second.cancelAndJoin(); h.close() }
+            }
         },
         native("duplicateEarlyAckTuplesStayBoundedAndTerminalRetirementReleasesEvidence") {
             val h = Harness(this); h.start(); h.service.startEventMonitoring()

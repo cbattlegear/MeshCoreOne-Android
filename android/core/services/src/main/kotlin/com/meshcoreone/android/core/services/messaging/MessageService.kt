@@ -74,7 +74,6 @@ class MessageService(
         val attempt: DirectAckAttempt,
         firstWireID: UUID,
         val correlateResponses: Boolean,
-        val registrationOrder: Long,
     ) {
         val wires = mutableMapOf(0 to firstWireID)
         val operations = mutableMapOf<String, UUID>()
@@ -88,8 +87,7 @@ class MessageService(
     private val directAuthorities = mutableMapOf<UUID, DirectAuthorityState>()
     private val retiredDirectEmissions = mutableListOf<DirectAuthorityState>()
     private val inFlightDirectEmissions = mutableSetOf<DirectAuthorityState>()
-    private var directEmissionOverflowOrder: Long? = null
-    private var directRegistrationOrder = 0L
+    private var directEmissionHistoryOverflow = false
     private val directIntentMessages = mutableSetOf<UUID>()
     private val directRegistrationIDs = mutableMapOf<UUID, UUID>()
     private class NoDispatchCompletion(
@@ -226,8 +224,7 @@ class MessageService(
         }
         if (receipt.permission != DirectAckPermission.CURRENT) throw authorityFailure(receipt.permission.name)
         val state = synchronized(lock) {
-            val order = Math.incrementExact(directRegistrationOrder).also { directRegistrationOrder = it }
-            DirectAuthorityState(requestID, attempt, wireID, correlateResponses, order).also {
+            DirectAuthorityState(requestID, attempt, wireID, correlateResponses).also {
                 it.predictedCodes[wireID] = predicted
                 directAuthorities.put(id, it)?.let { displaced -> retainRetiredEmission(displaced) }
                 pendingAcks.remove(id)?.receipt?.cancel()
@@ -240,9 +237,7 @@ class MessageService(
         if (state in inFlightDirectEmissions || state in retiredDirectEmissions ||
             directAuthorities.values.any { it === state } || state.possiblyEmittedCodes.isEmpty()) return
         if (retiredDirectEmissions.size < 64) retiredDirectEmissions += state
-        else directEmissionOverflowOrder = directEmissionOverflowOrder?.let {
-            minOf(it, state.registrationOrder)
-        } ?: state.registrationOrder
+        else directEmissionHistoryOverflow = true
     }
 
     private suspend fun directWire(
@@ -273,14 +268,11 @@ class MessageService(
         }
     }
 
-    private fun hasEmissionOverflowBefore(target: DirectAuthorityState): Boolean =
-        directEmissionOverflowOrder?.let { it < target.registrationOrder } == true
-
     private fun hasCompetingEmission(target: DirectAuthorityState, code: Bytes): Boolean =
-        hasEmissionOverflowBefore(target) ||
+        directEmissionHistoryOverflow ||
             (retiredDirectEmissions.asSequence() + directAuthorities.values.asSequence() +
                 inFlightDirectEmissions.asSequence()).any { other ->
-                other.registrationOrder < target.registrationOrder &&
+                other !== target &&
                     other.possiblyEmittedCodes.values.any { it == null || it == code }
             }
 
@@ -574,13 +566,13 @@ class MessageService(
                     directAuthorities[it.messageID]?.takeIf { state -> state.attempt === it.authority }
                         ?.let { state ->
                             if (state.correlateResponses && hasCompetingEmission(state, code)) {
-                                ambiguous[state.requestID] = hasEmissionOverflowBefore(state)
+                                ambiguous[state.requestID] = directEmissionHistoryOverflow
                                 false
                             } else !state.correlateResponses || code in state.confirmedCodes
                         } != false
             }
             directAuthorities.forEach { (id, state) ->
-                if (found == null && (expectedAttempt == null || state.attempt === expectedAttempt) &&
+                if (found == null && ambiguous.isEmpty() && (expectedAttempt == null || state.attempt === expectedAttempt) &&
                     state.correlateResponses && pendingAcks[id]?.authority === state.attempt &&
                     code !in state.confirmedCodes &&
                     !state.acceptedCodes.keys.containsAll(state.predictedCodes.keys)) {
@@ -610,7 +602,7 @@ class MessageService(
             remember("ackAmbiguous.$requestID", authorityFailure(
                 if (overflow)
                     "ACK correlation history overflow; delivery remains unproven"
-                else "ACK may belong to an earlier emitted claim; delivery remains unproven"))
+                else "ACK may belong to another emitted claim; delivery remains unproven"))
         }
         if (tracking == null) {
             if (!deferred && ambiguous.isEmpty()) reportUnmatchedAcknowledgement(code)

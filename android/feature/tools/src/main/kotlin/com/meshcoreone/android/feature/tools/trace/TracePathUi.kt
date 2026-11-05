@@ -440,15 +440,16 @@ internal fun TracePathListContent(
         }
         item { TraceResults(state) }
         item {
+            val canExecute = { holder.deps.connectedDevice() != null && canEdit() }
             val runOrCancel = {
-                if (canEdit()) {
+                if (canExecute()) {
                     if (state.isRunning) holder.cancelBatchTrace()
-                    else scope.launch { if (canEdit()) holder.runBatchTrace() }
+                    else scope.launch { if (canExecute()) holder.runBatchTrace() }
                 }
             }
             Button(
                 onClick = runOrCancel,
-                enabled = state.isRunning || state.canRunTraceWhenConnected,
+                enabled = state.isRunning || state.canRunTraceWhenConnected && holder.deps.connectedDevice() != null,
                 modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
                     onClick { runOrCancel(); true }
                 },

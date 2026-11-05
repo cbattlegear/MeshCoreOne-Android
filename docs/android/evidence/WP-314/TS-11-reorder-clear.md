@@ -365,5 +365,13 @@ production-null-origin offline draft actions, unchanged-wire one-hop Auto Return
 invalidation, and delete discarding an overlapping fresh rename reload. Their
 successor adds production-equivalent mounted offline/disconnect/reconnect drafts,
 one-hop pending/completed holder and mounted controls alongside existing changed
-multi-hop controls, and held reloads on both sides of the actual store read.
+multi-hop controls, and held reloads on both sides of the in-memory fixture store
+read (not Room).
 These new assertions and repairs are not accepted by r23 results.
+
+The subsequent offline retained-route schedule also invokes the disabled Run
+semantics directly, requires no radio send, and continues text/paste/Done editing
+before fresh same/different-radio input. Run eligibility and both callback
+launch boundaries require a live device independently of local editing authority;
+an offline attempt must not retire the valid draft binding. R24's already-running
+diagnostics remain bound to their older heads.

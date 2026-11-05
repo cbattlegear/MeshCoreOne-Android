@@ -63,14 +63,7 @@ import kotlinx.coroutines.launch
 import java.time.ZoneId
 
 class AppChatsFeature internal constructor(private val container: AppContainer) {
-    private data class PushedFloodScope(
-        val session: SessionToken,
-        val preference: ChannelFloodScope,
-        val deviceDefault: String?,
-        val supportsUnscoped: Boolean,
-    )
     private val floodScopeMutex = Mutex()
-    private var lastPushedScope: PushedFloodScope? = null
     private val store get() = container.processStore
     private val scope get() = container.uiScope
     private val app get() = container.appState
@@ -522,11 +515,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 val device = container.connectionManager.connectedDevice?.takeIf { it.radioId == radio }
                     ?: return@withPersistedDefaultFloodScope
                 val selected = store.fetchChannel(radio, channel.index) ?: channel
-                val desired = PushedFloodScope(
-                    current.token, selected.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
-                )
-                if (desired == lastPushedScope) return@withPersistedDefaultFloodScope
-                lastPushedScope = null
                 current.applyChannelFloodScope(ChannelFloodScopeResolver.resolve(
                     selected.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
                 ))
@@ -534,7 +522,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 if (!isCurrentAdmission(current.token)) {
                     throw CancellationException("Channel scope session superseded")
                 }
-                lastPushedScope = desired
             }
         }
         override val draftStore get() = drafts

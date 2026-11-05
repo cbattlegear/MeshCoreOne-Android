@@ -30,6 +30,7 @@ data class DefaultFloodScopeState(
 ) {
     /** The scope the radio holds now; null is "Disabled" (unscoped). */
     val currentScope: String? get() = device?.defaultFloodScopeName
+        ?.takeIf { it.isNotEmpty() }?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
     val sortedKnownRegions: List<String> get() = DefaultFloodScopeStateHolder.sortStandard(device?.knownRegions?.toList().orEmpty())
     val regionGroups: Map<String, List<String>>
         get() = sortedKnownRegions.groupBy { it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) }

@@ -15,6 +15,9 @@ import com.meshcoreone.android.core.contracts.domain.TeardownIssue
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
@@ -31,6 +34,7 @@ import com.meshcoreone.android.core.runtime.RuntimeServices
 import com.meshcoreone.android.core.runtime.RuntimeSyncResult
 import com.meshcoreone.android.core.services.contacts.AdvertisementService
 import com.meshcoreone.android.core.services.contacts.ChannelService
+import com.meshcoreone.android.core.services.contacts.ChannelFloodScopeResolver
 import com.meshcoreone.android.core.services.contacts.ContactCleanupCoordinator
 import com.meshcoreone.android.core.services.contacts.ContactService
 import com.meshcoreone.android.core.services.contacts.ResolvedFloodScope
@@ -182,6 +186,27 @@ class RadioSessionContainer private constructor(
         token, inputs.device.publicKey, session, dataStore, inputs.connection.signals, scope,
         config = env.messageServiceConfig,
         reporter = env.messagingReporter,
+        channelTransmission = { index, transmit ->
+            try {
+                settingsService.withPersistedDefaultFloodScope {
+                    val device = dataStore.fetchDevice(radioId)
+                        ?: throw MessageServiceException(MessageServiceError.NotConnected)
+                    val channel = dataStore.fetchChannel(radioId, index)
+                        ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+                    try {
+                        applyChannelFloodScope(ChannelFloodScopeResolver.resolve(
+                            channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
+                        ))
+                    } catch (failure: MeshCoreException) {
+                        // Scope preparation is not a channel write's ERROR 2 or pool-backoff attempt.
+                        throw MessageServiceException(MessageServiceError.SendFailed("Channel scope application failed"), failure)
+                    }
+                    transmit()
+                }
+            } catch (failure: SettingsServiceException) {
+                throw MessageServiceException(MessageServiceError.SendFailed("Channel scope reconciliation failed"), failure)
+            }
+        },
     )
     override val channelService = ChannelService(session, dataStore, ChannelDecryptionAdapter(rxLogService))
     // The settings/device services validate their generation against the published connection snapshot when they

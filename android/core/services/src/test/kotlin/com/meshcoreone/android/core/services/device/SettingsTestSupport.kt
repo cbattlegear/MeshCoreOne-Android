@@ -147,7 +147,11 @@ internal class SettingsFixture(
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
-internal suspend fun TestScope.settingsFixture(initial: Bytes = selfPacket(), generation: Long = 1): SettingsFixture {
+internal suspend fun TestScope.settingsFixture(
+    initial: Bytes = selfPacket(),
+    generation: Long = 1,
+    onDefaultScopeAdmission: (() -> Unit)? = null,
+): SettingsFixture {
     val radio = TestRadio()
     val clock = SchedulerClock(testScheduler)
     val diagnostics = mutableListOf<SessionDiagnostic>()
@@ -166,7 +170,7 @@ internal suspend fun TestScope.settingsFixture(initial: Bytes = selfPacket(), ge
     start.await()
     val signals = TestSignals(token(generation))
     val context = DeviceSettingsContext(token(generation), signals, backgroundScope, StandardTestDispatcher(testScheduler))
-    return SettingsFixture(radio, session, signals, context, SettingsService(session, context), clock, diagnostics)
+    return SettingsFixture(radio, session, signals, context, SettingsService(session, context, onDefaultScopeAdmission), clock, diagnostics)
 }
 
 internal class CheckedRequest<T>(private val request: Deferred<Result<T>>) {

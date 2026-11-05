@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.SessionEvent
 import com.meshcoreone.android.core.contracts.domain.SessionEventSubscription
+import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.model.AdvertLocationPolicy
@@ -37,10 +38,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class SettingsService(
     private val session: ConfigurationSessionOps,
     private val context: DeviceSettingsContext,
+    // Observes the admitted boundary outside eventLock, before the first radio command.
+    private val onDefaultScopeAdmission: (() -> Unit)? = null,
 ) {
     private val operationLock = Mutex()
     private val eventLock = Any()
@@ -52,6 +56,7 @@ class SettingsService(
     private var pathHashRevision = 0L
     private var persistedPathHashRevision = 0L
     private var defaultScopeUncertain = false
+    private var defaultScopeBaselineEstablished = false
     private var defaultScopeRecovery: kotlinx.coroutines.Deferred<Unit>? = null
     val sessionToken get() = context.token
     val defaultFloodScopeNeedsRecovery: Boolean
@@ -270,7 +275,10 @@ class SettingsService(
         mode
     }
 
-    private suspend fun <T> acknowledged(action: suspend (CompletableDeferred<Unit>, Subscription) -> T): T {
+    private suspend fun <T> acknowledged(
+        defaultScope: Boolean = false,
+        action: suspend (CompletableDeferred<Unit>, Subscription) -> T,
+    ): T {
         val completion = CompletableDeferred<Unit>()
         val owner = synchronized(eventLock) {
             subscription?.takeUnless { eventsFinished }
@@ -282,7 +290,9 @@ class SettingsService(
                     if (eventsFinished || subscription !== owner) {
                         throw SettingsServiceException(SettingsServiceError.NotConnected)
                     }
+                    if (defaultScope) defaultScopeUncertain = true
                 }
+                if (defaultScope) onDefaultScopeAdmission?.invoke()
                 action(completion, owner)
             }
             completion.await()
@@ -310,6 +320,7 @@ class SettingsService(
     suspend fun getDefaultFloodScope(): String? = defaultScopeOperation { operation { readDefaultFloodScope() } }
 
     private suspend fun readDefaultFloodScope(): String? {
+        synchronized(eventLock) { defaultScopeBaselineEstablished = false }
         val actual = configuration { getDefaultFloodScope() }?.name
         publish(SettingsEvent.DefaultFloodScopeUpdated(actual))
         return actual
@@ -320,10 +331,20 @@ class SettingsService(
     }
 
     /** Dependent channel routing and region edits must not sample an uncertain cached default. */
-    suspend fun <T> withPersistedDefaultFloodScope(action: suspend () -> T): T = defaultScopeOperation {
-        if (defaultFloodScopeNeedsRecovery) readDefaultFloodScopePersisted()
-        context.requireCurrent()
-        action()
+    suspend fun <T> withPersistedDefaultFloodScope(action: suspend () -> T): T {
+        val caller = currentCoroutineContext()
+        return defaultScopeOperation {
+            if (!synchronized(eventLock) { defaultScopeBaselineEstablished }) {
+                val supported = operation { configuration { queryDevice() }.firmwareVersion >= 11u }
+                if (supported) readDefaultFloodScopePersisted()
+                else synchronized(eventLock) { defaultScopeBaselineEstablished = true }
+            } else if (defaultFloodScopeNeedsRecovery) readDefaultFloodScopePersisted()
+            // Reconciliation is connection-owned; dependent transmission still belongs to its caller.
+            withContext(caller) {
+                context.requireCurrent()
+                action()
+            }
+        }
     }
 
     suspend fun setDefaultFloodScopePersisted(name: String?, currentDevice: () -> DeviceDTO?): String? = defaultScopeOperation {
@@ -338,28 +359,37 @@ class SettingsService(
     suspend fun removeKnownRegionPersisted(
         region: String,
         currentDevice: () -> DeviceDTO?,
-        remove: suspend () -> Unit,
+        remove: suspend (String?) -> KnownRegionRemovalOutcome,
     ) = defaultScopeOperation {
-        val device = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
-        if (device.supportsDefaultFloodScope) {
-            // This acknowledged baseline fences older unacknowledged reads even if no clear is needed.
-            val actual = readDefaultFloodScopePersisted()
-            val radioRegion = defaultFloodScopeName(region)
-            val latest = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
-            val anotherAlias = latest.knownRegions.any { it != region && defaultFloodScopeName(it) == radioRegion }
-            val matchesRadio = radioRegion != null && actual?.name == radioRegion
-            if (matchesRadio && actual?.scopeKey != FloodScope.Region(checkNotNull(radioRegion)).scopeKey()) {
-                verification("scopeKey(region=$radioRegion)", "different scope key")
+        repeat(3) {
+            val device = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+            var acknowledgedName: String? = null
+            if (device.supportsDefaultFloodScope) {
+                // Every replan rebases live state from the authoritative row through the radio ACK.
+                val actual = readDefaultFloodScopePersisted()
+                acknowledgedName = actual?.name
+                val radioRegion = defaultFloodScopeName(region)
+                val latest = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+                val anotherAlias = latest.knownRegions.any { it != region && defaultFloodScopeName(it) == radioRegion }
+                val matchesRadio = radioRegion != null && actual?.name == radioRegion
+                val retryClear = actual == null &&
+                    (device.defaultFloodScopeName == region || (radioRegion != null && device.defaultFloodScopeName == radioRegion))
+                if (!anotherAlias && (matchesRadio || retryClear)) {
+                    persistDefaultFloodScope(null)
+                    acknowledgedName = null
+                }
             }
-            val retryClear = actual == null &&
-                (device.defaultFloodScopeName == region || (radioRegion != null && device.defaultFloodScopeName == radioRegion))
-            if (!anotherAlias && (matchesRadio || retryClear)) {
-                persistDefaultFloodScope(null)
+            context.requireCurrent()
+            when (remove(acknowledgedName)) {
+                KnownRegionRemovalOutcome.Removed -> {
+                    context.requireCurrent()
+                    return@defaultScopeOperation
+                }
+                KnownRegionRemovalOutcome.Retired -> throw SettingsServiceException(SettingsServiceError.NotConnected)
+                KnownRegionRemovalOutcome.NeedsScopeReconciliation -> Unit
             }
         }
-        context.requireCurrent()
-        remove()
-        context.requireCurrent()
+        verification("stable region removal", "scope changed during every commit attempt")
     }
 
     private suspend fun <T> defaultScopeOperation(action: suspend () -> T): T {
@@ -394,8 +424,7 @@ class SettingsService(
 
     private suspend fun persistDefaultFloodScope(name: String?): String? {
         val expected = defaultFloodScopeName(name)
-        val actual = acknowledged { completion, owner ->
-            synchronized(eventLock) { defaultScopeUncertain = true }
+        val actual = acknowledged(defaultScope = true) { completion, owner ->
             configuration {
                 if (expected == null) setDefaultFloodScope("", FloodScope.Disabled)
                 else setDefaultFloodScope(expected, FloodScope.Region(expected))
@@ -405,20 +434,25 @@ class SettingsService(
             value
         }
         verifyDefaultScopeKey(actual)
-        synchronized(eventLock) { defaultScopeUncertain = false }
+        synchronized(eventLock) {
+            defaultScopeUncertain = false
+            defaultScopeBaselineEstablished = true
+        }
         if (actual?.name != expected) verification(expected ?: "(cleared)", actual?.name ?: "(cleared)")
         return actual?.name
     }
 
     private suspend fun readDefaultFloodScopePersisted(): DefaultFloodScope? {
-        synchronized(eventLock) { defaultScopeUncertain = true }
-        val actual = acknowledged { completion, owner ->
+        val actual = acknowledged(defaultScope = true) { completion, owner ->
             val value = configuration { getDefaultFloodScope() }
             publish(SettingsEvent.DefaultFloodScopeUpdated(value?.name, completion), completion, owner)
             value
         }
         verifyDefaultScopeKey(actual)
-        synchronized(eventLock) { defaultScopeUncertain = false }
+        synchronized(eventLock) {
+            defaultScopeUncertain = false
+            defaultScopeBaselineEstablished = true
+        }
         return actual
     }
 
@@ -454,6 +488,7 @@ class SettingsService(
     }
 
     private suspend fun writeDefaultFloodScopeAndVerify(name: String?): String? {
+        synchronized(eventLock) { defaultScopeBaselineEstablished = false }
         val expected = defaultFloodScopeName(name)
         configuration {
             if (expected == null) setDefaultFloodScope("", FloodScope.Disabled)

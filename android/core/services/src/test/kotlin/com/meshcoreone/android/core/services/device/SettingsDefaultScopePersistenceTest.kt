@@ -10,7 +10,6 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.FloodScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.async
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -31,6 +30,160 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsDefaultScopePersistenceTest {
+    @Test fun replacementAtAdmissionBeforeTheFirstCommandRetainsTheRecoveryObligation() = runTest {
+        lateinit var fixture: SettingsFixture
+        var replace = true
+        var replacement: com.meshcoreone.android.core.contracts.domain.SessionEventSubscription<SettingsEvent>? = null
+        fixture = settingsFixture(onDefaultScopeAdmission = {
+            if (replace) {
+                replace = false
+                assertTrue(fixture.settings.defaultFloodScopeNeedsRecovery, "Obligation and owner check are one admission")
+                replacement = fixture.settings.events()
+            }
+        })
+        val old = fixture.settings.events()
+        try {
+            val write = request { fixture.settings.selectScope("EU868") }
+            reply(fixture, 2, PacketBuilder.setDefaultFloodScope("EU868", FloodScope.Region("EU868")), okPacket())
+            reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
+            assertEquals(SettingsServiceError.NotConnected, assertFailsWith<SettingsServiceException> { write.await() }.error)
+            val observed = mutableListOf<String?>()
+            val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                assertNotNull(replacement).events.collect {
+                    val update = assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)
+                    observed += update.name
+                    assertNotNull(update.persistence).complete(Unit)
+                }
+            }
+            try {
+                reply(fixture, 4, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
+                assertFalse(fixture.settings.defaultFloodScopeNeedsRecovery)
+                assertEquals(listOf("EU868"), observed)
+                assertEquals(1, fixture.radio.sent.count { it[0] == 0x3f.toUByte() }, "Recovery never invents rollback")
+            } finally { collector.cancel() }
+        } finally { old.close(); replacement?.close(); fixture.close() }
+    }
+
+    @Test fun aFreshSupportedGenerationRequiresAnAcknowledgedRadioBaselineBeforeDependentWork() = runTest {
+        val fixture = settingsFixture(generation = 2)
+        val subscription = fixture.settings.events()
+        val received = CompletableDeferred<SettingsEvent.DefaultFloodScopeUpdated>()
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect { received.complete(assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)) }
+        }
+        var dependent = false
+        try {
+            val work = request { fixture.settings.withPersistedDefaultFloodScope { dependent = true } }
+            reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 11u))
+            reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
+            assertFalse(dependent)
+            assertFalse(work.isCompleted)
+            val actual = received.await()
+            assertEquals("EU868", actual.name)
+            assertNotNull(actual.persistence).complete(Unit)
+            work.await()
+            assertTrue(dependent)
+        } finally { subscription.close(); collector.cancel(); fixture.close() }
+    }
+
+    @Test fun aFreshUnsupportedGenerationNeverIssuesAnUnsupportedScopeRead() = runTest {
+        val fixture = settingsFixture(generation = 2)
+        var dependent = false
+        try {
+            val work = request { fixture.settings.withPersistedDefaultFloodScope { dependent = true } }
+            reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 9u))
+            work.await()
+            assertTrue(dependent)
+            assertEquals(2, fixture.radio.sent.size)
+        } finally { fixture.close() }
+    }
+
+    @Test fun cancelledDependentWorkDoesNotTransmitAfterItsOwnedBaselineAcknowledges() = runTest {
+        val fixture = settingsFixture()
+        val subscription = fixture.settings.events()
+        val received = CompletableDeferred<SettingsEvent.DefaultFloodScopeUpdated>()
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect { received.complete(assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)) }
+        }
+        var transmitted = false
+        try {
+            val work = request { fixture.settings.withPersistedDefaultFloodScope { transmitted = true } }
+            reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 11u))
+            reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
+            work.cancel()
+            runCurrent()
+            assertNotNull(received.await().persistence).complete(Unit)
+            runCurrent()
+            assertFalse(transmitted)
+            assertFalse(fixture.settings.defaultFloodScopeNeedsRecovery, "Accepted baseline persists despite waiter cancellation")
+            val next = request { fixture.settings.withPersistedDefaultFloodScope { transmitted = true } }
+            next.await()
+            assertTrue(transmitted)
+            assertEquals(3, fixture.radio.sent.size, "The same generation reuses only its acknowledged baseline")
+        } finally { subscription.close(); collector.cancel(); fixture.close() }
+    }
+
+    @Test fun reconciliationRefusalReplansRadioAndPersistenceBeforeReattemptingRemoval() = runTest {
+        val fixture = settingsFixture()
+        val subscription = fixture.settings.events()
+        val prefix = "A".repeat(30)
+        var device = DeviceDTO(
+            radioId = RADIO, publicKey = filled(1), nodeName = "Test", firmwareVersion = 11u,
+            defaultFloodScopeName = prefix, knownRegions = listOf(prefix, prefix + "suffix").snapshot(),
+        )
+        val observed = mutableListOf<String?>()
+        val attempts = mutableListOf<String?>()
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect {
+                val update = assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)
+                device = device.copy(defaultFloodScopeName = update.name)
+                observed += update.name
+                assertNotNull(update.persistence).complete(Unit)
+            }
+        }
+        try {
+            val removal = request {
+                fixture.settings.removeKnownRegionPersisted(prefix, { device }) { acknowledgedName ->
+                    attempts += acknowledgedName
+                    if (attempts.size == 1) {
+                        device = device.copy(knownRegions = listOf(prefix).snapshot())
+                        com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome.NeedsScopeReconciliation
+                    } else com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome.Removed
+                }
+            }
+            reply(fixture, 2, PacketBuilder.getDefaultFloodScope(), floodScopePacket(prefix))
+            reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket(prefix))
+            reply(fixture, 4, PacketBuilder.setDefaultFloodScope("", FloodScope.Disabled), okPacket())
+            reply(fixture, 5, PacketBuilder.getDefaultFloodScope(), floodScopePacket(null))
+            removal.await()
+            assertEquals(listOf(prefix, null), attempts)
+            assertEquals(listOf(prefix, prefix, null), observed)
+        } finally { subscription.close(); collector.cancel(); fixture.close() }
+    }
+
+    @Test fun repeatedReconciliationRefusalFailsExplicitlyAfterTheBoundedReplans() = runTest {
+        val fixture = settingsFixture()
+        val subscription = fixture.settings.events()
+        val device = DeviceDTO(radioId = RADIO, publicKey = filled(1), nodeName = "Test", firmwareVersion = 11u)
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect {
+                assertNotNull(assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event).persistence).complete(Unit)
+            }
+        }
+        var attempts = 0
+        try {
+            val removal = request {
+                fixture.settings.removeKnownRegionPersisted("EU868", { device }) {
+                    attempts++
+                    com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome.NeedsScopeReconciliation
+                }
+            }
+            repeat(3) { reply(fixture, it + 2, PacketBuilder.getDefaultFloodScope(), floodScopePacket(null)) }
+            assertIs<SettingsServiceError.VerificationFailed>(assertFailsWith<SettingsServiceException> { removal.await() }.error)
+            assertEquals(3, attempts)
+        } finally { subscription.close(); collector.cancel(); fixture.close() }
+    }
+
     private fun floodScopePacket(name: String?, key: Bytes? = null): Bytes = Bytes.of(0x1c) +
         (name?.let { Bytes.utf8(it).paddedOrTruncated(31) + (key ?: FloodScope.Region(it).scopeKey()) } ?: Bytes.EMPTY)
 
@@ -203,7 +356,10 @@ class SettingsDefaultScopePersistenceTest {
         var removed = false
         try {
             val removal = request {
-                fixture.settings.removeKnownRegionPersisted(region, { device }) { removed = true }
+                fixture.settings.removeKnownRegionPersisted(region, { device }) {
+                    removed = true
+                    com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome.Removed
+                }
             }
             reply(fixture, 2, PacketBuilder.getDefaultFloodScope(), floodScopePacket(radioName))
             assertFalse(removed)
@@ -349,7 +505,10 @@ class SettingsDefaultScopePersistenceTest {
         var removed = false
         try {
             val removal = request {
-                fixture.settings.removeKnownRegionPersisted(prefix + "two", { device }) { removed = true }
+                fixture.settings.removeKnownRegionPersisted(prefix + "two", { device }) {
+                    removed = true
+                    com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome.Removed
+                }
             }
             reply(fixture, 2, PacketBuilder.getDefaultFloodScope(), floodScopePacket(prefix))
             removal.await()

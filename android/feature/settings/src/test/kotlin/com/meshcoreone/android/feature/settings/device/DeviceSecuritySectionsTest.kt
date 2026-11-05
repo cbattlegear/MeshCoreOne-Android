@@ -549,6 +549,22 @@ class DefaultFloodScopeStateHolderTest {
     }
 
     @Test
+    fun `restored raw defaults select their normalized identity at multibyte boundaries`() {
+        for ((raw, normalized) in listOf(
+            "A".repeat(30) + "suffix" to "A".repeat(30),
+            "é".repeat(15) + "suffix" to "é".repeat(15),
+            "A".repeat(29) + "é-tail" to "A".repeat(29),
+        )) {
+            val restored = DefaultFloodScopeState(device = device(
+                knownRegions = listOf(raw, normalized), defaultFloodScopeName = raw,
+            ))
+            assertEquals(normalized, restored.currentScope)
+            assertEquals(setOf(normalized), restored.regionGroups.keys)
+            assertEquals(raw, restored.device!!.defaultFloodScopeName, "Rendering must not rewrite restored storage")
+        }
+    }
+
+    @Test
     fun `teardown during service acquisition is routed through the scope action instead of escaping the click`() {
         val bound = DefaultFloodScopeStateHolder(
             scheduler.environment(), connection, { throw SettingsNotConnectedException() }, discovery, store,

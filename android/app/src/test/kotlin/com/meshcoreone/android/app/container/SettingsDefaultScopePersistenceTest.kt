@@ -5,11 +5,16 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.navigation.removeSettingsKnownRegion
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.DeviceDTO
+import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.FloodScope
@@ -31,11 +36,325 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
+    @Test fun channelReactionAndNotificationReplyShareTheActualWireGateAndCanRetry() = runTest {
+        withSettings { h, holder, _, radio ->
+            val device = assertNotNull(h.manager.connectedDevice)
+            val channel = ChannelDTO(radioId = device.radioId, index = 1u, name = "Inline scope control")
+            store.saveChannel(channel)
+            holder.select("EU868")
+            h.eventually("default acknowledged before inline actions") {
+                !holder.state.value.isApplying && holder.state.value.currentScope == "EU868"
+            }
+            val source = MessageDTO(
+                java.util.UUID.randomUUID(), device.radioId, channelIndex = channel.index,
+                text = "Original", timestamp = 1u, senderNodeName = "Peer",
+            )
+            val start = h.links.radios.single().sent.size
+            radio.activeScopeFailure = 2u
+            val failure = assertFailsWith<MessageServiceException> {
+                h.container.chatsFeature.react(source, "\uD83D\uDC4D", TimelineConversation.Channel(channel))
+            }
+            assertTrue(failure.error is MessageServiceError.SendFailed)
+            h.sessions.current!!.notificationActionHandler.handleChannelQuickReply(device.radioId, channel.index, "Inline reply")
+            assertTrue(radio.channelTransmissions.isEmpty())
+            assertEquals(2, radio.activeScopes.size)
+            val failed = store.fetchMessages(device.radioId, channel.index)
+            assertEquals(2, failed.size)
+            assertTrue(failed.all { it.status == MessageStatus.FAILED }, "Neither inline action can retain false pending/sent success")
+            radio.activeScopeFailure = null
+            h.container.chatsFeature.react(source, "\uD83D\uDC4D", TimelineConversation.Channel(channel))
+            h.sessions.current!!.notificationActionHandler.handleChannelQuickReply(device.radioId, channel.index, "Inline reply retry")
+            assertEquals(2, radio.channelTransmissions.size)
+            val saved = store.fetchMessages(device.radioId, channel.index)
+            assertEquals(2, saved.count { it.status == MessageStatus.SENT })
+            assertTrue(saved.filter { it.id in failed.map(MessageDTO::id) }.all { it.status == MessageStatus.FAILED })
+            val scopeOpcode = PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey())[0]
+            val frames = h.links.radios.single().sent.drop(start)
+            assertEquals(
+                listOf(scopeOpcode, scopeOpcode, scopeOpcode, 3u.toUByte(), scopeOpcode, 3u.toUByte()),
+                frames.map { it[0] }.filter { it == scopeOpcode || it == 3u.toUByte() },
+            )
+            assertTrue(frames.none { it[0] == 0x1fu.toUByte() }, "Scope ERROR 2 must never query channel existence")
+        }
+    }
+
+    @Test fun actualChannelTransmissionWaitsThroughPausedAndFailedReconciliationThenSendsAfterRetry() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var armed = false
+        var failedSaves = 0
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (armed && dto.defaultFloodScopeName == "EU868") {
+                    armed = false
+                    entered.complete(Unit)
+                    release.await()
+                }
+                return try {
+                    store.saveDeviceIfUnchanged(dto, expected)
+                } catch (failure: com.meshcoreone.android.core.contracts.domain.PersistenceStoreException) {
+                    if (dto.defaultFloodScopeName == "EU868") failedSaves++
+                    throw failure
+                }
+            }
+        }
+        try {
+            withSettings(held) { h, holder, failures, radio ->
+                val before = assertNotNull(h.manager.connectedDevice)
+                store.saveChannel(ChannelDTO(radioId = before.radioId, index = 1u, name = "Scope control"))
+                db.openHelper.writableDatabase.execSQL(
+                    "CREATE TRIGGER reject_transmission_scope BEFORE UPDATE ON devices " +
+                        "BEGIN SELECT RAISE(FAIL, 'scope acknowledgment unavailable'); END",
+                )
+                try {
+                    armed = true
+                    holder.select("EU868")
+                    h.eventually("actual Settings persistence is paused") { entered.isCompleted }
+                    val message = enqueueActualChannel(h, before, "scope-gated channel")
+                    val channel = assertNotNull(store.fetchChannel(before.radioId, 1u))
+                    val source = MessageDTO(
+                        java.util.UUID.randomUUID(), before.radioId, channelIndex = channel.index,
+                        text = "Inline source", timestamp = 1u, senderNodeName = "Peer",
+                    )
+                    val reaction = async {
+                        runCatching { h.container.chatsFeature.react(source, "\uD83D\uDC4D", TimelineConversation.Channel(channel)) }
+                    }
+                    val notification = async {
+                        h.sessions.current!!.notificationActionHandler.handleChannelQuickReply(
+                            before.radioId, channel.index, "Reply during reconciliation",
+                        )
+                    }
+                    h.settle()
+                    assertTrue(radio.channelTransmissions.isEmpty())
+                    assertTrue(radio.activeScopes.isEmpty())
+                    assertFalse(reaction.isCompleted, "Inline reaction cannot bypass the pending Room acknowledgment")
+                    assertFalse(notification.isCompleted, "Notification reply cannot bypass the pending Room acknowledgment")
+                    assertEquals(before, store.fetchDevice(before.id))
+                    release.complete(Unit)
+                    h.eventually("selection, queued and inline gates encounter real Room failures") {
+                        failedSaves >= 4 && !holder.state.value.isApplying && failures.isNotEmpty() &&
+                            reaction.isCompleted && notification.isCompleted
+                    }
+                    assertTrue(reaction.await().exceptionOrNull() is com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)
+                    notification.await()
+                    val inlineFailures = store.fetchMessages(before.radioId, channel.index).filter { it.id != message.id }
+                    assertEquals(2, inlineFailures.size)
+                    assertTrue(inlineFailures.all { it.status == MessageStatus.FAILED })
+                    assertNotNull(holder.state.value.errorMessage)
+                    assertTrue(radio.channelTransmissions.isEmpty(), "Failed reconciliation cannot transmit")
+                    assertTrue(radio.activeScopes.isEmpty(), "Failed reconciliation cannot apply a stale inherited scope")
+                    assertEquals(before, store.fetchDevice(before.id))
+                    db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_transmission_scope")
+                    holder.select("EU868")
+                    h.eventually("actual Settings retry acknowledges the radio default") {
+                        !holder.state.value.isApplying && holder.state.value.errorMessage == null &&
+                            h.manager.connectedDevice?.defaultFloodScopeName == "EU868"
+                    }
+                    h.sessions.current!!.chatSendQueueService.transportDidOpen()
+                    h.eventually("actual persisted channel message transmits after reconciliation") {
+                        radio.channelTransmissions.size == 1 &&
+                            kotlinx.coroutines.runBlocking {
+                                store.fetchMessage(com.meshcoreone.android.core.contracts.domain.EntityKey(before.radioId, message.id))
+                                    ?.status == com.meshcoreone.android.core.model.MessageStatus.SENT
+                            }
+                    }
+                    assertEquals(
+                        listOf(PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey())),
+                        radio.activeScopes,
+                    )
+                    assertEquals("EU868", radio.mode)
+                    assertEquals(before.copy(defaultFloodScopeName = "EU868"), store.fetchDevice(before.id))
+                    assertEquals(before.copy(defaultFloodScopeName = "EU868"), h.manager.connectedDevice)
+                    val frames = h.links.radios.single().sent
+                    assertTrue(
+                        frames.indexOf(radio.channelTransmissions.single()) > frames.lastIndexOf(radio.activeScopes.single()),
+                        "A successful actual channel scope application must precede the channel text command",
+                    )
+                } finally {
+                    db.openHelper.writableDatabase.execSQL("DROP TRIGGER IF EXISTS reject_transmission_scope")
+                }
+            }
+        } finally { release.complete(Unit) }
+    }
+
+    @Test fun failedScopeApplicationIsNotMistakenForAChannelErrorTwoOrAChannelTransmission() = runTest {
+        withSettings { h, holder, _, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            store.saveChannel(ChannelDTO(radioId = before.radioId, index = 1u, name = "Scope control"))
+            holder.select("EU868")
+            h.eventually("default acknowledged") { !holder.state.value.isApplying && holder.state.value.currentScope == "EU868" }
+            radio.activeScopeFailure = 2u
+            val start = h.links.radios.single().sent.size
+            val failed = enqueueActualChannel(h, before, "scope preparation fails")
+            h.eventually("scope preparation failure is surfaced on the actual unsent message") {
+                kotlinx.coroutines.runBlocking {
+                    store.fetchMessage(com.meshcoreone.android.core.contracts.domain.EntityKey(before.radioId, failed.id))
+                        ?.status == com.meshcoreone.android.core.model.MessageStatus.FAILED
+                }
+            }
+            assertTrue(radio.channelTransmissions.isEmpty())
+            assertFalse(
+                h.links.radios.single().sent.drop(start).any { it[0] == 0x1f.toUByte() },
+                "ERROR2 from scope preparation must not enter the channel-write query/accounting classifier",
+            )
+            radio.activeScopeFailure = null
+            val sent = enqueueActualChannel(h, before, "scope preparation retried")
+            h.eventually("positive actual send follows successful scope application") {
+                radio.channelTransmissions.size == 1 && kotlinx.coroutines.runBlocking {
+                    store.fetchMessage(com.meshcoreone.android.core.contracts.domain.EntityKey(before.radioId, sent.id))
+                        ?.status == com.meshcoreone.android.core.model.MessageStatus.SENT
+                }
+            }
+            val frames = h.links.radios.single().sent
+            assertTrue(frames.indexOf(radio.channelTransmissions.single()) > frames.lastIndexOf(radio.activeScopes.last()))
+            assertEquals("EU868", radio.mode)
+        }
+    }
+
+    @Test fun successorGenerationReconcilesARadioWriteThatOutlivedTheOriginalPersistenceConsumer() = runTest {
+        withSettings { h, holder, _, radio ->
+            holder.select("US915")
+            h.eventually("original durable baseline") {
+                !holder.state.value.isApplying && holder.state.value.currentScope == "US915"
+            }
+            val first = h.sessions.current!!
+            val retired = first.settingsService.events()
+            holder.select("EU868")
+            h.eventually("B is on the radio but its old consumer has not acknowledged") {
+                radio.mode == "EU868" && holder.state.value.isApplying
+            }
+            assertEquals("US915", store.fetchDevice(h.manager.connectedDevice!!.id)!!.defaultFloodScopeName)
+            h.manager.disconnect()
+            h.manager.connect(h.target())
+            h.eventually("S2 becomes ready without adopting the S1 completion") {
+                h.sessions.current != null && h.sessions.current !== first && h.appState.canRunSettingsStartupReads
+            }
+            val current = assertNotNull(h.manager.connectedDevice)
+            val channel = ChannelDTO(radioId = current.radioId, index = 1u, name = "Inherited after reconnect")
+            store.saveChannel(channel)
+            val readsBefore = radio.defaultReads
+            h.container.chatsFeature.timeline(TimelineConversation.Channel(channel)).syncChannelFloodScope(channel)
+            assertTrue(radio.defaultReads > readsBefore, "S2 must establish its own actual-radio baseline")
+            assertEquals("EU868", store.fetchDevice(current.id)!!.defaultFloodScopeName)
+            assertEquals("EU868", h.manager.connectedDevice!!.defaultFloodScopeName)
+            assertEquals(PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey()), radio.activeScopes.last())
+            assertEquals(listOf("US915", "EU868"), radio.writes, "No invented rollback or successor write")
+            assertTrue(retired.events.toList().isEmpty())
+        }
+    }
+
+    @Test fun actualInFlightScopeSubscriberReplacementReconcilesWithoutReportingTheOldActionSuccessful() = runTest {
+        withSettings { h, holder, failures, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            radio.onWrite = {
+                radio.onWrite = null
+                h.appState.wireServicesIfConnected()
+            }
+            holder.select("EU868")
+            h.eventually("replacement consumer acknowledges the actual in-flight radio scope") {
+                !holder.state.value.isApplying && failures.isNotEmpty() &&
+                    !h.sessions.current!!.settingsService.defaultFloodScopeNeedsRecovery &&
+                    h.manager.connectedDevice?.defaultFloodScopeName == "EU868"
+            }
+            assertNotNull(holder.state.value.errorMessage, "The retired action must not claim success")
+            assertEquals("EU868", radio.mode)
+            assertEquals(before.copy(defaultFloodScopeName = "EU868"), store.fetchDevice(before.id))
+            assertEquals(before.copy(defaultFloodScopeName = "EU868"), h.manager.connectedDevice)
+            assertEquals(listOf<String?>("EU868"), radio.writes)
+            holder.select("EU868")
+            h.eventually("same-session retry uses the current consumer") {
+                !holder.state.value.isApplying && holder.state.value.errorMessage == null
+            }
+            assertEquals(listOf<String?>("EU868", "EU868"), radio.writes)
+        }
+    }
+
+    @Test fun differentTargetAliasCasRacesReplanActualRadioInBothOrdersAndPreserveDisabledSurvivors() = runTest {
+        var completed = 0
+        for (prefix in listOf("A".repeat(30), "é".repeat(15))) {
+            for (removeShort in listOf(false, true)) {
+                for (scoped in listOf(false, true)) {
+                    val longer = prefix + "suffix"
+                    val target = if (removeShort) prefix else longer
+                    val other = if (removeShort) longer else prefix
+                    val entered = CompletableDeferred<Unit>()
+                    val release = CompletableDeferred<Unit>()
+                    var armed = false
+                    var rejectedHeldTicket = 0
+                    val held = object : PersistenceStoreProtocol by store {
+                        override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                            val heldTicket = armed && target !in dto.knownRegions && other in dto.knownRegions
+                            if (heldTicket) {
+                                armed = false
+                                entered.complete(Unit)
+                                release.await()
+                            }
+                            val accepted = store.saveDeviceIfUnchanged(dto, expected)
+                            if (heldTicket && !accepted) rejectedHeldTicket++
+                            return accepted
+                        }
+                    }
+                    try {
+                        withSettings(held) { h, holder, failures, radio ->
+                            val before = assertNotNull(h.manager.connectedDevice)
+                            val session = h.sessions.current!!
+                            com.meshcoreone.android.app.navigation.addSettingsKnownRegion(h.container, session, prefix)
+                            com.meshcoreone.android.app.navigation.addSettingsKnownRegion(h.container, session, longer)
+                            val targetChannel = store.fetchChannel(before.radioId, 1u)
+                                ?: ChannelDTO(radioId = before.radioId, index = 1u, name = "Target").also {
+                                    store.saveChannel(it)
+                                }
+                            val otherChannel = store.fetchChannel(before.radioId, 2u)
+                                ?: ChannelDTO(radioId = before.radioId, index = 2u, name = "Other").also {
+                                    store.saveChannel(it)
+                                }
+                            store.setChannelFloodScope(EntityKey(before.radioId, targetChannel.id), ChannelFloodScope.Region(target))
+                            store.setChannelFloodScope(EntityKey(before.radioId, otherChannel.id), ChannelFloodScope.Region(other))
+                            assertEquals(ChannelFloodScope.Region(target), store.fetchChannel(before.radioId, 1u)!!.floodScope)
+                            assertEquals(ChannelFloodScope.Region(other), store.fetchChannel(before.radioId, 2u)!!.floodScope)
+                            h.eventually("mixed aliases observed") { longer in holder.state.value.sortedKnownRegions }
+                            if (scoped) {
+                                holder.select(target)
+                                h.eventually("actual selected scope acknowledged") {
+                                    !holder.state.value.isApplying && holder.state.value.currentScope == prefix
+                                }
+                            }
+                            armed = true
+                            val removal = async { removeSettingsKnownRegion(h.container, session, target) }
+                            h.eventually("actual Settings removal is paused before its Room CAS") { entered.isCompleted }
+                            store.removeDeviceKnownRegion(before.radioId, other)
+                            val contested = assertNotNull(store.fetchDevice(before.id))
+                            assertTrue(target in contested.knownRegions)
+                            assertFalse(other in contested.knownRegions)
+                            assertEquals(if (scoped) prefix else null, contested.defaultFloodScopeName)
+                            assertEquals(if (scoped) prefix else null, radio.mode)
+                            assertEquals(ChannelFloodScope.Region(target), store.fetchChannel(before.radioId, 1u)!!.floodScope)
+                            release.complete(Unit)
+                            h.eventually("conditional editor removal readmits the actual scope transition") { removal.isCompleted }
+                            removal.await()
+                            assertEquals(1, rejectedHeldTicket, "The stale actual Room ticket must be rejected")
+                            assertNull(radio.mode)
+                            assertEquals(before, store.fetchDevice(before.id))
+                            assertEquals(before, h.manager.connectedDevice)
+                            assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(before.radioId, 1u)!!.floodScope)
+                            assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(before.radioId, 2u)!!.floodScope)
+                            assertEquals(if (scoped) listOf(prefix, null) else emptyList<String?>(), radio.writes)
+                            assertTrue(failures.isEmpty())
+                            completed++
+                        }
+                    } finally { release.complete(Unit) }
+                }
+            }
+        }
+        assertEquals(8, completed)
+    }
+
     @Test fun roomFailureReachesTheActualSettingsActionAndSameScopeReselectionRetries() = runTest {
         withSettings { h, holder, failures, radio ->
             val before = assertNotNull(h.manager.connectedDevice)
@@ -538,30 +857,51 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         }
     }
 
+    private suspend fun enqueueActualChannel(h: ContainerHarness, device: DeviceDTO, text: String): com.meshcoreone.android.core.model.MessageDTO {
+        val sender = h.container.chatsFeature.sender(device.radioId)
+        val message = sender.createPendingChannel(text, 1u, device.radioId, com.meshcoreone.android.core.protocol.model.TextType.PLAIN)
+        sender.enqueueChannel(com.meshcoreone.android.core.model.ChannelMessageEnvelope(
+            message.id, 1u, false, message.text, message.timestamp, null,
+        ))
+        return message
+    }
+
     private class ScopeRadio {
         var mode: String? = null
         var key: Bytes? = null
         var writeTransform: (String?) -> String? = { it }
         val writes = mutableListOf<String?>()
         val activeScopes = mutableListOf<Bytes>()
+        val channelTransmissions = mutableListOf<Bytes>()
+        var defaultReads = 0
+        var onWrite: (() -> Unit)? = null
+        var activeScopeFailure: UByte? = null
         fun configure(radio: FirmwareRadio) {
             radio.firmwareVersion = 11u
             radio.respond = { command ->
                 when (command[0].toInt()) {
+                    0x03 -> {
+                        channelTransmissions += command
+                        listOf(Bytes.of(0))
+                    }
                     PacketBuilder.setFloodScope(Bytes(ByteArray(16)))[0].toInt() -> {
                         activeScopes += command
-                        listOf(Bytes.of(0))
+                        listOf(activeScopeFailure?.let { Bytes.of(1, it.toInt()) } ?: Bytes.of(0))
                     }
                     0x3f -> {
                         val requested = if (command.size == 1) null else
                             command.slice(1, 32).toByteArray().toString(Charsets.UTF_8).substringBefore('\u0000')
                         writes += requested
                         mode = writeTransform(requested)
+                        onWrite?.invoke()
                         listOf(Bytes.of(0))
                     }
-                    0x40 -> listOf(Bytes.of(0x1c) + (mode?.let {
+                    0x40 -> {
+                        defaultReads++
+                        listOf(Bytes.of(0x1c) + (mode?.let {
                         Bytes.utf8(it).paddedOrTruncated(31) + (key ?: FloodScope.Region(it).scopeKey())
-                    } ?: Bytes.EMPTY))
+                        } ?: Bytes.EMPTY))
+                    }
                     else -> null
                 }
             }

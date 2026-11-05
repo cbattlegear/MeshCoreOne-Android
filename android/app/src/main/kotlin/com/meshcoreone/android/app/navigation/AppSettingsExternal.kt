@@ -13,6 +13,7 @@ import com.meshcoreone.android.app.container.AppSettingsFeature
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.state.AppSession
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.datastore.KeyGenerationService
@@ -41,9 +42,13 @@ internal suspend fun removeSettingsKnownRegion(container: AppContainer, session:
         session.settingsService.removeKnownRegionPersisted(
             region,
             currentDevice = { requireCurrent(); container.appState.connectedDevice },
-        ) {
+        ) { acknowledgedName ->
             requireCurrent()
-            if (!container.deviceEditor.persistKnownRegionRemoval(region, session.token)) throw SettingsNotConnectedException()
+            if (container.appState.connectedDevice?.supportsDefaultFloodScope == true) {
+                container.deviceEditor.persistKnownRegionRemoval(region, session.token, acknowledgedName)
+            } else if (container.deviceEditor.persistKnownRegionRemoval(region, session.token)) {
+                KnownRegionRemovalOutcome.Removed
+            } else KnownRegionRemovalOutcome.Retired
         }
     } catch (failure: SettingsServiceException) {
         if (failure.error == SettingsServiceError.NotConnected) {

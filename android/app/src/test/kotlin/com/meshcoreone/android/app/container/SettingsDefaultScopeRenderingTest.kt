@@ -68,6 +68,19 @@ class SettingsDefaultScopeRenderingTest : RoomProcessTest() {
             compose.onNode(isSelected()).assert(hasText(prefix))
             compose.onAllNodesWithText(prefix + "one").assertCountEquals(1)
             compose.onAllNodesWithText(prefix + "two").assertCountEquals(1)
+            for ((raw, identity) in listOf(
+                prefix + "one" to prefix,
+                "é".repeat(15) + "suffix" to "é".repeat(15),
+                "A".repeat(29) + "é-tail" to "A".repeat(29),
+            )) {
+                devices.value = device.copy(
+                    defaultFloodScopeName = raw, knownRegions = listOf(identity, raw).snapshot(),
+                )
+                runCurrent()
+                compose.onAllNodes(isSelected()).assertCountEquals(1)
+                compose.onNode(isSelected()).assert(hasText(identity))
+                compose.onAllNodesWithText(raw).assertCountEquals(1)
+            }
             devices.value = device.copy(defaultFloodScopeName = null)
             runCurrent()
             compose.onAllNodes(isSelected()).assertCountEquals(1)

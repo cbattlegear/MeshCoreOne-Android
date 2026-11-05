@@ -163,6 +163,7 @@ class DirectAckFailurePersistenceTest {
         var committed: Boolean? = null
         val cancellation = CancellationException("controlled caller cancellation at actual Room commit")
         var cancelAtRoomCommit = false
+        var cancelAfterSuccessfulReturn = false
         var cancelledAfterCommit = false
 
         override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
@@ -180,6 +181,10 @@ class DirectAckFailurePersistenceTest {
             }
             val changed = if (commit) store.updateMessageStatusUnlessDelivered(key, status) else false
             if (commit) committed = changed
+            if (cancelAfterSuccessfulReturn) {
+                check(changed) { "Caller cancellation requires a successful actual Room FAILED return" }
+                requireNotNull(currentCoroutineContext()[Job]).cancel(cancellation)
+            }
             if (throws) throw failure
             return changed
         }
@@ -299,6 +304,59 @@ class DirectAckFailurePersistenceTest {
         assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(radio, message.id))?.status)
         assertEquals(0, generation.service.pendingAckCount)
         assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u)), generation.statuses)
+        assertTrue(generation.stop().isComplete)
+    }
+
+    @Test fun successfulRoomFailAllReturnThenCallerCancellationStillCommitsTheRecordedAck() = runTest(scheduler) {
+        successfulFailureReturnThenCancellation(expiry = false)
+    }
+
+    @Test fun successfulRoomExpiryReturnThenCallerCancellationStillCommitsTheRecordedAck() = runTest(scheduler) {
+        successfulFailureReturnThenCancellation(expiry = true)
+    }
+
+    private suspend fun TestScope.successfulFailureReturnThenCancellation(expiry: Boolean) {
+        val writer = FailedWriter().apply {
+            throws = false
+            cancelAfterSuccessfulReturn = true
+        }
+        val generation = RadioGeneration(if (expiry) 16 else 15, writer)
+        val message = sent(generation)
+        if (expiry) advanceTimeBy(1_001)
+        val work = async {
+            if (expiry) generation.service.checkExpiredAcks() else generation.service.failAllPendingMessages()
+        }
+        runCurrent()
+        assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+        registerAckWhileWriterIsHeld(generation, writer)
+        writer.release.complete(Unit)
+        val thrown = assertFailsWith<CancellationException> { work.await() }
+        assertTrue(generateSequence<Throwable>(thrown) { it.cause }.any { it === writer.cancellation })
+        runCurrent()
+        assertTrue(work.isCancelled)
+        assertEquals(true, writer.committed, "Actual Room must return true before cancelling the service caller")
+        assertFalse(writer.cancelledAfterCommit, "This schedule must not cancel inside the repository commit boundary")
+        assertNull(failedCommitObserver)
+        assertEquals(1, writer.failedWrites)
+        val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(message.copy(status = MessageStatus.DELIVERED, roundTripTime = 123u), delivered)
+        assertEquals(code.readUInt32LE(0), delivered.ackCode)
+        assertEquals(0, generation.service.pendingAckCount)
+        assertEquals(1, writer.ackWrites)
+        assertEquals(1, generation.firmware.directSends)
+        assertEquals(listOf<MessageStatusEvent>(
+            MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u),
+        ), generation.statuses)
+        assertTrue(generation.service.isEventMonitoringActive, "Caller cancellation must not cancel the live ACK monitor")
+        assertNull(generation.statusFailure)
+        assertTrue(generation.diagnostics.none { it is MessagingDiagnostic.Failure })
+        generation.firmware.pushAck()
+        runCurrent()
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(1, generation.statuses.size, "Duplicate raw ACK must not publish delivery twice")
+        assertEquals(1, writer.ackWrites)
+        assertEquals(1, generation.firmware.directSends)
+        assertTrue(generation.service.isEventMonitoringActive)
         assertTrue(generation.stop().isComplete)
     }
 
@@ -503,6 +561,8 @@ class DirectAckFailurePersistenceTest {
     private inner class Firmware : MeshTransport {
         private val mock = MockTransport()
         var acceptedCode: Bytes = code
+        var directSends = 0
+            private set
         override suspend fun isConnected() = mock.isConnected()
         override suspend fun connect() = mock.connect()
         override suspend fun disconnect() = mock.disconnect()
@@ -519,10 +579,13 @@ class DirectAckFailurePersistenceTest {
                         .appendUInt32LE(915_000u).appendUInt32LE(125_000u).appendUInt8(7u).appendUInt8(5u)
                         .append(Bytes.utf8("Test")).toBytes(),
                 )
-                CommandCode.SEND_MESSAGE -> mock.simulateReceive(
-                    ByteWriter().appendUInt8(ResponseCode.MESSAGE_SENT.rawValue).appendUInt8(0u)
-                        .append(acceptedCode).appendUInt32LE(1u).toBytes(),
-                )
+                CommandCode.SEND_MESSAGE -> {
+                    directSends++
+                    mock.simulateReceive(
+                        ByteWriter().appendUInt8(ResponseCode.MESSAGE_SENT.rawValue).appendUInt8(0u)
+                            .append(acceptedCode).appendUInt32LE(1u).toBytes(),
+                    )
+                }
                 CommandCode.GET_CONTACT_BY_KEY -> mock.simulateError(2u)
                 else -> throw AssertionError("Unexpected direct-ACK test command: ${data[0]}")
             }

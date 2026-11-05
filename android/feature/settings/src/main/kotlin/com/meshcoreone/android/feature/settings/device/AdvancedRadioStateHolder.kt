@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
@@ -38,6 +39,7 @@ data class AdvancedRadioState(
     val isApplying: Boolean = false,
     val showSuccess: Boolean = false,
     val errorMessage: UiText? = null,
+    val sessionToken: SessionToken? = null,
 ) {
     /** Repeat Mode pins the frequency, so its field is disabled. */
     val frequencyEditable: Boolean get() = device?.clientRepeat != true
@@ -78,7 +80,10 @@ class AdvancedRadioStateHolder(
         if (observing != null) return
         observing = env.scope.launch {
             launch { connection.connectionState.collect { s -> mutable.update { it.copy(connectionState = s) } } }
-            connection.connectedDevice.collect { onDevice(it) }
+            connection.deviceObservations.collect { observed ->
+                mutable.update { it.copy(sessionToken = observed.sessionToken) }
+                onDevice(observed.device)
+            }
         }
     }
 
@@ -129,18 +134,34 @@ class AdvancedRadioStateHolder(
         }
     }
 
-    fun apply() {
+    fun apply() = apply(mutable.value.sessionToken)
+
+    fun apply(renderedToken: SessionToken?) {
         if (writeGate.inFlight.value) return
         val current = mutable.value
         val service = settingsService()
-        val request = if (service == null) null else validated(current, connection.connectedDevice.value)
+        val target = try {
+            if (service == null) null else
+                SettingsRadioTarget.capture(renderedToken, current.device, current.sessionToken, service)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            mutable.update { it.copy(errorMessage = env.describe(failure)) }
+            return
+        }
+        val request = target?.let { validated(current, it.device) }
         if (service == null || request == null) {
             mutable.update { it.copy(errorMessage = UiText.Resource(AppSettingsStrings.advancedRadioInvalidInput)) }
             return
         }
+        startApply(requireNotNull(target), request)
+    }
+
+    private fun startApply(target: SettingsRadioTarget, request: Request) {
+        if (writeGate.inFlight.value) return
         mutable.update { it.copy(isApplying = true) }
         writeGate.set(true)
-        env.scope.launch { runApply(service, request) }
+        env.scope.launch { runApply(target, request) }
     }
 
     private class Request(val frequencyKHz: UInt, val bandwidthHz: UInt, val spreadingFactor: UByte, val codingRate: UByte, val power: Byte)
@@ -161,21 +182,24 @@ class AdvancedRadioStateHolder(
         return Request(scaledKHz.toLong().toUInt(), bandwidthHz, spread.toUByte(), code.toUByte(), power.toByte())
     }
 
-    private suspend fun runApply(service: SettingsRadioPort, request: Request) {
+    private suspend fun runApply(target: SettingsRadioTarget, request: Request) {
         try {
-            val device = connection.connectedDevice.value ?: throw SettingsNotConnectedException()
-            // Firmware treats an omitted repeat byte as Repeat Mode off; read both from the radio at this call.
+            target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
+            val device = target.device
+            val service = target.service
+            // Firmware treats an omitted repeat byte as Repeat Mode off; retain the captured radio's values.
             val frequencyToSend = if (device.clientRepeat) device.frequency else request.frequencyKHz
             service.setRadioParamsVerified(
                 frequencyToSend, request.bandwidthHz, request.spreadingFactor, request.codingRate,
                 clientRepeat = device.clientRepeat,
             )
+            target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             service.setTxPowerVerified(request.power)
         } catch (cancelled: CancellationException) {
             release()
             throw cancelled
         } catch (error: Exception) {
-            val message = failures.route(error) { apply() }
+            val message = failures.route(error) { startApply(target, request) }
             mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }
             release()
             return

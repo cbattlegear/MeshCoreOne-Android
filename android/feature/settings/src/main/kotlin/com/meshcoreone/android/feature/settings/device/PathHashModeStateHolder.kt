@@ -59,28 +59,32 @@ class PathHashModeStateHolder(
 
     fun dismissError() = mutable.update { it.copy(errorMessage = null) }
 
-    fun onModeSelected(mode: UByte) {
+    fun onModeSelected(mode: UByte) = onModeSelected(mode, mutable.value.sessionToken)
+
+    fun onModeSelected(mode: UByte, renderedToken: SessionToken?) {
         if (mutable.value.isApplying) return
-        val expectedToken = mutable.value.sessionToken
-        val service = try {
-            settingsService().also {
-                if (expectedToken != null && it?.sessionToken != expectedToken) throw SettingsNotConnectedException()
-            }
+        val target = try {
+            val observed = mutable.value
+            SettingsRadioTarget.capture(renderedToken, observed.device, observed.sessionToken, settingsService())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
             apply(mode, null, failure)
             return
         }
-        if (mode == mutable.value.selectedMode && failedMode == null && service?.pathHashModeNeedsRecovery != true) return
-        apply(mode, service)
+        if (mode == mutable.value.selectedMode && failedMode == null && !target.service.pathHashModeNeedsRecovery) return
+        apply(mode, target)
     }
 
-    private fun apply(mode: UByte, service: SettingsRadioPort?, acquisitionFailure: Exception? = null) {
+    private fun apply(mode: UByte, target: SettingsRadioTarget?, acquisitionFailure: Exception? = null) {
         if (mutable.value.isApplying) return
         mutable.update { it.copy(selectedMode = mode, isApplying = true, errorMessage = null) }
         env.scope.launch {
             try {
                 acquisitionFailure?.let { throw it }
-                (service ?: throw SettingsNotConnectedException()).setPathHashModeVerified(mode)
+                val captured = target ?: throw SettingsNotConnectedException()
+                captured.requireCurrent(mutable.value.device, mutable.value.sessionToken)
+                captured.service.setPathHashModeVerified(mode)
                 failedMode = null
                 retryAlert.reset()
             } catch (cancelled: CancellationException) {
@@ -89,7 +93,7 @@ class PathHashModeStateHolder(
                 throw cancelled
             } catch (error: Exception) {
                 failedMode = mode
-                val message = failures.route(error) { apply(mode, service) }
+                val message = failures.route(error) { apply(mode, target) }
                 mutable.update { it.copy(selectedMode = it.device?.pathHashMode ?: 0u, errorMessage = message ?: it.errorMessage) }
             }
             mutable.update { it.copy(isApplying = false) }

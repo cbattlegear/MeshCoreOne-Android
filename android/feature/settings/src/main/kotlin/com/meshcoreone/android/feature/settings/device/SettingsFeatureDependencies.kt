@@ -31,6 +31,25 @@ interface SettingsConnection {
 
 data class SettingsDeviceObservation(val device: DeviceDTO?, val sessionToken: SessionToken? = null)
 
+internal data class SettingsRadioTarget(val device: DeviceDTO, val service: SettingsRadioPort, val token: SessionToken?) {
+    fun requireCurrent(device: DeviceDTO?, token: SessionToken?) {
+        if (this.token != token || device == null ||
+            (token != null && (device.id != this.device.id || device.radioId != token.radioId))
+        ) throw SettingsNotConnectedException()
+    }
+
+    companion object {
+        fun capture(
+            renderedToken: SessionToken?, device: DeviceDTO?, observedToken: SessionToken?, service: SettingsRadioPort?,
+        ): SettingsRadioTarget {
+            if (service == null || device == null || observedToken != renderedToken || service.sessionToken != renderedToken ||
+                (renderedToken != null && device.radioId != renderedToken.radioId)
+            ) throw SettingsNotConnectedException()
+            return SettingsRadioTarget(device, service, renderedToken)
+        }
+    }
+}
+
 /** Device GPS capability and switch (mirror of `core:services` `DeviceGPSState`). */
 data class DeviceGpsState(val isSupported: Boolean, val isEnabled: Boolean)
 

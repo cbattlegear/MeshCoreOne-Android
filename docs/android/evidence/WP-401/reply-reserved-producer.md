@@ -79,3 +79,85 @@ Historical exact composition 413d95303ab801dc34fd99c4a05842bca2969362/run4197051
 188 notification executions including all 20 original producer controls. That does NOT verify
 this successor. No device, cross-UID, runtime installation, release or activation evidence is
 claimed here.
+
+## Closed one-shot publication successor
+
+The later, unwired `AndroidMessagingNotificationDelivery.publishIssuedReplyOnce` owns
+construction and `notify` together and returns no PendingIntent. It calls
+`reservePublicationAttempt` with the exact bound installation, typed proposal, reply
+bound and caller-supplied attempt/owner UUIDs. Only `NewlyClaimed` permits construction
+and one app-level `notify` call. `Observed` returns `AttemptHeld`; rejection and
+indeterminate outcomes never construct an action. Receipt identity and bound are
+checked before construction. Cancellation propagates and never releases the permanent
+claim; platform rejection likewise cannot authorize a retry.
+
+This is at most one conforming APP publication attempt, not an atomic Android IPC
+fence, display receipt, ongoing visibility promise or guaranteed retention of entered
+text. Admission can consume quota while the sole first `notify` call is pending.
+Permission and request checks before claiming are not promises that later platform
+calls will succeed. The historical `prepareReserved` path remains exposure-held.
+
+The isolated producer composition is
+`3e56dc5580ea8e39758cd71f0f8dfbf70f6f4992`, with parents
+`2c3a71902aec417b6920ffb778a2064c33489a0e` and the real corrected storage successor
+`3768bcf61685f4c47bf3220903899a88c3da9cb5`. The storage source blob is
+`954e71f68512dbab778d59e4920f0b137382836c`. No storage implementation is copied or
+changed by the producer. Full hosted diagnostic
+[41983088348](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41983088348)
+is the authority for that exact composition; its result must be inspected, not inferred
+from the separate schema-6 diagnostic.
+
+That run completed FAILURE. The original Linux job127097519641 logged
+`:platform:notifications:compileDebugKotlin`,
+`:platform:notifications:compileDebugUnitTestKotlin` and
+`:platform:notifications:testDebugUnitTest` without FROM-CACHE markers, followed by
+`BUILD SUCCESSFUL in 12m 39s`. Post-Gradle evidence validation then failed:
+`Cannot establish all inherited Kotlin JUnit declarations for changed test source`.
+The nested Robolectric `CountingNotificationManager : ShadowNotificationManager()`
+cannot be resolved by that candidate's trusted source-declaration checker. Therefore
+there is no accepted method inventory/count or full diagnostic success. Controller,
+classification and Swift codec jobs passed; Android CI failed and the SwiftData job
+was skipped. No second CI-result bundle is retained. The bounded discovery-support
+dependency was escalated to the coordinator without changing the verifier or
+substituting a mock for the real PendingIntent/shadow-notify control.
+
+Five new producer methods cover first publication and consumed replay, real
+PendingIntent submission while a shadowed notify return is blocked, pre-claim
+permission/request failures, terminal platform failure, and post-commit cancellation
+followed by restart observation. Four execute on API31 and API37; the Android
+notification runtime-permission method executes on API37 only (nine expected
+executions). The existing declared task is
+`:platform:notifications:testDebugUnitTest`. The blocked-notify control uses
+Robolectric, not real Binder/device evidence.
+
+The earlier producer diagnostic
+[41982119166](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41982119166)
+on exact `2c3a71902aec417b6920ffb778a2064c33489a0e` failed production compilation at
+the storage Array.plus overload ambiguity; no notification tests executed. All
+earlier refs and runs are preserved, including the separately failing storage
+diagnostics. Source review and structural checks do not repair that execution gap.
+
+## Rejected-input recovery successor
+
+The producer-owned parser now reads RemoteInput independently before structural
+identity rejection. `Rejected(reason, readableExactText, inputStatus)` carries
+optional exact nonempty text solely as volatile recovery data. Input status
+distinguishes READABLE, EMPTY, MISSING and MALFORMED. Stale, missing or malformed
+identity retains its rejection reason and never becomes `ReadyForAdmission`.
+Malformed/unreadable Parcelable input is explicit; there is no replacement text,
+normalization, legacy decode or broad exception fallback. Valid-identity empty input
+retains its prior structural behavior. Diagnostic `toString` redacts rejected text.
+
+Three real-Intent methods execute on API31 and API37 (six expected executions) and
+cover stale/missing/malformed identity with exact whitespace/non-BMP text, absent
+and empty input, and a non-text Parcelable in Android's actual RemoteInput results
+Bundle. The parser calls neither storage admission nor send/dispatch and makes no
+persistence claim. WP-215 owns any later mapping to transient NOT_RETAINED and must
+bind its own candidate and execution evidence.
+
+Original parser refs are retained. The corrected-storage parser source pin
+`bb1d7eb99dcc03cc3c6a5185335dd6a9c7470e6e` descends from the isolated producer above;
+its source blob is `15190721b0d18dd32150a3febd8dac8d998f6a9d` and test blob is
+`0bbed4eb425644c32854a254f762e583bee92a86`. At this documentation update its controls
+have not yet executed. Neither this producer nor parser activates live ingress,
+changes the private reject-only component or modifies the #515 worktree.

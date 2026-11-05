@@ -120,7 +120,8 @@ class AppSettingsFeature private constructor(
     internal val selectionRequestedPermission = MutableStateFlow<OnboardingPermissionKind?>(null)
     private var selectionScanQueued = false
     private var selectionScanOwned = false
-    private var selectionScanJob: Job? = null
+    internal var selectionScanJob: Job? = null
+        private set
     private val selectionScanGate by lazy {
         val platform = requireNotNull(container.onboarding)
         DeviceScanCoordinator(scope, platform.pairing, platform.demo, platform.permissions, {})
@@ -183,12 +184,21 @@ class AppSettingsFeature private constructor(
                     if (platform.pairing.scanFallback?.isRequested?.value != true && selectionScanJob?.isActive != true) {
                         selectionScanOwned = platform.pairing.scanFallback != null
                         app.connectionUI.queuedSystemPairingSetup = null
+                        val previous = selectionScanJob
                         selectionScanJob = scope.launch {
                             try {
+                                previous?.join()
+                                ensureActive()
+                                if (container.navigation.state.value.selectedTab != AppTab.SETTINGS) return@launch
+                                platform.permissions.refresh()
+                                if (selectionScanGate.blockerFor(platform.permissions.snapshot.value) != PairingBlocker.NONE) {
+                                    requestSelectionPermission(SelectionAction.Scan)
+                                    return@launch
+                                }
                                 container.connectionPort.stopBleScanning()
                                 app.startDeviceScanAndAwait()
                             } finally {
-                                selectionScanOwned = false
+                                if (currentCoroutineContext()[Job] === selectionScanJob) selectionScanOwned = false
                             }
                         }
                     }

@@ -45,6 +45,10 @@ import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -376,6 +380,93 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertEquals(0, starts)
             assertTrue(h.links.links.isEmpty())
         }
+    }
+
+    private suspend fun TestScope.reopenedFallbackCleanupControl(cancelWhileWaiting: Boolean) {
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        var stops = 0
+        val cleanupEntered = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
+            override fun stopScan() { stops++ }
+        })
+        withSettings(pairingService = service, scans = scans) { h, feature ->
+            try {
+                mount(h, feature)
+                open(h)
+                compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+                compose.waitForIdle()
+                h.eventually("first scan awaiting discovery") { service.isPresenting.value && starts == 1 }
+                val oldJob = requireNotNull(feature.selectionScanJob)
+                val cleanupChild = backgroundScope.launch(oldJob) {
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        withContext(NonCancellable) {
+                            cleanupEntered.complete(Unit)
+                            releaseCleanup.await()
+                        }
+                    }
+                }
+                h.settle()
+                assertTrue(cleanupChild.isActive)
+                compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
+                compose.waitForIdle()
+                h.eventually("old job cancellation held in actual child cleanup") {
+                    cleanupEntered.isCompleted && oldJob.isCancelled && !oldJob.isCompleted && !service.isPresenting.value && stops == 1
+                }
+                compose.runOnUiThread { h.container.navigation.selectTab(AppTab.SETTINGS) }
+                compose.waitForIdle()
+                open(h)
+                compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+                compose.waitForIdle()
+                h.settle()
+                val nextJob = requireNotNull(feature.selectionScanJob)
+                assertNotSame(oldJob, nextJob)
+                assertTrue(nextJob.isActive)
+                assertFalse(oldJob.isCompleted)
+                assertEquals(1, starts)
+                assertFalse(service.isPresenting.value)
+                if (cancelWhileWaiting) {
+                    compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
+                    compose.waitForIdle()
+                    releaseCleanup.complete(Unit)
+                    h.eventually("navigation cancels the queued replacement before old cleanup ends") {
+                        oldJob.isCompleted && nextJob.isCompleted && !service.isPresenting.value &&
+                            !h.container.connectionPort.isPairingFlowActive
+                    }
+                    assertEquals(1, starts)
+                    assertEquals(1, stops)
+                    assertTrue(h.links.links.isEmpty())
+                    return@withSettings
+                }
+                releaseCleanup.complete(Unit)
+                h.eventually("new scan starts only after old job finishes") {
+                    oldJob.isCompleted && nextJob.isActive && service.isPresenting.value && starts == 2
+                }
+                compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertIsDisplayed()
+                compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
+                compose.waitForIdle()
+                h.eventually("new scan retains cancellation after old cleanup") {
+                    nextJob.isCompleted && !service.isPresenting.value &&
+                        !h.container.connectionPort.isPairingFlowActive && stops == 2
+                }
+                assertTrue(h.links.links.isEmpty())
+                assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+            } finally {
+                releaseCleanup.complete(Unit)
+            }
+        }
+    }
+
+    @Test fun reopenedFallbackScanWaitsForOldCancellationCleanupThenRetainsItsOwnNavigationCancellation() = runTest {
+        reopenedFallbackCleanupControl(cancelWhileWaiting = false)
+    }
+
+    @Test fun leavingSettingsWhileReplacementWaitsForOldCleanupCancelsThePendingScanGeneration() = runTest {
+        reopenedFallbackCleanupControl(cancelWhileWaiting = true)
     }
 
     @Test fun selectedFallbackRadioContinuesConnectingAfterNavigationRemovesThePickerHost() = runTest {

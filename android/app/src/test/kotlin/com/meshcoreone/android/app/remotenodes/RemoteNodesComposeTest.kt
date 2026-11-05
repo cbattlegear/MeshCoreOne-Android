@@ -515,6 +515,9 @@ class RemoteNodesComposeTest {
         show(); open(); expand(L.remoteNodesSettingsIdentityLocation)
         compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
         settleMapComposition()
+        compose.waitUntil(5_000) {
+            renderedMap?.camera == MapCamera(GeoPoint(37.7, -122.4), .05, .05)
+        }
         compose.runOnIdle {
             assertEquals(MapCamera(GeoPoint(37.7, -122.4), .05, .05), requireNotNull(renderedMap).camera)
         }

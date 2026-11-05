@@ -93,6 +93,14 @@ original cancellation for caller propagation and diagnostics, while subsequent
 live reconciliation uses a typed persistence error rather than cancelling
 the fresh event monitor.
 
+The cancellation control also starts a successor after the incomplete original
+teardown and sends the exact original raw ACK again. Its required outcome is
+explicitly unresolved FAILED with an unmatched-ACK diagnostic, not DELIVERED.
+The original in-memory receipt has been retired; the teardown issue is not
+a durable receipt and cannot give the successor authority to revive that row.
+The genuinely late, independent terminal FAILED and earlier replacement
+controls remain separate and unchanged.
+
 These are Android-only race/uncertainty controls, not additional claimed Swift
 original-case acceptance. Existing tests and their provenance remain unchanged.
 Assertions target the paired service repair; retention cases are expected to
@@ -150,3 +158,60 @@ errors, service-owner review found that a real Room commit can throw
 The successor includes the owner's immutable cancellation correction and the
 real commit-boundary control above. The existing run is not rerun or cancelled;
 the successor requires its own exact pushed-SHA diagnostic dispatch.
+
+## Second hosted diagnostic outcome
+
+The authoritative [run 41940596230](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41940596230)
+executed exact candidate `1709ec5e6b796a4ab7906d3844e9c7dddea4ceae`. Target
+compilation succeeded and tests actually ran: data reported 624 tests with
+11 failures; services reported 2,987 tests with six failures. Ten new Room
+cases stopped at the ACK-spy barrier because the initial real send had already
+called `updateMessageAck(..., SENT)`. The corrected spy counts DELIVERED writes
+only, preserving the assertion that delivery persistence cannot pass the held
+mutation lock. The genuinely late ACK control passed; these results do not
+establish that the blocked interleavings passed.
+
+The original Room no-ACK cancellation/explicit-retry test also failed and is
+preserved without assertion changes. The service owner supplied correction
+`d44b7aefae6439b613fb2548cf918afca8b2a58d`: retain cancellation uncertainty
+without prematurely reporting failure before an ACK exists. The new
+service-only replacement collectors explicitly observe the expected stale
+NotConnected stream termination, and inline cancellation assertions preserve
+the original cancellation in the recovered cause chain. These corrections
+require a fresh candidate run, not acceptance from the prior failed job.
+
+## Durable authority feasibility boundary
+
+The current schema is version 1. `MessageEntity`, `MessageDao` and
+`MessagePersisting` contain no persisted attempt receipt, message incarnation
+or mutation revision. An operation UUID or matching FAILED value is not proof
+of the writer. Reusing an existing status, ACK, timestamp or send-count column
+would corrupt its current contract rather than create authenticated authority.
+
+Trusted WP-202 admission succeeds for `MessageEntities.kt` and
+`MeshCoreDatabase.kt` with `update-directly-required-entity-or-dao`
+(`persistence-schemas`), and for `MessagePersisting.kt` with
+`modify-related-consumer` (`reviewed-support-consumer`). This is not a denied
+capability or historical reservation blocker. No such production/schema edit
+has been made in this candidate.
+
+A safe future contract needs a repository-owned persisted direct-attempt
+identity before an ambiguous write, an atomic conditional FAILED transition
+plus that exact attempt's receipt, and an atomic ACK-to-DELIVERED operation
+that validates message/radio/peer/ACK identity and the current incarnation
+and mutation revision. Competing status writes, upserts, deletion/recreation
+and restores must invalidate stale authority; unresolved-attempt enumeration
+and retirement must be durable and idempotent. A thrown return must read the
+existing receipt, never mint a replacement proof. This requires a forward
+schema migration and coverage of every affected mutation surface, not a local
+service marker or unrestricted FAILED-to-SENT operation.
+
+Current schema-integration producer
+`f5fe197b-40c2-44b8-aa63-6643c3d3469f` was contacted for the exact shared
+schema/base/version prerequisite; no held `6d41` schema, frozen `0cce`, old
+channel candidate or another producer's checkout was imported or edited.
+Even such a receipt cannot recover an ACK received while storage is
+unavailable if the process dies before the ACK itself reaches durable ingress.
+Without an acknowledged durable journal or firmware replay guarantee, that
+case must remain explicitly unresolved; no process-death or exactly-once
+recovery is claimed.

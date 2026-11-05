@@ -185,7 +185,7 @@ class DirectAckFailurePersistenceTest {
         }
 
         override suspend fun updateMessageAck(key: EntityKey, ackCode: UInt, status: MessageStatus, roundTripTime: UInt?) {
-            ackWrites++
+            if (status == MessageStatus.DELIVERED) ackWrites++
             store.updateMessageAck(key, ackCode, status, roundTripTime)
         }
     }
@@ -210,7 +210,7 @@ class DirectAckFailurePersistenceTest {
         generation.firmware.pushAck()
         runCurrent()
         assertEquals(1, generation.service.pendingAckCount)
-        assertEquals(0, writer.ackWrites, "ACK persistence must wait for the real service mutation lock")
+        assertEquals(0, writer.ackWrites, "DELIVERED ACK persistence must wait for the real service mutation lock")
         // A registered ACK is excluded from a second failure sweep before that sweep can take the held lock.
         val sweep = async { generation.service.failAllPendingMessages() }
         runCurrent()
@@ -433,7 +433,9 @@ class DirectAckFailurePersistenceTest {
         runCurrent()
         registerAckWhileWriterIsHeld(generation, writer)
         writer.release.complete(Unit)
-        assertSame(writer.cancellation, assertFailsWith<CancellationException> { work.await() })
+        val thrown = assertFailsWith<CancellationException> { work.await() }
+        assertTrue(generateSequence<Throwable>(thrown) { it.cause }.any { it === writer.cancellation },
+            "Coroutine stack recovery must preserve the original caller cancellation in its cause chain")
         runCurrent()
         assertTrue(writer.cancelledAfterCommit, "Caller cancellation must originate after actual SQLite endTransaction")
         assertNull(failedCommitObserver)
@@ -465,6 +467,20 @@ class DirectAckFailurePersistenceTest {
         assertTrue(report.issues.any { it.cause === writer.cancellation })
         assertEquals(0, generation.service.pendingAckCount)
         assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
+        val replacement = RadioGeneration(14)
+        generation.signals.replace(replacement.token)
+        replacement.start()
+        replacement.firmware.pushAck(code)
+        runCurrent()
+        assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)),
+            "The original teardown diagnostic is not a durable writer or ACK receipt for the successor")
+        assertEquals(0, replacement.service.pendingAckCount)
+        assertTrue(replacement.statuses.isEmpty())
+        assertTrue(replacement.diagnostics.any { it is MessagingDiagnostic.UnmatchedAcknowledgement })
+        assertTrue(replacement.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none {
+            it.cause === writer.cancellation
+        })
+        assertTrue(replacement.stop().isComplete)
     }
 
     private class Signals(token: SessionToken) : ConnectionSignals {

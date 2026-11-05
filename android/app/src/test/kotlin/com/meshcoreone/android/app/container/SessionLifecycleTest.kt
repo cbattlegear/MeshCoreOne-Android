@@ -36,7 +36,6 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.test.assertEquals
@@ -168,19 +167,18 @@ class SessionLifecycleTest : RoomProcessTest() {
                 accountingReceipts += event to h.manager.snapshot.value.token
             },
         )
-        val activeRadio = AtomicReference<FirmwareRadio?>()
         val generationRadios = ConcurrentHashMap<SessionToken, FirmwareRadio>()
         val bootstrapChannelRequests = ConcurrentLinkedQueue<Pair<SessionToken, UByte>>()
         val queueChannelRequests = ConcurrentLinkedQueue<Pair<SessionToken, UByte>>()
         h.links.configureRadio = { radio ->
-            activeRadio.set(radio)
             val sending = AtomicBoolean(false)
             radio.respond = { command ->
                 when (command[0].toInt()) {
                     3 -> {
                         check(h.manager.connectionState == DeviceConnectionState.READY)
                         sending.set(true)
-                        emptyList()
+                        // ERROR 2 belongs to this channel write, not a preceding scope/configuration command.
+                        listOf(Bytes.of(1, 2))
                     }
                     31 -> {
                         val index = command[1]
@@ -268,7 +266,6 @@ class SessionLifecycleTest : RoomProcessTest() {
             attemptCount = 2,
         ))
 
-        var errorDispatcher: Job? = null
         var transportOpenTrigger: Job? = null
         var queue: ChatSendQueueService? = null
         var initialToken: SessionToken? = null
@@ -361,14 +358,6 @@ class SessionLifecycleTest : RoomProcessTest() {
             assertTrue(h.container.foreground.activityStarted())
             h.appState.handleBecameActive()
             h.appState.handleReturnToForeground()
-            errorDispatcher = backgroundScope.launch(Dispatchers.Default) {
-                while (isActive) {
-                    if (h.manager.connectionState == DeviceConnectionState.READY) {
-                        activeRadio.get()?.push(Bytes.of(1, 2))
-                    }
-                    delay(20.milliseconds)
-                }
-            }
             transportOpenTrigger = backgroundScope.launch(Dispatchers.Default) {
                 while (isActive) {
                     h.sessions.current?.chatSendQueueService?.transportDidOpen()
@@ -503,7 +492,6 @@ class SessionLifecycleTest : RoomProcessTest() {
                         }
                     }
 
-                    cleanupStep { errorDispatcher?.cancel() }
                     cleanupStep { transportOpenTrigger?.cancel() }
                     var queueReport: TeardownReport? = null
                     cleanupStep { queueReport = queue?.shutdown() }

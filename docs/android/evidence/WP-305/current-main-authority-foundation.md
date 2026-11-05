@@ -42,6 +42,21 @@ actual receipt revisions, callback order and no save-failure remapping. Neither
 source review nor the earlier candidate results establishes this successor's
 Kotlin execution.
 
+The separately assigned SessionLifecycle integration trace compared the actual
+verified da8 with failed producer b1e. Runtime, protocol, ChatSendQueueService and
+the lifecycle test were unchanged. The added channelTransmission adapter now
+force-applies flood scope before channel transmission. The fixture's former
+20ms free-running generic ERROR 2 injector could reject that preliminary scope
+command instead of SEND_CHANNEL, which correctly becomes generic scope SendFailed
+and never reaches the asserted channel disambiguation query. The fixture now
+returns ERROR 2 specifically to actual command 3 (SEND_CHANNEL) and retains
+unanswered actual GET_CHANNEL plus all original per-envelope persistence,
+generation teardown, watchdog reconnect and final three-second assertions. No
+classification or messaging/rendering production change is made. Producer 244
+confirmed no competing fixture edit. This is a source-backed command-response
+provenance repair, not dismissal as flaky or acceptance without exact execution.
+The held map/timeline test is not edited.
+
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive
 cancellation before SET, then a later manual RF edit and fresh enable/off would

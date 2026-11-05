@@ -1929,43 +1929,51 @@ class MessagingRoomIntegrationTest {
         g.firmware.ackBeforeAcceptance = earlyPrediction
         g.firmware.acceptanceGate = gate
         val events = g.service.statusEvents()
-        val sending = if (queued) {
-            val message = g.service.createPendingMessage(text, contact)
-            store.upsertPendingSend(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio))
-            g.signals.set(DeviceConnectionState.READY)
-            g.queue.hydrate()
-            null
-        } else async { g.service.sendMessageWithRetry(text, contact) }
-        runCurrent()
-        assertFalse(sending?.isCompleted ?: false)
-        val pending = store.fetchMessages(EntityKey(radio, contact.id)).single()
-        assertEquals(MessageStatus.PENDING, pending.status)
-        assertNull(pending.ackCode)
-        assertNull(pending.roundTripTime)
-        assertEquals(1, g.service.pendingAckCount)
-        assertEquals(1, g.firmware.sent().size)
-        gate.complete(Unit); runCurrent()
-        g.firmware.pushAck(predicted, 999u); runCurrent()
-        val beforeActualAck = assertNotNull(store.fetchMessage(EntityKey(radio, pending.id)))
-        assertNotEquals(MessageStatus.DELIVERED, beforeActualAck.status)
-        assertNull(beforeActualAck.roundTripTime)
-        g.firmware.pushAck(accepted, 123u); runCurrent()
-        val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, pending.id)))
-        assertEquals(MessageStatus.DELIVERED, delivered.status)
-        assertEquals(accepted.readUInt32LE(0), delivered.ackCode)
-        assertEquals(123u, delivered.roundTripTime)
-        if (sending != null) assertEquals(delivered, sending.await()) else g.queue.awaitDrainCompletion()
-        assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
-        assertEquals(0, g.service.pendingAckCount)
-        assertEquals(1, g.firmware.sent().size)
-        assertTrue(store.fetchPendingSends(radio).isEmpty())
-        assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none {
-            it.operation == "park.${delivered.id}"
-        })
-        assertEquals(listOf(MessageStatusEvent.StatusResolved(delivered.id, MessageStatus.DELIVERED, 123u)),
-            completedStatuses(g, events))
-        g.stop()
-        assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
+        var sending: Deferred<MessageDTO>? = null
+        try {
+            if (queued) {
+                val message = g.service.createPendingMessage(text, contact)
+                store.upsertPendingSend(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio))
+                g.signals.set(DeviceConnectionState.READY)
+                g.queue.hydrate()
+            } else sending = async { g.service.sendMessageWithRetry(text, contact) }
+            runCurrent()
+            assertFalse(sending?.isCompleted ?: false)
+            val pending = store.fetchMessages(EntityKey(radio, contact.id)).single()
+            assertEquals(MessageStatus.PENDING, pending.status)
+            assertNull(pending.ackCode)
+            assertNull(pending.roundTripTime)
+            assertEquals(1, g.service.pendingAckCount)
+            assertEquals(1, g.firmware.sent().size)
+            gate.complete(Unit); runCurrent()
+            g.firmware.pushAck(predicted, 999u); runCurrent()
+            val beforeActualAck = assertNotNull(store.fetchMessage(EntityKey(radio, pending.id)))
+            assertNotEquals(MessageStatus.DELIVERED, beforeActualAck.status)
+            assertNull(beforeActualAck.roundTripTime)
+            g.firmware.pushAck(accepted, 123u); runCurrent()
+            val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, pending.id)))
+            assertEquals(MessageStatus.DELIVERED, delivered.status)
+            assertEquals(accepted.readUInt32LE(0), delivered.ackCode)
+            assertEquals(123u, delivered.roundTripTime)
+            if (sending != null) assertEquals(delivered, sending.await()) else g.queue.awaitDrainCompletion()
+            assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
+            assertEquals(0, g.service.pendingAckCount)
+            assertEquals(1, g.firmware.sent().size)
+            assertTrue(store.fetchPendingSends(radio).isEmpty())
+            assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none {
+                it.operation == "park.${delivered.id}"
+            })
+            assertEquals(listOf(MessageStatusEvent.StatusResolved(delivered.id, MessageStatus.DELIVERED, 123u)),
+                completedStatuses(g, events))
+            g.stop()
+            assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
+        } finally {
+            withContext(NonCancellable) {
+                gate.complete(Unit)
+                sending?.cancelAndJoin()
+                g.stop()
+            }
+        }
     }
 
     @Test fun inlineIntentRejectsChangedTextBeforeBegin() = runTest(scheduler) {

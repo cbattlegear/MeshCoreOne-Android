@@ -346,11 +346,19 @@ interface DirectAckRadioExclusionAuthority {
      *
      * Every resolution operation's identity, exact input and committed result must be durably
      * retained atomically with the evidence mutation, independently of the emission row's latest
-     * resolutionRequestId. Later resolutions and database/process reopen do not retire earlier
+     * resolutionRequestId. Within a claim, the ID binds the exact wire, physical emission and
+     * resolution input: reusing it for another emission is Conflict even with the same code.
+     * The caller uses a fresh ID for each distinct operation; the first journal entry is immutable.
+     * Later resolutions and database/process reopen do not retire earlier
      * replay identities. After E/r1 Accepted(123) and E/r2 Accepted(123), replaying r1 after reopen
      * is still AlreadyApplied; reusing r1 with Accepted(456) or DefinitelyUnsent is Conflict.
      * Replaying r1 neither replaces latest metadata r2 nor restores earlier evidence/authority.
      * Existing sticky Conflict evidence must never be cleared by replaying an earlier success.
+     * File-reopen replay requires a retained genuine opaque handle, validated against its persisted
+     * original issuer/lease/emission binding, not equality with the receiver's current issuer.
+     * This historical refinement never reauthorizes the product grant or relaxes issuer fencing
+     * on attempt/lease APIs. Process death cannot reconstruct an opaque handle through this API;
+     * durable operation retention is not a promise of handle recovery or restart replay.
      * Storage failures/cancellation propagate unchanged; a latest-ID comparison or readback alone
      * cannot establish whether an older operation committed.
      */

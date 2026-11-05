@@ -166,6 +166,16 @@ actual and any unsent observation. Replaying a prior successful operation must
 not clear that conflict, restore old evidence or renew authority. A lookup of
 only the emission row's latest ID cannot satisfy these cases.
 
+Within a claim, each resolution ID binds its exact wire, physical emission and
+resolution input; reuse across distinct emissions is `Conflict`, even for the
+same accepted code. The original operation entry is never overwritten.
+File-reopen controls retain a genuine opaque emission handle and validate its
+persisted original issuer/lease/emission binding rather than the receiver's
+current issuer. This permits historical evidence refinement only, not product
+grant renewal or relaxation of existing attempt/lease issuer fences. Actual
+process death cannot reconstruct that handle through the current API; retained
+operation history does not imply handle recovery or restart replay support.
+
 The contract value tests distinguish latest metadata from an older replay's
 operation identity and preserve conflict receipt data. They do not execute this
 storage sequence or prove persistence across reopen. Actual Room/journal/reopen

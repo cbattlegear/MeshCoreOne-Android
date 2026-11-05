@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RepeaterResolvable
 import com.meshcoreone.android.core.model.SavedTracePathDTO
@@ -108,9 +109,10 @@ class TracePathStateHolder(
         }
     }
 
-    internal fun isConnectionCurrent(): Boolean {
+    internal fun isConnectionCurrent(device: DeviceDTO? = deps.connectedDevice()): Boolean {
         if (connectionRetired) return false
-        if (sessionToken == deps.sessionToken()) return true
+        val token = sessionToken
+        if (token == deps.sessionToken() && (token == null || token.radioId == device?.radioId)) return true
         retireConnection()
         return false
     }
@@ -307,15 +309,16 @@ class TracePathStateHolder(
 
     /** Restores a saved path at its saved width; a mirrored palindrome turns auto-return on. */
     fun loadSavedPath(savedPath: SavedTracePathDTO) {
-        if (!isConnectionCurrent()) return
-        if (connectionIdentity != null && deps.connectedDevice()?.radioId != savedPath.radioId) return
+        val device = deps.connectedDevice()
+        if (!isConnectionCurrent(device)) return
+        if (connectionIdentity != null && device?.radioId != savedPath.radioId) return
         invalidatePathExecution()
         notifyHashModeAction()
         pendingPathHash = null
         update { it.copy(outboundPath = emptyList(), result = null, batchPresentationActive = false) }
         if (savedPath.pathBytes.isEmpty) return
         val size = savedPath.hashSize.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
-        val mode = if (deps.connectedDevice()?.supportsTraceHashSizeOverride == true) {
+        val mode = if (device?.supportsTraceHashSizeOverride == true) {
             java.lang.Long.numberOfTrailingZeros(savedPath.hashSize).toUByte()
         } else {
             null
@@ -345,7 +348,7 @@ class TracePathStateHolder(
         val radioId = device.radioId
         val snapshot = current
         val size = TraceHashModes.hashSize(snapshot.traceHashMode ?: device.pathHashMode).toLong()
-        if (!isConnectionCurrent()) return false
+        if (!isConnectionCurrent(device)) return false
         val store = deps.savedPaths() ?: return false
         val revision = pathSelectionRevision
         if (snapshot.batchEnabled && snapshot.completedResults.isNotEmpty()) {

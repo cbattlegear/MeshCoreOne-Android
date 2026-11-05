@@ -1403,6 +1403,60 @@ class MessagingRoomIntegrationTest {
         }
     }
 
+    @Test fun livePredictedAckDeliverySurvivesDifferentAcceptanceCodeInRetrySender() = runTest(scheduler) {
+        earlyPredictedAckThenDifferentAcceptance(queued = false)
+    }
+
+    @Test fun livePredictedAckDeliverySurvivesDifferentAcceptanceCodeInQueue() = runTest(scheduler) {
+        earlyPredictedAckThenDifferentAcceptance(queued = true)
+    }
+
+    private suspend fun TestScope.earlyPredictedAckThenDifferentAcceptance(queued: Boolean) {
+        seed()
+        val g = RadioGeneration(if (queued) 136 else 135, config = MessageServiceConfig(maxAttempts = 1))
+        g.start(); g.service.startEventMonitoring()
+        val text = "predicted before different acceptance"
+        val input = ByteWriter().appendUInt32LE(base.epochSecond.toUInt()).appendUInt8(0u)
+            .append(Bytes.utf8(text)).append(self).toBytes()
+        val predicted = Bytes(MessageDigest.getInstance("SHA-256").digest(input.toByteArray())).prefix(4)
+        val accepted = Bytes.of(0x10, 0x20, 0x30, 0x40)
+        assertNotEquals(predicted, accepted)
+        val gate = CompletableDeferred<Unit>()
+        g.firmware.acceptedAck = accepted
+        g.firmware.earlyAck = predicted
+        g.firmware.ackBeforeAcceptance = true
+        g.firmware.acceptanceGate = gate
+        val events = g.service.statusEvents()
+        val sending = if (queued) {
+            val message = g.service.createPendingMessage(text, contact)
+            store.upsertPendingSend(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio))
+            g.signals.set(DeviceConnectionState.READY)
+            g.queue.hydrate()
+            null
+        } else async { g.service.sendMessageWithRetry(text, contact) }
+        runCurrent()
+        assertFalse(sending?.isCompleted ?: false)
+        val delivered = store.fetchMessages(EntityKey(radio, contact.id)).single()
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        assertEquals(predicted.readUInt32LE(0), delivered.ackCode)
+        assertEquals(123u, delivered.roundTripTime)
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(1, g.firmware.sent().size)
+        gate.complete(Unit); runCurrent()
+        if (sending != null) assertEquals(delivered, sending.await()) else g.queue.awaitDrainCompletion()
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
+        assertEquals(0, g.service.pendingAckCount)
+        assertEquals(1, g.firmware.sent().size)
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
+        assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none {
+            it.operation == "park.${delivered.id}"
+        })
+        assertEquals(listOf(MessageStatusEvent.StatusResolved(delivered.id, MessageStatus.DELIVERED, 123u)),
+            completedStatuses(g, events))
+        g.stop()
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
+    }
+
     private suspend fun TestScope.exercisePublicFinalization(
         code: Bytes, tripTime: UInt?, listenerWins: Boolean, rejectWriteAfterDelivery: Boolean = false,
     ) {
@@ -2359,6 +2413,7 @@ class MessagingRoomIntegrationTest {
         var emptyChannelSlot = false
         var acknowledge = true
         var ackBeforeAcceptance = false
+        var earlyAck: Bytes? = null
         var automaticTripTime: UInt? = 123u
         var acceptanceGate: CompletableDeferred<Unit>? = null
         var acceptedAck: Bytes? = null
@@ -2390,7 +2445,7 @@ class MessagingRoomIntegrationTest {
                         .appendUInt8((data[2].toInt() and 3).toUByte()).append(data.slice(13, data.size)).append(self).toBytes()
                     val ack = acceptedAck ?: Bytes(MessageDigest.getInstance("SHA-256").digest(input.toByteArray())).prefix(4)
                     lastAck = ack
-                    if (acknowledge && ackBeforeAcceptance) pushAck(ack, automaticTripTime)
+                    if (acknowledge && ackBeforeAcceptance) pushAck(earlyAck ?: ack, automaticTripTime)
                     acceptanceGate?.await()
                     mock.simulateReceive(ByteWriter().appendUInt8(ResponseCode.MESSAGE_SENT.rawValue).appendUInt8(0u)
                         .append(ack).appendUInt32LE(suggestedTimeout).toBytes())

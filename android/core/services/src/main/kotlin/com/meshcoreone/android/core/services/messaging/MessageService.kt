@@ -913,13 +913,13 @@ class MessageService(
                             }
                         }
                     }
-                    mergeSentInfo(message.id, contact.id, predicted, info, 0u, null)
+                    mergeSentInfo(message.id, predicted, info, 0u, null)
                     Triple(info, tracking, predicted)
                 }
                 postDMSent(message.id, contact.id, info)
                 ownership.check("sendDirectMessage.accepted")
                 if (pendingAck(message.id)?.receipt === tracking.receipt) {
-                    mergeSentInfo(message.id, contact.id, predicted, info, 0u, null)
+                    mergeSentInfo(message.id, predicted, info, 0u, null)
                 }
                 fetchSaved(message.id)
             }
@@ -1145,7 +1145,7 @@ class MessageService(
                     claim.lastSentInfo = info
                     claim.acceptedWire = AcceptedDirectWire(wireID, info)
                 }
-                mergeSentInfo(id, contact.id, predicted, info, attempt, timeout)
+                mergeSentInfo(id, predicted, info, attempt, timeout)
                 recordDirectAcceptance(authorityState, wireID, info)
                 ownership.check("retryDirectMessage.accepted")
                 completedDirect(claim)?.let { return it }
@@ -1185,14 +1185,25 @@ class MessageService(
     }
 
     private fun mergeSentInfo(
-        id: UUID, contactID: UUID, predicted: Bytes, info: MessageSentInfo, attempt: UByte, timeout: Double?,
+        id: UUID, predicted: Bytes, info: MessageSentInfo, attempt: UByte, timeout: Double?,
     ) {
         val seconds = timeout ?: maxOf(config.minTimeout, info.suggestedTimeoutMs.toDouble() / 1000.0 * 1.2)
         if (info.expectedAck != predicted) {
             ownership.reporter.report(MessagingDiagnostic.AckCodeMismatch(token, id, attempt))
-            trackPendingAck(id, contactID, info.expectedAck, seconds)
-        } else synchronized(lock) {
-            pendingAcks[id]?.let { pendingAcks[id] = it.copy(sentAt = clock.wallClock.instant(), timeout = seconds) }
+        }
+        synchronized(lock) {
+            val current = pendingAcks[id] ?: return
+            if (current.authority !== directAuthorities[id]?.attempt) return
+            if (info.expectedAck != predicted) {
+                pendingAcks.values.firstOrNull { it.messageID != id && info.expectedAck in it.ackCodes }?.let {
+                    ownership.reporter.report(MessagingDiagnostic.AckCodeCollision(token, id, it.messageID))
+                    throw MessageServiceException(MessageServiceError.SendFailed("Ambiguous acknowledgement identity"))
+                }
+            }
+            pendingAcks[id] = current.copy(
+                ackCodes = (current.ackCodes + listOf(info.expectedAck)).snapshotSet(),
+                sentAt = clock.wallClock.instant(), timeout = seconds,
+            )
         }
     }
 

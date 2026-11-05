@@ -25,6 +25,7 @@ import com.meshcoreone.android.feature.nodes.deps.NodesAdvertisementService
 import com.meshcoreone.android.feature.nodes.deps.NodesClock
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
+import com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesNotificationCleanup
@@ -39,6 +40,8 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 
@@ -84,6 +87,17 @@ private class AppNodesSession(private val container: AppContainer) : NodesSessio
     }
     override fun captureContactNavigationValidity(generation: Long): () -> Boolean =
         container.captureContactNavigationSession(generation)
+
+    override fun connectionSnapshots() = combine(
+        container.sessions.currentSessions,
+        container.connectionManager.snapshot,
+        container.appState.servicesVersion,
+        container.appState.sessionStateChangeCount,
+    ) { graph, _, _, _ ->
+        NodesConnectionSnapshot(currentRadioId(), graph, connectedDevice(), connectionState())
+    }.distinctUntilChanged()
+
+    override fun connectionIdentity(): Any? = container.sessions.current
     override fun connectionState() = container.appState.connectionState
     override fun connectedDevice() = container.appState.connectedDevice
     override fun currentRadioId() = container.appState.currentRadioId
@@ -153,8 +167,8 @@ private class AppNodesContactService(private val service: ContactService) : Node
     override suspend fun updateContactPreferences(contact: EntityKey, nickname: String?, isBlocked: Boolean?) =
         service.updateContactPreferences(contact, nickname, isBlocked)
 
-    override suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) =
-        service.updateContactAvatar(contact, imageData)
+    override suspend fun updateContactAvatar(contact: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?) =
+        mapContactFailure { service.updateContactAvatar(contact, expectedPublicKey, imageData) }
 
     override suspend fun setContactFavorite(contact: EntityKey, isFavorite: Boolean) =
         service.setContactFavorite(contact, isFavorite)

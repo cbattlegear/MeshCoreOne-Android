@@ -21,6 +21,11 @@ class FresnelZoneRendererTest {
     fun `isObstructed returns true when terrain above yBottom`() {
         assertFalse(ProfileSample(0.0, 100.0, 150.0, 20.0).isObstructed)
         assertTrue(ProfileSample(0.0, 140.0, 150.0, 20.0).isObstructed)
+        // Outer bottom = 130; inner bottom = 138. These points distinguish the two zones.
+        assertFalse(ProfileSample(0.0, 134.0, 150.0, 20.0).isObstructed)
+        assertFalse(ProfileSample(0.0, 137.999, 150.0, 20.0).isObstructed)
+        assertFalse(ProfileSample(0.0, 138.0, 150.0, 20.0).isObstructed)
+        assertTrue(ProfileSample(0.0, 138.001, 150.0, 20.0).isObstructed)
     }
 
     @Test @OriginalCase("FresnelZoneRendererTests::yVisibleBottom clamps to prevent path inversion()")

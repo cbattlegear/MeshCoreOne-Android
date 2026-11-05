@@ -15,8 +15,12 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * A registered event stream: registration happens when the subscription is created, so events
@@ -60,7 +64,7 @@ interface NodesContactService {
     suspend fun setPath(radioId: RadioId, publicKey: Bytes, path: Bytes, pathLength: UByte)
     suspend fun shareContact(publicKey: Bytes)
     suspend fun updateContactPreferences(contact: EntityKey, nickname: String? = null, isBlocked: Boolean? = null)
-    suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?)
+    suspend fun updateContactAvatar(contact: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?)
     suspend fun setContactFavorite(contact: EntityKey, isFavorite: Boolean)
 }
 
@@ -93,6 +97,14 @@ interface NodesNotificationCleanup {
     suspend fun updateBadgeCount()
 }
 
+/** Radio-owned list identity and graph-owned interaction lifetime, published together to mounted consumers. */
+data class NodesConnectionSnapshot(
+    val radioId: RadioId?,
+    val identity: Any?,
+    val device: DeviceDTO? = null,
+    val state: DeviceConnectionState = DeviceConnectionState.DISCONNECTED,
+)
+
 /**
  * Live connection facts from the app graph (`AppState`). Every provider is re-read at its point of
  * use, so a disconnect between actions is observed, never a stale snapshot; `null` services mean
@@ -113,6 +125,12 @@ interface NodesSession {
             if (device == null) connectedDevice() == null && currentRadioId() == radio else live()
         }
     }
+
+    /** Static sessions emit once; mutable live adapters must emit on radio or graph replacement. */
+    fun connectionSnapshots(): Flow<NodesConnectionSnapshot> =
+        flowOf(NodesConnectionSnapshot(currentRadioId(), connectionIdentity(), connectedDevice(), connectionState()))
+    /** Stable identity of the live service graph; changes even when reconnecting the same radio. */
+    fun connectionIdentity(): Any? = contactService()
     fun connectionState(): DeviceConnectionState
     fun connectedDevice(): DeviceDTO?
     fun currentRadioId(): RadioId?
@@ -124,6 +142,13 @@ interface NodesSession {
     fun advertisementService(): NodesAdvertisementService?
     fun traceService(): NodesTraceService?
     fun notificationCleanup(): NodesNotificationCleanup?
+}
+
+internal suspend fun NodesSession.ensureContactConnection(identity: Any?, radioId: RadioId?) {
+    currentCoroutineContext().ensureActive()
+    if (connectionIdentity() !== identity || currentRadioId() != radioId) {
+        throw CancellationException("Contact operation's radio session changed")
+    }
 }
 
 /** The scanned/pasted contact payload (`MeshCoreURLParser.ContactResult`, WP-405). */

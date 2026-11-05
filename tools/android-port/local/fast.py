@@ -42,6 +42,28 @@ def owned_scope():
     return module
 
 
+def owned_verification(repo):
+    source = Path(__file__).resolve().parent
+    if source == (repo / "tools/android-port/local").resolve():
+        return repo / "tools/android-port/controller/verify_candidate_task_graph.gradle"
+    import controller
+    from controller.errors import PortError
+
+    for name in ("ci_evidence", "publication", "repair_acceptance", "module_junit"):
+        path = source / (name + ".py")
+        if path.is_symlink() or not path.is_file():
+            raise PortError("Missing or unsafe owned verification dependency: " + name)
+        spec = importlib.util.spec_from_file_location("controller." + name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        setattr(controller, name, module)
+    script = source / "verify_candidate_task_graph.gradle"
+    if script.is_symlink() or not script.is_file():
+        raise PortError("Missing or unsafe owned compiler-source collector")
+    return script
+
+
 def execution_lane(work):
     descriptor = Path("/proc/self/fd/8")
     if not descriptor.is_file():
@@ -92,6 +114,17 @@ def execute(command, repo, environment, log):
         raise subprocess.CalledProcessError(status, command)
 
 
+def notification_test_sources(repo, path):
+    from controller.ci_evidence import read_test_sources
+    from controller.module_junit import module_sources, validate_remapped_compilation
+
+    if "platform/notifications" not in module_sources(repo):
+        return {}
+    sources = read_test_sources(path, {"platform/notifications": "testDebugUnitTest"})
+    validate_remapped_compilation(repo, sources, ["platform/notifications"])
+    return sources
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -103,10 +136,21 @@ def main():
     parser.add_argument("--affected-base")
     args = parser.parse_args()
     sys.path.insert(0, str(args.repo / "tools" / "android-port"))
+    task_graph_script = owned_verification(args.repo)
     from controller import ci
     from controller.ci_environment import candidate_environment, verify_wrapper, write_json
-    from controller.ci_evidence import collect_lint, collect_suites, validate_graph_runtime
-    from controller.module_junit import check_module_tests
+    from controller.ci_evidence import (
+        LINT_TARGETS, SUITES, bind_test_lineage, collect_lint, collect_suites,
+        prepare_test_lineage, prepare_test_sources, read_test_lineage,
+        read_test_sources, validate_graph_runtime,
+    )
+    from controller.errors import PortError
+    from controller.module_junit import (
+        REPORT_LOCATIONS, bounded_directory, check_module_tests,
+        module_method_inventory, module_sources, remapped_tasks, select_remapped_tasks,
+        validate_remapped_compilation,
+        notification_instrumentation_evidence, notification_instrumentation_tasks,
+    )
 
     stages = args.stages.split(",")
     plan = affected_request(args.repo, args.affected_plan, args.affected_base, stages, args.advisory)
@@ -141,16 +185,68 @@ def main():
             if plan is not None:
                 report = owned_scope().run_scaffold(
                     args.repo, plan, environment, args.output, execute, options,
-                    trusted_base=args.affected_base)
+                    trusted_base=args.affected_base, task_graph_script=task_graph_script)
                 print(json.dumps(report, indent=2), flush=True)
                 print(f"===== PASS: {stage} =====", flush=True)
                 continue
             project = args.repo / "android"
+            tasks = select_remapped_tasks(ci.TASKS[stage], remapped_tasks(args.repo))
+            if ":platform:notifications:testDebugUnitTest" in tasks:
+                tasks = list(dict.fromkeys([*tasks, *notification_instrumentation_tasks(args.repo)]))
+            directories = {project / relative for relative, _ in SUITES.values()}
+            for module in module_sources(args.repo):
+                directories.update(project / module / relative for relative in REPORT_LOCATIONS)
+            reports = [
+                project / module / "build/reports/lint-results-debug.xml" for module in LINT_TARGETS
+            ] + [
+                project / "build/reports/scaffold" / name
+                for name in ("module-graph.tsv", "runtime-dependencies.tsv")
+            ]
+            for directory in directories:
+                bounded_directory(directory, args.repo)
+                reports.extend(directory.glob("TEST-*.xml"))
+            for path in reports:
+                bounded_directory(path.parent, args.repo)
+                if path.is_symlink():
+                    raise PortError("Linked previous report cannot become current evidence")
+                path.unlink(missing_ok=True)
+            lineage_path = prepare_test_lineage(args.output)
+            sources_path = prepare_test_sources(args.output)
+            graph_path = args.output / "gradle-scaffold-task-graph.json"
+            if graph_path.is_symlink():
+                raise PortError("Linked resolved task graph")
+            graph_path.unlink(missing_ok=True)
+            task_environment = {
+                **environment, "ANDROID_CI_TEST_LINEAGE": str(lineage_path),
+                "ANDROID_CI_TEST_SOURCES": str(sources_path),
+                "ANDROID_CI_TASK_GRAPH": str(graph_path),
+            }
             execute([str(args.repo / "android" / "gradlew"), "-p", str(project),
-                     *ci.TASKS[stage], *options], args.repo, environment, args.output / f"gradle-{stage}.log")
-            report = {"stage": stage, "result": "success", "tasks": ci.TASKS[stage], "warm_cache": True}
+                     *tasks, *options, "--init-script", str(task_graph_script)],
+                    args.repo, task_environment, args.output / f"gradle-{stage}.log")
+            report = {"stage": stage, "result": "success", "tasks": tasks, "warm_cache": True}
+            report["resolved_task_graph"] = ci.validate_candidate_task_graph(graph_path, tasks)
             report["suites"] = collect_suites(args.repo / "android")
-            report["module_unit_tests"] = check_module_tests(args.repo)
+            notification_sources = notification_test_sources(args.repo, sources_path)
+            report["module_unit_tests"] = check_module_tests(args.repo, notification_sources)
+            inventory = module_method_inventory(args.repo, report["module_unit_tests"])
+            runners = {}
+            for module in inventory:
+                locations = [
+                    relative for relative in REPORT_LOCATIONS
+                    if any((project / module / relative).glob("TEST-*.xml"))
+                ]
+                if len(locations) != 1:
+                    raise PortError("Missing or ambiguous selected JUnit runner: " + module)
+                runners[module] = Path(locations[0]).name
+            bind_test_lineage(inventory, read_test_lineage(lineage_path), runners)
+            report["unit_test_methods"] = inventory
+            report["compiled_test_sources"] = read_test_sources(sources_path, runners)
+            report["remapped_jvm_inputs"] = validate_remapped_compilation(
+                args.repo, report["compiled_test_sources"], runners)
+            instrumentation = notification_instrumentation_evidence(args.repo, sources_path, tasks)
+            if instrumentation:
+                report["notification_instrumentation"] = instrumentation
             report["reports"] = collect_lint(args.repo / "android")
             validate_graph_runtime(args.repo / "android/build/reports/scaffold")
             execute([sys.executable, str(args.repo / "tools/android-port/l10n_convert.py"), "--check",

@@ -9,8 +9,11 @@ import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.feature.tools.diagnostics.text.SwiftNumbers
 import com.meshcoreone.android.feature.tools.diagnostics.text.SwiftStrings
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
+import kotlinx.coroutines.withContext
 
 private const val NODE_NAME_COLUMN = 20
 private const val NODE_KIND_COLUMN = 10
@@ -125,13 +128,19 @@ internal suspend fun CliToolStateHolder.completeLogin(contact: ContactDTO, passw
     val radio = radioId
     val remote = remoteNodeService
     if (radio == null || remote == null) return appendError(tools(AppToolsStrings.toolsCliNotConnected))
+    val loginJob = currentCoroutineContext().job
 
     try {
         val remoteSession = remote.createSession(radio, contact)
         if (!currentCoroutineContext().isActive) return
 
         val success = remote.login(remoteSession, password, contact.outPathLength) { seconds ->
-            startCountdown(seconds.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
+            // The service invokes this from its own scope, not the command's dispatcher or Job.
+            withContext(scope.coroutineContext.minusKey(Job)) {
+                if (loginJob.isActive && ownsCommand(loginJob)) {
+                    startCountdown(seconds.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
+                }
+            }
         }
         if (!currentCoroutineContext().isActive) return
         if (!success) {
@@ -154,7 +163,7 @@ internal suspend fun CliToolStateHolder.completeLogin(contact: ContactDTO, passw
     } catch (failure: Exception) {
         appendError(loginFailureLine(failure))
     } finally {
-        stopCountdown()
+        if (ownsCommand(loginJob)) stopCountdown()
     }
 }
 

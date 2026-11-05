@@ -142,7 +142,10 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     @Volatile var syncCoordinator: SyncCoordinator? = null
         private set
-    private var lastBumpedSession: Any? = null
+    private var lastBumpedSession: AppSession? = null
+    private var servicesOrigin: SessionToken? = null
+    private var servicesOriginVersion = 0
+    private var reservedServicesVersion = 0
     private var lastConnectedDeviceIdForCli: UUID? = null
     private var chatRegistry: ChatCoordinatorRegistry? = null
     private var prewarmRefresher: ChatPrewarmRefresher? = null
@@ -377,7 +380,41 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     fun bumpContactsVersion() = contactsVersionFlow.update { it + 1 }
 
-    fun bumpServicesVersion() = servicesVersionFlow.update { it + 1 }
+    fun bumpServicesVersion() {
+        var version = 0
+        navigation.retireBinding {
+            val current = services
+            synchronized(sessionLock) {
+                version = reserveServicesVersion(lastBumpedSession?.takeIf { it === current })
+            }
+        }
+        publishServicesVersion(version)
+    }
+
+    fun sessionTokenForServicesVersion(version: Int): SessionToken? {
+        var origin: SessionToken? = null
+        navigation.retireBinding {
+            val current = services
+            synchronized(sessionLock) {
+                if (servicesVersionFlow.value == version && servicesOriginVersion == version &&
+                    lastBumpedSession === current
+                ) origin = servicesOrigin
+            }
+        }
+        return origin
+    }
+
+    private fun reserveServicesVersion(origin: AppSession?): Int {
+        val version = Math.incrementExact(reservedServicesVersion)
+        reservedServicesVersion = version
+        servicesOriginVersion = version
+        servicesOrigin = origin?.token
+        return version
+    }
+
+    private fun publishServicesVersion(version: Int) {
+        servicesVersionFlow.update { maxOf(it, version) }
+    }
 
     override fun handleSessionStateChange() {
         refreshConversations()
@@ -526,7 +563,11 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             tearDownAppStateSessionJobs(retiringToken)
             synchronized(sessionLock) {
                 if (syncCoordinator === retiringSync) syncCoordinator = null
-                if (lastBumpedSession === retiringBump) lastBumpedSession = null
+                if (lastBumpedSession === retiringBump) {
+                    lastBumpedSession = null
+                    servicesOrigin = null
+                    servicesOriginVersion = -1
+                }
             }
             connectionUI.handleDisconnect(
                 connectionState, connection.lastConnectedDeviceId, connection.shouldSuppressDisconnectedPill,
@@ -570,14 +611,16 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         session.channelService.setSlotOccupantChangedHandler { radioId, indices -> handleChannelSlotOccupantChanged(radioId, indices) }
 
         // Bump only when the container actually changed: connect fires onConnectionReady and then an explicit rewire.
-        var changed = false
+        var nextVersion: Int? = null
         if (!commitSessionWiring(attempt) {
-                changed = lastBumpedSession !== session
-                if (changed) lastBumpedSession = session
+                if (lastBumpedSession !== session) {
+                    lastBumpedSession = session
+                    nextVersion = reserveServicesVersion(session)
+                }
             }
         ) return
-        if (changed) {
-            servicesVersionFlow.update { it + 1 }
+        nextVersion?.let {
+            publishServicesVersion(it)
             deps.platform.onSessionChanged()
         }
 

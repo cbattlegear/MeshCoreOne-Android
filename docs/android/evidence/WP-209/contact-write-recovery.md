@@ -803,3 +803,82 @@ compiled, but its runner did not execute after the protocol failure. This run
 does not establish the contact regression assertions or overall candidate pass;
 the corrected successor requires fresh hosted verification. No CI-result bundle
 is retained; the original hosted job/log is authoritative.
+
+### Exact-dispatch settlement and reactive observation follow-up
+
+The safety follow-up is based on current main `e9b924752f085533a349eda07de4527eba40dc56`
+(the #556 merge), integrated without rewriting in merge commit `4f10a4daa`.
+It preserves #556's synchronous getter and adds the radio-scoped
+`observeContactWriteRecoveryState` flow. The getter and flow remain observations,
+not reconciliation authority; state is held by the process preference role and
+radio across service-graph replacement.
+
+Exact terminal acceptance plus successful local persistence/completion settles
+only that dispatch's recorded cancellation uncertainty. Rejection similarly
+settles only its exact receipt. The false marker is committed only after any
+pending true-marker recording succeeds, and in-memory provenance is cleared
+only after the false commit succeeds. Unanswered possibly-written exchanges,
+failed persistence, retained newer frames, concurrent or unattributed owners,
+and loaded markers without provenance remain fail-closed.
+
+Discriminating real-session controls cover late ACK through a held local tail,
+flow updates across graph replacement and independent collectors, exact successful
+settlement, failed local persistence, concurrent newer/unowned obligations,
+failed marker clear/retry, persisted markers and preference-read failure.
+Late rejection after cancellation emits a rejection-pending state then clears
+only after exact terminal settlement. The #556 control's final late-ACK assertion
+now expects `Clear` only after successful local completion and exact marker clear;
+its uncertainty-before-ACK assertion remains intact.
+
+A cancellation marker followed by a later `DEFINITELY_UNSENT` result for the
+same real serializer dispatch is unreachable: `RequestContext.cancelDispatch`
+records a one-use disposition, and `ChannelWriteDispatch.cancelled` only accepts
+the first value. If `beforeSend` ran, cancellation is permanently
+`MAY_HAVE_WRITTEN`; if it did not, the cancellation is immediately
+`DEFINITELY_UNSENT` and does not record that uncertainty. Existing real-session
+pre-send and serializer controls cover the latter case. No synthetic late-unsent
+transition is asserted.
+
+Candidate `3ebb99d017eedc993bd95c47d744c819b8baa41e` ran in hosted CI
+[41882543558](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41882543558).
+Attempt 1 failed the datastore identity import/export control with an
+`IllegalStateException at FileStorage.kt:52`, before services JUnit discovery.
+The run uploaded no Actions artifact, so neither the full exception message nor
+its JUnit stack was available; no root cause or intermittent-failure claim is made.
+The ordinary same-SHA failed-job rerun (attempt 2) passed that datastore task,
+but executed and failed six services recovery controls. It is not a candidate pass.
+
+Source review on that exact head identified late-report retirement races, loss
+of an incoming obligation before a failed preference read, unrelated queued-write
+registrations removed by settlement, and stale pending-marker deduplication.
+The repair retains weak exact-dispatch terminal/local-completion evidence after
+retirement, registers incoming uncertainty before fallible preference access,
+defers provenance resolution without claiming ownership of a stored marker, and
+clears only the matching recovery owners rather than unrelated queued writes.
+Pending and reported receipts share the same deduplication check.
+
+New real-session controls delay cancellation reporting until after successful
+terminal/local completion or rejection, retry marker clearing from an immediately
+resumed subscriber before the failure callback, fail preference reads only after
+dispatch with and without a pre-existing stored marker, and cancel a resumed
+queued write during its held persistence tail while a replacement graph attempts
+sync. Existing safety controls now use genuinely unanswered or superseded writes
+where continued blocking is essential; the queued marker-error identity controls
+retain their error assertions and permit exact settlement only after true then
+false marker commits succeed.
+
+This repair requires fresh exact-head hosted CI and source review. No local
+Gradle result or older-head check is a pass, and no duplicate CI-result bundle
+is retained.
+
+Successor `cdba785e3cb9f4184d49c8b7c1b496f56fb4ad02`, hosted
+[41889202757](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41889202757),
+executed 2,904 services tests with one failure in the equal-count snapshot-safety
+control. Its newer-row setup had been applied to a different held-tail test,
+so successful ACK/local completion still cleared the equal-count test's marker.
+The correction places the newer row before ACK in that exact control and restores
+the other held-tail test's original setup. All four new schedule controls executed
+without failures in this run, but this failed run is not an overall pass.
+Exact-head source review `41889214020` marked all six prior findings resolved
+and identified this test-setup correction; the corrected head still requires
+fresh hosted verification and review.

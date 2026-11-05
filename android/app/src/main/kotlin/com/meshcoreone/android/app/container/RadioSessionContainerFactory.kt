@@ -1,6 +1,9 @@
 // AndroidOnly: WP-303 The runtime service factory: one graph per connection generation, built only after its prerequisites exist.
+// AndroidOnly: WP-311 Observable registry publication retires mounted contact interactions on quiet graph replacement.
+// AndroidOnly: WP-314 Observable registry ownership for the mounted Tools trace binding.
 package com.meshcoreone.android.app.container
 
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.runtime.FactoryOwnership
 import com.meshcoreone.android.core.runtime.RuntimePublicationAuthority
 import com.meshcoreone.android.core.runtime.RuntimePublicationCounts
@@ -11,6 +14,13 @@ import com.meshcoreone.android.core.runtime.RuntimeServiceFactory
 import com.meshcoreone.android.core.runtime.RuntimeServiceInputs
 import com.meshcoreone.android.core.runtime.RuntimeServices
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 
 /**
@@ -45,7 +55,10 @@ class RadioSessionContainerFactory(
             store, processScope, notificationDelivery, notificationPreferences, notificationStrings, appState, passwords,
             contactPreferences, runtimeState, resyncFailure, chatSendQueueProgress, syncClock, sessionClock, logSink, messagingReporter,
             object : SessionLifecycleListener {
-                override fun created(container: RadioSessionContainer) = downstream.created(container)
+                override fun created(container: RadioSessionContainer) {
+                    registry.created()
+                    downstream.created(container)
+                }
                 override fun tornDown(container: RadioSessionContainer) {
                     registry.withdraw(container)
                     downstream.tornDown(container)
@@ -66,27 +79,59 @@ class RadioSessionContainerFactory(
  */
 class SessionRegistry {
     private val slot = RuntimePublicationSlot<RadioSessionContainer>()
+    private val changes = MutableStateFlow(0L)
+    private val accountingLock = Any()
+    private var createdCount = 0
+    private var tornDownCount = 0
 
     val current: RadioSessionContainer? get() = slot.current
     internal val publicationIdentity get() = slot.identity
+    val currentSessions: StateFlow<RadioSessionContainer?> = RegistryStateFlow(changes) { slot.current }
+    val currentToken: StateFlow<SessionToken?> = RegistryStateFlow(changes) { slot.current?.token }
 
     internal fun <T> withNavigationCommitBoundary(action: (RadioSessionContainer?) -> T): T =
         slot.withCurrent(action)
 
     /** A coherent snapshot of registry publications and their completed withdrawals. */
     val counts: RuntimePublicationCounts get() = slot.counts
-    val created: Int get() = counts.created
-    val tornDown: Int get() = counts.tornDown
+    val created: Int get() = synchronized(accountingLock) { createdCount }
+    val tornDown: Int get() = synchronized(accountingLock) { tornDownCount }
+    val outstanding: Int get() = synchronized(accountingLock) { createdCount - tornDownCount }
 
-    /** Published containers not yet torn down, including a displaced predecessor. */
-    val outstanding: Int get() = counts.outstanding
+    internal fun created() {
+        synchronized(accountingLock) { createdCount = Math.incrementExact(createdCount) }
+    }
 
-    internal fun publish(container: RadioSessionContainer, authority: RuntimePublicationAuthority): RuntimePublicationOutcome =
-        authority.publish(slot.target(container))
+    internal fun publish(container: RadioSessionContainer, authority: RuntimePublicationAuthority): RuntimePublicationOutcome {
+        val outcome = authority.publish(slot.target(container))
+        if (outcome == RuntimePublicationOutcome.PUBLISHED || outcome == RuntimePublicationOutcome.ALREADY_PUBLISHED) {
+            changes.update { it + 1 }
+        }
+        return outcome
+    }
 
     fun withdraw(container: RadioSessionContainer) {
-        check(slot.withdraw(container) != RuntimePublicationRetirement.DIFFERENT_REGISTRY) {
+        val result = slot.withdraw(container)
+        check(result != RuntimePublicationRetirement.DIFFERENT_REGISTRY) {
             "Session belongs to another registry"
         }
+        if (result != RuntimePublicationRetirement.ALREADY_WITHDRAWN) {
+            synchronized(accountingLock) { tornDownCount = Math.incrementExact(tornDownCount) }
+        }
+        if (result == RuntimePublicationRetirement.LIVE) changes.update { it + 1 }
+    }
+}
+
+@OptIn(InternalCoroutinesApi::class)
+private class RegistryStateFlow<T>(
+    private val changes: StateFlow<Long>,
+    private val readCurrent: () -> T,
+) : StateFlow<T> {
+    override val value: T get() = readCurrent()
+    override val replayCache: List<T> get() = listOf(value)
+
+    override suspend fun collect(collector: FlowCollector<T>): Nothing {
+        changes.map { readCurrent() }.distinctUntilChanged().collect(collector)
+        error("Registry state flow completed unexpectedly")
     }
 }

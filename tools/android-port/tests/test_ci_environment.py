@@ -16,7 +16,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fixtures import REPO
-from controller.ci_environment import candidate_environment, host_name, toolchain_lock, verify_wrapper
+from controller.ci_environment import (
+    candidate_environment, host_name, hosted_resource_observation, toolchain_lock, verify_wrapper,
+)
 from controller.errors import PortError
 from controller.gates import Binding, policy_revision
 from controller.model import git, load_manifest
@@ -102,16 +104,24 @@ class EnvironmentTests(unittest.TestCase):
                 preflight_arguments = calls[1][0][3:]
         for key in ("GH_TOKEN", "GITHUB_TOKEN", "ANDROID_CI_OUTPUT", "GITHUB_RUN_ID", "GITHUB_EVENT_PATH"):
             self.assertNotIn(key, calls[main_index][1], "No credential or disallowed parent environment forwarding")
+        for _, environment, _, _ in calls:
+            self.assertIn("-Xmx3072m", environment["GRADLE_OPTS"])
+            self.assertIn("-XX:MaxMetaspaceSize=768m", environment["GRADLE_OPTS"])
+            self.assertNotIn("-Xmx2048m", environment["GRADLE_OPTS"])
         self.assertIn("--dependency-verification", arguments)
         self.assertEqual("strict", arguments[arguments.index("--dependency-verification") + 1])
         self.assertNotIn("--rerun-tasks", arguments)
         self.assertIn("--build-cache", arguments)
-        self.assertIn("--max-workers=8", arguments)
+        self.assertIn("--max-workers=2", arguments)
         self.assertIn("--parallel", arguments)
+        self.assertIn("-Pkotlin.compiler.execution.strategy=in-process", arguments)
+        self.assertIn("-PscaffoldTestHeap=512m", arguments)
+        self.assertFalse(any(option.startswith("--max-workers") and option != "--max-workers=2"
+                             for option in arguments))
         self.assertNotIn("--no-build-cache", arguments)
         if split_preflight:
             self.assertIn("--parallel", preflight_arguments)
-            self.assertIn("--max-workers=8", preflight_arguments)
+            self.assertIn("--max-workers=2", preflight_arguments)
             self.assertNotIn("--max-workers=1", preflight_arguments)
             self.assertIn("--build-cache", preflight_arguments)
         return output, state, arguments, observe_identity.call_count, preflight_arguments
@@ -121,6 +131,7 @@ class EnvironmentTests(unittest.TestCase):
             "verifyScaffoldTests", "verifyRoomSchema", "validateModuleGraph",
             "runtimeDependencyInventory", "resolveScaffoldDependencies",
             ":app:assembleDebug", ":app:compileDebugAndroidTestKotlin", "lintScaffold",
+            ":platform:notifications:testDebugUnitTest",
         ]
         for host in ("linux", "windows"):
             for scopes in (None, ["scaffold"], ["scaffold", "protocol"]):
@@ -140,6 +151,7 @@ class EnvironmentTests(unittest.TestCase):
                         expected + ([":core:protocol:test"] if scopes and "protocol" in scopes else []),
                     )
                     self.assertEqual(build_tasks.count(":app:compileDebugAndroidTestKotlin"), 1)
+                    self.assertEqual(build_tasks.count(":platform:notifications:testDebugUnitTest"), 1)
                     self.assertFalse(any(
                         forbidden in task.lower()
                         for task in tasks for forbidden in ("connected", "install", "device")
@@ -245,25 +257,45 @@ class EnvironmentTests(unittest.TestCase):
             self.assertIn("resolveScaffoldDependencies", arguments)
             self.assertNotIn("verifyScaffoldTests", arguments)
             self.assertIn("--build-cache", arguments)
-            self.assertIn("--max-workers=8", arguments)
+            self.assertIn("--max-workers=2", arguments)
             self.assertIn("--parallel", arguments)
             self.assertIn("--init-script", arguments)
             self.assertTrue(arguments[arguments.index("--init-script") + 1].endswith(
                 "verify_candidate_task_graph.gradle"
             ))
 
-    def test_only_wp203_test_task_is_cacheable_and_its_side_effects_are_declared(self):
-        script = (REPO / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_text(
-            encoding="utf-8",
+    def assert_task_cache_policies(self, script):
+        test_scope = "    project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->"
+        self.assertEqual(script.count(test_scope), 1)
+        compiler_scope, test_and_graph = script.split(test_scope)
+        test_scope_body, graph_scope = test_and_graph.split("gradle.taskGraph.whenReady { graph ->")
+        compiler_policy = (
+            "    project.tasks.configureEach { task ->\n"
+            '        if (task.path == ":platform:notifications:compileDebugAndroidTestKotlin") {\n'
+            "            task.outputs.upToDateWhen { false }\n"
+            '            task.outputs.cacheIf("Notification instrumentation inputs require a fresh compiler observation") { false }'
         )
+        self.assertEqual(compiler_scope.count(compiler_policy), 1)
+        self.assertEqual(compiler_scope.count(".outputs.cacheIf("), 1)
+        self.assertEqual(compiler_scope.count(".outputs.upToDateWhen"), 1)
         cache_policy = (
             'task.outputs.cacheIf("Only WP-203 test inputs and interop outputs are explicitly declared") {\n'
             '            task.path == ":core:data:testDebugUnitTest"\n'
             "        }"
         )
-        self.assertIn(cache_policy, script)
-        self.assertEqual(script.count("task.outputs.cacheIf("), 1)
-        self.assertLess(script.index(cache_policy), script.index('if (task.path == ":core:data:testDebugUnitTest")'))
+        self.assertEqual(test_scope_body.count(cache_policy), 1)
+        self.assertEqual(test_scope_body.count(".outputs.cacheIf("), 1)
+        self.assertNotIn(".outputs.cacheIf(", graph_scope)
+        self.assertLess(
+            test_scope_body.index(cache_policy),
+            test_scope_body.index('if (task.path == ":core:data:testDebugUnitTest")'),
+        )
+
+    def test_only_wp203_test_task_is_cacheable_and_its_side_effects_are_declared(self):
+        script = (REPO / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_text(
+            encoding="utf-8",
+        )
+        self.assert_task_cache_policies(script)
         self.assertIn('task.outputs.dir(interopOutput)', script)
         self.assertIn("task.inputs.dir(interopInput)", script)
         self.assertIn("task.doFirst", script)
@@ -272,6 +304,38 @@ class EnvironmentTests(unittest.TestCase):
         self.assertLess(script.index("task.inputs.files.files.any"), script.index("gradle.taskGraph.whenReady"))
         self.assertIn("WP-203 interop artifacts are not declared Gradle task outputs", script)
         self.assertIn("WP-203 interoperability fixture is not a Gradle task input", script)
+
+    def test_task_cache_policies_reject_widened_missing_and_extra_policies(self):
+        script = (REPO / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_text(
+            encoding="utf-8",
+        )
+        veto = (
+            '            task.outputs.cacheIf("Notification instrumentation inputs require a fresh compiler observation") { false }'
+        )
+        compiler_path = 'if (task.path == ":platform:notifications:compileDebugAndroidTestKotlin")'
+        test_path = '            task.path == ":core:data:testDebugUnitTest"\n'
+        test_scope = "    project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->"
+        mutations = {
+            "missing-compiler-veto": script.replace(veto, ""),
+            "cacheable-compiler": script.replace(veto, veto.replace("{ false }", "{ true }")),
+            "up-to-date-compiler": script.replace("task.outputs.upToDateWhen { false }", "task.outputs.upToDateWhen { true }"),
+            "widened-compiler-scope": script.replace(compiler_path, "if (true)"),
+            "cacheable-other-test": script.replace(test_path, '            task.path == ":app:testDebugUnitTest"\n'),
+            "cacheable-all-tests": script.replace(test_path, "            true\n"),
+            "extra-policy": script + '\ntask.outputs.cacheIf("Unexpected") { true }\n',
+            "extra-compiler-policy": script.replace(veto, veto + '\n            task.outputs.cacheIf("Unexpected") { true }'),
+            "extra-test-policy": script.replace(test_scope, test_scope + '\n        task.outputs.cacheIf("Unexpected") { true }'),
+            "duplicate-compiler-veto": script.replace(veto, veto + "\n" + veto),
+            "compiler-veto-in-test-scope": script.replace(veto, "").replace(test_scope, test_scope + "\n" + veto),
+            "test-policy-outside-test-scope": script.replace(test_scope, "").replace(
+                "gradle.taskGraph.whenReady { graph ->", test_scope + "\ngradle.taskGraph.whenReady { graph ->"
+            ),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(script, mutated)
+                with self.assertRaises(AssertionError):
+                    self.assert_task_cache_policies(mutated)
 
     def test_app_tests_reuse_the_worker_jvm_instead_of_forking_for_each_class(self):
         app_build = (REPO / "android/app/build.gradle.kts").read_text(encoding="utf-8")
@@ -367,8 +431,38 @@ class EnvironmentTests(unittest.TestCase):
             local = candidate_environment(state, {}, local=True)
             self.assertNotIn("TieredStopAtLevel", hosted["GRADLE_OPTS"])
             self.assertIn("TieredStopAtLevel=1", local["GRADLE_OPTS"])
-            self.assertIn("-Xmx2048m", hosted["GRADLE_OPTS"])
+            self.assertIn("-Xmx3072m", hosted["GRADLE_OPTS"])
             self.assertIn("-Xmx768m", local["GRADLE_OPTS"])
+
+    def test_hosted_heap_cannot_be_overridden_by_inherited_environment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = self.state(Path(temporary))
+            clean = candidate_environment(state, {})
+            inherited = candidate_environment(state, {
+                "JAVA_OPTS": "-Xmx99g -Dcredential=fixture",
+                "GRADLE_OPTS": '-Dorg.gradle.jvmargs="-Xmx128m" -Dorg.gradle.workers.max=99',
+            })
+            self.assertEqual(inherited, clean)
+            self.assertIn("-Xmx3072m", clean["GRADLE_OPTS"])
+            self.assertEqual(clean["JAVA_OPTS"], "-Xms32m -Xmx128m -Dfile.encoding=UTF-8")
+
+    def test_hosted_resource_observation_reports_visible_host_not_reserved_capacity(self):
+        with (
+            patch("controller.ci_environment.Path.read_text",
+                  return_value="MemTotal:       16384000 kB\nMemAvailable:   12000000 kB\n"),
+            patch("controller.ci_environment.os.sched_getaffinity", create=True,
+                  return_value={0, 1, 2, 3}),
+        ):
+            observed = hosted_resource_observation()
+        self.assertEqual(observed["cpu_affinity_count"], 4)
+        self.assertEqual(observed["host_memory_total_bytes"], 16384000 * 1024)
+        self.assertEqual(observed["host_memory_available_bytes"], 12000000 * 1024)
+        self.assertIn("not reserved memory or cgroup capacity", observed["scope"])
+        for memory in ("", "MemTotal: 1 kB\n", "MemTotal: unknown kB\nMemAvailable: 1 kB\n"):
+            with self.subTest(memory=memory), patch(
+                "controller.ci_environment.Path.read_text", return_value=memory,
+            ), self.assertRaisesRegex(PortError, "Missing hosted Linux memory observation"):
+                hosted_resource_observation()
 
     def test_exact_host_archive_sets_and_unchanged_wrapper_pins(self):
         lock = toolchain_lock()

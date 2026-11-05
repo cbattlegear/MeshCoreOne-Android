@@ -319,7 +319,7 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
                 }
             }
         }
-        if (staged == ForegroundAcknowledgmentStaging.Staged) {
+        return if (staged == ForegroundAcknowledgmentStaging.Staged) {
             synchronize(file)
             fault?.invoke(WritePoint.COMMITTED)
             val confirmed = read(acknowledgmentId(evidence.request))

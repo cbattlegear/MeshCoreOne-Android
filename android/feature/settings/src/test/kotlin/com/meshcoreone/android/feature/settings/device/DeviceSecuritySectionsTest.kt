@@ -142,6 +142,20 @@ class PathHashModeStateHolderTest {
         assertEquals(2, service.calls.size)
         assertTrue(successor.calls.isEmpty())
     }
+
+    @Test
+    fun `cancelled waiting leaves a recoverable selection rather than assuming radio rollback`() {
+        holder.start(); scheduler.runCurrent()
+        service.failNext("setPathHashModeVerified", CancellationException("Waiting cancelled after radio verification"))
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertFalse(state.isApplying)
+        assertEquals(1u.toUByte(), state.displayedMode)
+        assertNull(state.errorMessage)
+        holder.onModeSelected(1u)
+        scheduler.runCurrent()
+        assertEquals(listOf("setPathHashModeVerified(2)", "setPathHashModeVerified(1)"), service.calls)
+    }
 }
 
 class BluetoothPinStateHolderTest {

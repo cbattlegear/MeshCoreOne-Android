@@ -406,68 +406,68 @@ tasks.withType<Test>().configureEach {
                     }
                 }
             }
+        }
+    }
+}
 
-            // AndroidOnly: WP-312 Bounded readiness observations; no task, fixture or outcome changes.
-            tasks.withType<Test>().configureEach {
-                val readinessLogger = logger
-                val readinessClass = "com.meshcoreone.android.app.remotenodes.RemoteNodesComposeTest"
-                val readinessNames = setOf(
-                    "realRemoteMapReadinessAfterComposeIdleIsObservedWithoutEmissionGates",
-                    "historyRouteAndRealPreferenceEmissionHaveIndependentReadinessBoundaries",
-                    "successfulMapWriteDoesNotClearTerminalObservationFailureBeforeRetry",
-                    "disconnectedHistoryHasChartsReportSelectionAttributionAndNoRadioWrites",
-                ).flatMap { method ->
-                    listOf(method, "$method()", "$method[31]", "$method[31]()", "$method[37]", "$method[37]()")
-                }.toSet()
-                val readinessStages = listOf(
-                    "ungated-show-returned", "ungated-map-and-controls-ready", "show-returned",
-                    "route-ready-read-held", "actual-datastore-ready-emission-held", "emission-mounted-controls",
-                    "successful-write-does-not-clear-observation-failure", "explicit-retry-restores-map",
-                ).joinToString("|")
-                val readinessMarker = Regex(
-                    """WP312_MAP_READINESS\|sdk=(31|37)\|($readinessStages)\|historyReads=[0-9]+""" +
-                        """\|entered=(true|false)\|snapshot=(true|false)\|emitted=(true|false)""" +
-                        """\|write=(true|false)\|failed=(true|false)""",
+// AndroidOnly: WP-312 Bounded readiness observations; no task, fixture or outcome changes.
+tasks.withType<Test>().configureEach {
+    val readinessLogger = logger
+    val readinessClass = "com.meshcoreone.android.app.remotenodes.RemoteNodesComposeTest"
+    val readinessNames = setOf(
+        "realRemoteMapReadinessAfterComposeIdleIsObservedWithoutEmissionGates",
+        "historyRouteAndRealPreferenceEmissionHaveIndependentReadinessBoundaries",
+        "successfulMapWriteDoesNotClearTerminalObservationFailureBeforeRetry",
+        "disconnectedHistoryHasChartsReportSelectionAttributionAndNoRadioWrites",
+    ).flatMap { method ->
+        listOf(method, "$method()", "$method[31]", "$method[31]()", "$method[37]", "$method[37]()")
+    }.toSet()
+    val readinessStages = listOf(
+        "ungated-show-returned", "ungated-map-and-controls-ready", "show-returned",
+        "route-ready-read-held", "actual-datastore-ready-emission-held", "emission-mounted-controls",
+        "successful-write-does-not-clear-observation-failure", "explicit-retry-restores-map",
+    ).joinToString("|")
+    val readinessMarker = Regex(
+        """WP312_MAP_READINESS\|sdk=(31|37)\|($readinessStages)\|historyReads=[0-9]+""" +
+            """\|entered=(true|false)\|snapshot=(true|false)\|emitted=(true|false)""" +
+            """\|write=(true|false)\|failed=(true|false)""",
+    )
+    val readinessOutput = mutableMapOf<String, StringBuilder>()
+    addTestListener(object : TestListener {
+        override fun beforeSuite(suite: TestDescriptor) = Unit
+        override fun afterSuite(suite: TestDescriptor, result: TestResult) = Unit
+        override fun beforeTest(testDescriptor: TestDescriptor) {
+            if (testDescriptor.className == readinessClass && testDescriptor.name in readinessNames) {
+                readinessLogger.quiet(
+                    "WP312_MAP_READINESS_TEST|${testDescriptor.name}|START",
                 )
-                val readinessOutput = mutableMapOf<String, StringBuilder>()
-                addTestListener(object : TestListener {
-                    override fun beforeSuite(suite: TestDescriptor) = Unit
-                    override fun afterSuite(suite: TestDescriptor, result: TestResult) = Unit
-                    override fun beforeTest(testDescriptor: TestDescriptor) {
-                        if (testDescriptor.className == readinessClass && testDescriptor.name in readinessNames) {
-                            readinessLogger.quiet(
-                                "WP312_MAP_READINESS_TEST|${testDescriptor.name}|START",
-                            )
+            }
+        }
+        override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+            if (testDescriptor.className == readinessClass && testDescriptor.name in readinessNames) {
+                synchronized(readinessOutput) { readinessOutput.remove(testDescriptor.name) }
+                readinessLogger.quiet(
+                    "WP312_MAP_READINESS_TEST|${testDescriptor.name}|END|${result.resultType}|" +
+                        "count=${result.testCount}|failed=${result.failedTestCount}|skipped=${result.skippedTestCount}",
+                )
+            }
+        }
+    })
+    addTestOutputListener { descriptor, event ->
+        if (descriptor.className == readinessClass && descriptor.name in readinessNames &&
+            event.destination == TestOutputEvent.Destination.StdOut
+        ) {
+            synchronized(readinessOutput) {
+                val pending = readinessOutput.getOrPut(descriptor.name) { StringBuilder() }
+                event.message.forEach { character ->
+                    if (character == '\n' || character == '\r') {
+                        val marker = pending.toString()
+                        pending.setLength(0)
+                        if (readinessMarker.matches(marker)) {
+                            readinessLogger.quiet("WP312_MAP_READINESS_STAGE|${descriptor.name}|$marker")
                         }
-                    }
-                    override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
-                        if (testDescriptor.className == readinessClass && testDescriptor.name in readinessNames) {
-                            synchronized(readinessOutput) { readinessOutput.remove(testDescriptor.name) }
-                            readinessLogger.quiet(
-                                "WP312_MAP_READINESS_TEST|${testDescriptor.name}|END|${result.resultType}|" +
-                                    "count=${result.testCount}|failed=${result.failedTestCount}|skipped=${result.skippedTestCount}",
-                            )
-                        }
-                    }
-                })
-                addTestOutputListener { descriptor, event ->
-                    if (descriptor.className == readinessClass && descriptor.name in readinessNames &&
-                        event.destination == TestOutputEvent.Destination.StdOut
-                    ) {
-                        synchronized(readinessOutput) {
-                            val pending = readinessOutput.getOrPut(descriptor.name) { StringBuilder() }
-                            event.message.forEach { character ->
-                                if (character == '\n' || character == '\r') {
-                                    val marker = pending.toString()
-                                    pending.setLength(0)
-                                    if (readinessMarker.matches(marker)) {
-                                        readinessLogger.quiet("WP312_MAP_READINESS_STAGE|${descriptor.name}|$marker")
-                                    }
-                                } else if (pending.length <= 512) {
-                                    pending.append(character)
-                                }
-                            }
-                        }
+                    } else if (pending.length <= 512) {
+                        pending.append(character)
                     }
                 }
             }

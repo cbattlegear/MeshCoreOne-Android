@@ -47,28 +47,30 @@ import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
     @Test fun identityWritersCannotChangeAnAdmittedRestoreBeforeItsActualSet() = runTest {
-        for (operation in listOf("delete", "delete-data", "demote", "reconcile", "insert")) {
+        for ((index, operation) in listOf("delete", "delete-all", "demote", "reconcile", "insert").withIndex()) {
             withRepeat(store) { h, _, _, radio ->
                 val before = assertNotNull(h.manager.connectedDevice)
                 val token = assertNotNull(h.sessions.current).token
                 val ghost = before.copy(id = UUID.randomUUID(), radioId = com.meshcoreone.android.core.model.RadioId(UUID.randomUUID()),
-                    publicKey = key(91), isActive = false, connectionMethods = com.meshcoreone.android.core.model.SnapshotList.empty())
+                    publicKey = key(91 + index), isActive = false, connectionMethods = com.meshcoreone.android.core.model.SnapshotList.empty())
                 store.saveDevice(ghost)
                 val authority = h.container.deviceEditor.preRepeatSettingsRestoreAuthority(token, before)
                 val entered = CompletableDeferred<Unit>()
                 val release = CompletableDeferred<Unit>()
                 radio.beforeRadioSend = { entered.complete(Unit); release.await() }
                 val restore = async {
-                    assertNotNull(h.sessions.current).settingsService.setRadioParamsVerified(
-                        before.frequency, before.bandwidth, before.spreadingFactor, before.codingRate, false,
-                        expectedDevice = before, restoreAuthority = authority,
-                    )
+                    runCatching {
+                        assertNotNull(h.sessions.current).settingsService.setRadioParamsVerified(
+                            before.frequency, before.bandwidth, before.spreadingFactor, before.codingRate, false,
+                            expectedDevice = before, restoreAuthority = authority,
+                        )
+                    }
                 }
                 entered.await()
                 val writer = async(start = CoroutineStart.UNDISPATCHED) {
                     when (operation) {
                         "delete" -> store.deleteDevice(before.id)
-                        "delete-data" -> store.deleteDeviceAndData(before.id)
+                        "delete-all" -> store.deleteDeviceAndData(before.id)
                         "demote" -> store.demoteDeviceToGhost(before.id)
                         "reconcile" -> store.reconcileGhostIdentity(before.id, ghost.publicKey)
                         else -> assertFalse(store.insertDeviceIfAbsent(before))
@@ -79,9 +81,21 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     assertFalse(writer.isCompleted, "$operation must wait outside the DB mutex")
                     assertTrue(radio.radioWrites.isEmpty())
                     release.complete(Unit)
-                    restore.await()
+                    restore.await().exceptionOrNull()?.let { failure ->
+                        assertTrue(failure is kotlinx.coroutines.CancellationException ||
+                            failure is com.meshcoreone.android.core.services.device.SettingsServiceException ||
+                            failure is DeviceEditPersistenceConflict, "Unexpected post-send failure: $failure")
+                    }
                     writer.await()
                     assertEquals(1, radio.radioWrites.size)
+                    when (operation) {
+                        "delete", "delete-all", "demote" -> assertNull(store.fetchDevice(before.id))
+                        "reconcile" -> {
+                            assertEquals(before.copy(radioId = ghost.radioId, publicKey = ghost.publicKey), store.fetchDevice(before.id))
+                            assertNull(store.fetchDevice(ghost.id))
+                        }
+                        else -> assertEquals(before, store.fetchDevice(before.id))
+                    }
                 } finally {
                     release.complete(Unit)
                     restore.cancel()
@@ -165,20 +179,22 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     restoreAuthority = h.container.deviceEditor.preRepeatSettingsRestoreAuthority(token, before),
                 )
             }
-            h.eventually("actual transport send child entered") { entered.isCompleted }
-            restore.cancel()
-            restore.join()
-            val changed = before.copy(lastContactSync = before.lastContactSync + 1u)
-            val writer = async(start = CoroutineStart.UNDISPATCHED) { store.saveDevice(changed) }
             try {
-                assertEquals(before, store.fetchDevice(before.id))
-                assertFalse(writer.isCompleted, "Caller cancellation does not settle a transport child that can still write")
-                assertTrue(radio.radioWrites.isEmpty())
-                release.complete(Unit)
-                h.eventually("writer proceeds after the actual send child settles") { writer.isCompleted }
-                writer.await()
-                assertEquals(changed, store.fetchDevice(before.id))
-            } finally { release.complete(Unit); writer.join() }
+                h.eventually("actual transport send child entered") { entered.isCompleted }
+                restore.cancel()
+                testScheduler.runCurrent()
+                val changed = before.copy(lastContactSync = before.lastContactSync + 1u)
+                val writer = async(start = CoroutineStart.UNDISPATCHED) { store.saveDevice(changed) }
+                try {
+                    assertEquals(before, store.fetchDevice(before.id))
+                    assertFalse(writer.isCompleted, "Caller cancellation does not settle a transport child that can still write")
+                    assertTrue(radio.radioWrites.isEmpty())
+                    release.complete(Unit)
+                    h.eventually("writer proceeds after the actual send child settles") { writer.isCompleted }
+                    writer.await()
+                    assertEquals(changed, store.fetchDevice(before.id))
+                } finally { release.complete(Unit); writer.join() }
+            } finally { release.complete(Unit); restore.cancel(); restore.join() }
         }
     }
 

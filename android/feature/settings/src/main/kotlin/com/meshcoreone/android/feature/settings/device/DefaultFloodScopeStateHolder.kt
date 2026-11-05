@@ -76,11 +76,12 @@ class DefaultFloodScopeStateHolder(
     fun select(name: String?, expectedToken: SessionToken? = mutable.value.sessionToken) {
         if (mutable.value.isApplying) return
         val service = try {
-            settingsService().also {
-                if (expectedToken != null && it?.sessionToken != expectedToken) {
-                    throw SettingsNotConnectedException()
-                }
-            }
+            val observed = mutable.value
+            SettingsRadioTarget.capture(
+                expectedToken, observed.device, observed.sessionToken, settingsService(),
+            ).service
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
             apply(name, null, failure)
             return

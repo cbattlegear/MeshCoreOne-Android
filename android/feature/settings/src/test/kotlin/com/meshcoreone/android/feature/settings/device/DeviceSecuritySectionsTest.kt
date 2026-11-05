@@ -539,6 +539,45 @@ class DefaultFloodScopeStateHolderTest {
     }
 
     @Test
+    fun `a retained null token disabled row cannot adopt a live scope session`() {
+        val token = SessionToken(ProcessEpoch(UUID(0, 1)), Generation(1), connection.deviceFlow.value!!.radioId)
+        val observations = MutableStateFlow(SettingsDeviceObservation(connection.deviceFlow.value, null))
+        val observed = object : SettingsConnection by connection {
+            override val deviceObservations = observations
+        }
+        val live = FakeSettingsPort()
+        var current: SettingsRadioPort = service
+        val bound = DefaultFloodScopeStateHolder(scheduler.environment(), observed, { current }, discovery, store)
+        bound.start(); scheduler.runCurrent()
+        val renderedToken = bound.state.value.sessionToken
+        assertNull(renderedToken)
+        val retainedDisabledAction = { bound.select(null, renderedToken) }
+        current = object : SettingsRadioPort by live { override val sessionToken = token }
+
+        retainedDisabledAction()
+        scheduler.runCurrent()
+        assertTrue(live.calls.isEmpty(), "A null observation cannot authorize a session-bound service")
+        assertTrue(bound.state.value.errorMessage != null)
+        assertFalse(bound.state.value.isApplying)
+
+        observations.value = SettingsDeviceObservation(connection.deviceFlow.value, token)
+        scheduler.runCurrent()
+        retainedDisabledAction()
+        scheduler.runCurrent()
+        assertTrue(live.calls.isEmpty(), "Refreshing the observation cannot upgrade a retained null-token callback")
+        assertTrue(bound.state.value.errorMessage != null)
+        assertFalse(bound.state.value.isApplying)
+
+        bound.select(null, bound.state.value.sessionToken)
+        scheduler.runCurrent()
+        assertEquals(listOf("setDefaultFloodScopeVerified(null)"), live.calls)
+        assertNull(bound.state.value.errorMessage)
+        assertFalse(bound.state.value.isApplying)
+        assertTrue(service.calls.isEmpty())
+        bound.stop()
+    }
+
+    @Test
     fun `long and mixed aliases have one radio identity while preserving every full name`() {
         val prefix = "é".repeat(15)
         val aliases = listOf(prefix + "two", prefix, prefix + "one")

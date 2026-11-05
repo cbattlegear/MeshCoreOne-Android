@@ -40,7 +40,8 @@ class NotificationReplyEnrollmentStore internal constructor(
         replyLimits, receiptBudget, issuanceLimits, unboundLimits,
     )
 
-    data class EnrollmentOperation(val operationId: UUID, val storeId: UUID)
+    /** All three values must be independently retained before any prepare call. */
+    data class EnrollmentOperation(val operationId: UUID, val storeId: UUID, val creationNonce: UUID)
     enum class Phase { PREPARING, BOUND }
     enum class CommitPoint { PREPARE, BIND, UNBOUND_TEXT }
     internal enum class CrashPoint { ALLOCATED, JOURNAL_CREATED, PREPARE_WRITTEN, BIND_WRITTEN, TEXT_WRITTEN }
@@ -102,10 +103,10 @@ class NotificationReplyEnrollmentStore internal constructor(
         var proposedReceipt: CreationReceipt? = null
         try {
             if (!file.createNewFile()) {
-                return@withContext observeExisting(operation, null, replayPrepare = true)
+                return@withContext observeExisting(operation, operation.creationNonce, replayPrepare = true)
             }
             failIf(CrashPoint.ALLOCATED)
-            val receipt = CreationReceipt(operation, 1, Phase.PREPARING, UUID.randomUUID(), null)
+            val receipt = CreationReceipt(operation, 1, Phase.PREPARING, operation.creationNonce, null)
             proposedReceipt = receipt
             database { db ->
                 transaction(db) {
@@ -171,10 +172,14 @@ class NotificationReplyEnrollmentStore internal constructor(
         }
     }
 
-    /** Never creates. A known nonce is mandatory once the external owner has retained it. */
-    suspend fun reconcile(operation: EnrollmentOperation, expectedNonce: UUID? = null): EnrollmentResult =
+    /** Never creates or discovers an adoptable nonce: operation already requires its retained nonce. */
+    suspend fun reconcile(
+        operation: EnrollmentOperation,
+        expectedNonce: UUID = operation.creationNonce,
+    ): EnrollmentResult =
         withContext(Dispatchers.IO) {
             if (!validLimits()) EnrollmentResult.NotRetained(Failure.INVALID_LIMITS)
+            else if (expectedNonce != operation.creationNonce) EnrollmentResult.NotRetained(Failure.MISMATCH)
             else observeExisting(operation, expectedNonce)
         }
 
@@ -182,6 +187,7 @@ class NotificationReplyEnrollmentStore internal constructor(
         withContext(Dispatchers.IO) {
             if (!validLimits()) return@withContext EnrollmentResult.NotRetained(Failure.INVALID_LIMITS)
             if (expected.state != Phase.PREPARING || expected.revision != 1L || expected.witnessId != null ||
+                expected.creationNonce != expected.operation.creationNonce ||
                 acceptance.operation != expected.operation || acceptance.creationNonce != expected.creationNonce
             ) return@withContext EnrollmentResult.NotRetained(Failure.MISMATCH)
             val bound = expected.copy(revision = 2, state = Phase.BOUND, witnessId = acceptance.witnessId)
@@ -323,12 +329,12 @@ class NotificationReplyEnrollmentStore internal constructor(
 
     private fun observeExisting(
         operation: EnrollmentOperation,
-        nonce: UUID?,
+        nonce: UUID,
         replayPrepare: Boolean = false,
     ): EnrollmentResult = try {
         database { db -> transaction(db) {
             val receipt = checked(db)
-            if (receipt.operation != operation || nonce != null && receipt.creationNonce != nonce) {
+            if (receipt.operation != operation || receipt.creationNonce != nonce) {
                 EnrollmentResult.NotRetained(Failure.MISMATCH)
             } else if (!replayPrepare) EnrollmentResult.Observed(receipt)
             else if (receipt.state == Phase.PREPARING) EnrollmentResult.AlreadyPreparing(receipt)
@@ -458,9 +464,10 @@ class NotificationReplyEnrollmentStore internal constructor(
                     cursor.getType(7) != Cursor.FIELD_TYPE_BLOB
                 ) corrupt()
                 val phase = Phase.entries.firstOrNull { it.name == cursor.getString(4) } ?: corrupt()
+                val nonce = uuid(cursor.getString(5))
                 val value = CreationReceipt(
-                    EnrollmentOperation(uuid(cursor.getString(1)), uuid(cursor.getString(2))),
-                    cursor.getLong(3), phase, uuid(cursor.getString(5)),
+                    EnrollmentOperation(uuid(cursor.getString(1)), uuid(cursor.getString(2)), nonce),
+                    cursor.getLong(3), phase, nonce,
                     if (cursor.isNull(6)) null else uuid(cursor.getString(6)),
                 )
                 if (value.revision != (if (phase == Phase.PREPARING) 1L else 2L) ||

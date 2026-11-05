@@ -1,7 +1,8 @@
 # WP-401: distinct loss-aware enrollment and copy-only unknown text
 
 Repository: `cbattlegear/MeshCoreOne-Android`.
-Parent: `5cc18d54f774134b356f4ae39a2a3ac35d485965`.
+Initial implementation parent: `5cc18d54f774134b356f4ae39a2a3ac35d485965`.
+Nonce-replay repair parent: `e3f3c451fcb294aae68457e949677ac4a1cfa9b2`.
 Clean-main base: `41552c85b659396111cee6b0e0f70c404ac5a8ee`.
 Read-only Swift pin remains `db14559b39d32322b06477c6ae676112f583db50`.
 The commit containing this document binds its source and controls.
@@ -29,7 +30,7 @@ not the old `notification-reply-staging.db` path. Internal File/fault constructo
 real SQLite controls, not runtime provisioning shortcuts.
 
 ```kotlin
-data class EnrollmentOperation(val operationId: UUID, val storeId: UUID)
+data class EnrollmentOperation(val operationId: UUID, val storeId: UUID, val creationNonce: UUID)
 enum class Phase { PREPARING, BOUND }
 data class CreationReceipt(
     val operation: EnrollmentOperation,
@@ -45,7 +46,9 @@ data class WitnessAcceptance(
 )
 
 suspend fun prepare(operation: EnrollmentOperation): EnrollmentResult
-suspend fun reconcile(operation: EnrollmentOperation, expectedNonce: UUID? = null): EnrollmentResult
+suspend fun reconcile(
+    operation: EnrollmentOperation, expectedNonce: UUID = operation.creationNonce,
+): EnrollmentResult
 suspend fun bind(expected: CreationReceipt, acceptance: WitnessAcceptance): EnrollmentResult
 fun boundJournal(receipt: CreationReceipt): NotificationReplyStagingStore
 ```
@@ -53,10 +56,13 @@ fun boundJournal(receipt: CreationReceipt): NotificationReplyStagingStore
 The agreed **external** ordering is:
 
 1. Capture actual foreground loss warning acknowledgment; durably retain authenticated
-   PREPARING witness for the already chosen operation/new store UUID before storage creation.
+   PREPARING witness for the already chosen operation/new store UUID **and creation nonce**
+   before storage creation. All three are mandatory independently retained inputs, with no
+   generated/default nonce in the storage API.
 2. Call prepare at the separate generation path. Validate exact operation/store, revision1
-   PREPARING receipt and atomically generated creation nonce. Persist exact nonce and witness
-   acceptance durably before calling bind. A known nonce must always be checked on recovery.
+   PREPARING receipt and the already retained exact creation nonce. Persist exact receipt and
+   witness acceptance durably before calling bind. Even restart before the first receipt return
+   must verify that predeclared nonce; a newly observed nonce is never adoptable.
 3. Bind compares exact PREPARING receipt and acceptance in a SQLite transaction. BOUND is
    revision2 with the same operation/store/nonce and exact accepted witness UUID.
 4. Validate/reconcile exact BOUND receipt and persist/positively read the external BOUND
@@ -69,11 +75,11 @@ does not manufacture authorization. No production authenticated witness adapter 
 foreground acknowledgment has been supplied by this storage change.
 
 `prepare` atomically allocates a previously absent path with createNewFile, then commits the
-predeclared store UUID, operation, fresh creation nonce, all mandatory policy, empty real
+predeclared store UUID, operation, predeclared creation nonce, all mandatory policy, empty real
 journal/registry/custody and copy tables in one synchronous-FULL SQLite transaction (schema4).
 It does **not** call initializeNew, randomize the supplied store identity or infer freshness
 from absence. Matching previously attributed operation returns its receipt; another
-operation/store cannot adopt it. A known expected nonce rejects replacement with matching
+operation/store/nonce cannot adopt it. The required predeclared nonce rejects replacement with matching
 operation/store but another creation. Positive same-operation inspection is causal local
 evidence, not proof of first installation or external consent.
 
@@ -162,7 +168,7 @@ notification retirement, expiry or deletion is wired.
 
 ## Authored controls and actual verification
 
-`NotificationReplyEnrollmentTest` authors 29 real-SQLite methods at API31/37, covering:
+`NotificationReplyEnrollmentTest` authors 31 real-SQLite methods at API31/37, covering:
 absent/allocated/foreign/corrupt state; op/store/nonce/witness mismatch; PREPARING/BOUND
 restart and concurrent enrollment; actual transaction interruptions at allocation, journal
 creation, preparing write, bind write and text write; post-commit lost returns; missing and
@@ -172,7 +178,7 @@ count/per-record/total budgets; concurrent admissions; ignored/aborted inserts/a
 old-journal byte preservation/manual-copy projection; malformed rows and policies.
 
 These are authored controls, **not executable acceptance**. The preexisting 81 named journal
-methods remain; expected total is 110 journal/enrollment methods and 220 API-configured
+methods remain; expected total is 112 journal/enrollment methods and 224 API-configured
 invocations before baseline/adapter tests. Actual discovery must positively observe all names
 in the exact committed candidate, with compiler-captured source/clean-input proof.
 
@@ -193,3 +199,31 @@ prove Kotlin compilation, SQLite execution, actual enrollment or human acknowled
 
 The bounded retry set only process-local `pack.threads=1` and `pack.windowMemory=16m`;
 no repository settings, reference pin, lock, runtime or persisted toolchain state was changed.
+
+## Independent-review nonce replay correction
+
+The initial `e3f3c451f` API generated its nonce during prepare, then allowed existing-path prepare
+and reconcile without an expected nonce. A caller could lose its first successful return,
+restart with only operation/store, and observe a replacement using those same two IDs but a
+different nonce. In-method commit-error reconciliation checked the nonce, but that did not
+protect a new process or existing-path call. This was a real source defect, not covered by
+the initial authored replacement tests.
+
+The successor makes the creation nonce a **required predeclared EnrollmentOperation field**
+that must be independently retained with authorization before any prepare. Every prepare replay
+and reconcile compares the exact triple; nullable/nonce-less recovery is removed. An explicitly
+supplied reconcile nonce must also equal the operation's retained nonce. Receipt and acceptance
+must carry that same nonce. No nonce is generated or adopted in storage.
+
+Two added real-SQLite controls suspend the original caller only after real commit/handle close,
+cancel it before any result is returned, then use a new store handle. The prepare regression
+first proves exact original-triple reconciliation, replaces the DB with another real journal
+sharing operation/store but a different predeclared nonce, and requires both existing-path
+prepare and no-extra-argument reconcile to reject without altering bytes. The bind control
+proves that a lost return still reconciles the exact pre-retained nonce/witness. These model
+post-commit caller death with actual coroutine cancellation and reopened SQLite handles;
+they do not claim a physical device/process-kill or power-loss experiment.
+
+The required independent nonce still does not authenticate consent, establish never-before-
+provisioned state or detect a jointly restored identical authorized triple/DB/witness snapshot.
+Missing post-attempt storage still blocks read-only recovery, rather than authorizing recreation.

@@ -11,9 +11,12 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.RadioId
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -32,7 +35,8 @@ class NotificationReplyEnrollmentTest {
     private val file = File(context.cacheDir, "reply-enrollment-${UUID.randomUUID()}.db")
     private val limits = NotificationReplyLimits(3, 10_000, 30_000)
     private val issuance = NotificationReplyStagingStore.IssuanceLimits(3, 10_000, 30_000)
-    private val operation = NotificationReplyEnrollmentStore.EnrollmentOperation(UUID.randomUUID(), UUID.randomUUID())
+    private val operation = NotificationReplyEnrollmentStore.EnrollmentOperation(
+        UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID())
     private val store get() = NotificationReplyEnrollmentStore(file, limits, 30_000, issuance, limits)
     private val text = " \t\u0000e\u0301\uD800\uDC00\uD800 \r\n "
     private val proposal = NotificationReplyStagingStore.IssuedAction(
@@ -48,7 +52,7 @@ class NotificationReplyEnrollmentTest {
         assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
             store.reconcile(operation))
         val unknown = NotificationReplyEnrollmentStore.CreationReceipt(
-            operation, 2, NotificationReplyEnrollmentStore.Phase.BOUND, UUID.randomUUID(), UUID.randomUUID())
+            operation, 2, NotificationReplyEnrollmentStore.Phase.BOUND, operation.creationNonce, UUID.randomUUID())
         assertEquals(NotificationReplyEnrollmentStore.TextResult.NotRetained(
             NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
             store.retainUnbound(unknown, UUID.randomUUID(), text))
@@ -152,6 +156,78 @@ class NotificationReplyEnrollmentTest {
     }
 
     @Test
+    fun callerDiesAfterPrepareCommitBeforeReturnAndSameOperationStoreReplacementCannotBeAdopted() = runTest {
+        val committed = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        var returned = false
+        val interrupted = fault { if (it == NotificationReplyEnrollmentStore.CommitPoint.PREPARE) {
+            committed.countDown()
+            check(release.await(10, TimeUnit.SECONDS))
+        } }
+        val caller = launch(Dispatchers.Default) {
+            interrupted.prepare(operation)
+            returned = true
+        }
+        try {
+            assertTrue(committed.await(10, TimeUnit.SECONDS))
+            caller.cancel()
+        } finally {
+            release.countDown()
+        }
+        caller.join()
+        assertTrue(caller.isCancelled)
+        assertFalse(returned)
+        val original = store.reconcile(operation) as NotificationReplyEnrollmentStore.EnrollmentResult.Observed
+        assertEquals(operation.creationNonce, original.receipt.creationNonce)
+        val replacement = File(context.cacheDir, "reply-pre-return-${UUID.randomUUID()}.db")
+        try {
+            val differentNonce = operation.copy(creationNonce = UUID.randomUUID())
+            val other = NotificationReplyEnrollmentStore(replacement, limits, 30_000, issuance, limits)
+            assertTrue(other.prepare(differentNonce) is NotificationReplyEnrollmentStore.EnrollmentResult.Preparing)
+            cleanup()
+            replacement.copyTo(file)
+            val before = file.readBytes()
+            // Both APIs used to accept a null nonce here and return the replacement's receipt.
+            assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH), store.prepare(operation))
+            assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH), store.reconcile(operation))
+            assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH),
+                store.reconcile(operation, differentNonce.creationNonce))
+            assertTrue(before.contentEquals(file.readBytes()))
+        } finally {
+            removeDatabase(replacement)
+        }
+    }
+
+    @Test
+    fun callerDiesAfterBindCommitBeforeReturnAndExactRetainedWitnessStillReconciles() = runTest {
+        val preparing = prepareFixture()
+        val witness = acceptance(preparing)
+        val committed = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        var returned = false
+        val interrupted = fault { if (it == NotificationReplyEnrollmentStore.CommitPoint.BIND) {
+            committed.countDown()
+            check(release.await(10, TimeUnit.SECONDS))
+        } }
+        val caller = launch(Dispatchers.Default) {
+            interrupted.bind(preparing, witness)
+            returned = true
+        }
+        try {
+            assertTrue(committed.await(10, TimeUnit.SECONDS))
+            caller.cancel()
+        } finally {
+            release.countDown()
+        }
+        caller.join()
+        assertTrue(caller.isCancelled)
+        assertFalse(returned)
+        val observed = store.reconcile(operation) as NotificationReplyEnrollmentStore.EnrollmentResult.Observed
+        assertEquals(preparing.copy(revision = 2, state = NotificationReplyEnrollmentStore.Phase.BOUND,
+            witnessId = witness.witnessId), observed.receipt)
+    }
+
+    @Test
     fun interruptionsDuringAllocationAndPrepareLeaveUnattributedPathNotFalseReceiptOrFreshRetry() = runTest {
         for (point in listOf(
             NotificationReplyEnrollmentStore.CrashPoint.ALLOCATED,
@@ -233,7 +309,8 @@ class NotificationReplyEnrollmentTest {
         val replacement = File(context.cacheDir, "reply-enrollment-replace-${UUID.randomUUID()}.db")
         try {
             val other = NotificationReplyEnrollmentStore(replacement, limits, 30_000, issuance, limits)
-            val otherReceipt = (other.prepare(operation) as NotificationReplyEnrollmentStore.EnrollmentResult.Preparing).receipt
+            val otherOperation = operation.copy(creationNonce = UUID.randomUUID())
+            val otherReceipt = (other.prepare(otherOperation) as NotificationReplyEnrollmentStore.EnrollmentResult.Preparing).receipt
             val faulting = fault {
                 cleanup()
                 replacement.copyTo(file)
@@ -242,8 +319,9 @@ class NotificationReplyEnrollmentTest {
             assertEquals(NotificationReplyEnrollmentStore.EnrollmentResult.Indeterminate(operation),
                 faulting.prepare(operation))
             assertEquals(NotificationReplyEnrollmentStore.EnrollmentResult.Observed(otherReceipt),
-                store.reconcile(operation, otherReceipt.creationNonce))
-            // External known nonce is required; matching op/store alone is not anti-replacement proof.
+                store.reconcile(otherOperation))
+            assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH),
+                store.reconcile(operation))
             assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH),
                 store.reconcile(operation, UUID.randomUUID()))
         } finally {
@@ -476,7 +554,10 @@ class NotificationReplyEnrollmentTest {
         val bound = bindFixture(prepareFixture())
         val staleHandle = store.boundJournal(bound)
         cleanup()
-        val otherBound = bindFixture(prepareFixture())
+        val otherOperation = operation.copy(creationNonce = UUID.randomUUID())
+        val otherPreparing = (store.prepare(otherOperation) as
+            NotificationReplyEnrollmentStore.EnrollmentResult.Preparing).receipt
+        val otherBound = bindFixture(otherPreparing)
         assertNotEquals(bound.creationNonce, otherBound.creationNonce)
         assertEquals(NotificationReplyEnrollmentStore.TextResult.NotRetained(
             NotificationReplyEnrollmentStore.Failure.MISMATCH),
@@ -494,7 +575,8 @@ class NotificationReplyEnrollmentTest {
         val replacement = File(context.cacheDir, "reply-copy-replace-${UUID.randomUUID()}.db")
         try {
             val other = NotificationReplyEnrollmentStore(replacement, limits, 30_000, issuance, limits)
-            val preparing = (other.prepare(operation) as NotificationReplyEnrollmentStore.EnrollmentResult.Preparing).receipt
+            val otherOperation = operation.copy(creationNonce = UUID.randomUUID())
+            val preparing = (other.prepare(otherOperation) as NotificationReplyEnrollmentStore.EnrollmentResult.Preparing).receipt
             val otherBound = (other.bind(preparing, acceptance(preparing)) as
                 NotificationReplyEnrollmentStore.EnrollmentResult.Bound).receipt
             assertNotEquals(bound.creationNonce, otherBound.creationNonce)

@@ -95,6 +95,7 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
     private val processId: UUID = UUID.randomUUID(),
     private val fault: ((WritePoint) -> Unit)? = null,
     private val synchronize: (File) -> Unit = AndroidWitnessDurability::synchronize,
+    private val beforeAdmission: (AdmissionPoint) -> Unit = {},
 ) : ForegroundWitnessAcknowledgment {
     private val requestedFile = file.absoluteFile
     private val file: File by lazy {
@@ -109,6 +110,9 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
     )
 
     internal enum class WritePoint { ALLOCATED, KEY_CREATED, ROW_WRITTEN, COMMITTED }
+    internal enum class AdmissionPoint { EXPLICIT_ACTION, WITNESS_CONSUMPTION }
+
+    private enum class Admission { ADMITTED, RETIRED, ALREADY_ATTEMPTED }
 
     fun present(request: WitnessAuthorizationRequest): ForegroundAcknowledgmentPresentation {
         require(request.expectedCurrent == null || request.expectedCurrent.valid())
@@ -134,11 +138,18 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
     suspend fun recordExplicitAction(
         presentation: ForegroundAcknowledgmentPresentation,
     ): ForegroundAcknowledgmentStaging = withContext(Dispatchers.IO) {
-        if (!isActive(presentation) || presentation.warning != warning) {
-            return@withContext ForegroundAcknowledgmentStaging.Rejected
+        beforeAdmission(AdmissionPoint.EXPLICIT_ACTION)
+        val admission = synchronized(presentation.lifecycleLock) {
+            when {
+                !isActive(presentation) || presentation.warning != warning -> Admission.RETIRED
+                !presentation.actionAttempted.compareAndSet(false, true) -> Admission.ALREADY_ATTEMPTED
+                else -> Admission.ADMITTED
+            }
         }
-        if (!presentation.actionAttempted.compareAndSet(false, true)) {
-            return@withContext ForegroundAcknowledgmentStaging.Indeterminate
+        when (admission) {
+            Admission.ADMITTED -> Unit
+            Admission.RETIRED -> return@withContext ForegroundAcknowledgmentStaging.Rejected
+            Admission.ALREADY_ATTEMPTED -> return@withContext ForegroundAcknowledgmentStaging.Indeterminate
         }
         val evidence = Evidence(
             request = requestBytes(presentation.request),
@@ -248,9 +259,18 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
                         return@withContext ForegroundAcknowledgmentResult.Rejected
                     }
                     val handle = presentation ?: return@withContext ForegroundAcknowledgmentResult.Required
-                    if (!isActive(handle)) return@withContext ForegroundAcknowledgmentResult.Rejected
-                    if (!handle.consumeAttempted.compareAndSet(false, true)) {
-                        return@withContext ForegroundAcknowledgmentResult.Indeterminate
+                    beforeAdmission(AdmissionPoint.WITNESS_CONSUMPTION)
+                    val admission = synchronized(handle.lifecycleLock) {
+                        when {
+                            !isActive(handle) -> Admission.RETIRED
+                            !handle.consumeAttempted.compareAndSet(false, true) -> Admission.ALREADY_ATTEMPTED
+                            else -> Admission.ADMITTED
+                        }
+                    }
+                    when (admission) {
+                        Admission.ADMITTED -> Unit
+                        Admission.RETIRED -> return@withContext ForegroundAcknowledgmentResult.Rejected
+                        Admission.ALREADY_ATTEMPTED -> return@withContext ForegroundAcknowledgmentResult.Indeterminate
                     }
                     val consumed = transition(expected, Status.CONSUMED)
                     if (consumed == Status.CONSUMED) {

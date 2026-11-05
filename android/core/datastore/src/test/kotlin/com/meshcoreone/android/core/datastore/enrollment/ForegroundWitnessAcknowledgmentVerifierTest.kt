@@ -146,6 +146,50 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
 
         assertEquals(ForegroundAcknowledgmentStaging.Rejected, staging.await())
         assertEquals(ForegroundAcknowledgmentResult.Rejected, f.verifier.verify(f.request))
+        assertEquals(
+            ForegroundAcknowledgmentResult.Rejected,
+            f.verifier(processId = UUID.randomUUID()).verify(f.request),
+        )
+    }
+
+    @Test
+    fun retirementBeforeActionAdmissionDoesNotCreateAcknowledgmentStorage() = runBlocking {
+        val f = fixture()
+        val presentation = f.verifier.present(f.request)
+        val gate = AdmissionGate(ForegroundWitnessAcknowledgmentVerifier.AdmissionPoint.EXPLICIT_ACTION)
+        f.admissionGate = gate
+        val staging = async(Dispatchers.IO) { f.verifier.recordExplicitAction(presentation) }
+        assertTrue(gate.entered.await(10, TimeUnit.SECONDS))
+
+        f.verifier.retire(presentation)
+        gate.release.countDown()
+
+        assertEquals(ForegroundAcknowledgmentStaging.Rejected, staging.await())
+        assertFalse(f.file.exists())
+        assertEquals(
+            ForegroundAcknowledgmentResult.Required,
+            f.verifier(processId = UUID.randomUUID()).verify(f.request),
+        )
+    }
+
+    @Test
+    fun retirementBeforeConsumptionAdmissionLeavesSQLiteStaged() = runBlocking {
+        val f = fixture()
+        val presentation = f.verifier.present(f.request)
+        assertEquals(ForegroundAcknowledgmentStaging.Staged, f.verifier.recordExplicitAction(presentation))
+        val gate = AdmissionGate(ForegroundWitnessAcknowledgmentVerifier.AdmissionPoint.WITNESS_CONSUMPTION)
+        f.admissionGate = gate
+        val verification = async(Dispatchers.IO) { f.verifier.verify(f.request) }
+        assertTrue(gate.entered.await(10, TimeUnit.SECONDS))
+
+        f.verifier.retire(presentation)
+        gate.release.countDown()
+
+        assertEquals(ForegroundAcknowledgmentResult.Rejected, verification.await())
+        assertEquals(
+            ForegroundAcknowledgmentResult.Rejected,
+            f.verifier(processId = UUID.randomUUID()).verify(f.request),
+        )
     }
 
     @Test
@@ -324,6 +368,7 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
         val authentication = TestAcknowledgmentAuthentication()
         var failAt: ForegroundWitnessAcknowledgmentVerifier.WritePoint? = null
         @Volatile var synchronizationGate: SynchronizationGate? = null
+        @Volatile var admissionGate: AdmissionGate? = null
         val failures = mutableListOf<StorageFailure>()
         val verifier = verifier()
 
@@ -338,7 +383,17 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
             processId = processId,
             fault = { if (it == failAt) throw IOException("injected acknowledgment write uncertainty") },
             synchronize = ::synchronize,
+            beforeAdmission = ::beforeAdmission,
         )
+
+        fun beforeAdmission(point: ForegroundWitnessAcknowledgmentVerifier.AdmissionPoint) {
+            val gate = admissionGate?.takeIf { it.point == point } ?: return
+            gate.entered.countDown()
+            if (!gate.release.await(10, TimeUnit.SECONDS)) {
+                throw IOException("timed out waiting for acknowledgment admission release")
+            }
+            admissionGate = null
+        }
 
         fun synchronize(file: File) {
             synchronizationGate?.let { gate ->
@@ -359,6 +414,13 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
     }
 
     private class SynchronizationGate {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+    }
+
+    private class AdmissionGate(
+        val point: ForegroundWitnessAcknowledgmentVerifier.AdmissionPoint,
+    ) {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
     }

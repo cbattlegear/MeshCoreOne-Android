@@ -546,8 +546,14 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
     }
 
     abstract class ContactsImmediateAdmissionComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        private var menuOpen = false
+
         override fun rootView(): View =
-            ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: super.rootView()
+            if (menuOpen) {
+                checkNotNull(WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown })
+            } else {
+                ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: super.rootView()
+            }
 
         @Test
         fun mountedManualAddAppendsBeforeListFetchIncludesContact() = verifyAdmission("append", scan = false)
@@ -566,6 +572,90 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
 
         @Test
         fun mountedScanAddReplacesSameKeyAndRadioBeforeListFetchIncludesContact() = verifyAdmission("same-key", scan = true)
+
+        @Test
+        fun mountedDeleteConfirmationRetiresOnDifferentRadio() = verifyActionOwner(sameRadio = false, delete = true)
+
+        @Test
+        fun mountedDeleteConfirmationRetiresOnSameRadioSessionReplacement() = verifyActionOwner(sameRadio = true, delete = true)
+
+        @Test
+        fun mountedChatConfirmationRetiresOnDifferentRadio() = verifyActionOwner(sameRadio = false, delete = false)
+
+        @Test
+        fun mountedChatConfirmationRetiresOnSameRadioSessionReplacement() = verifyActionOwner(sameRadio = true, delete = false)
+
+        private fun verifyActionOwner(sameRadio: Boolean, delete: Boolean) {
+            val harness = Harness().connect()
+            val oldRadio = checkNotNull(harness.session.radioId)
+            val old = Fixtures.contact(radioId = oldRadio, name = "Old target")
+            harness.store.contacts += old
+            val replacement = Harness().connect(if (sameRadio) oldRadio else Fixtures.radio())
+            val radio = checkNotNull(replacement.session.radioId)
+            val fresh = old.copy(radioId = radio, name = "Fresh target")
+            replacement.store.contacts += fresh
+            val opened = mutableListOf<ContactDTO>()
+            val chats = mutableListOf<ContactDTO>()
+            val navigation = object : NodesNavigation by NodesNavigation.NONE {
+                override fun openContact(contact: ContactDTO) { opened += contact }
+                override fun openChat(contact: ContactDTO) { chats += contact }
+            }
+            val inset = mutableStateOf(0)
+            mount { NodesListScreen(harness.dependencies, navigation, Modifier.padding(inset.value.dp)) }
+            val oldOpen = checkNotNull(awaitAction(old.name).config[SemanticsActions.OnClick].action)
+            val context = controller.get()
+            val action = context.getString(if (delete) C.contactsCommonDelete else C.contactsDetailSendMessage)
+            val confirm = context.getString(if (delete) C.contactsCommonOk else C.contactsCommonDone)
+            openRowConfirmation(action)
+            val oldConfirm = checkNotNull(awaitAction(confirm).config[SemanticsActions.OnClick].action)
+            assertTrue(checkNotNull(ShadowDialog.getLatestDialog()).isShowing)
+
+            harness.session.radioId = radio
+            harness.session.device = replacement.session.device
+            harness.session.contacts = replacement.contactService
+            harness.session.adverts = replacement.adverts
+            harness.session.offlineStore = replacement.store
+            harness.session.servicesStore = replacement.store
+            controller.get().runOnUiThread { inset.value = 1 }
+            awaitCondition { ShadowDialog.getLatestDialog()?.isShowing != true }
+            controller.get().runOnUiThread {
+                assertTrue(oldConfirm.invoke())
+                assertTrue(oldOpen.invoke())
+            }
+            advanceFrames()
+            assertTrue(harness.contactService.calls.isEmpty(), "Retired controls must not use A's service")
+            assertTrue(replacement.contactService.calls.isEmpty(), "Retired controls must not use B's service")
+            assertTrue(opened.isEmpty(), "Retired row navigation must not open A on B")
+            assertTrue(chats.isEmpty(), "Retired confirmation must not navigate A on B")
+
+            click(awaitAction(context.getString(C.contactsListSyncNodes)))
+            awaitText(fresh.name)
+            awaitCondition { replacement.adverts.syncingFlags == listOf(true, false) }
+            click(awaitAction(fresh.name))
+            assertEquals(listOf(fresh), opened)
+            replacement.contactService.removeContact = { requestedRadio, key ->
+                assertEquals(radio, requestedRadio)
+                assertEquals(fresh.publicKey, key)
+            }
+            openRowConfirmation(action)
+            click(awaitAction(confirm))
+            if (delete) {
+                awaitCondition { replacement.contactService.calls == listOf("sync", "remove") }
+                assertTrue(chats.isEmpty())
+            } else {
+                assertEquals(listOf(fresh), chats)
+                assertEquals(listOf("sync"), replacement.contactService.calls)
+            }
+            assertTrue(harness.contactService.calls.isEmpty())
+        }
+
+        private fun openRowConfirmation(action: String) {
+            click(awaitAction("\u22EE"))
+            menuOpen = true
+            val item = awaitAction(action)
+            menuOpen = false
+            click(item)
+        }
 
         private fun verifyAdmission(identity: String, scan: Boolean) {
             if (scan) Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)

@@ -74,6 +74,7 @@ import com.meshcoreone.android.feature.nodes.contacts.ContactsStateHolder
 import com.meshcoreone.android.feature.nodes.contacts.RowActionEdge
 import com.meshcoreone.android.feature.nodes.contacts.RowActionKind
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
+import com.meshcoreone.android.feature.nodes.deps.ensureContactConnection
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.model.localizedNameRes
@@ -90,6 +91,7 @@ internal fun NodesListScreen(
 ) {
     val scope = rememberCoroutineScope()
     val radioId = dependencies.session.currentRadioId()
+    val connection = dependencies.session.connectionIdentity()
     val holder = remember(dependencies, radioId) { ContactsStateHolder(dependencies, scope) }
     val state by holder.state.collectAsStateWithLifecycle()
     var search by remember { mutableStateOf("") }
@@ -98,7 +100,7 @@ internal fun NodesListScreen(
     var sortMenu by remember { mutableStateOf(false) }
     var showAdd by remember(dependencies, radioId) { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
-    var pendingAction by remember { mutableStateOf<Pair<RowActionKind, ContactDTO>?>(null) }
+    var pendingAction by remember(dependencies, radioId, connection) { mutableStateOf<Pair<RowActionKind, ContactDTO>?>(null) }
 
     LaunchedEffect(holder, radioId) {
         if (radioId != null) holder.loadContacts(radioId)
@@ -178,8 +180,18 @@ internal fun NodesListScreen(
                         contact = contact,
                         stateHolder = holder,
                         dependencies = dependencies,
-                        onOpen = { navigation.openContact(contact) },
-                        onAction = { pendingAction = it to contact },
+                        onOpen = {
+                            scope.launch {
+                                dependencies.session.ensureContactConnection(connection, radioId)
+                                navigation.openContact(contact)
+                            }
+                        },
+                        onAction = { action ->
+                            scope.launch {
+                                dependencies.session.ensureContactConnection(connection, radioId)
+                                pendingAction = action to contact
+                            }
+                        },
                     )
                 }
             }
@@ -202,6 +214,7 @@ internal fun NodesListScreen(
                 TextButton(onClick = {
                     pendingAction = null
                     scope.launch {
+                        dependencies.session.ensureContactConnection(connection, radioId)
                         when (action) {
                             RowActionKind.DELETE -> holder.deleteContact(contact)
                             RowActionKind.BLOCK, RowActionKind.UNBLOCK -> holder.toggleBlocked(contact)
@@ -233,7 +246,7 @@ internal fun NodesListScreen(
         )
     }
     if (showAdd) {
-        key(dependencies, radioId, dependencies.session.connectionIdentity()) {
+        key(dependencies, radioId, connection) {
             AddContactDialog(
                 dependencies = dependencies,
                 navigation = navigation,

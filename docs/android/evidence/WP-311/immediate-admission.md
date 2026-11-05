@@ -70,6 +70,15 @@ Four named `old add/lookup table-full/ordinary failure cannot fail or stop a new
 controls hold the old failing operation while a new import is actively suspended. They require
 no stale error, announcement, feedback or flag reset, followed by exactly the new stored DTO's success.
 
+The independent review also identified adjacent row-confirmation lifetime coupling to the new
+radio-owned holder. Pending confirmations are keyed by both radio and service graph; retained row,
+menu and confirmation callbacks validate that owner before state, service or navigation effects.
+Four additional mounted controls (`mountedDelete/ChatConfirmationRetiresOnDifferentRadio` and
+`mountedDelete/ChatConfirmationRetiresOnSameRadioSessionReplacement`) require the old confirmation
+to retire, invoke its retained callback and old row navigation with zero effects on either service
+or navigation, then exercise the fresh radio/session's real Sync, row and confirmation actions.
+No WP-209 service or held work is modified.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

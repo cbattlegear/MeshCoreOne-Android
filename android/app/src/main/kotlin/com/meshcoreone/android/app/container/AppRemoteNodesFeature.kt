@@ -14,12 +14,9 @@ import com.meshcoreone.android.core.services.remote.BinaryProtocolError
 import com.meshcoreone.android.core.services.remote.RemoteNodeError
 import com.meshcoreone.android.core.services.remote.RepeaterAdminService
 import com.meshcoreone.android.core.services.remote.RoomAdminService
-import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesClock
+import com.meshcoreone.android.feature.remotenodes.common.SystemRemoteNodesClock
 import com.meshcoreone.android.feature.remotenodes.dependencies.*
-import java.time.Instant
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.nanoseconds
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 
 internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiDependencies =
@@ -57,11 +54,7 @@ internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiD
                 private fun requireActive() {
                     if (active() == null) throw RemoteNodeError.NotConnected()
                 }
-                override val clock = object : RemoteNodesClock {
-                    override val now: Instant get() = Instant.now()
-                    override val elapsed: Duration get() = System.nanoTime().nanoseconds
-                    override suspend fun sleep(duration: Duration) = delay(duration)
-                }
+                override val clock = SystemRemoteNodesClock
                 override val faults = AppRemoteNodeFaults
                 override fun repeaterAdmin() = active()?.repeaterAdminService?.let { AppRepeaterAdmin(it) { radio -> active()?.token?.radioId == radio } }
                 override fun roomAdmin() = active()?.roomAdminService?.let { AppRoomAdmin(it) { radio -> active()?.token?.radioId == radio } }

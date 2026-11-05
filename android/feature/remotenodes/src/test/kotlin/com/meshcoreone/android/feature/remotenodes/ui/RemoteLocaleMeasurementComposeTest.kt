@@ -33,6 +33,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.contracts.domain.ContactPersisting
+import com.meshcoreone.android.core.contracts.domain.DiscoveredNodePersisting
+import com.meshcoreone.android.core.contracts.domain.NodeSnapshotPersisting
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
@@ -48,20 +51,27 @@ import com.meshcoreone.android.core.protocol.lpp.LPPSensorType
 import com.meshcoreone.android.core.protocol.lpp.LPPValue
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesClock
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodeHistoryStore
+import com.meshcoreone.android.feature.remotenodes.dependencies.remoteNodeHistoryStore
 import com.meshcoreone.android.feature.remotenodes.history.ChartDataPoint
 import com.meshcoreone.android.feature.remotenodes.history.NeighborChart
 import com.meshcoreone.android.feature.remotenodes.status.FakeFaults
 import com.meshcoreone.android.feature.remotenodes.status.NodeStatusStateHolder
 import java.time.Instant
+import java.lang.reflect.Proxy
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import kotlin.time.Duration
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -78,6 +88,7 @@ class RemoteLocaleMeasurementComposeTest {
     @get:Rule val compose = createEmptyComposeRule()
     private lateinit var activity: ActivityController<ComponentActivity>
     private lateinit var previousLocale: Locale
+    private lateinit var previousZone: TimeZone
     private val tag = mutableStateOf("en-US")
     private val key = Bytes(ByteArray(32) { 1 })
     private val now = Instant.parse("2024-07-13T12:00:00Z")
@@ -89,7 +100,9 @@ class RemoteLocaleMeasurementComposeTest {
 
     @Before fun openWindow() {
         previousLocale = Locale.getDefault()
+        previousZone = TimeZone.getDefault()
         Locale.setDefault(Locale.US)
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
         activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
     }
 
@@ -98,6 +111,7 @@ class RemoteLocaleMeasurementComposeTest {
             activity.pause().stop().destroy()
         } finally {
             Locale.setDefault(previousLocale)
+            TimeZone.setDefault(previousZone)
         }
     }
 
@@ -211,7 +225,8 @@ class RemoteLocaleMeasurementComposeTest {
             activity.get().setContent {
                 ResourceLocale {
                     RemoteNodeHistoryRoute(
-                        key, RadioId(UUID(0, 1)), false, store, Modifier, { _, _, _, _, _, _, _ -> }, clock,
+                        key, RadioId(UUID(0, 1)), false, object : RemoteNodeHistoryStore by store {},
+                        Modifier, { _, _, _, _, _, _, _ -> }, clock,
                     )
                 }
             }
@@ -282,11 +297,16 @@ class RemoteLocaleMeasurementComposeTest {
     }
 
     @Test fun historyStoreTransitionsFenceLateResultsAndClockChangesReload() {
-        val lateA = CompletableDeferred<SnapshotList<NodeStatusSnapshotDTO>>()
+        lateinit var lateA: Continuation<SnapshotList<NodeStatusSnapshotDTO>>
+        lateinit var jobA: Job
         var readsA = 0
         var readsB = 0
         var readsC = 0
         fun report(value: Double) = listOf(
+            NodeStatusSnapshotDTO(
+                nodePublicKey = key, timestamp = now.minusSeconds(7_200),
+                telemetryEntries = listOf(TelemetrySnapshotEntry(1, "Temperature", value - 1)).snapshot(),
+            ),
             NodeStatusSnapshotDTO(
                 nodePublicKey = key, timestamp = now.minusSeconds(3_600),
                 telemetryEntries = listOf(TelemetrySnapshotEntry(1, "Temperature", value)).snapshot(),
@@ -305,7 +325,8 @@ class RemoteLocaleMeasurementComposeTest {
         val authorityA = Any()
         val storeA = historyStore(authorityA) {
             readsA++
-            withContext(NonCancellable) { lateA.await() }
+            jobA = currentCoroutineContext().job
+            suspendCoroutine { lateA = it }
         }
         val sameAuthorityWrapper = historyStore(authorityA) { readsA++; report(10.5) }
         val storeB = historyStore { readsB++; report(20.5) }
@@ -332,7 +353,10 @@ class RemoteLocaleMeasurementComposeTest {
         compose.runOnIdle { store.value = storeB }
         compose.waitUntil(5_000) { readsB == 1 }
         compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
-        compose.runOnIdle { lateA.complete(report(5.5)) }
+        compose.runOnIdle {
+            assertTrue("Replacing the backing authority cancels A", jobA.isCancelled)
+            lateA.resume(report(5.5))
+        }
         compose.waitForIdle()
         compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
         compose.onNode(hasText(": 41.9 \u00b0F", substring = true)).assertDoesNotExist()
@@ -341,6 +365,10 @@ class RemoteLocaleMeasurementComposeTest {
         compose.onNodeWithText(activity.get().getString(L.remoteNodesSettingsNoService))
             .performScrollTo().assertIsDisplayed()
         compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).assertDoesNotExist()
+
+        compose.runOnIdle { store.value = storeB }
+        compose.waitUntil(5_000) { readsB == 2 }
+        compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
 
         compose.runOnIdle { store.value = storeC }
         compose.waitUntil(5_000) { readsC == 1 }
@@ -354,6 +382,27 @@ class RemoteLocaleMeasurementComposeTest {
         compose.runOnIdle { activeClock.value = changedClock }
         compose.waitUntil(5_000) { readsC == 2 }
         compose.onNode(hasText(": 86.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.runOnIdle {
+            TimeZone.setDefault(TimeZone.getTimeZone("America/Los_Angeles"))
+            tag.value = "en-US-u-ms-metric"
+        }
+        compose.waitUntil(5_000) { readsC == 3 }
+        compose.onNode(hasText(": 30.5 \u00b0C", substring = true)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun productionHistoryAdaptersCompareEveryBackingRoleByReference() {
+        fun <T> role(type: Class<T>): T = type.cast(Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, _, _ ->
+            error("Identity comparison must not call persistence methods or equals")
+        })
+        val snapshots = role(NodeSnapshotPersisting::class.java)
+        val contacts = role(ContactPersisting::class.java)
+        val discovered = role(DiscoveredNodePersisting::class.java)
+        val identity = remoteNodeHistoryStore(snapshots, contacts, discovered).authorityIdentity
+        assertEquals(identity, remoteNodeHistoryStore(snapshots, contacts, discovered).authorityIdentity)
+        assertEquals(identity.hashCode(), remoteNodeHistoryStore(snapshots, contacts, discovered).authorityIdentity.hashCode())
+        assertNotEquals(identity, remoteNodeHistoryStore(role(NodeSnapshotPersisting::class.java), contacts, discovered).authorityIdentity)
+        assertNotEquals(identity, remoteNodeHistoryStore(snapshots, role(ContactPersisting::class.java), discovered).authorityIdentity)
+        assertNotEquals(identity, remoteNodeHistoryStore(snapshots, contacts, role(DiscoveredNodePersisting::class.java)).authorityIdentity)
     }
 
     @Test fun sameTimestampChartsKeepTheirOwnSelectionWhenLocaleReordersThemAndResetForAnotherNode() {

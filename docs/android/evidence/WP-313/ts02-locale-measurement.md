@@ -1,7 +1,7 @@
 # WP-313 TS-02: Android locale and measurement presentation
 
 Source-only lifecycle successor of `e0e2649de41d4fc723d79cfe64b4b8c89cd27467`,
-composed against live main `83fc29b14f082ef1806f2d68516668128f63b1d4`.
+composed against main `b22a7a987f2cbdcaa223c8f8b45506eecb24cbe6`.
 It preserves the previously reviewed locale and chart changes; prior immutable
 source candidates and hosted evidence are preserved, not rewritten or reused.
 Original source baseline: `99f03ad2da235e66c5cbcb58e88ac4d9aa55d2c5`.
@@ -49,6 +49,11 @@ replacement, not on locale changes.
 Neighbor chart selection has an explicit public-key-prefix identity, separate
 from its resolved display name, because locale-aware collision resolution can
 change that name without changing the neighbor.
+
+App wiring uses the existing `SystemRemoteNodesClock` singleton instead of
+allocating an identical system-clock wrapper per service adapter. A pure
+Activity recreation thus keeps both the backing authority and clock dependency
+stable; genuinely different injected clocks still replace the holder.
 
 ICU's regional `LocaleData.getMeasurementSystem` is retained for normal locales
 and regional `rg` overrides. Its supplemental-region lookup does not implement
@@ -150,24 +155,29 @@ It does not calculate expected values with production helpers.
 5. Keep the same node/radio while replacing a history adapter with a fresh
    wrapper over the same authority; assert it does not reload. Then switch to a
    different authority while the first read is suspended in a
-   cancellation-insensitive wait, verify the new store's data wins after the
-   old read completes, disconnect and reconnect to a third store, and verify
-   the old content is cleared and fresh content appears. Changing the clock
-   object reloads the connected store once, retaining the pre-existing
-   clock/zone dependency behavior.
+   cancellation-insensitive wait, assert the old job is canceled and verify the
+   new store's data wins after the old read completes. Disconnect, reconnect to
+   the same authority, then replace it with a third store; assert fresh reads
+   and content. Changing the clock object and system zone each reloads the
+   connected store once. Teardown restores the prior process zone/locale.
+6. Exercise the production adapter identity directly: fresh wrappers over the
+   same three backing roles compare equal, while replacing any single role
+   changes identity without invoking the roles' own equality or read methods.
 
 ## Admission, verification and limits
 
 The actual immutable-main `CapabilityEngine`, its `errors`/`paths`/`schema`
 imports, policy and manifest were loaded in memory without ledger access.
-All eleven candidate paths admit as WP-313 `wp-owned`: eight production
+Eleven feature/evidence paths admit as WP-313 `wp-owned`: eight production
 `modify`, two test `create`, one owned evidence `create`. Capability revision:
 `7680d62ed91fa7b9455647745901c07ac962966fba9ae26ab69e09a498911396`.
 This is path-rule evidence, not an identity receipt or a claim mutation.
+The coupled app clock substitution uses `app-build-launcher` with the named
+operation `update-launcher-or-composition`, not generic app-file modification.
 
 The original `e0e2649` exact-head hosted run passed, but does not verify the
-subsequent lifecycle-review repair. This repair is source-only pending fresh
-independent review and a newly authorized exact-head hosted run. No local
+subsequent lifecycle-review repair. This repair is published to the existing PR
+for fresh automatic checks and review; no diagnostic dispatch is added. No local
 build/test, Git fetch/decompression, new worktree or lock change was performed.
 No prior candidate's checks transfer. No physical-device, exact
 Foundation-oracle execution, real radio/persistence, or whole-WP acceptance is

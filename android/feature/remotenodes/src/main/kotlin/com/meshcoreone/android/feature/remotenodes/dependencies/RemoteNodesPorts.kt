@@ -158,7 +158,7 @@ fun remoteNodeHistoryStore(
     contacts: ContactPersisting,
     discoveredNodes: DiscoveredNodePersisting,
 ): RemoteNodeHistoryStore = object : RemoteNodeHistoryStore {
-    override val authorityIdentity = RemoteNodeHistoryAuthority(snapshots, contacts, discoveredNodes)
+    override val authorityIdentity: Any = RemoteNodeHistoryAuthority(snapshots, contacts, discoveredNodes)
 
     override suspend fun fetchNodeStatusSnapshots(nodePublicKey: Bytes, since: Instant?) =
         snapshots.fetchNodeStatusSnapshots(nodePublicKey, since)

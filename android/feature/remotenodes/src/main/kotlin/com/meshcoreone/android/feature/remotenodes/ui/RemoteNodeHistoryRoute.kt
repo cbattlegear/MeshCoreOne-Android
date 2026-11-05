@@ -165,9 +165,9 @@ internal fun RemoteNodeHistoryRoute(
     SideEffect { retained.configure(store, publicKey, radioId, clock, zone, presentation) }
     val holder = retained.holder
     val state by holder.state.collectAsStateWithLifecycle()
-    var fullMap by remember(publicKey, radioId) { mutableStateOf(false) }
-    var selectedReport by remember(publicKey, radioId) { mutableStateOf<NodeStatusSnapshotDTO?>(null) }
-    key(publicKey, radioId) {
+    var fullMap by remember(publicKey, radioId, holder) { mutableStateOf(false) }
+    var selectedReport by remember(publicKey, radioId, holder) { mutableStateOf<NodeStatusSnapshotDTO?>(null) }
+    key(publicKey, radioId, holder) {
     Column(modifier.verticalScroll(rememberScrollState()).testTag("remote-history-content"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         RemoteHeading(stringResource(L.remoteNodesHistoryOverviewTitle))
         TextButton({ retained.refresh(publicKey, radioId) }) {

@@ -41,7 +41,74 @@ class NativeMessagingTest {
             h.transport.acknowledge = true; h.transport.ackBeforeAcceptance = true; h.transport.expectedAckOverride = Bytes.of(9, 8, 7, 6)
             val m = h.service.sendMessageWithRetry("different firmware code", h.contact)
             assertEquals(MessageStatus.DELIVERED, m.status); assertEquals(0x06070809u, m.ackCode)
+            assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
             assertTrue(h.diagnostics.any { it is MessagingDiagnostic.AckCodeMismatch }); assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size); h.close()
+        },
+        native("bufferedUnrelatedAckIsReportedUnmatchedOnlyAfterActualResponse") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            val gate = CompletableDeferred<Unit>()
+            h.transport.acknowledge = false
+            h.transport.expectedAckOverride = Bytes.of(9, 8, 7, 6)
+            h.transport.acceptanceGate = gate
+            val sending = async { h.service.sendDirectMessage("deferred unmatched", h.contact) }
+            runCurrent()
+            h.transport.pushAck(Bytes.of(1, 2, 3, 4), 123u); runCurrent()
+            assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
+            gate.complete(Unit); runCurrent(); sending.await()
+            assertEquals(1, h.diagnostics.filterIsInstance<MessagingDiagnostic.UnmatchedAcknowledgement>().size)
+            h.close()
+        },
+        native("confirmedOtherMessageAckDoesNotConsumeUnresolvedBufferOrReportUnmatched") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            h.transport.acknowledge = false
+            val firstCode = Bytes.of(9, 8, 7, 6)
+            h.transport.expectedAckOverride = firstCode
+            val first = h.service.sendDirectMessage("confirmed first", h.contact)
+            val gate = CompletableDeferred<Unit>()
+            h.transport.expectedAckOverride = Bytes.of(5, 6, 7, 8)
+            h.transport.acceptanceGate = gate
+            val second = async { h.service.sendDirectMessage("unresolved second", h.contact) }
+            runCurrent()
+            val secondID = h.store.messages.values.single { it.id != first.id }.id
+            h.transport.pushAck(firstCode, 123u); runCurrent()
+            assertEquals(MessageStatus.DELIVERED, h.stored(first.id).status)
+            assertEquals(0, h.service.bufferedAcknowledgementCount(secondID))
+            gate.complete(Unit); runCurrent(); second.await()
+            assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
+            h.close()
+        },
+        native("unresolvedAckFloodIsBoundedAndOverflowDoesNotInventDeliveryOrUnmatched") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            val gate = CompletableDeferred<Unit>()
+            val actual = Bytes.of(9, 8, 7, 6)
+            h.transport.acknowledge = false
+            h.transport.expectedAckOverride = actual
+            h.transport.acceptanceGate = gate
+            val sending = async { h.service.sendDirectMessage("bounded early ACK", h.contact) }
+            runCurrent()
+            val id = h.store.messages.values.single().id
+            repeat(64) {
+                h.transport.pushAck(Bytes.of(it, 0, 0, 0), 123u)
+                runCurrent()
+            }
+            assertEquals(64, h.service.bufferedAcknowledgementCount(id))
+            assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
+            h.transport.pushAck(Bytes.of(64, 0, 0, 0), 123u); runCurrent()
+            repeat(256) { h.transport.pushAck(Bytes.of(it, 1, 0, 0), 123u) }
+            h.transport.pushAck(actual, 123u); runCurrent()
+            assertEquals(0, h.service.bufferedAcknowledgementCount(id))
+            assertEquals(1, h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                .count { it.operation.startsWith("ackBuffer.") })
+            assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
+            gate.complete(Unit); runCurrent()
+            val accepted = sending.await()
+            assertEquals(MessageStatus.SENT, accepted.status)
+            assertNull(accepted.roundTripTime)
+            h.transport.pushAck(actual, 123u); runCurrent()
+            assertEquals(MessageStatus.DELIVERED, h.stored(id).status)
+            assertEquals(123u, h.stored(id).roundTripTime)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            h.close()
         },
         native("wrongAckDoesNotResolveAndLateFirstAttemptAckStillResolvesSecondAttempt") {
             val h = Harness(this, MessageServiceConfig(maxAttempts = 2, floodAfter = 5)); h.start(); h.service.startEventMonitoring()

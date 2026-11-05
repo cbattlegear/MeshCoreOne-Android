@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteDatabaseCorruptException
 import android.database.sqlite.SQLiteException
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.RadioId
 import java.io.File
@@ -18,7 +19,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Structural post identity, NOT authentication or RF-origin proof. The future ingress owner must
- * verify the private PendingIntent provenance before staging. Display targets are not send authority.
+ * bind the private PendingIntent to durable issuance before staging. Display targets are not send authority.
  */
 data class NotificationReplyPost(val version: Int, val postId: UUID, val action: String) {
     internal fun isValid(): Boolean = version == 1 && action == "REPLY"
@@ -40,6 +41,7 @@ data class NotificationReplyLimits(
 class NotificationReplyStagingStore internal constructor(
     private val databaseFile: File,
     private val limits: NotificationReplyLimits,
+    private val afterIssuanceCommit: (() -> Unit)? = null,
     private val afterAdmissionCommit: (() -> Unit)? = null,
     private val afterLifecycleCommit: (() -> Unit)? = null,
 ) {
@@ -48,6 +50,30 @@ class NotificationReplyStagingStore internal constructor(
     )
 
     data class RecordIdentity(val storeId: UUID, val recordId: UUID, val sequence: Long)
+
+    data class IssuedAction(
+        val token: UUID,
+        val post: NotificationReplyPost,
+        val logicalNotificationId: NotificationId,
+        val payload: NotificationPayload,
+    )
+
+    data class IssuedRecord(val storeId: UUID, val sequence: Long, val action: IssuedAction)
+
+    /** Separate immutable caller-selected policy, with no expiry, eviction or production defaults. */
+    data class IssuanceLimits(val maxRecords: Int, val maxRecordBytes: Long, val maxTotalRecordBytes: Long) {
+        internal fun isValid(): Boolean =
+            maxRecords > 0 && maxRecordBytes > 0 && maxTotalRecordBytes >= maxRecordBytes
+    }
+
+    sealed interface IssuanceResult {
+        data class Reserved(val record: IssuedRecord) : IssuanceResult
+        data class AlreadyReserved(val record: IssuedRecord) : IssuanceResult
+        /** No reservation was retained by this call. */
+        data class Rejected(val reason: Failure) : IssuanceResult
+        /** Reservation may exist; do not expose a PendingIntent or allocate another token. */
+        data class Indeterminate(val token: UUID) : IssuanceResult
+    }
 
     enum class Custody { UNCLAIMED, UNBOUND, CLAIMED_POSSIBLE_SEND, INDETERMINATE }
     enum class Uncertainty { OWNER_REPORTED, RECOVERY, CANCELLED, OUTCOME_UNKNOWN }
@@ -88,6 +114,7 @@ class NotificationReplyStagingStore internal constructor(
         val identity: RecordIdentity
         val post: NotificationReplyPost
         val exactText: String
+        val issuedToken: UUID?
         val targetAuthority: TargetAuthority get() = TargetAuthority.UNPROVED
 
         class StagedReply internal constructor(
@@ -97,6 +124,7 @@ class NotificationReplyStagingStore internal constructor(
             val payload: NotificationPayload,
             val outgoingMessageId: UUID,
             val custody: CustodyReceipt?,
+            override val issuedToken: UUID?,
         ) : RecoveryEntry
 
         class UnboundConflict internal constructor(
@@ -104,6 +132,7 @@ class NotificationReplyStagingStore internal constructor(
             override val post: NotificationReplyPost,
             override val exactText: String,
             val custody: CustodyReceipt?,
+            override val issuedToken: UUID?,
         ) : RecoveryEntry
     }
 
@@ -137,6 +166,8 @@ class NotificationReplyStagingStore internal constructor(
         RECORD_CAPACITY, PRIVATE_DATA_CAPACITY, MISSING_STORAGE, STORAGE_UNAVAILABLE, CORRUPT_STORAGE,
         LIFECYCLE_NOT_INITIALIZED, LIFECYCLE_CAPACITY, INVALID_LIFECYCLE_BUDGET, RECORD_NOT_FOUND,
         IDENTITY_MISMATCH,
+        ISSUANCE_NOT_INITIALIZED, INVALID_ISSUANCE_LIMITS, ISSUANCE_RECORD_CAPACITY,
+        ISSUANCE_PRIVATE_DATA_CAPACITY, ISSUANCE_CONFLICT, ISSUED_TOKEN_NOT_FOUND,
     }
 
     // Neither the current payload nor a display-time full key proves the radio's prefix destination.
@@ -202,9 +233,9 @@ class NotificationReplyStagingStore internal constructor(
     ): StageResult = stageBound(null, post, payload, exactText)
 
     /**
-     * Atomic storage admission, NOT authenticated ingress or dispatch permission. The producer
-     * must first resolve its own issued-action registry to the exact post and immutable payload.
-     * Its externally retained store identity is checked in the same transaction as byte retention.
+     * Legacy storage-only admission, NOT authenticated ingress or dispatch permission. It does not
+     * resolve issuance; the issued-action adapter must use admitIssued instead of lookup + admit.
+     * Externally retained store identity is checked in the same transaction as byte retention.
      * Rejected means not retained; Indeterminate never authorizes queue retirement or retransmission.
      */
     suspend fun admit(
@@ -213,6 +244,10 @@ class NotificationReplyStagingStore internal constructor(
         issuedPayload: NotificationPayload,
         exactText: String,
     ): StageResult = stageBound(expectedStoreId, post, issuedPayload, exactText)
+
+    /** Resolve immutable issuance inside the reply transaction; incoming extras supply no payload. */
+    suspend fun admitIssued(expectedStoreId: UUID, issuedToken: UUID, exactText: String): StageResult =
+        stageBound(expectedStoreId, null, null, exactText, issuedToken)
 
     suspend fun inspectInstallation(expectedStoreId: UUID?): InstallationResult = withContext(Dispatchers.IO) {
         if (!limits.isValid()) return@withContext InstallationResult.Failed(Failure.INVALID_LIMITS)
@@ -244,30 +279,38 @@ class NotificationReplyStagingStore internal constructor(
 
     private suspend fun stageBound(
         expectedStoreId: UUID?,
-        post: NotificationReplyPost,
-        payload: NotificationPayload,
+        suppliedPost: NotificationReplyPost?,
+        suppliedPayload: NotificationPayload?,
         exactText: String,
+        issuedToken: UUID? = null,
     ): StageResult = withContext(Dispatchers.IO) {
         if (!limits.isValid()) return@withContext StageResult.Rejected(Failure.INVALID_LIMITS)
-        if (!post.isValid()) return@withContext StageResult.Rejected(Failure.INVALID_IDENTITY)
+        if (issuedToken == null && suppliedPost?.isValid() != true) {
+            return@withContext StageResult.Rejected(Failure.INVALID_IDENTITY)
+        }
         if (exactText.isEmpty()) return@withContext StageResult.Rejected(Failure.INVALID_TEXT)
-        if (payload !is NotificationPayload.DirectMessage && payload !is NotificationPayload.ChannelMessage) {
-            return@withContext StageResult.Rejected(Failure.INVALID_PAYLOAD)
+        if (issuedToken == null) {
+            val encoded = suppliedPayload?.let(ReplyRoutingCodec::encode)
+                ?: return@withContext StageResult.Rejected(Failure.INVALID_PAYLOAD)
+            if (ReplyRoutingCodec.decode(encoded) != suppliedPayload) {
+                return@withContext StageResult.Rejected(Failure.INVALID_PAYLOAD)
+            }
+            if (encoded.length.toLong() * Char.SIZE_BYTES + exactText.length.toLong() * Char.SIZE_BYTES >
+                limits.maxRecordBytes || encoded.length > Int.MAX_VALUE / Char.SIZE_BYTES
+            ) return@withContext StageResult.Rejected(Failure.PRIVATE_DATA_CAPACITY)
         }
-        val encoded = ReplyRoutingCodec.encode(payload)
-            ?: return@withContext StageResult.Rejected(Failure.INVALID_PAYLOAD)
-        if (ReplyRoutingCodec.decode(encoded) != payload) {
-            return@withContext StageResult.Rejected(Failure.INVALID_PAYLOAD)
-        }
-        if (encoded.length.toLong() * Char.SIZE_BYTES + exactText.length.toLong() * Char.SIZE_BYTES >
-            limits.maxRecordBytes ||
-            encoded.length > Int.MAX_VALUE / Char.SIZE_BYTES ||
+        if (exactText.length.toLong() * Char.SIZE_BYTES > limits.maxRecordBytes ||
             exactText.length > Int.MAX_VALUE / Char.SIZE_BYTES
         ) return@withContext StageResult.Rejected(Failure.PRIVATE_DATA_CAPACITY)
-        val payloadBytes = textBytes(encoded)
         val replyBytes = textBytes(exactText)
         val proposedId = UUID.randomUUID()
+        var resolvedPost: NotificationReplyPost? = null
+        var resolvedPayload: ByteArray? = null
         var commitAttempted = false
+        fun reconcileCommitted(): StageResult = reconcile(
+            expectedStoreId, requireNotNull(resolvedPost), requireNotNull(resolvedPayload),
+            replyBytes, proposedId, issuedToken,
+        )
         try {
             val result = database { db ->
                 transaction(db) {
@@ -275,7 +318,26 @@ class NotificationReplyStagingStore internal constructor(
                     if (expectedStoreId != null && state.storeId != expectedStoreId) {
                         return@transaction StageResult.Rejected(Failure.IDENTITY_MISMATCH)
                     }
-                    val prior = state.rows.filter { it.post == post }
+                    val issued = if (issuedToken == null) null else {
+                        if (db.version < 3) {
+                            return@transaction StageResult.Rejected(Failure.ISSUANCE_NOT_INITIALIZED)
+                        }
+                        readIssuance(db, state.storeId).records.firstOrNull { it.action.token == issuedToken }
+                            ?: return@transaction StageResult.Rejected(Failure.ISSUED_TOKEN_NOT_FOUND)
+                    }
+                    val post = issued?.action?.post ?: suppliedPost
+                        ?: return@transaction StageResult.Rejected(Failure.INVALID_IDENTITY)
+                    val payload = issued?.action?.payload ?: suppliedPayload
+                        ?: return@transaction StageResult.Rejected(Failure.INVALID_PAYLOAD)
+                    val encoded = ReplyRoutingCodec.encode(payload)
+                        ?: return@transaction StageResult.Rejected(Failure.INVALID_PAYLOAD)
+                    if (ReplyRoutingCodec.decode(encoded) != payload) {
+                        return@transaction StageResult.Rejected(Failure.INVALID_PAYLOAD)
+                    }
+                    val payloadBytes = textBytes(encoded)
+                    resolvedPost = post
+                    resolvedPayload = payloadBytes
+                    val prior = state.rows.filter { it.post == post && it.issuedToken == issuedToken }
                     val identical = prior.firstOrNull {
                         it.payload.contentEquals(payloadBytes) && it.text.contentEquals(replyBytes)
                     }
@@ -283,7 +345,7 @@ class NotificationReplyStagingStore internal constructor(
                     val first = prior.firstOrNull { it.parentId == null }
                     val row = Row(
                         state.rows.size.toLong() + 1, proposedId, post, first?.recordId,
-                        if (first == null) UUID.randomUUID() else null, payloadBytes, replyBytes,
+                        if (first == null) UUID.randomUUID() else null, payloadBytes, replyBytes, issuedToken,
                     )
                     if (row.contentBytes > limits.maxRecordBytes ||
                         row.contentBytes > limits.maxTotalRecordBytes - state.contentBytes
@@ -291,17 +353,21 @@ class NotificationReplyStagingStore internal constructor(
                     if (state.rows.size >= limits.maxRecords) {
                         return@transaction StageResult.Rejected(Failure.RECORD_CAPACITY)
                     }
+                    val values = arrayOf<Any?>(
+                        row.sequence, row.recordId.toString(), post.postId.toString(), post.version,
+                        post.action, row.parentId?.toString(), row.outgoingId?.toString(),
+                        row.payload, row.text, row.contentBytes, row.digest(state.storeId),
+                    )
                     db.execSQL(
-                        "INSERT INTO reply_records VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        arrayOf(row.sequence, row.recordId.toString(), post.postId.toString(), post.version,
-                            post.action, row.parentId?.toString(), row.outgoingId?.toString(),
-                            row.payload, row.text, row.contentBytes, row.digest(state.storeId)),
+                        if (db.version >= 3) "INSERT INTO reply_records VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        else "INSERT INTO reply_records VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        if (db.version >= 3) values + issuedToken?.toString() else values,
                     )
                     db.execSQL(
                         "UPDATE reply_metadata SET record_count=?, content_bytes=? WHERE singleton=1",
                         arrayOf<Any>(state.rows.size + 1, state.contentBytes + row.contentBytes),
                     )
-                    if (db.version == 2) {
+                    if (db.version >= 2) {
                         val receipt = initialCustody(state.storeId, row)
                         val before = readCustody(db, state)
                         writeCustody(db, receipt, insert = true)
@@ -312,6 +378,7 @@ class NotificationReplyStagingStore internal constructor(
                     if (retained.storeId != state.storeId || retained.rows.size != state.rows.size + 1 ||
                         actual.sequence != row.sequence || actual.recordId != row.recordId ||
                         actual.post != row.post || actual.parentId != row.parentId ||
+                        actual.issuedToken != row.issuedToken ||
                         actual.outgoingId != row.outgoingId || !actual.payload.contentEquals(row.payload) ||
                         !actual.text.contentEquals(row.text)
                     ) corrupt()
@@ -322,16 +389,16 @@ class NotificationReplyStagingStore internal constructor(
             if (commitAttempted) afterAdmissionCommit?.invoke()
             result
         } catch (error: StoreFailure) {
-            if (commitAttempted) reconcile(expectedStoreId, post, payloadBytes, replyBytes, proposedId)
+            if (commitAttempted) reconcileCommitted()
             else StageResult.Rejected(error.reason)
         } catch (_: SQLiteDatabaseCorruptException) {
-            if (commitAttempted) reconcile(expectedStoreId, post, payloadBytes, replyBytes, proposedId)
+            if (commitAttempted) reconcileCommitted()
             else StageResult.Rejected(Failure.CORRUPT_STORAGE)
         } catch (_: SQLiteException) {
-            if (commitAttempted) reconcile(expectedStoreId, post, payloadBytes, replyBytes, proposedId)
+            if (commitAttempted) reconcileCommitted()
             else StageResult.Rejected(Failure.STORAGE_UNAVAILABLE)
         } catch (_: SecurityException) {
-            if (commitAttempted) reconcile(expectedStoreId, post, payloadBytes, replyBytes, proposedId)
+            if (commitAttempted) reconcileCommitted()
             else StageResult.Rejected(Failure.STORAGE_UNAVAILABLE)
         }
     }
@@ -351,17 +418,19 @@ class NotificationReplyStagingStore internal constructor(
                     if (expectedStoreId != null && expectedStoreId != state.storeId) {
                         return@transaction ReadResult.Failed(Failure.IDENTITY_MISMATCH)
                     }
-                    val custody = if (db.version == 2) readCustody(db, state) else emptyMap()
+                    val custody = if (db.version >= 2) readCustody(db, state) else emptyMap()
                     ReadResult.Inventory(state.rows.map { row ->
                         val identity = RecordIdentity(state.storeId, row.recordId, row.sequence)
                         if (row.parentId == null) {
                             RecoveryEntry.StagedReply(
                                 identity, row.post, decodeText(row.text),
                                 decodePayload(row.payload), requireNotNull(row.outgoingId),
-                                custody[row.recordId],
+                                custody[row.recordId], row.issuedToken,
                             )
                         } else {
-                            RecoveryEntry.UnboundConflict(identity, row.post, decodeText(row.text), custody[row.recordId])
+                            RecoveryEntry.UnboundConflict(
+                                identity, row.post, decodeText(row.text), custody[row.recordId], row.issuedToken,
+                            )
                         }
                     })
                 }
@@ -383,6 +452,7 @@ class NotificationReplyStagingStore internal constructor(
         payload: ByteArray,
         text: ByteArray,
         proposedId: UUID,
+        issuedToken: UUID? = null,
     ): StageResult = try {
         database { db ->
             transaction(db) {
@@ -391,7 +461,8 @@ class NotificationReplyStagingStore internal constructor(
                     return@transaction StageResult.Indeterminate(post, proposedId)
                 }
                 val exact = state.rows.firstOrNull {
-                    it.post == post && it.payload.contentEquals(payload) && it.text.contentEquals(text)
+                    it.post == post && it.issuedToken == issuedToken &&
+                        it.payload.contentEquals(payload) && it.text.contentEquals(text)
                 }
                 if (exact == null) StageResult.Indeterminate(post, proposedId)
                 else result(state.storeId, exact, replay = true)
@@ -416,6 +487,8 @@ class NotificationReplyStagingStore internal constructor(
         val expected = when (db.version) {
             1 -> setOf("reply_metadata", "reply_records")
             2 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy")
+            3 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy",
+                "reply_issued_actions", "reply_issuance_policy")
             else -> corrupt()
         }
         if (userTables(db) != expected) corrupt()
@@ -426,7 +499,7 @@ class NotificationReplyStagingStore internal constructor(
         checkColumns(db, "reply_records", listOf(
             "sequence", "record_id", "post_id", "version", "action", "parent_id", "outgoing_id",
             "payload", "reply_text", "content_bytes", "digest",
-        ))
+        ) + if (db.version >= 3) listOf("issued_token") else emptyList())
         val state = db.rawQuery("SELECT * FROM reply_metadata", null).use { cursor ->
             if (!cursor.moveToFirst() || cursor.getLong(0) != 1L) corrupt()
             if ((0..6).any {
@@ -443,9 +516,11 @@ class NotificationReplyStagingStore internal constructor(
             State(storeId, count, bytes, mutableListOf())
         }
         var totalBytes = 0L
-        val roots = mutableMapOf<NotificationReplyPost, Row>()
+        val roots = mutableMapOf<Pair<NotificationReplyPost, UUID?>, Row>()
         val recordIds = mutableSetOf<UUID>()
         val outgoingIds = mutableSetOf<UUID>()
+        val issuance = if (db.version >= 3) readIssuance(db, state.storeId).records.associateBy { it.action.token }
+        else emptyMap()
         db.rawQuery("SELECT * FROM reply_records ORDER BY sequence", null).use { cursor ->
             while (cursor.moveToNext()) {
                 if (state.rows.size >= limits.maxRecords) corrupt()
@@ -461,6 +536,10 @@ class NotificationReplyStagingStore internal constructor(
                     if (cursor.isNull(5)) null else uuid(cursor.getString(5)),
                     if (cursor.isNull(6)) null else uuid(cursor.getString(6)),
                     cursor.getBlob(7), cursor.getBlob(8),
+                    if (db.version < 3 || cursor.isNull(11)) null else {
+                        if (cursor.getType(11) != Cursor.FIELD_TYPE_STRING) corrupt()
+                        uuid(cursor.getString(11))
+                    },
                 )
                 if (row.sequence != state.rows.size.toLong() + 1 || !row.post.isValid() ||
                     !recordIds.add(row.recordId) || row.text.isEmpty() || row.text.size % 2 != 0 ||
@@ -469,13 +548,19 @@ class NotificationReplyStagingStore internal constructor(
                     !row.digest(state.storeId).contentEquals(cursor.getBlob(10))
                 ) corrupt()
                 decodePayload(row.payload)
-                val root = roots[row.post]
+                if (row.issuedToken != null) {
+                    val issued = issuance[row.issuedToken]?.action ?: corrupt()
+                    if (issued.post != row.post || issued.payload != decodePayload(row.payload)) corrupt()
+                }
+                val key = row.post to row.issuedToken
+                val root = roots[key]
                 if (row.parentId == null) {
                     if (root != null || row.outgoingId == null || !outgoingIds.add(row.outgoingId)) corrupt()
-                    roots[row.post] = row
+                    roots[key] = row
                 } else {
                     if (root == null || row.parentId != root.recordId || row.outgoingId != null ||
-                        state.rows.any { it.post == row.post && it.payload.contentEquals(row.payload) &&
+                        state.rows.any { it.post == row.post && it.issuedToken == row.issuedToken &&
+                            it.payload.contentEquals(row.payload) &&
                             it.text.contentEquals(row.text) }
                     ) corrupt()
                 }
@@ -484,9 +569,244 @@ class NotificationReplyStagingStore internal constructor(
             }
         }
         if (state.count != state.rows.size.toLong() || state.contentBytes != totalBytes) corrupt()
-        if (db.version == 2) readCustody(db, state)
+        if (db.version >= 2) readCustody(db, state)
         return state
     }
+
+    /**
+     * Explicit v2 -> v3 migration of an existing externally bound installation. This supplies
+     * durable app-issued token binding, not first-install proof, human authentication or RF proof.
+     */
+    suspend fun initializeIssuance(expectedStoreId: UUID, policy: IssuanceLimits): InitializeResult =
+        withContext(Dispatchers.IO) {
+            if (!limits.isValid()) return@withContext InitializeResult.Failed(Failure.INVALID_LIMITS)
+            if (!policy.isValid()) return@withContext InitializeResult.Failed(Failure.INVALID_ISSUANCE_LIMITS)
+            var commitAttempted = false
+            try {
+                database { db ->
+                    transaction(db) {
+                        val state = load(db)
+                        if (state.storeId != expectedStoreId) throw StoreFailure(Failure.IDENTITY_MISMATCH)
+                        if (db.version < 2) throw StoreFailure(Failure.LIFECYCLE_NOT_INITIALIZED)
+                        if (db.version == 2) {
+                            db.execSQL(
+                                """CREATE TABLE reply_issuance_policy(
+                                   singleton INTEGER PRIMARY KEY CHECK(singleton=1), record_count INTEGER NOT NULL,
+                                   content_bytes INTEGER NOT NULL, max_records INTEGER NOT NULL,
+                                   max_record_bytes INTEGER NOT NULL, max_total_bytes INTEGER NOT NULL,
+                                   digest BLOB NOT NULL)""",
+                            )
+                            db.execSQL(
+                                "INSERT INTO reply_issuance_policy VALUES(1,0,0,?,?,?,?)",
+                                arrayOf<Any>(policy.maxRecords, policy.maxRecordBytes, policy.maxTotalRecordBytes,
+                                    issuancePolicyDigest(state.storeId, policy, 0, 0)),
+                            )
+                            db.execSQL(
+                                """CREATE TABLE reply_issued_actions(
+                                   sequence INTEGER PRIMARY KEY, token TEXT UNIQUE NOT NULL,
+                                   post_id TEXT NOT NULL, version INTEGER NOT NULL, action TEXT NOT NULL,
+                                   logical_id BLOB NOT NULL, payload BLOB NOT NULL,
+                                   content_bytes INTEGER NOT NULL, digest BLOB NOT NULL)""",
+                            )
+                            db.execSQL("ALTER TABLE reply_records ADD COLUMN issued_token TEXT")
+                            db.version = 3
+                        }
+                        if (readIssuance(db, state.storeId).policy != policy) {
+                            throw StoreFailure(Failure.LIMITS_MISMATCH)
+                        }
+                        load(db)
+                        commitAttempted = true
+                        InitializeResult.Ready
+                    }
+                }
+            } catch (error: StoreFailure) {
+                InitializeResult.Failed(error.reason)
+            } catch (_: SQLiteDatabaseCorruptException) {
+                InitializeResult.Failed(Failure.CORRUPT_STORAGE)
+            } catch (_: SQLiteException) {
+                if (commitAttempted) InitializeResult.Indeterminate
+                else InitializeResult.Failed(Failure.STORAGE_UNAVAILABLE)
+            } catch (_: SecurityException) {
+                if (commitAttempted) InitializeResult.Indeterminate
+                else InitializeResult.Failed(Failure.STORAGE_UNAVAILABLE)
+            }
+        }
+
+    /**
+     * Commit before exposing any PendingIntent. Exact token replay is idempotent; a differing
+     * proposal never overwrites it. Issuance reserves registry bytes, not future reply capacity.
+     */
+    suspend fun registerIssued(expectedStoreId: UUID, proposal: IssuedAction): IssuanceResult =
+        withContext(Dispatchers.IO) {
+            if (!limits.isValid()) return@withContext IssuanceResult.Rejected(Failure.INVALID_LIMITS)
+            if (!proposal.post.isValid() || proposal.logicalNotificationId.value.isEmpty()) {
+                return@withContext IssuanceResult.Rejected(Failure.INVALID_IDENTITY)
+            }
+            val encoded = ReplyRoutingCodec.encode(proposal.payload)
+                ?: return@withContext IssuanceResult.Rejected(Failure.INVALID_PAYLOAD)
+            if (ReplyRoutingCodec.decode(encoded) != proposal.payload) {
+                return@withContext IssuanceResult.Rejected(Failure.INVALID_PAYLOAD)
+            }
+            if (proposal.logicalNotificationId.value.length > Int.MAX_VALUE / Char.SIZE_BYTES) {
+                return@withContext IssuanceResult.Rejected(Failure.ISSUANCE_PRIVATE_DATA_CAPACITY)
+            }
+            var commitAttempted = false
+            try {
+                val result = database { db ->
+                    transaction(db) {
+                        val state = load(db)
+                        if (state.storeId != expectedStoreId) {
+                            return@transaction IssuanceResult.Rejected(Failure.IDENTITY_MISMATCH)
+                        }
+                        if (db.version < 3) {
+                            return@transaction IssuanceResult.Rejected(Failure.ISSUANCE_NOT_INITIALIZED)
+                        }
+                        val issued = readIssuance(db, state.storeId)
+                        val prior = issued.records.firstOrNull { it.action.token == proposal.token }
+                        if (prior != null) {
+                            return@transaction if (prior.action == proposal) IssuanceResult.AlreadyReserved(prior)
+                            else IssuanceResult.Rejected(Failure.ISSUANCE_CONFLICT)
+                        }
+                        val record = IssuedRecord(state.storeId, issued.records.size.toLong() + 1, proposal)
+                        val bytes = issuanceContentBytes(record)
+                        if (bytes > issued.policy.maxRecordBytes ||
+                            bytes > issued.policy.maxTotalRecordBytes - issued.contentBytes
+                        ) return@transaction IssuanceResult.Rejected(Failure.ISSUANCE_PRIVATE_DATA_CAPACITY)
+                        if (issued.records.size >= issued.policy.maxRecords) {
+                            return@transaction IssuanceResult.Rejected(Failure.ISSUANCE_RECORD_CAPACITY)
+                        }
+                        db.execSQL(
+                            "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?)",
+                            arrayOf<Any>(record.sequence, proposal.token.toString(), proposal.post.postId.toString(),
+                                proposal.post.version, proposal.post.action,
+                                textBytes(proposal.logicalNotificationId.value), textBytes(encoded), bytes,
+                                issuanceDigest(record)),
+                        )
+                        val count = issued.records.size.toLong() + 1
+                        val total = issued.contentBytes + bytes
+                        db.execSQL(
+                            "UPDATE reply_issuance_policy SET record_count=?,content_bytes=?,digest=? WHERE singleton=1",
+                            arrayOf<Any>(count, total, issuancePolicyDigest(state.storeId, issued.policy, count, total)),
+                        )
+                        load(db)
+                        val retained = readIssuance(db, state.storeId)
+                        if (retained.records.size.toLong() != count || retained.records.lastOrNull() != record) corrupt()
+                        commitAttempted = true
+                        IssuanceResult.Reserved(record)
+                    }
+                }
+                if (commitAttempted) afterIssuanceCommit?.invoke()
+                result
+            } catch (error: StoreFailure) {
+                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal)
+                else IssuanceResult.Rejected(error.reason)
+            } catch (_: SQLiteDatabaseCorruptException) {
+                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal)
+                else IssuanceResult.Rejected(Failure.CORRUPT_STORAGE)
+            } catch (_: SQLiteException) {
+                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal)
+                else IssuanceResult.Rejected(Failure.STORAGE_UNAVAILABLE)
+            } catch (_: SecurityException) {
+                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal)
+                else IssuanceResult.Rejected(Failure.STORAGE_UNAVAILABLE)
+            }
+        }
+
+    private fun reconcileIssuance(expectedStoreId: UUID, proposal: IssuedAction): IssuanceResult = try {
+        database { db ->
+            transaction(db) {
+                val state = load(db)
+                val record = if (state.storeId != expectedStoreId || db.version < 3) null
+                else readIssuance(db, state.storeId).records.firstOrNull { it.action == proposal }
+                if (record == null) IssuanceResult.Indeterminate(proposal.token)
+                else IssuanceResult.AlreadyReserved(record)
+            }
+        }
+    } catch (_: StoreFailure) {
+        IssuanceResult.Indeterminate(proposal.token)
+    } catch (_: SQLiteException) {
+        IssuanceResult.Indeterminate(proposal.token)
+    } catch (_: SecurityException) {
+        IssuanceResult.Indeterminate(proposal.token)
+    }
+
+    private class IssuanceState(
+        val policy: IssuanceLimits, val contentBytes: Long, val records: List<IssuedRecord>,
+    )
+
+    private fun readIssuance(db: SQLiteDatabase, storeId: UUID): IssuanceState {
+        checkColumns(db, "reply_issuance_policy", listOf(
+            "singleton", "record_count", "content_bytes", "max_records", "max_record_bytes", "max_total_bytes", "digest",
+        ))
+        checkColumns(db, "reply_issued_actions", listOf(
+            "sequence", "token", "post_id", "version", "action", "logical_id", "payload", "content_bytes", "digest",
+        ))
+        val state = db.rawQuery("SELECT * FROM reply_issuance_policy", null).use { cursor ->
+            if (!cursor.moveToFirst() || (0..5).any { cursor.getType(it) != Cursor.FIELD_TYPE_INTEGER } ||
+                cursor.getType(6) != Cursor.FIELD_TYPE_BLOB || cursor.getLong(0) != 1L
+            ) corrupt()
+            val count = cursor.getLong(1)
+            val bytes = cursor.getLong(2)
+            val policy = IssuanceLimits(exactInt(cursor, 3), cursor.getLong(4), cursor.getLong(5))
+            if (!policy.isValid() || count !in 0L..policy.maxRecords.toLong() ||
+                bytes !in 0L..policy.maxTotalRecordBytes ||
+                !issuancePolicyDigest(storeId, policy, count, bytes).contentEquals(cursor.getBlob(6)) ||
+                cursor.moveToNext()
+            ) corrupt()
+            Triple(policy, count, bytes)
+        }
+        val records = mutableListOf<IssuedRecord>()
+        val tokens = mutableSetOf<UUID>()
+        var bytes = 0L
+        db.rawQuery("SELECT * FROM reply_issued_actions ORDER BY sequence", null).use { cursor ->
+            while (cursor.moveToNext()) {
+                if (records.size >= state.first.maxRecords ||
+                    listOf(0, 3, 7).any { cursor.getType(it) != Cursor.FIELD_TYPE_INTEGER } ||
+                    listOf(1, 2, 4).any { cursor.getType(it) != Cursor.FIELD_TYPE_STRING } ||
+                    listOf(5, 6, 8).any { cursor.getType(it) != Cursor.FIELD_TYPE_BLOB }
+                ) corrupt()
+                val action = IssuedAction(
+                    uuid(cursor.getString(1)),
+                    NotificationReplyPost(exactInt(cursor, 3), uuid(cursor.getString(2)), cursor.getString(4)),
+                    NotificationId(decodeText(cursor.getBlob(5))), decodePayload(cursor.getBlob(6)),
+                )
+                val record = IssuedRecord(storeId, cursor.getLong(0), action)
+                val size = issuanceContentBytes(record)
+                if (record.sequence != records.size.toLong() + 1 || !tokens.add(action.token) ||
+                    !action.post.isValid() || action.logicalNotificationId.value.isEmpty() ||
+                    size != cursor.getLong(7) || size > state.first.maxRecordBytes ||
+                    size > state.first.maxTotalRecordBytes - bytes ||
+                    !issuanceDigest(record).contentEquals(cursor.getBlob(8))
+                ) corrupt()
+                bytes += size
+                records.add(record)
+            }
+        }
+        if (records.size.toLong() != state.second || bytes != state.third) corrupt()
+        return IssuanceState(state.first, bytes, records)
+    }
+
+    private fun issuanceHeader(record: IssuedRecord): String =
+        "issued-v1|${record.storeId}|${record.sequence}|${record.action.token}|" +
+            "${record.action.post.version}|${record.action.post.postId}|${record.action.post.action}"
+
+    private fun issuanceContentBytes(record: IssuedRecord): Long =
+        (issuanceHeader(record).length.toLong() + record.action.logicalNotificationId.value.length +
+            requireNotNull(ReplyRoutingCodec.encode(record.action.payload)).length) * Char.SIZE_BYTES
+
+    private fun issuanceDigest(record: IssuedRecord): ByteArray = MessageDigest.getInstance("SHA-256").run {
+        listOf(issuanceHeader(record), record.action.logicalNotificationId.value,
+            requireNotNull(ReplyRoutingCodec.encode(record.action.payload))).forEach { value ->
+            update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(value.length.toLong() * Char.SIZE_BYTES).array())
+            update(textBytes(value))
+        }
+        digest()
+    }
+
+    private fun issuancePolicyDigest(storeId: UUID, policy: IssuanceLimits, count: Long, bytes: Long): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(textBytes(
+            "issued-policy-v1|$storeId|$count|$bytes|${policy.maxRecords}|${policy.maxRecordBytes}|${policy.maxTotalRecordBytes}",
+        ))
 
     /**
      * Explicit transactional v1 -> v2 migration. The separate caller-selected byte budget covers
@@ -597,7 +917,7 @@ class NotificationReplyStagingStore internal constructor(
             val result = database { db ->
                 transaction(db) {
                     val state = load(db)
-                    if (db.version != 2) return@transaction CustodyResult.Failed(Failure.LIFECYCLE_NOT_INITIALIZED)
+                    if (db.version < 2) return@transaction CustodyResult.Failed(Failure.LIFECYCLE_NOT_INITIALIZED)
                     if (state.storeId != identity.storeId) {
                         return@transaction CustodyResult.Failed(Failure.IDENTITY_MISMATCH)
                     }
@@ -823,9 +1143,11 @@ class NotificationReplyStagingStore internal constructor(
         val outgoingId: UUID?,
         val payload: ByteArray,
         val text: ByteArray,
+        val issuedToken: UUID? = null,
     ) {
         private fun header(): ByteArray = textBytes(
-            "$sequence|$recordId|${post.version}|${post.postId}|${post.action}|$parentId|$outgoingId",
+            "$sequence|$recordId|${post.version}|${post.postId}|${post.action}|$parentId|$outgoingId" +
+                (issuedToken?.let { "|issued:$it" } ?: ""),
         )
         val contentBytes: Long get() = header().size.toLong() + payload.size + text.size
         fun digest(storeId: UUID): ByteArray = MessageDigest.getInstance("SHA-256").run {

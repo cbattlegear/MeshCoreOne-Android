@@ -634,8 +634,11 @@ evidence for the separately owned storage candidate.
 
 The authoritative reader derives the expected instrumentation source/blob map
 and reply exclusions from the immutable candidate commit, not the report. It
-requires the exact profile task in the trusted full-scaffold plan even when the
-report omits both that task and its proof. Reported Kotlin inputs and excluded
+requires the exact profile task in the trusted full-scaffold plan and rejects
+reports omitting that task or its proof, including omission of both. For
+affected-only runs, the trusted plan for the actual selected scopes determines
+this obligation: notification-selected runs require both, while unrelated
+scopes require neither and reject unsolicited notification proof. Reported Kotlin inputs and excluded
 reply JVM inputs must match candidate blobs exactly. Older candidates without
 the approved build profile retain the existing plan. The reader does not extend
 the historical scaffold task set unconditionally. The collector also refuses

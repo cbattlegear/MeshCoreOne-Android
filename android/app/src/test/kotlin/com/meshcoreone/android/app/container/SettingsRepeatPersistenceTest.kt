@@ -87,6 +87,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 }
                 edit = editor
                 h.eventually("real editor reached actual Room CAS") { editorEntered.isCompleted }
+                h.eventually("real editor entered the actual runtime authority before disconnect") { runtimeEntered.isCompleted }
                 assertFalse(editor.isCompleted)
                 assertEquals(before, store.fetchDevice(before.id))
                 val physical = h.links.radios.last()

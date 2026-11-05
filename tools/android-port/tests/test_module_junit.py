@@ -17,6 +17,9 @@ from controller.module_junit import (
     NOTIFICATION_CASES, NOTIFICATION_ROOT, check_module_tests,
     _notification_jvm_test_sources, module_method_inventory, module_sources,
     remapped_tasks, validate_remapped_compilation,
+    NOTIFICATION_INSTRUMENTATION_BASELINE, NOTIFICATION_INSTRUMENTATION_BUILD,
+    NOTIFICATION_INSTRUMENTATION_TASK, NOTIFICATION_REPLY_SOURCES,
+    notification_instrumentation_evidence, notification_instrumentation_tasks,
 )
 from test_ci_evidence import junit_report
 
@@ -152,6 +155,126 @@ class ModuleJUnitTests(unittest.TestCase):
         return {
             "platform/notifications": _notification_jvm_test_sources("platform/notifications", inputs),
         }
+
+    def instrumentation_fixture(self, *, replies=True):
+        self.notifications()
+        module = "platform/notifications"
+        fixture = Path(__file__).with_name("fixtures") / "notification-instrumentation-build.gradle.kts"
+        self.source(module, "build.gradle.kts", fixture.read_text(encoding="utf-8"))
+        status = next(path for path in NOTIFICATION_INSTRUMENTATION_BASELINE if "/status/" in path)
+        self.source(module, status, "package sample\nclass ConnectionStatusTests {}\n")
+        if replies:
+            for path in sorted(NOTIFICATION_REPLY_SOURCES):
+                name = Path(path).stem
+                self.source(module, path, f"""
+package sample
+import org.junit.Test
+@org.robolectric.annotation.Config(sdk = [31, 37])
+class {name} {{ @Test fun required() {{}} }}
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "reviewed instrumentation profile fixture")
+        self.assertEqual(self.command(
+            "rev-parse", f"HEAD:android/{module}/build.gradle.kts",
+        ), NOTIFICATION_INSTRUMENTATION_BUILD)
+        inputs = module_sources(self.repo)[module]
+        prefix = f"android/{module}/"
+        expected = {prefix + path: inputs[prefix + path] for path in NOTIFICATION_INSTRUMENTATION_BASELINE}
+        record = {"task": NOTIFICATION_INSTRUMENTATION_TASK,
+                  "sources": [{"path": path, "blob": blob} for path, blob in sorted(expected.items())]}
+        inventory = self.root / "compiler-sources.jsonl"
+        inventory.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        return inventory, record, expected
+
+    def test_instrumentation_and_jvm_sources_are_independent_and_named(self):
+        inventory, record, expected = self.instrumentation_fixture()
+        tasks = [*remapped_tasks(self.repo), *notification_instrumentation_tasks(self.repo)]
+        proof = notification_instrumentation_evidence(self.repo, inventory, tasks)
+        self.assertEqual(proof["sources"], expected)
+        self.assertEqual(proof["excluded_reply_sources"], sorted(
+            "android/platform/notifications/" + path for path in NOTIFICATION_REPLY_SOURCES
+        ))
+        compiled = self.compiled_notification_sources()
+        for path in proof["excluded_reply_sources"]:
+            self.assertIn(path, compiled["platform/notifications"])
+        self.assertNotIn(next(path for path in expected if "/status/" in path), compiled["platform/notifications"])
+        cases = NOTIFICATION_CASES | {
+            ("sample." + Path(path).stem, "required" + suffix)
+            for path in NOTIFICATION_REPLY_SOURCES for suffix in ("", "[31]")
+        }
+        notification_report(self.repo, cases)
+        self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 20)
+        notification_report(self.repo, cases - {("sample.NotificationReplyAdmissionTest", "required[31]")})
+        with self.assertRaisesRegex(PortError, "SDK cases"):
+            check_module_tests(self.repo, compiled)
+        notification_report(self.repo, cases)
+        broken = {"platform/notifications": dict(compiled["platform/notifications"])}
+        del broken["platform/notifications"][proof["excluded_reply_sources"][0]]
+        with self.assertRaisesRegex(PortError, "compilation"):
+            check_module_tests(self.repo, broken)
+        inventory.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        self.assertEqual(notification_instrumentation_evidence(self.repo, inventory, tasks), proof)
+
+    def test_instrumentation_inventory_refuses_missing_extra_changed_and_duplicate_inputs(self):
+        inventory, record, expected = self.instrumentation_fixture()
+        tasks = [*remapped_tasks(self.repo), *notification_instrumentation_tasks(self.repo)]
+        prefix = "android/platform/notifications/"
+        reply = prefix + min(NOTIFICATION_REPLY_SOURCES)
+        inputs = module_sources(self.repo)["platform/notifications"]
+        variants = [
+            [],
+            [{**record, "sources": []}],
+            [{**record, "task": ":app:compileDebugAndroidTestKotlin"}],
+            [record, record],
+            [{**record, "sources": record["sources"][:-1]}],
+            [{**record, "sources": [*record["sources"], {"path": reply, "blob": inputs[reply]}]}],
+            [{**record, "sources": [{**entry, "blob": "0" * 40} for entry in record["sources"]]}],
+            [{**record, "sources": [*record["sources"], record["sources"][0]]}],
+        ]
+        for records in variants:
+            inventory.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+            with self.subTest(records=records), self.assertRaises(PortError):
+                notification_instrumentation_evidence(self.repo, inventory, tasks)
+        inventory.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        for selected in ([tasks[0]], [tasks[1]]):
+            with self.subTest(selected=selected), self.assertRaisesRegex(PortError, "both declared"):
+                notification_instrumentation_evidence(self.repo, inventory, selected)
+        status = next(path for path in expected if "/status/" in path)
+        (self.repo / status).write_text("dirty", encoding="utf-8")
+        with self.assertRaisesRegex(PortError, "inputs differ"):
+            notification_instrumentation_evidence(self.repo, inventory, tasks)
+
+    def test_instrumentation_profile_preserves_candidates_without_reply_sources(self):
+        inventory, _, expected = self.instrumentation_fixture(replies=False)
+        tasks = [*remapped_tasks(self.repo), *notification_instrumentation_tasks(self.repo)]
+        proof = notification_instrumentation_evidence(self.repo, inventory, tasks)
+        self.assertEqual(proof["sources"], expected)
+        self.assertEqual(proof["excluded_reply_sources"], [])
+        self.assertEqual(check_module_tests(
+            self.repo, self.compiled_notification_sources(),
+        )["platform/notifications"]["passed"], 6)
+
+    def test_old_profile_does_not_acquire_an_instrumentation_obligation(self):
+        self.notifications()
+        self.assertEqual(notification_instrumentation_tasks(self.repo), [])
+        self.assertEqual(notification_instrumentation_evidence(
+            self.repo, self.root / "missing-inventory", remapped_tasks(self.repo),
+        ), {})
+
+    def test_instrumentation_task_selection_uses_candidate_profile_even_after_graph_fallback(self):
+        from controller.local_scope import candidate_plan
+
+        self.instrumentation_fixture(replies=False)
+        base, head = self.command("rev-parse", "HEAD^"), self.command("rev-parse", "HEAD")
+        for fallback in (False, True):
+            context = (
+                patch("controller.local_scope.module_inventory", side_effect=PortError("unclassified graph"))
+                if fallback else contextlib.nullcontext()
+            )
+            with self.subTest(fallback=fallback), context:
+                plan = candidate_plan(self.repo, base, head, trusted_base=base)
+            self.assertIn(NOTIFICATION_INSTRUMENTATION_TASK, plan["tasks"])
+            self.assertIn(":platform:notifications:testDebugUnitTest", plan["tasks"])
 
     def test_exact_mapping_activates_and_binds_all_remapped_inputs(self):
         self.notifications()
@@ -371,10 +494,15 @@ class SdkFamilyTest {
         with self.assertRaisesRegex(PortError, "Malformed or duplicate compiled test source"):
             fast.notification_test_sources(self.repo, path)
 
-    def test_default_full_fast_main_binds_only_current_invocation_compiler_inventory(self, notifications=True):
+    def test_default_full_fast_main_binds_only_current_invocation_compiler_inventory(
+        self, notifications=True, instrumentation=False,
+    ):
         from controller import ci, ci_environment, ci_evidence
 
-        if notifications:
+        instrumentation_record = None
+        if instrumentation:
+            _, instrumentation_record, _ = self.instrumentation_fixture(replies=False)
+        elif notifications:
             self.notifications()
         fast_path = Path(__file__).resolve().parents[1] / "local" / "fast.py"
         spec = importlib.util.spec_from_file_location("test_default_fast_main", fast_path)
@@ -405,6 +533,7 @@ class SdkFamilyTest {
                 if log.name != "gradle-scaffold.log":
                     return
                 self.assertEqual(":platform:notifications:testDebugUnitTest" in command, notifications)
+                self.assertEqual(NOTIFICATION_INSTRUMENTATION_TASK in command, instrumentation)
                 self.assertEqual(command[-2:], [
                     "--init-script",
                     str(self.repo / "tools/android-port/controller/verify_candidate_task_graph.gradle"),
@@ -424,7 +553,10 @@ class SdkFamilyTest {
                     actual = json.loads(json.dumps(record))
                     if mode == "stale":
                         actual["sources"][0]["blob"] = "0" * 40
-                    inventory_path.write_text(json.dumps(actual) + "\n", encoding="utf-8")
+                    records = [actual] + ([instrumentation_record] if instrumentation else [])
+                    inventory_path.write_text(
+                        "".join(json.dumps(item) + "\n" for item in records), encoding="utf-8",
+                    )
 
             text = io.StringIO()
             with self.subTest(mode=mode), \
@@ -451,12 +583,16 @@ class SdkFamilyTest {
             if mode == "current":
                 self.assertIn('"compiled_test_sources"', text.getvalue())
                 self.assertIn('"remapped_jvm_inputs"', text.getvalue())
+                self.assertEqual('"notification_instrumentation"' in text.getvalue(), instrumentation)
                 if not notifications:
                     self.assertIn('"remapped_jvm_inputs": {}', text.getvalue())
                     self.assertNotIn("platform:notifications", text.getvalue())
 
     def test_default_full_fast_main_does_not_require_absent_notification_module(self):
         self.test_default_full_fast_main_binds_only_current_invocation_compiler_inventory(notifications=False)
+
+    def test_default_full_fast_main_observes_instrumentation_separately_from_jvm_sources(self):
+        self.test_default_full_fast_main_binds_only_current_invocation_compiler_inventory(instrumentation=True)
 
     def test_future_candidate_named_case_is_mandatory_not_a_fixed_count(self):
         self.notifications()

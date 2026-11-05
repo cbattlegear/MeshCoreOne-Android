@@ -543,8 +543,11 @@ Linux launch. Neither outcome is real remote parallel product acceptance.
 Notification messaging tests under `src/androidTest` are also JVM inputs only for
 the explicitly supported notification build profiles. The verifier recognizes
 the complete immutable `build.gradle.kts` blobs `9c5e1f4f6ed16f68ff629e6768afdd9185d2da61`
-(current notification mapping) and `1edcfc21437134ff7eb4bc431ffd6358c6967bab`
-(the same mapping plus #515 task wiring). This is a bounded allowlist, not a Gradle
+(original notification mapping), `1edcfc21437134ff7eb4bc431ffd6358c6967bab`
+(the same mapping plus #515 task wiring), and
+`102fc68b8cde016474398764f0e99f766e00ee18` (reviewed `1b50a327` wiring that
+excludes the seven reply Robolectric files from AndroidTest Kotlin compilation).
+This is a bounded allowlist, not a Gradle
 interpreter. A missing/changed/dynamic/unsafe build mapping fails closed; changing
 that build requires a reviewed profile update. An unrelated instrumentation tree
 does not become JVM test evidence.
@@ -602,6 +605,37 @@ before accepting its module results; it does not reconstruct compilation inputs
 from the working tree. These are JVM/Robolectric observations, never API/device or
 notification trampoline evidence. A candidate verifier change cannot approve itself:
 trusted reader deployment and admission are separate from these source fixtures.
+
+The `102fc68b` profile additionally selects
+`:platform:notifications:compileDebugAndroidTestKotlin` when selecting its JVM
+runner. The older two profiles and candidates without notifications retain
+their existing task plans. This is not app instrumentation compilation: it is
+the notification library's own compiler task. The init script observes its
+actual Kotlin compiler inputs in the current invocation's source stream under
+that distinct task identity. Its compiler cannot reuse an up-to-date/cache
+result instead of emitting a fresh observation. Missing, empty, duplicate,
+wrong-task, changed or unexpected source inventories fail closed.
+
+The instrumentation map must equal the immutable AndroidTest Kotlin sources
+minus the seven exact reply-test paths, retaining all three original messaging
+files and the status test. AndroidTest inputs are also protected against dirty
+changes for this profile. A partial seven-file reply family is unsupported;
+when none exists the report claims no reply exclusions. When all seven exist,
+each must independently remain a compiled JVM input, and every declared JVM
+method and supported SDK variant must execute. Instrumentation exclusion does
+not substitute for JVM discovery, nor does compiler-source inventory establish
+device execution. The source-only regression fixture reproduces the reviewed
+`1b50a327` build bytes; its small synthetic reply methods are not execution
+evidence for the separately owned storage candidate.
+
+The log reader admits the additional compiler task only through its existing
+trusted exact-candidate plan callback, with the separate instrumentation proof;
+it does not extend the historical scaffold task set unconditionally. The
+collector also refuses directly runtime-linked JavaCompile inputs and nonempty
+unmatched test class directories for the notification JVM runner. Structural
+controls are not a real Java/Gradle runtime negative; the independently owned
+GradleTestKit control and reviewed hosted diagnostic remain required before
+claiming that behavior has executed.
 
 Focused source-only remapping and selector regression command (no Gradle lock,
 runtime installation or device execution):

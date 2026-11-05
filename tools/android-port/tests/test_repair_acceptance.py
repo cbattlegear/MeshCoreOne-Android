@@ -2111,6 +2111,57 @@ class RepairExecutionTests(unittest.TestCase):
             with self.subTest(kind=kind), self.assertRaises(PortError):
                 validate_build_log(log, ["core/maps"], plan_for_scopes=provider)
 
+    def test_notification_instrumentation_log_requires_its_exact_trusted_plan_and_inventory(self):
+        from controller.ci import TASKS
+        from controller.module_junit import (
+            NOTIFICATION_INSTRUMENTATION_BASELINE, NOTIFICATION_INSTRUMENTATION_TASK,
+            NOTIFICATION_REPLY_SOURCES,
+        )
+
+        prefix = "android/platform/notifications/"
+        replies = sorted(prefix + path for path in NOTIFICATION_REPLY_SOURCES)
+        sources = {prefix + path: "4" * 40 for path in NOTIFICATION_INSTRUMENTATION_BASELINE}
+        tasks = [*TASKS["scaffold"], NOTIFICATION_INSTRUMENTATION_TASK]
+        plan = {"full_scaffold": True, "tasks": tasks}
+        proof = {"task": NOTIFICATION_INSTRUMENTATION_TASK, "sources": sources,
+                 "excluded_reply_sources": replies}
+        report = {"tasks": tasks, "scopes": ["scaffold"], "notification_instrumentation": proof,
+                  "compiled_test_sources": {"platform/notifications": {path: "4" * 40 for path in replies}}}
+        def provider(scopes):
+            from controller.ci import SCOPED_TASKS
+
+            self.assertEqual(scopes, list(SCOPED_TASKS))
+            return plan
+        self.assertTrue(validate_build_log(
+            build_log([], **report), [], plan_for_scopes=provider,
+        )["positive_discovery"])
+        for kind in ("no-plan", "wrong-plan", "missing-proof", "empty", "included-reply",
+                     "missing-baseline", "missing-jvm", "partial-exclusion", "no-task", "wrong-scopes"):
+            altered = copy.deepcopy(report)
+            trusted = provider
+            if kind == "no-plan":
+                trusted = None
+            elif kind == "wrong-plan":
+                trusted = lambda scopes: {"full_scaffold": True, "tasks": TASKS["scaffold"]}
+            elif kind == "missing-proof":
+                altered.pop("notification_instrumentation")
+            elif kind == "empty":
+                altered["notification_instrumentation"]["sources"] = {}
+            elif kind == "included-reply":
+                altered["notification_instrumentation"]["sources"][replies[0]] = "4" * 40
+            elif kind == "missing-baseline":
+                altered["notification_instrumentation"]["sources"].pop(next(iter(sources)))
+            elif kind == "missing-jvm":
+                altered["compiled_test_sources"]["platform/notifications"].pop(replies[0])
+            elif kind == "partial-exclusion":
+                altered["notification_instrumentation"]["excluded_reply_sources"] = replies[:-1]
+            elif kind == "no-task":
+                altered["tasks"] = TASKS["scaffold"]
+            elif kind == "wrong-scopes":
+                altered["scopes"] = ["scaffold", "protocol"]
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_build_log(build_log([], **altered), [], plan_for_scopes=trusted)
+
     def test_authoritative_hosted_report_requires_nonzero_successful_affected_modules(self):
         modules = ["feature/map", "core/maps"]
         self.assertTrue(validate_build_log(build_log(modules), modules)["positive_discovery"])

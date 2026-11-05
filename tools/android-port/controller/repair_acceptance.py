@@ -719,6 +719,47 @@ def read_job_log(native, job_id):
         process.stdout.close()
 
 
+def _notification_instrumentation_report(report, compiled):
+    from .module_junit import (
+        NOTIFICATION_INSTRUMENTATION_BASELINE, NOTIFICATION_INSTRUMENTATION_TASK,
+        NOTIFICATION_REPLY_SOURCES,
+    )
+
+    proof = report.get("notification_instrumentation")
+    tasks = report.get("tasks")
+    selected = isinstance(tasks, list) and NOTIFICATION_INSTRUMENTATION_TASK in tasks
+    if not selected:
+        if proof is not None:
+            raise PortError("Unexpected notification instrumentation proof without its compiler task")
+        return
+    fields(proof, {"task", "sources", "excluded_reply_sources"}, label="notification instrumentation")
+    prefix = "android/platform/notifications/"
+    sources, excluded = proof["sources"], proof["excluded_reply_sources"]
+    replies = {prefix + path for path in NOTIFICATION_REPLY_SOURCES}
+    if (
+        proof["task"] != NOTIFICATION_INSTRUMENTATION_TASK
+        or ":platform:notifications:testDebugUnitTest" not in tasks
+        or not isinstance(sources, dict) or not sources
+        or not isinstance(excluded, list) or not all(isinstance(path, str) for path in excluded)
+        or excluded not in ([], sorted(replies))
+    ):
+        raise PortError("Missing or malformed notification instrumentation proof")
+    for path, blob in sources.items():
+        if (
+            not isinstance(path, str) or git_path(path) != path
+            or not path.startswith(prefix + "src/androidTest/kotlin/") or not path.endswith(".kt")
+            or not isinstance(blob, str) or SHA.fullmatch(blob) is None or path in replies
+        ):
+            raise PortError("Malformed or excluded notification instrumentation source")
+    if not {prefix + path for path in NOTIFICATION_INSTRUMENTATION_BASELINE} <= sources.keys():
+        raise PortError("Missing baseline notification instrumentation compiler inputs")
+    jvm = compiled.get("platform/notifications")
+    if not isinstance(jvm, dict) or any(
+        not isinstance(jvm.get(path), str) or SHA.fullmatch(jvm[path]) is None for path in excluded
+    ):
+        raise PortError("Excluded notification reply sources lack independent JVM compilation")
+
+
 def validate_build_log(log, modules, *, plan_for_scopes=None):
     lines = []
     for line in log.splitlines():
@@ -758,6 +799,7 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
                 or not isinstance(blob, str) or SHA.fullmatch(blob) is None
             ):
                 raise PortError("Malformed compiled test source inventory")
+    _notification_instrumentation_report(report, compiled)
     if report.get("kind") == "local-affected-only":
         scopes = report.get("scopes")
         if (
@@ -823,6 +865,31 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
     from .ci import SCOPED_TASKS, TASKS
 
     tasks = report.get("tasks")
+    allowed_tasks = {task for values in SCOPED_TASKS.values() for task in values}
+    if isinstance(tasks, list) and all(isinstance(task, str) for task in tasks):
+        extra_tasks = set(tasks) - allowed_tasks
+        if extra_tasks:
+            from .module_junit import NOTIFICATION_INSTRUMENTATION_TASK
+
+            if extra_tasks != {NOTIFICATION_INSTRUMENTATION_TASK} or plan_for_scopes is None:
+                raise PortError("Additional compiler task requires the trusted exact-candidate plan")
+            scopes = report.get("scopes")
+            if (
+                not isinstance(scopes, list) or not scopes or "scaffold" not in scopes
+                or not all(isinstance(scope, str) and scope in SCOPED_TASKS for scope in scopes)
+                or len(scopes) != len(set(scopes))
+            ):
+                raise PortError("Additional compiler task requires explicit trusted scopes")
+            expected_tasks = {task for scope in scopes for task in SCOPED_TASKS[scope]} | extra_tasks
+            # Hosted full jobs can leave oracle scopes to separate jobs; the maximal
+            # immutable plan establishes profile support without widening their task set.
+            plan = plan_for_scopes(list(SCOPED_TASKS))
+            if (
+                plan.get("full_scaffold") is not True or not extra_tasks <= set(plan["tasks"])
+                or set(tasks) != expected_tasks
+            ):
+                raise PortError("Additional compiler task disagrees with the trusted candidate plan")
+            allowed_tasks.update(extra_tasks)
     if (
         report.get("result") != "success" or report.get("strict_verification") is not True
         or not isinstance(tasks, list) or not all(isinstance(task, str) for task in tasks)
@@ -830,7 +897,7 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
     ):
         raise PortError("Hosted affected verification did not execute the declared strict task set")
     required = set(TASKS["scaffold"])
-    allowed = {task for values in SCOPED_TASKS.values() for task in values}
+    allowed = allowed_tasks
     if not required.issubset(tasks) and plan_for_scopes is not None:
         from .module_junit import JVM_REMAPPED_TASKS, select_remapped_tasks
 

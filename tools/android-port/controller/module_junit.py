@@ -17,10 +17,22 @@ NOTIFICATION_ROOT = "src/androidTest/kotlin/com/meshcoreone/android/platform/not
 NOTIFICATION_RESOURCE_ROOTS = tuple(
     "src/" + source_set + "/resources" for source_set in ("main", "debug", "test", "testDebug")
 )
+NOTIFICATION_INSTRUMENTATION_BUILD = "102fc68b8cde016474398764f0e99f766e00ee18"
+NOTIFICATION_INSTRUMENTATION_TASK = ":platform:notifications:compileDebugAndroidTestKotlin"
+NOTIFICATION_REPLY_SOURCES = {
+    NOTIFICATION_ROOT + "/NotificationReply" + name + "Test.kt"
+    for name in ("Admission", "Capacity", "Enrollment", "Issuance", "Lifecycle", "Publication", "StagingStore")
+}
+NOTIFICATION_INSTRUMENTATION_BASELINE = {
+    NOTIFICATION_ROOT + "/" + name + ".kt"
+    for name in ("AndroidMessagingNotificationDeliveryTest", "NotificationPayloadCodecTest",
+                 "NotificationActionDispatcherTest")
+} | {"src/androidTest/kotlin/com/meshcoreone/android/platform/notifications/status/ConnectionStatusTests.kt"}
 # Complete build profiles subject to trusted review, not a Gradle expression interpreter.
 JVM_REMAPS = {
     "platform/notifications": {
-        "builds": {"9c5e1f4f6ed16f68ff629e6768afdd9185d2da61", "1edcfc21437134ff7eb4bc431ffd6358c6967bab"},
+        "builds": {"9c5e1f4f6ed16f68ff629e6768afdd9185d2da61", "1edcfc21437134ff7eb4bc431ffd6358c6967bab",
+                   NOTIFICATION_INSTRUMENTATION_BUILD},
         "roots": (NOTIFICATION_ROOT,),
         "runner": "testDebugUnitTest",
     },
@@ -91,10 +103,14 @@ def module_sources(repo: Path, revision=None):
             continue
         inputs = {}
         resource_roots = NOTIFICATION_RESOURCE_ROOTS if module in JVM_REMAPS else ()
+        instrumentation_roots = (
+            ("src/androidTest/",)
+            if module == "platform/notifications" and build[2] == NOTIFICATION_INSTRUMENTATION_BUILD else ()
+        )
         for relative, (mode, kind, blob) in files.items():
             if relative != "build.gradle.kts" and not relative.startswith(
                 ("src/main/", "src/test/", "src/testDebug/", *(root + "/" for root in roots),
-                 *(root + "/" for root in resource_roots))
+                 *(root + "/" for root in resource_roots), *instrumentation_roots)
             ):
                 continue
             path = f"android/{module}/{relative}"
@@ -119,6 +135,55 @@ def select_remapped_tasks(tasks, remapped):
     ]))
 
 
+def notification_instrumentation_tasks(repo, revision=None):
+    module = "platform/notifications"
+    inputs = module_sources(repo, revision).get(module, {})
+    if inputs.get(f"android/{module}/build.gradle.kts") == NOTIFICATION_INSTRUMENTATION_BUILD:
+        return [NOTIFICATION_INSTRUMENTATION_TASK]
+    return []
+
+
+def notification_instrumentation_evidence(repo, path, tasks, revision=None):
+    from .ci_evidence import read_test_sources
+
+    runner = ":platform:notifications:testDebugUnitTest"
+    if not ({runner, NOTIFICATION_INSTRUMENTATION_TASK} & set(tasks)):
+        return {}
+    required = notification_instrumentation_tasks(repo, revision)
+    if not required:
+        if NOTIFICATION_INSTRUMENTATION_TASK in tasks:
+            raise PortError("Notification instrumentation compiler task requires an approved build profile")
+        return {}
+    if not {runner, *required} <= set(tasks):
+        raise PortError("Notification instrumentation proof requires both declared compilation and JVM runner")
+    module = "platform/notifications"
+    prefix = f"android/{module}/"
+    inputs = module_sources(repo, revision)[module]
+    check_module_inputs(repo, [module], revision)
+    replies = {prefix + relative for relative in NOTIFICATION_REPLY_SOURCES}
+    present = replies & inputs.keys()
+    if present and present != replies:
+        raise PortError("Incomplete committed notification reply source family")
+    expected = {}
+    for source, blob in inputs.items():
+        relative = source[len(prefix):]
+        if not relative.startswith(("src/androidTest/kotlin/", "src/androidTest/java/")):
+            continue
+        if relative.endswith(".java"):
+            raise PortError("Unsupported Java notification instrumentation input: " + source)
+        if relative.endswith(".kt") and source not in replies:
+            expected[source] = blob
+    if not {prefix + relative for relative in NOTIFICATION_INSTRUMENTATION_BASELINE} <= expected.keys():
+        raise PortError("Missing committed baseline notification instrumentation sources")
+    actual = read_test_sources(path, {module: "compileDebugAndroidTestKotlin"})
+    if actual != {module: expected}:
+        raise PortError("Actual notification instrumentation compilation differs from immutable sources")
+    return {
+        "task": NOTIFICATION_INSTRUMENTATION_TASK, "sources": expected,
+        "excluded_reply_sources": sorted(present),
+    }
+
+
 def check_module_inputs(repo, modules, revision=None):
     revision = revision or git(repo, "rev-parse", "HEAD").decode().strip()
     paths = []
@@ -129,6 +194,7 @@ def check_module_inputs(repo, modules, revision=None):
         paths.extend(f"android/{module}/{relative}" for relative in (
             "build.gradle.kts", "src/main", "src/test", "src/testDebug", *remapped_roots(module, blob),
             *resource_roots,
+            *(("src/androidTest",) if blob == NOTIFICATION_INSTRUMENTATION_BUILD else ()),
         ))
     if paths and (
         git(repo, "diff", "--name-only", revision, "--", *paths).strip()

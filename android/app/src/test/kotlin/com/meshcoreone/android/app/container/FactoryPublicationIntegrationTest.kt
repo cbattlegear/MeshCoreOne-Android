@@ -58,10 +58,10 @@ class FactoryPublicationIntegrationTest : RoomProcessTest() {
                 if (successorFails) radio.connectFailure = unavailable
                 successorAllocated.complete(Unit)
             }
-            val observed = mutableListOf<NodesConnectionSnapshot>()
-            backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                h.container.nodesFeature.session.connectionSnapshots().collect { observed += it }
-            }
+        }
+        val observed = mutableListOf<NodesConnectionSnapshot>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            h.container.nodesFeature.session.connectionSnapshots().collect { observed += it }
         }
         try {
             val first = backgroundScope.async(Dispatchers.Default) {

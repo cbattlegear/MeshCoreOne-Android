@@ -2759,6 +2759,20 @@ class RepairAuthorityTests(unittest.TestCase):
         from controller.runtime_inputs import required_inputs
         entries = {p: "6" * 40 for p in required_inputs()}
         entries.update({"docs/android/test-cases.json": "7" * 40, PATH: "5" * 40, TEST: "4" * 40})
+
+        def candidate_git(repo, *arguments):
+            self.assertEqual(repo, native.manifest.repo)
+            if arguments == ("cat-file", "-t", HEAD):
+                return b"commit\n"
+            self.assertEqual(arguments, ("ls-tree", "-rz", "--full-tree", HEAD, "--", "android"))
+            return b"".join(
+                f"100644 blob {blob}\t{path}\0".encode()
+                for path, blob in sorted(entries.items()) if path.startswith("android/")
+            )
+
+        reader = patch("controller.module_junit.git", side_effect=candidate_git)
+        reader.start()
+        self.addCleanup(reader.stop)
         return native, api, prefix, value, scope, staged, entries
 
     def verification_fixture(self):

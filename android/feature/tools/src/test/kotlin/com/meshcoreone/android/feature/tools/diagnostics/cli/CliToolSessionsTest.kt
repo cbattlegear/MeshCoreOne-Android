@@ -12,6 +12,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -182,11 +183,159 @@ class CliToolSessionsTest {
         remote.loginGate = CompletableDeferred()
         connect()
         run("login Hilltop")
+        assertTrue(holder.isWaitingForResponse)
+        assertEquals("Logging in... (5s)", holder.promptText)
+        assertEquals(5, holder.state.value.remainingSeconds)
+        assertEquals(1, scheduler.clock.pendingSleepers)
+        scheduler.advanceBy(1.seconds)
+        assertEquals("Logging in... (4s)", holder.promptText)
         holder.cancelCurrentCommand()
+        assertNull(holder.state.value.remainingSeconds)
+        assertEquals(0, scheduler.clock.pendingSleepers)
         scheduler.runCurrent()
         assertNull(holder.state.value.remainingSeconds)
+        assertEquals(0, scheduler.clock.pendingSleepers)
+        assertFalse(holder.isWaitingForResponse)
+        assertEquals("Base> ", holder.promptText)
         assertEquals("Command cancelled", lastText)
+        remote.loginGate?.complete(Unit)
+        scheduler.advanceBy(5.seconds)
+        assertNull(holder.state.value.remainingSeconds)
         assertTrue(holder.state.value.remoteSessions.isEmpty())
+        assertTrue(remote.storedPasswords.isEmpty())
+    }
+
+    @Test
+    fun `a timeout callback retained after cancellation cannot restart the countdown`() {
+        remote.storedPassword = "pw"
+        remote.loginGate = CompletableDeferred()
+        connect()
+        run("login Hilltop")
+        val callback = remote.timeoutCallbacks.single()
+        holder.cancelCurrentCommand()
+        scheduler.runCurrent()
+
+        scheduler.run { callback(9) }
+        assertNull(holder.state.value.remainingSeconds)
+        assertEquals(0, scheduler.clock.pendingSleepers)
+        assertEquals("Base> ", holder.promptText)
+        assertFalse(holder.isWaitingForResponse)
+        scheduler.advanceBy(10.seconds)
+        assertTrue(holder.state.value.remoteSessions.isEmpty())
+        assertTrue(remote.storedPasswords.isEmpty())
+    }
+
+    @Test
+    fun `a callback retained after successful login cannot resurrect the countdown`() {
+        remote.storedPassword = "pw"
+        connect()
+        run("login Hilltop")
+        scheduler.run { remote.timeoutCallbacks.single()(9) }
+        assertNull(holder.state.value.remainingSeconds)
+        assertEquals(0, scheduler.clock.pendingSleepers)
+        assertEquals("@Hilltop> ", holder.promptText)
+        assertEquals(1, holder.state.value.remoteSessions.size)
+    }
+
+    @Test
+    fun `an external timeout callback is confined and cannot replace a newer countdown`() {
+        remote.storedPassword = "pw"
+        remote.loginGate = CompletableDeferred()
+        connect()
+        run("login Hilltop")
+        val oldCallback = remote.timeoutCallbacks.single()
+        holder.cancelCurrentCommand()
+        scheduler.runCurrent()
+
+        val gate = CompletableDeferred<Unit>()
+        remote.loginGate = gate
+        run("login Basement")
+        val callback = remote.timeoutCallbacks.last()
+        val serviceScheduler = TestScheduler()
+        serviceScheduler.scope.launch { callback(7) }
+        serviceScheduler.runCurrent()
+        assertNull(holder.state.value.remainingSeconds)
+        scheduler.runCurrent()
+        serviceScheduler.runCurrent()
+        assertEquals("Logging in... (7s)", holder.promptText)
+        assertEquals(1, scheduler.clock.pendingSleepers)
+
+        serviceScheduler.scope.launch { callback(8) }
+        serviceScheduler.runCurrent()
+        scheduler.runCurrent()
+        serviceScheduler.runCurrent()
+        assertEquals(8, holder.state.value.remainingSeconds)
+        assertEquals(1, scheduler.clock.pendingSleepers)
+
+        serviceScheduler.scope.launch { oldCallback(50) }
+        serviceScheduler.runCurrent()
+        scheduler.runCurrent()
+        serviceScheduler.runCurrent()
+        assertEquals(8, holder.state.value.remainingSeconds)
+        assertEquals(1, scheduler.clock.pendingSleepers)
+        scheduler.advanceBy(1.seconds)
+        assertEquals("Logging in... (7s)", holder.promptText)
+        gate.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals("@Basement> ", holder.promptText)
+        assertEquals(0, scheduler.clock.pendingSleepers)
+        assertEquals(listOf("Basement"), holder.state.value.remoteSessions.map { it.name })
+        assertEquals(listOf("pw"), remote.storedPasswords)
+    }
+
+    @Test
+    fun `old login cleanup cannot stop a newer login countdown`() {
+        remote.storedPassword = "pw"
+        remote.loginTimeoutSeconds = 5
+        val oldGate = CompletableDeferred<Unit>()
+        remote.loginGate = oldGate
+        remote.holdLoginAfterCancellation = true
+        connect()
+        run("login Hilltop")
+        assertEquals("Logging in... (5s)", holder.promptText)
+        holder.cancelCurrentCommand()
+        assertFalse(holder.isWaitingForResponse)
+
+        val newGate = CompletableDeferred<Unit>()
+        remote.loginGate = newGate
+        remote.loginTimeoutSeconds = 7
+        remote.holdLoginAfterCancellation = false
+        run("login Basement")
+        assertEquals("Logging in... (7s)", holder.promptText)
+        oldGate.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(7, holder.state.value.remainingSeconds)
+        assertEquals(1, scheduler.clock.pendingSleepers)
+        assertTrue(holder.isWaitingForResponse)
+        assertTrue(holder.state.value.remoteSessions.isEmpty())
+        assertTrue(remote.storedPasswords.isEmpty())
+        scheduler.advanceBy(1.seconds)
+        assertEquals("Logging in... (6s)", holder.promptText)
+        newGate.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals("@Basement> ", holder.promptText)
+        assertEquals(0, scheduler.clock.pendingSleepers)
+        assertEquals(listOf("Basement"), holder.state.value.remoteSessions.map { it.name })
+        assertEquals(listOf("pw"), remote.storedPasswords)
+    }
+
+    @Test
+    fun `reset rejects a retained timeout callback without restoring the cleared terminal`() {
+        remote.storedPassword = "pw"
+        remote.loginTimeoutSeconds = 5
+        remote.loginGate = CompletableDeferred()
+        connect()
+        run("login Hilltop")
+        assertEquals("Logging in... (5s)", holder.promptText)
+        holder.reset()
+        scheduler.runCurrent()
+        scheduler.run { remote.timeoutCallbacks.single()(9) }
+        assertNull(holder.state.value.remainingSeconds)
+        assertEquals(0, scheduler.clock.pendingSleepers)
+        assertFalse(holder.isWaitingForResponse)
+        assertTrue(lines.isEmpty())
+        assertTrue(holder.state.value.remoteSessions.isEmpty())
+        assertTrue(remote.storedPasswords.isEmpty())
     }
 
     @Test

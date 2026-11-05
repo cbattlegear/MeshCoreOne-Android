@@ -132,7 +132,8 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     @Volatile var syncCoordinator: SyncCoordinator? = null
         private set
-    private var lastBumpedSession: Any? = null
+    private var lastBumpedSession: AppSession? = null
+    private var servicesOrigin: com.meshcoreone.android.core.contracts.domain.SessionToken? = null
     private var lastConnectedDeviceIdForCli: UUID? = null
     private var chatRegistry: ChatCoordinatorRegistry? = null
     private var prewarmRefresher: ChatPrewarmRefresher? = null
@@ -357,7 +358,17 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     fun bumpContactsVersion() = contactsVersionFlow.update { it + 1 }
 
-    fun bumpServicesVersion() = servicesVersionFlow.update { it + 1 }
+    fun bumpServicesVersion() {
+        synchronized(lock) {
+            servicesOrigin = lastBumpedSession?.takeIf { it === services }?.token
+            servicesVersionFlow.value += 1
+        }
+    }
+
+    fun sessionTokenForServicesVersion(version: Int): com.meshcoreone.android.core.contracts.domain.SessionToken? =
+        synchronized(lock) {
+            servicesOrigin.takeIf { servicesVersionFlow.value == version && lastBumpedSession === services }
+        }
 
     override fun handleSessionStateChange() {
         refreshConversations()
@@ -473,7 +484,12 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             batteryMonitor.stop()
             batteryMonitor.clearThresholds()
             deps.platform.onConnectionLost()
-            synchronized(lock) { lastBumpedSession = null }
+            synchronized(lock) {
+                if (services == null) {
+                    lastBumpedSession = null
+                    servicesOrigin = null
+                }
+            }
             return
         }
 
@@ -500,10 +516,14 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
         // Bump only when the container actually changed: connect fires onConnectionReady and then an explicit rewire.
         val changed = synchronized(lock) {
-            if (lastBumpedSession !== session) { lastBumpedSession = session; true } else false
+            if (services === session && lastBumpedSession !== session) {
+                lastBumpedSession = session
+                servicesOrigin = session.token
+                servicesVersionFlow.value += 1
+                true
+            } else false
         }
         if (changed) {
-            servicesVersionFlow.update { it + 1 }
             deps.platform.onSessionChanged()
         }
 

@@ -494,12 +494,16 @@ class NativeReview:
         else:
             modules = verify_repair(value, scope, self.manifest, self.policy, value.catalog)["modules"]
         from .local_scope import candidate_plan
+        from .module_junit import notification_instrumentation_candidate
 
         execution = validate_build_log(
             read_job_log(self, positive_integer(selected[0].get("id"), "Build job ID")), modules,
             plan_for_scopes=lambda scopes: candidate_plan(
                 self.manifest.repo, value.binding.base_sha, value.binding.head_sha, scopes,
                 trusted_base=value.binding.base_sha, merge_base_only=True,
+            ),
+            notification_inputs_for_candidate=lambda: notification_instrumentation_candidate(
+                self.manifest.repo, value.binding.head_sha,
             ),
         )
         validate_hosted_methods(scope, candidate_tree, self.manifest.repo, execution["methods"],

@@ -56,6 +56,69 @@ class ShowOnceTipsTest {
         suspend fun close() = storage.close()
     }
 
+    @Test fun unattributedSameValueWritesInvalidateIdentityWithoutDonatingOrConsumingTips() = runBlocking {
+        val h = Harness(temporary.newFolder())
+        try {
+            h.tips.persistOnboardingFlag(true)
+            assertTrue(h.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            assertFalse(h.storage.preferences.snapshot().contains(SharedTip.DEVICE_MENU.eventKey))
+            assertFalse(h.tips.claim(SharedTip.DEVICE_MENU) { connected })
+            h.tips.completeOnboarding("attempt-a")
+            h.tips.stageOnboardingCompletion("attempt-b")
+            h.tips.persistOnboardingFlag(true)
+            assertTrue(h.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            assertFalse(h.tips.isOnboardingCompletionFinalized("attempt-a"))
+            assertEquals("", h.storage.preferences.get(PreferenceKey.StringKey("onboarding.completion.pending", "")))
+            assertFalse(h.tips.hasDisplayed(SharedTip.DEVICE_MENU))
+            assertTrue(h.tips.claim(SharedTip.DEVICE_MENU) { connected })
+            h.tips.completeOnboarding("attempt-c")
+            assertTrue(h.tips.isOnboardingCompletionFinalized("attempt-c"))
+            h.tips.persistOnboardingFlag(false)
+            assertFalse(h.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            assertFalse(h.tips.isOnboardingCompletionFinalized("attempt-c"))
+            assertTrue(h.tips.hasDisplayed(SharedTip.DEVICE_MENU))
+        } finally { h.close() }
+    }
+
+    @Test fun failedUnattributedWritePreservesGateIdentityAndDonationTogether() = runBlocking {
+        val directory = temporary.newFolder()
+        val h = Harness(directory)
+        val storageDirectory = File(directory, "meshcoreone-datastore")
+        val temporaryWrite = File(storageDirectory, "app.preferences_pb.tmp")
+        try {
+            h.tips.completeOnboarding("attempt-a")
+            h.tips.stageOnboardingCompletion("attempt-b")
+            val previous = File(storageDirectory, "app.preferences_pb").readBytes()
+            assertTrue(temporaryWrite.mkdir())
+            val failure = assertFailsWith<StorageFailure> { h.tips.persistOnboardingFlag(false) }
+            assertEquals(StorageProblem.IoFailure, failure.problem)
+            assertEquals(StorageOperation.WRITE, failure.operation)
+            assertTrue(h.reported.contains(failure))
+            assertContentEquals(previous, File(storageDirectory, "app.preferences_pb").readBytes())
+            assertTrue(h.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            assertTrue(h.tips.isOnboardingCompletionFinalized("attempt-a"))
+            assertEquals("attempt-b", h.storage.preferences.get(
+                PreferenceKey.StringKey("onboarding.completion.pending", ""),
+            ))
+            assertTrue(h.storage.preferences.get(SharedTip.DEVICE_MENU.eventKey))
+            assertFalse(h.tips.hasDisplayed(SharedTip.DEVICE_MENU))
+        } finally {
+            h.close()
+            if (temporaryWrite.exists()) {
+                assertTrue(temporaryWrite.isDirectory)
+                assertTrue(temporaryWrite.delete())
+            }
+        }
+        val reopened = Harness(directory)
+        try {
+            assertTrue(reopened.tips.isOnboardingCompletionFinalized("attempt-a"))
+            reopened.tips.persistOnboardingFlag(false)
+            assertFalse(reopened.tips.isOnboardingCompletionFinalized("attempt-a"))
+            assertFalse(reopened.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            assertTrue(reopened.tips.claim(SharedTip.DEVICE_MENU) { connected })
+        } finally { reopened.close() }
+    }
+
     @Test fun missingDonationsAndDisconnectedOrInvisibleHostsDoNotConsumeOrCreateAShownDefault() = runBlocking {
         val h = Harness(temporary.newFolder())
         try {

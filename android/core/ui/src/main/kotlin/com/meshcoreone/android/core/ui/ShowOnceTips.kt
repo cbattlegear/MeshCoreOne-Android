@@ -51,6 +51,15 @@ class ShowOnceTips(private val preferences: PreferenceStore) {
         preferences.set(pendingCompletion, attemptId)
     }
 
+    /** Legacy Boolean writes have no attempt identity, even when the value is unchanged. */
+    suspend fun persistOnboardingFlag(completed: Boolean) {
+        preferences.update {
+            this[AppStorageKey.hasCompletedOnboarding] = completed
+            remove(finalizedCompletion)
+            remove(pendingCompletion)
+        }
+    }
+
     /** Commits the first-run gate and its pending show-once event as one preference transaction. */
     suspend fun completeOnboarding(attemptId: String? = null) {
         preferences.update {

@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.container.onboarding
 
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.PreferenceStore
+import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
 import com.meshcoreone.android.feature.onboarding.OnboardingState
 import java.util.logging.Level
@@ -67,8 +68,8 @@ class WriteBehindOnboardingFlags(
             WriteBehindOnboardingFlags(
                 KEYS.mapValues { (_, key) -> store.get(key) }, scope,
                 persist = { name, value ->
-                    val key = KEYS[name] ?: throw IllegalArgumentException("Unknown onboarding flag: $name")
-                    store.set(key, value)
+                    require(name in KEYS) { "Unknown onboarding flag: $name" }
+                    ShowOnceTips(store).persistOnboardingFlag(value)
                 },
                 onFailure = { logger.log(Level.WARNING, "Failed to persist onboarding flag: ${it.message}") },
             )

@@ -1913,9 +1913,14 @@ class MessagingRoomIntegrationTest {
     private suspend fun TestScope.earlyPredictedAckThenDifferentAcceptance(
         queued: Boolean, earlyPrediction: Boolean = true,
     ) {
+        fun phase(value: String) = println("WP208_ACK_PHASE|queued=$queued|early=$earlyPrediction|$value")
+        phase("seed.start")
         seed()
+        phase("seed.end")
         val g = RadioGeneration(if (queued) 136 else 135, config = MessageServiceConfig(maxAttempts = 1))
+        phase("session.start")
         g.start(); g.service.startEventMonitoring()
+        phase("session.ready")
         val text = "predicted before different acceptance"
         val input = ByteWriter().appendUInt32LE(base.epochSecond.toUInt()).appendUInt8(0u)
             .append(Bytes.utf8(text)).append(self).toBytes()
@@ -1932,12 +1937,20 @@ class MessagingRoomIntegrationTest {
         var sending: Deferred<MessageDTO>? = null
         try {
             if (queued) {
+                phase("pending.create")
                 val message = g.service.createPendingMessage(text, contact)
+                phase("pending.created")
+                phase("pending.upsert")
                 store.upsertPendingSend(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio))
+                phase("pending.upserted")
                 g.signals.set(DeviceConnectionState.READY)
+                phase("queue.hydrate.start")
                 g.queue.hydrate()
+                phase("queue.hydrate.end")
             } else sending = async { g.service.sendMessageWithRetry(text, contact) }
+            phase("beforeAcceptance.runCurrent.start")
             runCurrent()
+            phase("beforeAcceptance.assertions")
             assertFalse(sending?.isCompleted ?: false)
             val pending = store.fetchMessages(EntityKey(radio, contact.id)).single()
             assertEquals(MessageStatus.PENDING, pending.status)
@@ -1945,17 +1958,35 @@ class MessagingRoomIntegrationTest {
             assertNull(pending.roundTripTime)
             assertEquals(1, g.service.pendingAckCount)
             assertEquals(1, g.firmware.sent().size)
-            gate.complete(Unit); runCurrent()
-            g.firmware.pushAck(predicted, 999u); runCurrent()
+            phase("acceptance.release")
+            gate.complete(Unit)
+            phase("acceptance.runCurrent.start")
+            runCurrent()
+            phase("acceptance.runCurrent.end")
+            phase("prediction.push")
+            g.firmware.pushAck(predicted, 999u)
+            phase("prediction.pushed")
+            phase("prediction.runCurrent.start")
+            runCurrent()
+            phase("prediction.runCurrent.end")
+            phase("prediction.assertions")
             val beforeActualAck = assertNotNull(store.fetchMessage(EntityKey(radio, pending.id)))
             assertNotEquals(MessageStatus.DELIVERED, beforeActualAck.status)
             assertNull(beforeActualAck.roundTripTime)
-            g.firmware.pushAck(accepted, 123u); runCurrent()
+            phase("actual.push")
+            g.firmware.pushAck(accepted, 123u)
+            phase("actual.pushed")
+            phase("actual.runCurrent.start")
+            runCurrent()
+            phase("actual.runCurrent.end")
+            phase("actual.assertions")
             val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, pending.id)))
             assertEquals(MessageStatus.DELIVERED, delivered.status)
             assertEquals(accepted.readUInt32LE(0), delivered.ackCode)
             assertEquals(123u, delivered.roundTripTime)
+            phase("completion.await")
             if (sending != null) assertEquals(delivered, sending.await()) else g.queue.awaitDrainCompletion()
+            phase("completion.assertions")
             assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
             assertEquals(0, g.service.pendingAckCount)
             assertEquals(1, g.firmware.sent().size)
@@ -1965,13 +1996,22 @@ class MessagingRoomIntegrationTest {
             })
             assertEquals(listOf(MessageStatusEvent.StatusResolved(delivered.id, MessageStatus.DELIVERED, 123u)),
                 completedStatuses(g, events))
+            phase("stop.start")
             g.stop()
+            phase("stop.end")
             assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
+        } catch (failure: Throwable) {
+            phase("failure|${failure.javaClass.name}|${failure.stackTrace.firstOrNull { it.className.startsWith(javaClass.name) }}")
+            throw failure
         } finally {
             withContext(NonCancellable) {
+                phase("finally.release")
                 gate.complete(Unit)
+                phase("finally.caller.start")
                 sending?.cancelAndJoin()
+                phase("finally.stop.start")
                 g.stop()
+                phase("finally.stop.end")
             }
         }
     }

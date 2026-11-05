@@ -41,6 +41,13 @@ class SourceDispositionTests(unittest.TestCase):
             task.afterTest { descriptor, result ->
                 task.logger.quiet("WP208_DATA_TEST|${task.path}|${descriptor.className}|${descriptor.name}|END|${result.resultType}")
             }
+            task.onOutput { descriptor, event ->
+                if (descriptor.className == "com.meshcoreone.android.core.data.messaging.MessagingRoomIntegrationTest") {
+                    event.message.eachLine { line ->
+                        if (line.startsWith("WP208_ACK_PHASE|")) task.logger.quiet(line)
+                    }
+                }
+            }
 ''')
 
     def test_source_capture_uses_completed_same_project_graph_compilers(self):

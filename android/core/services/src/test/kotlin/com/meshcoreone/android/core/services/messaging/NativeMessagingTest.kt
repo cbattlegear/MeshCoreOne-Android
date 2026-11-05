@@ -77,6 +77,28 @@ class NativeMessagingTest {
             assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
             h.close()
         },
+        native("duplicateEarlyAckTuplesStayBoundedAndTerminalRetirementReleasesEvidence") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            val gate = CompletableDeferred<Unit>()
+            h.transport.acknowledge = false
+            h.transport.acceptanceGate = gate
+            val sending = async { h.service.sendDirectMessage("terminal buffer", h.contact) }
+            runCurrent()
+            val id = h.store.messages.values.single().id
+            repeat(256) { h.transport.pushAck(Bytes.of(1, 2, 3, 4), 123u) }
+            runCurrent()
+            assertEquals(1, h.service.bufferedAcknowledgementCount(id))
+            assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
+            h.service.failAllPendingMessages()
+            assertEquals(0, h.service.bufferedAcknowledgementCount(id))
+            assertEquals(MessageStatus.FAILED, h.stored(id).status)
+            assertEquals(1, h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                .count { it.operation.startsWith("ackBuffer.") })
+            gate.complete(Unit); runCurrent(); sending.await()
+            assertEquals(MessageStatus.FAILED, h.stored(id).status)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            h.close()
+        },
         native("unresolvedAckFloodIsBoundedAndOverflowDoesNotInventDeliveryOrUnmatched") {
             val h = Harness(this); h.start(); h.service.startEventMonitoring()
             val gate = CompletableDeferred<Unit>()

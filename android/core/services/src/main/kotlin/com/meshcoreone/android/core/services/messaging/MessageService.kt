@@ -257,6 +257,18 @@ class MessageService(
     internal fun bufferedAcknowledgementCount(messageID: UUID): Int =
         synchronized(lock) { directAuthorities[messageID]?.bufferedAcknowledgements?.size ?: 0 }
 
+    private fun retireBufferedAcknowledgements(messageID: UUID, expectedAttempt: DirectAckAttempt?) {
+        val requestID = synchronized(lock) {
+            directAuthorities[messageID]?.takeIf { it.attempt === expectedAttempt }
+                ?.takeIf { it.bufferedAcknowledgements.isNotEmpty() }?.let {
+                    it.bufferedAcknowledgements.clear()
+                    it.requestID
+                }
+        }
+        if (requestID != null) remember("ackBuffer.$requestID",
+            authorityFailure("Uncorrelated ACK evidence retired with its terminal tracker"))
+    }
+
     private suspend fun reportUnmatchedAcknowledgement(code: Bytes) = bookkeeping("unmatchedAckDiagnostic") {
         val orphanSentRow = dataStore.hasOutgoingSentDM(token.radioId, code.ackCodeUInt32)
         ownership.check("unmatchedAcknowledgement.read")
@@ -656,6 +668,7 @@ class MessageService(
             if (pendingAcks[messageID]?.receipt === tracking.receipt) pendingAcks.remove(messageID)
             if (uncertainFailureWrites[messageID]?.tracking?.receipt === tracking.receipt) uncertainFailureWrites.remove(messageID)
         }
+        retireBufferedAcknowledgements(messageID, tracking.authority)
         recovered("ack.$messageID")
         recovered("ackDelivery")
         recovered("failPending.$messageID")
@@ -691,6 +704,7 @@ class MessageService(
                 uncertainFailureWrites.remove(tracking.messageID)
             }
         }
+        retireBufferedAcknowledgements(tracking.messageID, tracking.authority)
     }
 
     private suspend fun expireOrReconcile(snapshot: PendingAck, now: Instant) {
@@ -766,6 +780,7 @@ class MessageService(
         retireDirectClaim: Boolean,
         expectedAttempt: DirectAckAttempt? = null,
     ): Boolean {
+        var retiredAttempt: DirectAckAttempt? = null
         val acknowledgementArrived = synchronized(lock) {
             val tracking = pendingAcks[messageID]
             if (expectedAttempt != null && tracking?.authority !== expectedAttempt) return false
@@ -773,6 +788,7 @@ class MessageService(
                 true
             }
             else {
+                retiredAttempt = tracking?.authority
                 pendingAcks.remove(messageID)
                 uncertainFailureWrites.remove(messageID)
                 if (retireDirectClaim) {
@@ -783,6 +799,7 @@ class MessageService(
                 false
             }
         }
+        if (!acknowledgementArrived) retireBufferedAcknowledgements(messageID, retiredAttempt)
         if (!acknowledgementArrived) {
             if (notify && changed) broadcastFailed(messageID)
             recovered("failPending.$messageID")

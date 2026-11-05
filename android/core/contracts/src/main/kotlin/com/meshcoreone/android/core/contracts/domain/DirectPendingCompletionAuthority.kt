@@ -24,13 +24,19 @@ enum class DirectPendingCompletionPermission { CURRENT, INVALIDATED, STALE_LEASE
 /**
  * Immutable capture/commit history, not the current rows or a publicly reconstructible grant.
  * completedRequestId records the exact deletion operation even after subsequent invalidation.
+ * Null DTOs explicitly mean erased payload, not missing identity or fabricated success. CURRENT
+ * requires both actual snapshots. Message deletion/key replacement or payload-field updates/redaction
+ * purge both snapshots; pending deletion/replacement/update (including own completion) purges
+ * pending payload while the message snapshot remains until message erasure. Identity/operation
+ * tombstones remain, with non-CURRENT permission and no handle reissue or payload reconstruction.
  */
 data class DirectPendingCompletionReceipt(
     val captureRequestId: UUID,
     val key: EntityKey,
     val reason: DirectPendingCompletionReason,
-    val message: MessageDTO,
-    val pending: PendingSendDTO,
+    val message: MessageDTO?,
+    val pendingSendId: UUID,
+    val pending: PendingSendDTO?,
     val completedRequestId: UUID?,
     val permission: DirectPendingCompletionPermission,
 )
@@ -94,6 +100,8 @@ interface DirectPendingCompletionAuthority {
      * Journal completionRequestId with the deletion. Exact replay returns AlreadyApplied even if
      * a replacement now exists, without deleting it; a different completion ID is CONFLICT.
      * Own committed deletion is history, not a generic missing-row success or authority renewal.
+     * Its receipt retains pendingSendId/completedRequestId and the message unless erased, but erases
+     * pending payload with non-CURRENT permission; it never persists the deleted pending DTO.
      */
     suspend fun completeDirectPendingWithoutDispatch(
         completion: DirectPendingCompletion,

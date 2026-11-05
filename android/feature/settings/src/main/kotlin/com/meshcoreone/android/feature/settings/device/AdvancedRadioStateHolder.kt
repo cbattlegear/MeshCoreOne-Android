@@ -201,7 +201,7 @@ class AdvancedRadioStateHolder(
             service.reconcileRadioSettingsIfNeeded()
             val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
             // Firmware treats an omitted repeat byte as off; read current values only from the captured radio.
-            val frequencyToSend = if (device.clientRepeat) device.frequency else request.frequencyKHz
+            val frequencyToSend = if (target.device.clientRepeat || device.clientRepeat) device.frequency else request.frequencyKHz
             service.setRadioParamsVerified(
                 frequencyToSend, request.bandwidthHz, request.spreadingFactor, request.codingRate,
                 clientRepeat = device.clientRepeat,

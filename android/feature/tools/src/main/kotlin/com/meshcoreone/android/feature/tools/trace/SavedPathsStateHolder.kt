@@ -47,6 +47,7 @@ class SavedPathsStateHolder(
     private var active = true
     private var revision = 0L
     private var mutationRevision = 0L
+    private val deletedPaths = mutableSetOf<EntityKey>()
     private var sessionToken: SessionToken? = null
     private var originatingGeneration: Int? = null
 
@@ -95,7 +96,9 @@ class SavedPathsStateHolder(
         }
         try {
             val paths = store.fetchSavedTracePaths(radioId)
-            if (isCurrent(operation, radioId)) mutableState.update { it.copy(savedPaths = paths.toList()) }
+            if (isCurrent(operation, radioId)) mutableState.update {
+                it.copy(savedPaths = paths.filterNot { path -> EntityKey(path.radioId, path.id) in deletedPaths })
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -135,11 +138,10 @@ class SavedPathsStateHolder(
         try {
             store.deleteSavedTracePath(EntityKey(path.radioId, path.id))
             if (isCurrentConnection(path.radioId)) {
-                revision += 1
+                deletedPaths += EntityKey(path.radioId, path.id)
                 mutableState.update { state ->
                     state.copy(
                         savedPaths = state.savedPaths.filterNot { it.id == path.id && it.radioId == path.radioId },
-                        isLoading = false,
                         errorMessage = if (operation == mutationRevision) null else state.errorMessage,
                     )
                 }

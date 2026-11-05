@@ -345,3 +345,25 @@ The successor gives both detail Text nodes the available column width instead
 of leaving the short hash intrinsically shrink-wrapped. The original visual
 overflow, visible bounds, action size, boundary and real removal assertions
 remain unchanged and require fresh execution.
+
+### r23 compact and retired batch-save schedules
+
+Exact `725de68da85de66ece85a0d3ddc7972201dfdb9c`, run `42032282681`,
+passed all six jobs. Original-log audit matched the compiled candidate blobs and
+all 145 selected declarations (76 mounted, 44 execution, 4 batch-card,
+13 saved-list, 8 AppContainer/Room). Actual tools 785/785 and app 2012/2012
+passed with zero failures, errors or skips. The compact 320dp/200% font row and
+all completed/partial same/different-radio retired batch-save controls executed.
+Identical-test negative `cf20a98bff650c719b00eb41b356c4577a672609`,
+run `42032322236`, failed five of 785 tools tests: all four batch-save variants
+reached the stale eligibility assertion (line 887), and the compact test reached
+the visible text-height assertion (line 298). No partial precondition failure
+is credited as save evidence in this corrected negative.
+
+Independent full review subsequently identified three separate source issues:
+production-null-origin offline draft actions, unchanged-wire one-hop Auto Return
+invalidation, and delete discarding an overlapping fresh rename reload. Their
+successor adds production-equivalent mounted offline/disconnect/reconnect drafts,
+one-hop pending/completed holder and mounted controls alongside existing changed
+multi-hop controls, and held reloads on both sides of the actual store read.
+These new assertions and repairs are not accepted by r23 results.

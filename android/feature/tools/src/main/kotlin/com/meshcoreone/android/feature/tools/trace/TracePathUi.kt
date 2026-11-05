@@ -255,8 +255,8 @@ internal fun TracePathListContent(
 ) {
     val scope = rememberCoroutineScope()
     val canEdit = {
-        if (connection == null) holder.isConnectionCurrent()
-        else holder.isBoundConnectionCurrent(connection.radioId, connection.generation, connection.originatingToken)
+        if (connection == null) holder.isEditingCurrent()
+        else holder.isBoundEditingCurrent(connection.radioId, connection.generation, connection.originatingToken)
     }
     var showClearConfirmation by remember(connection?.radioId, connection?.generation, connection?.originatingToken) {
         mutableStateOf(false)

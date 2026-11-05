@@ -1,6 +1,7 @@
 // PortedFrom: MC1/Views/Tools/TracePath/TracePathView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/TracePathListView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/TraceResultsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/TracePath/SavePathRowView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.tools.trace
 
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +23,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,6 +64,7 @@ import com.meshcoreone.android.core.maps.MapPinStyle
 import com.meshcoreone.android.core.maps.MapPresentationState
 import com.meshcoreone.android.core.maps.boundingCamera
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
 import java.text.NumberFormat
 import com.meshcoreone.android.core.l10n.R as Strings
 
@@ -81,9 +84,9 @@ private fun rememberTraceStrings(): TracePathStrings {
             override fun codeInvalidFormat(codes: String) = codes
             override fun codeNotFound(codes: String) = codes
             override fun codeAlreadyInPath(codes: String) = codes
-            override fun pathNamePrefix(prefix: String) = prefix
-            override fun pathNameTwoEndpoints(first: String, last: String) = "$first → $last"
-            override fun pathNameMultipleEndpoints(first: String, last: String) = "$first → … → $last"
+            override fun pathNamePrefix(prefix: String) = C.contactsPathNamePrefix(resources, prefix)
+            override fun pathNameTwoEndpoints(first: String, last: String) = C.contactsPathNameTwoEndpoints(resources, first, last)
+            override fun pathNameMultipleEndpoints(first: String, last: String) = C.contactsPathNameMultipleEndpoints(resources, first, last)
             override val defaultMapPathName = defaultName
         }
     }
@@ -439,6 +442,7 @@ internal fun TracePathListContent(
             item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = error }) }
         }
         item { TraceResults(state) }
+        item(key = "trace-save-path") { TraceSavePathAction(state, holder, connection, scope) }
         item {
             val canExecute = { holder.deps.connectedDevice() != null && canEdit() }
             val runOrCancel = {
@@ -479,6 +483,109 @@ internal fun TracePathListContent(
                     onClick { confirmClear(); true }
                 }) {
                     Text(stringResource(C.contactsTraceClearPath))
+                }
+            },
+        )
+    }
+}
+
+private data class TraceSaveDialogState(
+    val open: Boolean = false,
+    val name: String = "",
+    val saving: Boolean = false,
+    val failed: Boolean = false,
+)
+
+@Composable
+private fun TraceSavePathAction(
+    state: TracePathState,
+    holder: TracePathStateHolder,
+    connection: TracePathScreen.Dependencies?,
+    scope: CoroutineScope,
+) {
+    val dialog = remember(
+        connection?.radioId, connection?.generation, connection?.originatingToken,
+        state.fullPathData, state.result?.id, state.completedResults,
+    ) { mutableStateOf(TraceSaveDialogState()) }
+    val canSave = {
+        val live = holder.state.value
+        val currentConnection = if (connection == null) holder.isConnectionCurrent()
+        else holder.isBoundConnectionCurrent(connection.radioId, connection.generation, connection.originatingToken)
+        currentConnection && holder.deps.connectedDevice() != null &&
+            live.canSavePath && !live.isRunningSavedPath &&
+            live.fullPathData == state.fullPathData && live.result?.id == state.result?.id &&
+            live.completedResults == state.completedResults
+    }
+    if (state.displayedResult?.success != true || state.isRunningSavedPath) return
+    val requestSave = {
+        if (canSave() && !dialog.value.saving) {
+            dialog.value = TraceSaveDialogState(open = true, name = holder.generatePathName())
+        }
+    }
+    OutlinedButton(
+        onClick = requestSave,
+        enabled = state.canSavePath && holder.deps.connectedDevice() != null && !dialog.value.saving,
+        modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
+            onClick { requestSave(); true }
+        },
+    ) {
+        Text(stringResource(C.contactsResultsSavePath))
+    }
+    if (dialog.value.open) {
+        val dismiss = {
+            if (!dialog.value.saving) dialog.value = TraceSaveDialogState()
+        }
+        val confirmSave = {
+            if (dialog.value.open && !dialog.value.saving && dialog.value.name.isNotBlank() && canSave()) {
+                val name = dialog.value.name
+                dialog.value = dialog.value.copy(saving = true, failed = false)
+                scope.launch {
+                    if (canSave()) {
+                        val saved = holder.savePath(name)
+                        dialog.value = if (saved) TraceSaveDialogState()
+                        else dialog.value.copy(saving = false, failed = true)
+                    } else {
+                        dialog.value = TraceSaveDialogState()
+                    }
+                }
+            }
+        }
+        AlertDialog(
+            onDismissRequest = dismiss,
+            title = { Text(stringResource(C.contactsTraceMapSaveTitle)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = dialog.value.name,
+                        onValueChange = { name ->
+                            if (!dialog.value.saving && canSave()) dialog.value = dialog.value.copy(name = name, failed = false)
+                        },
+                        label = { Text(stringResource(C.contactsTraceMapPathName)) },
+                        singleLine = true,
+                        enabled = !dialog.value.saving,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (dialog.value.saving) CircularProgressIndicator()
+                    if (dialog.value.failed) {
+                        Text(
+                            stringResource(C.contactsTraceMapSaveFailedMessage),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = dismiss, enabled = !dialog.value.saving) {
+                    Text(stringResource(L.commonCancel))
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = confirmSave,
+                    enabled = dialog.value.name.isNotBlank() && state.canSavePath && !dialog.value.saving,
+                    modifier = Modifier.semantics { onClick { confirmSave(); true } },
+                ) {
+                    Text(stringResource(L.commonSave))
                 }
             },
         )

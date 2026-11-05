@@ -1,5 +1,6 @@
 // AndroidOnly: WP-314 TS-09 Mounted code/paste actions use the production parser and width policy.
 // AndroidOnly: WP-314 TS-11 Mounted path editing controls drive the real state holder.
+// AndroidOnly: WP-314 TS-13 Mounted Save/name actions persist through the real holder.
 package com.meshcoreone.android.feature.tools.trace
 
 import android.app.Activity
@@ -53,6 +54,7 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
+import com.meshcoreone.android.core.protocol.event.TraceNode
 import java.time.Duration
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -88,6 +90,266 @@ class TraceCodeInputComposeTest {
     @Before fun setup() = attachHost()
 
     @After fun dispose() = destroyHost()
+
+    @Test fun mountedSaveNamesAndPersistsTheSuccessfulTraceAndSuppressesAnotherSave() {
+        val h = successfulSaveHarness()
+        val store = h.deps.store as InMemoryTracePathStore
+        val traced = assertNotNull(h.state.result)
+        mountSaveAction(h)
+        assertTrue(button(host.get().getString(C.contactsResultsSavePath)).boundsInRoot.height >= 48f)
+        click(host.get().getString(C.contactsResultsSavePath))
+        assertEquals("Tower", input().config[SemanticsProperties.EditableText].text)
+        setInput(" \t ")
+        assertTrue(button(host.get().getString(L.commonSave)).config.contains(SemanticsProperties.Disabled))
+        val disabledSave = assertNotNull(button(host.get().getString(L.commonSave)).config[SemanticsActions.OnClick].action)
+        host.get().runOnUiThread { disabledSave() }
+        settle()
+        assertTrue(store.paths.isEmpty())
+        click(host.get().getString(L.commonCancel))
+        assertTrue(store.paths.isEmpty())
+        click(host.get().getString(C.contactsResultsSavePath))
+        assertEquals("Tower", input().config[SemanticsProperties.EditableText].text)
+        setInput("  Field route  ")
+        click(host.get().getString(L.commonSave))
+        val saved = store.paths.values.single()
+        assertEquals("  Field route  ", saved.name, "Preserve the source's untrimmed nonblank name")
+        assertEquals(RADIO, saved.radioId)
+        assertEquals(traced.tracedPathBytes, saved.pathBytes)
+        assertEquals(2L, saved.hashSize)
+        assertEquals(traced.durationMs, saved.runs.single().roundTripMs)
+        assertEquals(listOf(6.0), saved.runs.single().hopsSNR.toList())
+        assertEquals(saved, h.state.activeSavedPath)
+        assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
+        assertFalse(texts().contains(host.get().getString(C.contactsResultsSavePath)))
+        assertEquals(1, (h.deps.sender as FakeTraceSender).sent.size, "Saving does not send radio commands")
+    }
+
+    @Test fun mountedSavePersistsEveryCompletedBatchRunAtTheDispatchedWidth() {
+        val h = successfulSaveHarness(batch = true)
+        val results = h.state.completedResults
+        assertEquals(2, results.size)
+        mountSaveAction(h)
+        click(host.get().getString(C.contactsResultsSavePath))
+        setInput("Batch route")
+        click(host.get().getString(L.commonSave))
+        val saved = (h.deps.store as InMemoryTracePathStore).paths.values.single()
+        assertEquals("Batch route", saved.name)
+        assertEquals(results.first().tracedPathBytes, saved.pathBytes)
+        assertEquals(2L, saved.hashSize)
+        assertEquals(results.map { it.durationMs }, saved.runs.map { it.roundTripMs })
+        assertEquals(2, saved.runs.size)
+        assertEquals(saved, h.state.activeSavedPath)
+    }
+
+    @Test fun mountedSaveFailureKeepsTheNameAndAllowsARealStorageRetry() {
+        val h = successfulSaveHarness()
+        val store = h.deps.store as InMemoryTracePathStore
+        mountSaveAction(h)
+        click(host.get().getString(C.contactsResultsSavePath))
+        setInput("Retry this name")
+        store.failure = java.io.IOException("fixture storage failure")
+        click(host.get().getString(L.commonSave))
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceMapSaveFailedMessage)))
+        assertEquals("Retry this name", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(store.paths.isEmpty())
+        assertNull(h.state.activeSavedPath)
+        assertEquals("savePath", h.diagnostics.failures.single().first)
+        store.failure = null
+        click(host.get().getString(L.commonSave))
+        assertEquals("Retry this name", store.paths.values.single().name)
+        assertNotNull(h.state.activeSavedPath)
+    }
+
+    @Test fun mountedSaveBlocksRepeatedConfirmationWhileTheAcceptedWriteIsHeld() {
+        val h = successfulSaveHarness()
+        val store = h.deps.store as InMemoryTracePathStore
+        val release = CompletableDeferred<Unit>()
+        var creates = 0
+        h.deps.store = object : TracePathPersisting by store {
+            override suspend fun createSavedTracePath(
+                radioId: RadioId, name: String, pathBytes: Bytes, hashSize: Long,
+                initialRun: com.meshcoreone.android.core.model.TracePathRunDTO?,
+            ): SavedTracePathDTO {
+                creates += 1
+                release.await()
+                return store.createSavedTracePath(radioId, name, pathBytes, hashSize, initialRun)
+            }
+        }
+        mountSaveAction(h)
+        click(host.get().getString(C.contactsResultsSavePath))
+        val confirm = assertNotNull(button(host.get().getString(L.commonSave)).config[SemanticsActions.OnClick].action)
+        host.get().runOnUiThread { confirm() }
+        settle()
+        assertEquals(1, creates)
+        assertTrue(button(host.get().getString(L.commonSave)).config.contains(SemanticsProperties.Disabled))
+        assertTrue(button(host.get().getString(L.commonCancel)).config.contains(SemanticsProperties.Disabled))
+        host.get().runOnUiThread { repeat(3) { confirm() } }
+        settle()
+        assertEquals(1, creates)
+        assertTrue(store.paths.isEmpty())
+        host.get().runOnUiThread { release.complete(Unit) }
+        settle()
+        assertEquals(1, store.paths.size)
+        assertNotNull(h.state.activeSavedPath)
+    }
+
+    @Test fun mountedSaveRejectsEditedAndFailedRoutesWithoutWritingStorage() {
+        val h = successfulSaveHarness()
+        val store = h.deps.store as InMemoryTracePathStore
+        mountSaveAction(h)
+        click(host.get().getString(C.contactsResultsSavePath))
+        val confirm = assertNotNull(button(host.get().getString(L.commonSave)).config[SemanticsActions.OnClick].action)
+        host.get().runOnUiThread { h.holder.clearPath(); confirm() }
+        settle()
+        assertTrue(store.paths.isEmpty())
+        assertFalse(nodes().any { it.config.contains(SemanticsProperties.IsDialog) })
+        assertFalse(texts().contains(host.get().getString(C.contactsResultsSavePath)))
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.deps.sender = FakeTraceSender(failure = java.io.IOException("fixture send failure"))
+        h.complete { h.holder.runTrace() }
+        settle()
+        assertFalse(h.state.canSavePath)
+        assertFalse(texts().contains(host.get().getString(C.contactsResultsSavePath)))
+        assertTrue(store.paths.isEmpty())
+    }
+
+    @Test fun mountedSaveRejectsRetainedSameRadioConfirmationAfterReconnect() = staleSaveAcrossReconnect(false)
+
+    @Test fun mountedSaveRejectsRetainedDifferentRadioConfirmationAfterReconnect() = staleSaveAcrossReconnect(true)
+
+    @Test fun mountedAcceptedSaveKeepsItsSameRadioOriginWithoutReplacingFreshResults() = acceptedSaveAcrossReconnect(false)
+
+    @Test fun mountedAcceptedSaveKeepsItsDifferentRadioOriginWithoutReplacingFreshResults() = acceptedSaveAcrossReconnect(true)
+
+    @Test
+    @Config(qualifiers = "fr-rFR-w320dp-h900dp-mdpi")
+    fun mountedSaveUsesLocalizedNameAndActionsAtDoubleFont() {
+        val h = successfulSaveHarness()
+        mountSaveAction(h, fontScale = 2f)
+        val savePath = host.get().getString(C.contactsResultsSavePath)
+        assertFalse(savePath == "Save Path")
+        click(savePath)
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceMapPathName)))
+        setInput("Relais de montagne")
+        assertTrue(button(host.get().getString(L.commonSave)).boundsInRoot.height >= 48f)
+        click(host.get().getString(L.commonSave))
+        assertEquals("Relais de montagne", (h.deps.store as InMemoryTracePathStore).paths.values.single().name)
+    }
+
+    private fun successfulSaveHarness(batch: Boolean = false): TraceHarness = configured().also { h ->
+        h.deps.store = InMemoryTracePathStore { h.time.now() }
+        h.deps.sender = FakeTraceSender()
+        h.holder.setTraceHashMode(1u)
+        h.holder.addNode(contact(0xAA, 0x11, name = "Tower"))
+        h.holder.setBatchEnabled(batch)
+        h.holder.setBatchSize(2)
+        h.start { h.holder.runBatchTrace() }
+        h.respond(
+            (h.deps.sender as FakeTraceSender).sent.last().tag,
+            listOf(TraceNode(Bytes.of(0xAA, 0x11), 6.0), node(null, 3.0)), RADIO,
+        )
+        if (batch) {
+            h.time.advanceBy(500.milliseconds)
+            h.respond(
+                (h.deps.sender as FakeTraceSender).sent.last().tag,
+                listOf(TraceNode(Bytes.of(0xAA, 0x11), 8.0), node(null, 4.0)), RADIO,
+            )
+        }
+        assertTrue(h.state.canSavePath)
+        assertNull(h.state.activeSavedPath)
+    }
+
+    private fun mountSaveAction(h: TraceHarness, fontScale: Float = 1f) {
+        mountPathList(h, fontScale)
+        scrollToIndex(11)
+    }
+
+    private fun staleSaveAcrossReconnect(crossRadio: Boolean) {
+        val h = successfulSaveHarness()
+        val store = h.deps.store as InMemoryTracePathStore
+        val generation = mutableIntStateOf(1)
+        h.holder.bindConnection(RADIO, 1)
+        // Binding retires the old result; obtain the eligible result in the actual A binding.
+        h.complete { h.holder.runTrace() }
+        val sender = h.deps.sender as FakeTraceSender
+        h.respond(sender.sent.last().tag, listOf(TraceNode(Bytes.of(0xAA, 0x11), 6.0), node(null, 3.0)), RADIO)
+        content.setContent {
+            val state = h.holder.state.collectAsStateWithLifecycle().value
+            val connection = TracePathScreen.Dependencies(h.deps, h.recents, h.diagnostics, h.deps.device?.radioId, generation.intValue)
+            val entry = rememberTraceCodeInputState(h.holder, connection.generation, connection.radioId)
+            MaterialTheme { TracePathListContent(state, h.holder, entry, connection) }
+        }
+        settle()
+        scrollToIndex(11)
+        click(host.get().getString(C.contactsResultsSavePath))
+        val oldConfirm = assertNotNull(button(host.get().getString(L.commonSave)).config[SemanticsActions.OnClick].action)
+        val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
+        host.get().runOnUiThread {
+            h.deps.device = device().copy(radioId = nextRadio)
+            h.holder.bindConnection(nextRadio, 2)
+            generation.intValue = 2
+        }
+        settle()
+        host.get().runOnUiThread { oldConfirm() }
+        settle()
+        assertTrue(store.paths.isEmpty(), "Retained A confirmation cannot save against B")
+        assertNull(h.state.activeSavedPath)
+        assertFalse(nodes().any { it.config.contains(SemanticsProperties.IsDialog) })
+        h.complete { h.holder.runTrace() }
+        h.respond(sender.sent.last().tag, listOf(TraceNode(Bytes.of(0xAA, 0x11), 9.0), node(null, 5.0)), nextRadio)
+        settle()
+        scrollToIndex(11)
+        click(host.get().getString(C.contactsResultsSavePath))
+        setInput("Fresh B route")
+        click(host.get().getString(L.commonSave))
+        val saved = store.paths.values.single()
+        assertEquals(nextRadio, saved.radioId)
+        assertEquals("Fresh B route", saved.name)
+    }
+
+    private fun acceptedSaveAcrossReconnect(crossRadio: Boolean) {
+        val h = successfulSaveHarness()
+        val store = h.deps.store as InMemoryTracePathStore
+        val release = CompletableDeferred<Unit>()
+        var acceptedRadio: RadioId? = null
+        h.deps.store = object : TracePathPersisting by store {
+            override suspend fun createSavedTracePath(
+                radioId: RadioId, name: String, pathBytes: Bytes, hashSize: Long,
+                initialRun: com.meshcoreone.android.core.model.TracePathRunDTO?,
+            ): SavedTracePathDTO {
+                acceptedRadio = radioId
+                release.await()
+                return store.createSavedTracePath(radioId, name, pathBytes, hashSize, initialRun)
+            }
+        }
+        mountSaveAction(h)
+        click(host.get().getString(C.contactsResultsSavePath))
+        setInput("Accepted A")
+        click(host.get().getString(L.commonSave))
+        assertEquals(RADIO, acceptedRadio)
+        val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
+        host.get().runOnUiThread {
+            h.deps.device = device().copy(radioId = nextRadio)
+            h.holder.bindConnection(nextRadio, 2)
+        }
+        settle()
+        h.complete { h.holder.runTrace() }
+        val sender = h.deps.sender as FakeTraceSender
+        h.respond(sender.sent.last().tag, listOf(TraceNode(Bytes.of(0xAA, 0x11), 9.0), node(null, 5.0)), nextRadio)
+        settle()
+        val fresh = h.state
+        host.get().runOnUiThread { release.complete(Unit) }
+        settle()
+        val saved = store.paths.values.single()
+        assertEquals(RADIO, saved.radioId, "Already accepted writes remain attributed to A")
+        assertEquals("Accepted A", saved.name)
+        assertEquals(fresh, h.state, "Old completion must not adopt A's saved path or overwrite B")
+        assertNull(h.state.activeSavedPath)
+        scrollToIndex(11)
+        click(host.get().getString(C.contactsResultsSavePath))
+        assertEquals("Tower", input().config[SemanticsProperties.EditableText].text)
+        click(host.get().getString(L.commonCancel))
+    }
 
     private fun attachHost() {
         host = Robolectric.buildActivity(TraceCodeInputTestActivity::class.java).setup().visible()

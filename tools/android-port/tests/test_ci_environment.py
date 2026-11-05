@@ -6,6 +6,8 @@ import hashlib
 import io
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import tarfile
 import unittest
@@ -108,6 +110,15 @@ class EnvironmentTests(unittest.TestCase):
             self.assertIn("-Xmx3072m", environment["GRADLE_OPTS"])
             self.assertIn("-XX:MaxMetaspaceSize=768m", environment["GRADLE_OPTS"])
             self.assertNotIn("-Xmx2048m", environment["GRADLE_OPTS"])
+        allowed = {name.casefold() for name in load_json(
+            REPO / "android/scaffold/environment-allowlist.json"
+        )["allowed_names"]}
+        for _, environment, log, _ in calls[1:]:
+            sanitized = {name: value for name, value in environment.items() if name.casefold() in allowed}
+            self.assertEqual(
+                sanitized.get("ANDROID_CI_TASK_GRAPH"), str(output / f"{log.stem}-task-graph.json"),
+                "The Windows child sanitizer must preserve the controller's exact per-phase graph",
+            )
         self.assertIn("--dependency-verification", arguments)
         self.assertEqual("strict", arguments[arguments.index("--dependency-verification") + 1])
         self.assertNotIn("--rerun-tasks", arguments)
@@ -407,6 +418,8 @@ class EnvironmentTests(unittest.TestCase):
                 "ANDROID_PORT_GITHUB_TOKEN": "fixture-not-a-secret", "NODE_OPTIONS": "fixture-options",
                 "JAVA_OPTS": "-Dcredential=fixture", "GRADLE_OPTS": "-Dcredential=fixture",
                 "GRADLE_USER_HOME": str(Path(temporary) / "restored-gradle-cache"),
+                "ANDROID_CI_TASK_GRAPH": str(Path(temporary) / "untrusted-parent-graph.json"),
+                "android_ci_task_graph": str(Path(temporary) / "untrusted-lowercase-graph.json"),
             }
             value = candidate_environment(state, inherited)
             for key in inherited.keys() - {"PATH", "JAVA_OPTS", "GRADLE_OPTS", "GRADLE_USER_HOME"}:
@@ -416,6 +429,68 @@ class EnvironmentTests(unittest.TestCase):
             self.assertEqual(value["GRADLE_USER_HOME"], inherited["GRADLE_USER_HOME"])
             standalone = candidate_environment(state, inherited, standalone=True)
             self.assertEqual(value["GRADLE_USER_HOME"], standalone["GRADLE_USER_HOME"])
+
+    def test_controller_task_graph_survives_windows_allowlist_without_parent_override(self):
+        declaration = load_json(REPO / "android/scaffold/environment-allowlist.json")
+        allowed = {name.casefold() for name in declaration["allowed_names"]}
+        self.assertIn("android_ci_task_graph", allowed)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for host in ("linux", "windows"):
+                with self.subTest(host=host):
+                    self.captured_stage(directory / host, host, "prepare", self.forwarding_identity())
+
+    @unittest.skipUnless(os.name == "nt", "Executes the native Windows wrapper with stubs, not Gradle")
+    def test_windows_wrapper_preserves_phase_graph_and_drops_credentials(self):
+        powershell = shutil.which("pwsh")
+        self.assertIsNotNone(powershell, "Windows wrapper verification requires PowerShell")
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            controller = directory / "tools/android-port/controller"
+            scaffold = directory / "android/scaffold"
+            controller.mkdir(parents=True)
+            scaffold.mkdir(parents=True)
+            wrapper = controller / "gradle_windows.ps1"
+            shutil.copyfile(REPO / "tools/android-port/controller/gradle_windows.ps1", wrapper)
+            allowlist_path = scaffold / "environment-allowlist.json"
+            declaration = load_json(REPO / "android/scaffold/environment-allowlist.json")
+            phase_graph = directory / "phase graph.json"
+            fake_gradle = directory / "stub-gradle.ps1"
+            fake_gradle.write_text(
+                "[ordered]@{graph=$env:ANDROID_CI_TASK_GRAPH;token=$env:GH_TOKEN;"
+                "githubToken=$env:GITHUB_TOKEN} | ConvertTo-Json -Compress\n",
+                encoding="utf-8",
+            )
+            invocation = directory / "invocation.json"
+            invocation.write_text(json.dumps({
+                "wrapper": str(fake_gradle), "project": str(directory / "android"),
+                "arguments": ["fixtureTask"],
+            }), encoding="utf-8")
+            command = (
+                "function global:python { $global:LASTEXITCODE = 0 }; "
+                "& '" + str(wrapper).replace("'", "''") + "' -InvocationFile '" +
+                str(invocation).replace("'", "''") + "'"
+            )
+            # The Python preflight and Gradle wrapper are stubs: only the real sanitizer executes.
+            for admitted in (False, True):
+                with self.subTest(graph_admitted=admitted):
+                    allowlist_path.write_text(json.dumps({
+                        **declaration, "allowed_names": [
+                            name for name in declaration["allowed_names"]
+                            if admitted or name != "ANDROID_CI_TASK_GRAPH"
+                        ],
+                    }), encoding="utf-8")
+                    result = subprocess.run(
+                        [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+                        env={**os.environ, "ANDROID_CI_TASK_GRAPH": str(phase_graph),
+                             "GH_TOKEN": "fixture-only", "GITHUB_TOKEN": "fixture-only"},
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    observed = json.loads(result.stdout)
+                    self.assertEqual(observed, {
+                        "graph": str(phase_graph) if admitted else None, "token": None, "githubToken": None,
+                    })
 
     def test_private_absolute_inputs_and_exact_host_are_required(self):
         with tempfile.TemporaryDirectory() as temporary:

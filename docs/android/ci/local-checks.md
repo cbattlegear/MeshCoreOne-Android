@@ -118,6 +118,13 @@ and use `$env:ANDROID_CI_STATE` or an explicit `--state` argument. Allocate a fr
 Successful preflight proves current Windows input readiness only, not Android
 test execution, device acceptance or hosted verification.
 
+The controller supplies `ANDROID_CI_TASK_GRAPH` separately for each Gradle phase.
+The Windows child sanitizer preserves that exact allowlisted output path; the
+controller discards any inherited parent value before selecting its own path.
+An `ANDROID_CI_TASK_GRAPH is required` failure before product tasks indicates a
+launcher/allowlist mismatch, not failed product tests. Repair the launcher inputs;
+do not bypass the task-graph guard or supply a fabricated graph.
+
 ## WSL and remote workers are separate execution hosts
 
 The supported `local/check.py` launcher transports Windows requests into WSL.

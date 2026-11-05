@@ -76,7 +76,7 @@ def candidate_environment(state: dict, inherited=None, *, standalone=False, loca
         name: value for name, value in inherited.items()
         if name.casefold() in allowed and name.casefold() not in {
             "java_opts", "gradle_opts", "java_home", "android_home", "android_sdk_root",
-            "gradle_user_home", "android_user_home",
+            "gradle_user_home", "android_user_home", "android_ci_task_graph",
         }
     }
     private = Path(state["private_root"])

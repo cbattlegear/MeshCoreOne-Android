@@ -26,6 +26,11 @@ Dependency ancestry is deliberately limited to:
   support `854785a40aa84163deafc6176747e16ec23b61ff`.
 - Existing merged coordinator from PR #571. Its algorithm is unchanged.
 
+The actual witness PR #576 subsequently landed as trusted-main merge
+`59ee802c3d1067446b6bd2c99299a05e1f299a57`, whose second parent is exactly
+`b75555a0b22e493a2a9117f25e1fcfde871ee60c`. That merge provenance is reconciled;
+the original candidate's execution evidence is not transferred to a changed head.
+
 No WP-308/#530 source is imported or edited.
 
 ## Real surface and request lifetime
@@ -84,25 +89,30 @@ modified; English fallback is not claimed to be reviewed translation.
 
 ## Focused evidence (source until executed)
 
-`NotificationEnrollmentProducerTest` covers independent request identities,
+`NotificationEnrollmentProducerTest` declares 16 methods covering independent request identities,
 unknown/lost resume, exact prior observation, competing actions, delayed reads,
 locked/corrupt/mismatched reads, dismissed/rotated callbacks, delayed staging,
-uncertain/rejected returns, explicit later new attempts and copy field boundaries.
+uncertain/rejected returns, explicit later new attempts, delayed failed observation
+after a foreground-owner replacement, and copy field boundaries.
 
-`NotificationEnrollmentEntryTest` mounts the real entry and Notifications settings
+`NotificationEnrollmentEntryTest` declares 14 methods and mounts the real entry and Notifications settings
 extension. Controls cover held action, actual displayed descriptor, explicit
-confirm/dismissal, pause, window focus loss and disposal/remount. Three integrated
+confirm/dismissal, pause, window focus loss, actual Activity recreation and
+disposal/remount. Five integrated
 cases use actual product verifier/witness/journal SQLite, real JCE HMAC and host
-file/directory `FileChannel.force`: STAGED -> CONSUMED -> BOUND/reopen; pause
-before stage admission with no ledgers; disposal before consumption with
+file/directory `FileChannel.force`: STAGED -> CONSUMED -> BOUND/reopen; both pause
+and disposal before stage admission with no ledgers; both before consumption with
 STAGED -> INVALIDATED and no witness/journal creation.
+The class explicitly requests native SQLite and native graphics. Actual confirm
+rechecks the dialog-owned view's attachment/focus and resumed lifecycle before
+admitting the action; initial focus and attachment loss also retire the presentation.
 
 The test-only Kotlin helper narrowly suppresses internal visibility diagnostics
 to use datastore's existing constructor seams without widening production APIs
 or changing the build graph. It does not return fabricated verification results.
 This is host-JVM evidence, not AndroidKeystore, hardware or device durability.
 
-`NotificationEnrollmentJournalAdapterTest` uses real SQLite at API 31/37 to
+`NotificationEnrollmentJournalAdapterTest` declares three native SQLite methods at API 31/37 to
 exercise missing reconcile without creation, exact receipt/nonce/witness/revision
 round trip, foreign witness rejection and changed nonce rejection.
 

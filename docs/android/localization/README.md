@@ -170,6 +170,52 @@ The displayed value remains signed and unchanged.
 
 ## Consumers and native declarations
 
+### WP-308 recovered-draft copy contract
+
+`values/wp308_recovery.xml` is a handwritten WP-005-owned Android-only resource
+slice for the separate, copy-only recovery list. It is not generated from the
+pinned Swift catalog and does not change any original message text or existing
+localized wording. Each new declaration deliberately falls back to English
+with its own `MissingTranslation` annotation; no source translation exists and
+none is invented. These remain translatable resources, not English literals in
+the feature.
+
+The committed consumer at `14b71be599ff44022eae62f39a9f43f4deab2508`
+accepts seven `RecoveredDraftLabels` fields. Wrap the following shared
+`com.meshcoreone.android.core.l10n.R.string` IDs in the existing `UiText`
+resource type; this change does not add a feature dependency or wire a route.
+
+| Consumer field | Shared resource ID |
+| --- | --- |
+| title | `wp308_recovery_title` |
+| explanation | `wp308_recovery_explanation` |
+| empty | `wp308_recovery_empty` |
+| refresh | `wp308_recovery_refresh` |
+| loadMore | `wp308_recovery_load_more` |
+| chooseChat | `wp308_recovery_choose_chat` |
+| copyToSelectedChat | `wp308_recovery_copy_to_selected_chat` |
+
+Callback-owned status/failure/feedback IDs use the same `wp308_recovery_`
+prefix: `status_unknown_origin`, `status_replaced_occupant`,
+`status_delivery_unknown`, `load_failed`, `copy_failed`,
+`destination_conflict` and `copied`. Origin status does not establish delivery
+state. Use `status_delivery_unknown` only for an actually uncertain state;
+do not replace known delivery evidence with uncertainty. Use
+`destination_conflict` only when the destination owner confirms a nonempty
+draft was not overwritten. Use `copied` only after actual copy completion,
+never when a request merely starts or its outcome is uncertain.
+The generic copy failure asks the user to check the destination rather than
+asserting nothing changed. Visible action names also provide meaningful
+accessibility labels without a second, divergent set of copy.
+
+`RecoveredDraftResourceTest` adds two compiled-resource controls: all fourteen
+IDs retain exact copy across the twelve supported locales plus Portuguese
+regional, RTL and unsupported-locale fallback, and copy-only/uncertain-delivery
+wording remains explicit. These are resource assertions, not UI integration,
+TalkBack, 200% font, disk-reopen, delivery or device acceptance.
+
+### Generated source declarations
+
 Use `com.meshcoreone.android.core.l10n.generated.App*Strings`,
 `WidgetLocalizableStrings` and `ShortcutAppShortcutsStrings`. Plain members are
 shared resource IDs; formatted/plural members are typed functions accepting the

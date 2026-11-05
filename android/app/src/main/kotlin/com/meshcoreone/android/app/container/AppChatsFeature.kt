@@ -10,6 +10,7 @@ import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.ChannelQuery
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
@@ -29,6 +30,7 @@ import com.meshcoreone.android.feature.chats.rooms.*
 import com.meshcoreone.android.feature.chats.channels.*
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
+import com.meshcoreone.android.core.services.messaging.PendingMessageCreation
 import com.meshcoreone.android.core.services.notifications.NotificationService
 import java.time.Clock
 import java.time.Instant
@@ -61,6 +63,7 @@ import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.ZoneId
 
 class AppChatsFeature internal constructor(private val container: AppContainer) {
@@ -120,12 +123,179 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         return changes.map { current() }.stateIn(screenScope, SharingStarted.Eagerly, current())
     }
 
-    val drafts = object : TimelineDraftStore {
-        override fun get(conversationId: ChatConversationID) = app.draftStore.draft(conversationId)
-        override fun set(conversationId: ChatConversationID, text: String?) {
+    private val draftLock = Any()
+    private data class UnresolvedCreation(
+        val target: ComposerTarget, val revision: Long, val slotGeneration: Int,
+        val receipt: PendingMessageCreation,
+    )
+    private val unresolvedCreations = java.util.concurrent.ConcurrentHashMap<UUID, UnresolvedCreation>()
+    private data class DeferredDraft(
+        val target: ComposerTarget, val text: String, val revision: Long, val slotGeneration: Int,
+    )
+    private val deferredDrafts = java.util.concurrent.ConcurrentHashMap<UUID, DeferredDraft>()
+    private data class DeferredCommitted(
+        val target: ComposerTarget, val slotGeneration: Int, val messageId: UUID,
+    )
+    private val deferredCommitted = java.util.concurrent.ConcurrentHashMap<UUID, DeferredCommitted>()
+    private val committedRecoveryMutex = Mutex()
+    val drafts = object : ComposerDraftStore {
+        override val changes = MutableStateFlow(0L)
+        override fun get(conversationId: ChatConversationID) = synchronized(draftLock) {
+            app.draftStore.draft(conversationId)
+        }
+        override fun set(conversationId: ChatConversationID, text: String?) = synchronized(draftLock) {
             if (text == null) app.draftStore.clearDraft(conversationId)
             else app.draftStore.setDraft(text, conversationId)
+            changes.value++
+            Unit
         }
+        override fun revision(conversationId: ChatConversationID) = synchronized(draftLock) {
+            app.draftStore.revision(conversationId)
+        }
+        override fun restoreIfUnchanged(conversationId: ChatConversationID, revision: Long, text: String) =
+            synchronized(draftLock) {
+                app.draftStore.restoreIfUnchanged(conversationId, revision, text).also { restored ->
+                    if (restored) changes.value++
+                }
+            }
+    }
+
+    init {
+        scope.launch {
+            merge(changes, app.channelSlotGenerations.map { Unit }).collect {
+                for ((id, recovery) in unresolvedCreations) {
+                    try {
+                        val snapshot = recovery.receipt.snapshot
+                        if (snapshot.state == PendingMessageCreation.State.WRITING) continue
+                        val allocated = checkNotNull(snapshot.message)
+                        val target = recovery.target
+                        if (snapshot.state == PendingMessageCreation.State.COMMITTED) {
+                            deferredCommitted[id] = DeferredCommitted(target, recovery.slotGeneration, id)
+                            unresolvedCreations.remove(id, recovery)
+                            continue
+                        }
+                        if (target is ComposerTarget.Channel) {
+                            val current = store.fetchChannel(target.channel.radioId, target.channel.index)
+                            if ((app.channelSlotGenerations.value[target.conversationId] ?: 0) !=
+                                recovery.slotGeneration || current == null || current.id != target.channel.id ||
+                                current.secret != target.channel.secret || !current.isEnabled
+                            ) {
+                                report("Uncertain creation belongs to a replaced channel slot",
+                                    MessageServiceException(MessageServiceError.ChannelNotFound))
+                                continue
+                            }
+                        }
+                        val saved = store.fetchMessage(EntityKey(allocated.radioId, allocated.id))
+                        if (target is ComposerTarget.Channel &&
+                            (app.channelSlotGenerations.value[target.conversationId] ?: 0) != recovery.slotGeneration
+                        ) {
+                            report("Uncertain creation changed channel slot during reconciliation",
+                                MessageServiceException(MessageServiceError.ChannelNotFound))
+                            continue
+                        }
+                        if (saved == null) {
+                            drafts.restoreIfUnchanged(target.conversationId, recovery.revision, allocated.text)
+                        } else {
+                            if (saved.id != allocated.id || saved.radioId != allocated.radioId ||
+                                saved.contactID != allocated.contactID || saved.channelIndex != allocated.channelIndex ||
+                                saved.text != allocated.text || saved.timestamp != allocated.timestamp ||
+                                saved.createdAt != allocated.createdAt || saved.direction != allocated.direction ||
+                                saved.textType != allocated.textType || saved.replyToID != allocated.replyToID
+                            ) {
+                                throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                            }
+                            deferredCommitted[id] = DeferredCommitted(target, recovery.slotGeneration, id)
+                        }
+                        unresolvedCreations.remove(id, recovery)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: PersistenceStoreException) {
+                        report("Uncertain composer creation could not reconcile its exact saved identity", failure)
+                    }
+                }
+                for ((id, recovery) in deferredDrafts) {
+                    val conversation = recovery.target.conversationId
+                    if (drafts.revision(conversation) != recovery.revision ||
+                        (app.channelSlotGenerations.value[conversation] ?: 0) != recovery.slotGeneration
+                    ) {
+                        deferredDrafts.remove(id, recovery)
+                        continue
+                    }
+                    try {
+                        val target = recovery.target
+                        if (target is ComposerTarget.Channel) {
+                            val current = store.fetchChannel(target.channel.radioId, target.channel.index)
+                            if (current == null || current.id != target.channel.id ||
+                                current.secret != target.channel.secret || !current.isEnabled
+                            ) {
+                                deferredDrafts.remove(id, recovery)
+                                continue
+                            }
+                        }
+                        if ((app.channelSlotGenerations.value[conversation] ?: 0) == recovery.slotGeneration) {
+                            drafts.restoreIfUnchanged(conversation, recovery.revision, recovery.text)
+                            deferredDrafts.remove(id, recovery)
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: PersistenceStoreException) {
+                        report("Deferred composer draft recovery could not read its channel", failure)
+                    }
+                }
+                for ((id, recovery) in deferredCommitted) {
+                    try {
+                        val target = recovery.target
+                        if (target is ComposerTarget.Channel) {
+                            if ((app.channelSlotGenerations.value[target.conversationId] ?: 0) !=
+                                recovery.slotGeneration
+                            ) continue
+                            val current = store.fetchChannel(target.channel.radioId, target.channel.index)
+                            if (current == null || current.id != target.channel.id ||
+                                current.secret != target.channel.secret || !current.isEnabled
+                            ) continue
+                        }
+                        recoverCommittedCreation(recovery)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: PersistenceStoreException) {
+                        report("Committed composer recovery could not update its saved row", failure)
+                    } catch (failure: MessageServiceException) {
+                        report("Committed composer recovery could not find its saved row or contact", failure)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun recoverCommittedCreation(recovery: DeferredCommitted) = committedRecoveryMutex.withLock {
+        if (deferredCommitted[recovery.messageId] != recovery) return@withLock
+        requireOriginalChannel(recovery.target, recovery.slotGeneration)
+        val radio = recovery.target.conversationId.radioId
+        val committed = savedMessage(radio, recovery.messageId)
+        committed.contactID?.let { store.recomputeContactLastMessageDate(EntityKey(radio, it)) }
+        sender(radio).recordLocalEnqueueFailure(recovery.messageId)
+        val saved = savedMessage(radio, recovery.messageId)
+        requireOriginalChannel(recovery.target, recovery.slotGeneration)
+        val channelIndex = saved.channelIndex
+        if (channelIndex != null) {
+            app.messageEventStream.send(MessageEvent.ChannelMessageReceived(saved, channelIndex))
+        } else {
+            val contact = saved.contactID?.let { store.fetchContact(EntityKey(radio, it)) }
+                ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
+            app.messageEventStream.send(MessageEvent.DirectMessageReceived(saved, contact))
+        }
+        app.refreshConversations()
+        deferredCommitted.remove(recovery.messageId, recovery)
+        Unit
+    }
+
+    private suspend fun requireOriginalChannel(target: ComposerTarget, generation: Int) {
+        if (target !is ComposerTarget.Channel) return
+        val current = store.fetchChannel(target.channel.radioId, target.channel.index)
+        if ((app.channelSlotGenerations.value[target.conversationId] ?: 0) != generation ||
+            current == null || current.id != target.channel.id || current.secret != target.channel.secret ||
+            !current.isEnabled
+        ) throw MessageServiceException(MessageServiceError.ChannelNotFound)
     }
 
     internal fun restoreNotificationDraft(
@@ -647,25 +817,141 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val diagnostics = TimelineDiagnostics { operation, failure -> report(operation, failure) }
     }
 
-    fun sender(radio: RadioId): ComposerSendPort = object : ComposerSendPort {
+    internal fun composer(
+        target: ComposerTarget,
+        environment: ComposerEnvironment,
+        screenScope: CoroutineScope,
+        decorateSender: (ComposerSendPort) -> ComposerSendPort = { it },
+    ): ComposerStateHolder {
+        val radio = target.conversationId.radioId
+        return ComposerStateHolder(
+            target, decorateSender(sender(radio)), drafts, environment, screenScope,
+            ComposerTimer { kotlinx.coroutines.delay(it) }, ComposerDiagnostics(::report),
+            sendScope = scope,
+            captureSendPort = {
+                val initiating = container.sessions.current
+                val receipt = PendingMessageCreation()
+                val operationId = UUID.randomUUID()
+                val slotGeneration = app.channelSlotGenerations.value[target.conversationId] ?: 0
+                fun isSameSlot() = target !is ComposerTarget.Channel ||
+                    (app.channelSlotGenerations.value[target.conversationId] ?: 0) == slotGeneration
+                suspend fun checkChannel() {
+                    if (target is ComposerTarget.Channel) {
+                        val current = store.fetchChannel(radio, target.channel.index)
+                        if (!isSameSlot() || current == null || current.id != target.channel.id ||
+                            current.secret != target.channel.secret || !current.isEnabled
+                        ) throw MessageServiceException(MessageServiceError.ChannelNotFound)
+                    }
+                }
+                val captured = {
+                    if (initiating == null || initiating.token.radioId != radio || session(radio) !== initiating) {
+                        throw MessageServiceException(MessageServiceError.NotConnected)
+                    }
+                    initiating
+                }
+                val pinned = sender(radio, captured, beforeChannelPublication = { checkChannel() }) {
+                    if (initiating == null || initiating.token.radioId != radio ||
+                        container.sessions.current !== initiating ||
+                        app.connectionState != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                    ) throw ChatSendQueueServiceException(ChatSendQueueServiceError.NotConnected)
+                    initiating.chatSendQueueService
+                }
+                decorateSender(object : ComposerSendPort by pinned {
+                    override fun retainDraftForRecovery(text: String, revision: Long?) {
+                        deferredDrafts[operationId] = DeferredDraft(
+                            target, text, checkNotNull(revision), slotGeneration,
+                        )
+                    }
+                    override fun retainUncertainCreation(revision: Long?) {
+                        val message = checkNotNull(receipt.snapshot.message)
+                        unresolvedCreations[message.id] = UnresolvedCreation(
+                            target, checkNotNull(revision), slotGeneration, receipt,
+                        )
+                    }
+                    override suspend fun recordCommittedCreationFailure(messageId: UUID) {
+                        val recovery = DeferredCommitted(target, slotGeneration, messageId)
+                        deferredCommitted[messageId] = recovery
+                        recoverCommittedCreation(recovery)
+                    }
+                    override suspend fun recordLocalEnqueueFailure(messageId: UUID) {
+                        recordCommittedCreationFailure(messageId)
+                    }
+                    override suspend fun canRestoreDraft(): Boolean {
+                        if (!isSameSlot()) return false
+                        if (target !is ComposerTarget.Channel) return true
+                        val current = store.fetchChannel(radio, target.channel.index)
+                        return current != null && current.id == target.channel.id &&
+                            current.secret == target.channel.secret && current.isEnabled && isSameSlot()
+                    }
+                    override fun creationOutcome(): ComposerCreationOutcome {
+                        val snapshot = receipt.snapshot
+                        return when (snapshot.state) {
+                            PendingMessageCreation.State.NOT_STARTED,
+                            PendingMessageCreation.State.NOT_COMMITTED -> ComposerCreationOutcome.NotCommitted
+                            PendingMessageCreation.State.COMMITTED ->
+                                ComposerCreationOutcome.Committed(checkNotNull(snapshot.message))
+                            PendingMessageCreation.State.WRITING,
+                            PendingMessageCreation.State.UNKNOWN -> {
+                                ComposerCreationOutcome.Uncertain(snapshot.message)
+                            }
+                        }
+                    }
+                    override suspend fun createPendingDirect(
+                        text: String, contact: ContactDTO, textType: TextType, replyToId: UUID?,
+                    ) = withContext(receipt) {
+                        pinned.createPendingDirect(text, contact, textType, replyToId)
+                    }
+                    override suspend fun createPendingChannel(
+                        text: String, channelIndex: UByte, radioId: RadioId, textType: TextType,
+                    ) = withContext(receipt) {
+                        checkChannel()
+                        pinned.createPendingChannel(text, channelIndex, radioId, textType).also {
+                            checkChannel()
+                        }
+                    }
+                    override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) {
+                        checkChannel()
+                        pinned.enqueueChannel(envelope.copy(
+                            localNodeName = app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName,
+                        ))
+                    }
+                })
+            },
+        )
+    }
+
+    fun sender(radio: RadioId): ComposerSendPort =
+        sender(radio, { session(radio) }, acceptedQueue = { sendQueue(radio) })
+
+    private fun sender(
+        radio: RadioId,
+        acceptedSession: () -> RadioSessionContainer,
+        beforeChannelPublication: suspend () -> Unit = {},
+        acceptedQueue: () -> ChatSendQueueService,
+    ): ComposerSendPort = object : ComposerSendPort {
         override suspend fun createPendingDirect(text: String, contact: ContactDTO, textType: TextType, replyToId: UUID?) =
-            session(radio).messageService.createPendingMessage(text, contact, textType, replyToId).also {
+            acceptedSession().messageService.createPendingMessage(text, contact, textType, replyToId).also {
                 app.messageEventStream.send(MessageEvent.DirectMessageReceived(it, contact))
                 app.refreshConversations()
             }
         override suspend fun createPendingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType) =
-            session(radio).messageService.createPendingChannelMessage(text, channelIndex, radioId, textType).also {
+            acceptedSession().messageService.createPendingChannelMessage(text, channelIndex, radioId, textType).also {
+                beforeChannelPublication()
                 app.messageEventStream.send(MessageEvent.ChannelMessageReceived(it, channelIndex))
                 app.refreshConversations()
             }
         override suspend fun enqueueDM(envelope: DirectMessageEnvelope) =
-            sendQueue(radio).enqueueDM(envelope)
+            acceptedQueue().enqueueDM(envelope)
         override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) =
-            sendQueue(radio).enqueueChannel(envelope)
+            acceptedQueue().enqueueChannel(envelope)
         override suspend fun signalDMEnqueued(envelope: DirectMessageEnvelope) =
             sendQueue(radio).signalDMEnqueued(envelope)
-        override suspend fun recordLocalEnqueueFailure(messageId: UUID) =
-            failPending(savedMessage(radio, messageId))
+        override suspend fun recordLocalEnqueueFailure(messageId: UUID) {
+            if (store.fetchPendingSendsForMessage(EntityKey(radio, messageId)).isEmpty()) {
+                val message = savedMessage(radio, messageId)
+                if (message.status == MessageStatus.PENDING) failPending(message)
+            }
+        }
     }
 
     private suspend fun savedMessage(radio: RadioId, id: UUID): MessageDTO =
@@ -673,13 +959,26 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             ?: throw MessageServiceException(MessageServiceError.SendFailed("Saved message not found"))
 
     private suspend fun enqueueChannel(radio: RadioId, id: UUID, isResend: Boolean) {
-        val queue = sendQueue(radio)
         val localName = app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName
         val message = savedMessage(radio, id)
+        deferredCommitted[id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
+        unresolvedCreations[id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
         val index = message.channelIndex
             ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+        val origin = try {
+            store.validateChannelMessageOrigin(EntityKey(radio, id))
+        } catch (failure: PersistenceStoreException) {
+            if (failure.cause !is ChannelHistoryRejected) throw failure
+            throw MessageServiceException(MessageServiceError.ChannelNotFound).also {
+                it.initCause(failure)
+            }
+        }
+        val queue = sendQueue(radio)
         queue.enqueueChannel(
-            ChannelMessageEnvelope(id, index, isResend, message.text, message.timestamp, localName),
+            ChannelMessageEnvelope(
+                id, index, isResend, message.text, message.timestamp, localName,
+                channelOccupantID = origin.expectedOccupantID,
+            ),
         )
     }
 

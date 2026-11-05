@@ -1,0 +1,610 @@
+# WP-308 outgoing send lifetime (#524)
+
+## Independent recovery confirmation review repair
+
+Review `4486841610` identified that `RecoveredDraftList` nested successful-copy
+feedback inside its optional failure block. Success sets `copied=true` with
+`failure=null`, so the confirmation was unreachable. The confirmation now renders
+independently, retaining its localized text and polite accessibility live region.
+No copy, draft, source-row or send policy changes.
+
+Added mounted `mountedCopyConfirmationIsVisibleWithoutFailureAndClearsWithNextSelection`
+at API31/37 and 200% font. It checks initially absent feedback, visible successful
+feedback with no failure, polite live-region semantics, and removal on the next
+explicit source selection. Existing actual-copy success/cancellation/conflict
+controls and held wrong-channel/restart assertions remain unchanged.
+
+Historical exact-head run `42120152996` for `6b1d335feef83bd93edb9e7dced9a2a17bd63de1`
+failed at `:app:compileDebugKotlin`: `validateChannelMessageOrigin` and consequently
+`expectedOccupantID` were unresolved on the App persistence interface. App tests
+did not execute. This is a real producer-interface dependency, not a passing
+restart check; the current-main storage owner is producing compatible APIs.
+No duplicate producer implementation or guard removal is used to mask it.
+The new mounted confirmation control is authored, not yet executed.
+
+Review `4453010408` also applies to ordinary enqueue-stage failure, not just
+creation failure. The captured App send port now routes that local failure
+through its existing origin-aware retained committed-row recovery. Registration
+precedes any fallible recovery read/write. A later real invalidation retries only
+local status/publication; durable-queue presence remains checked and no send is
+automatically resubmitted. A replaced channel fails its original-slot guard
+before status changes or replacement-timeline publication.
+
+Five additional mounted lifetime controls hold before actual queue admission:
+direct/channel pending-read and status-write failures retain the same PENDING
+row until storage recovers, then expose FAILED without a pending send or wire
+attempt; channel replacement during the held enqueue retains the original
+PENDING row and rejects actual Retry. Existing durable-queue, cancellation,
+held-save/restart and positive-send assertions are preserved. These new controls
+are authored, not yet executed.
+
+Review `4486841505` exposed a second draft mutation path: `AppState` clears
+vacated slots through the shared `DraftStore`, outside the App adapter's private
+revision map. Moved the existing process-local revision/empty-destination
+compare-and-restore into that shared store's existing lock. Every explicit set,
+clear and slot-vacate now advances its affected revision, including an already
+empty slot; no-op clears still perform no persistence write. The App adapter
+delegates its same interface to this single mutation boundary. No backend
+origin, durable operation authorization or new persistence format is introduced.
+The original Swift content, whitespace and batched-persistence behavior is
+preserved; revision fencing is a native concurrency adaptation.
+
+Added two core draft controls for vacate/re-vacate, direct typing/clear,
+unrelated-chat isolation and nonempty-destination refusal. Four mounted controls
+exercise actual App slot invalidation after destination selection: held-inventory
+copy and transient copy each reject A-to-B and A-to-B-to-A, leaving the destination
+empty and the exact source intact. Explicit later reselection is still required
+for transient copy. These controls are authored, not yet executed. These
+process-local draft tokens are not wire permission or restart-safe channel
+origin proof; the independent storage/dispatch producer dependency remains.
+
+For these review repairs, trusted `reserve.py admit` accepted primary composer
+and evidence paths as `wp-owned`, existing App/core test paths with
+`add-or-update-related-test` as `reviewed-support-test`, and App/shared-draft
+consumer paths with `modify-related-consumer` as `reviewed-support-consumer`.
+The historical advisory claim remains preserved, not released or impersonated.
+`python tools\android-port\portmap.py`, `python tools\android-port\controller\validate.py`
+and `git diff --check` all returned 0. Source validation is not Android execution.
+
+## Current-main restart repair continuation
+
+Reconciled actual main `83fc29b14f082ef1806f2d68516668128f63b1d4` in
+`05ccf895001e97b2989d90af224e21505032905a`, preserving existing composer,
+copy-only and foreground-warning work and the two untracked geometry files.
+Four producer-file conflicts were resolved in favor of main's newer
+pending-creation canonical-row/UNKNOWN and notification behavior. The exact
+preexisting `notifyQueuedChannelRetired` helper was retained because the local
+queue prerequisite still invokes it; no replacement producer implementation
+was invented.
+
+The App Retry/Send Again adapter now validates the exact persisted message's
+origin through `validateChannelMessageOrigin` before queue lookup or mutation,
+and propagates that origin in `ChannelMessageEnvelope`. Typed unknown/stale
+origin refusals are mapped to the existing `MessageServiceError.ChannelNotFound`
+while preserving the storage cause; other storage errors propagate.
+This rejects legacy NULL and replaced-occupant rows even in a fresh process,
+without relying on deferred in-memory creation maps. It neither samples a
+replacement occupant into the old row nor deletes/recreates the original.
+
+The existing actual disk-reopen Send Again regression and its zero-wire,
+typed-refusal, exact-source and no-pending assertions remain unchanged.
+Three added actual App/Room adapter controls distinguish NULL origin, known
+replaced origin and valid current origin while offline. The positive origin
+case must reach the connectivity check rather than be falsely classified as
+an origin failure. These controls are authored, not yet executed.
+
+This adapter guard alone is not full channel-send acceptance. Fresh pending
+creation still needs the actual messaging producer's original-display-scope
+overload, and runtime needs the real channel dispatch lease. Raw index-only
+creation currently persists NULL proof and cannot be made retryable by silently
+adopting current slot identity. The exact producer request is recorded in
+PR530 comments `6670930125` and `6670960872`; no service policy is fabricated.
+All existing positive send/retry cases must pass with the real producer wiring
+before merge. No diagnostic infrastructure or new process-only gate is added.
+
+## Recovery-list consumer preparation (not activated)
+
+### Foreground loss-warning interaction boundary (not activated)
+
+Synchronous-retirement successor: inspected actual WP-204 verifier source
+`c786c16bd1be664f7906730a5dd07881a5edc6d8` (parent
+`2fb3e565a27a01d4405b726b7ff08a310ba8a607`, tree
+`65e06b3b4b2489214a382daf32719336c0b2e120`) exposes
+`ForegroundWitnessAcknowledgmentVerifier.retire(presentation)` as a non-suspending
+producer fence before its suspending `invalidate`. The UI now requires a separate
+`onRetirePresentation` callback. It first invalidates its own live action, then
+synchronously calls producer retirement, and only afterwards invokes the callback
+that may schedule ledger invalidation. Omitting producer retirement is no longer
+an API-compatible adapter. Throwing retirement does not schedule invalidation or
+restore the UI action; the caller must surface the failure.
+
+Two further mounted controls hold action dispatch and ledger invalidation,
+pause or dispose the actual Activity content, and check synchronous retirement
+before releasing held dispatch, with ledger work still withheld. They check
+UI/adapter callback ordering with an explicit retirement fixture, not real SQLite
+staging/consumption. Actual b8-verifier staging/consume integration and execution
+remain unproved. No backend implementation is copied into the feature.
+
+The coordinator assigned this WP-308 UI boundary separately from b8's WP-204
+independent durable verifier. It wraps the existing `RecoveryContinuityNotice`;
+the earlier Boolean checkbox/content callback is not treated as consent proof.
+The inspected immutable witness producer is
+`56e4cf72283aa5089c05123127577d35803c186b`, specifically `WitnessProtocol.kt`:
+`WitnessAuthorizationRequest` binds `WitnessOperation(operationId, storeId,
+creationNonce)`, acknowledgment ID and the complete expected current record.
+That source is read-only here, not imported, rewritten or implemented by WP-308.
+
+`RecoveryContinuityBinding<Request, Observation, Presentation>` retains the exact
+immutable producer request, complete typed observation, versioned warning and
+independent verifier's opaque presentation handle. Generics preserve the actual
+producer types without a feature-to-datastore dependency, duplicate wire codec
+or a replacement Boolean/UUID-only consent object. The caller must pass the full
+real request and observation, not fixture types or freshly sampled substitutes.
+No operation, nonce, acknowledgment or presentation handle is generated by UI.
+
+`RecoveryContinuityInteraction` resolves all seven existing notice strings and
+emits their exact rendered values as `RecoveryWarningContent` alongside the
+binding in `ForegroundRecoveryAction`. Only the actual create-button gesture,
+after a checkbox gesture while resumed/focused and producer-ready, emits an
+action. Working/background state refuses interaction. The local interaction
+submits once; ordinary recomposition cannot emit or replay. It is not saveable
+and does not survive reconstruction as consent.
+
+Pause/stop/destroy, focus loss, disposal and changed request/observation/warning
+version/rendered copy invalidate the old ephemeral action and invoke
+`onInvalidatePresentation(handle)`. A retired presentation cannot resume through
+the same interaction: the producer must provide a new actual presentation
+handle, followed by fresh user gestures. Local state is keyed by the opaque presentation handle,
+not the changed evidence: resupplying the same handle with different evidence
+or warning cannot reset a retired interaction. The mounted changed-evidence
+control explicitly checks refusal until a new producer handle is supplied.
+The invalidation callback must remain
+nonblocking/idempotent; durable invalidation and any failure recovery remain
+the producer's responsibility. The action's live validity query is not durable
+consumption, authentication or an atomic cross-process authorization fence.
+
+The b8 handoff proposes session-scoped `beginPresentation(request,
+warningRevision, warningContentIdentity)`, `acknowledge(handle)` from the actual
+action callback, and `invalidate(handle)` from invalidation. The route and
+independent verifier must agree on exact supported warning revision/content
+identity and retain complete request/observation binding; no approved production
+localized warning digest/content policy or frozen verifier successor has been
+supplied here. The UI neither implements `ForegroundWitnessAcknowledgment` nor
+calls enrollment/prepare/bind/issuance/dispatch. This is not a durable witness.
+
+Two additional mounted API31/37, font200 controls are authored using an actual
+Activity lifecycle and typed, explicitly test-only request/observation/handle
+fixtures. They exercise explicit inspection without action, readiness/working
+refusal, checkbox/create gestures, complete request/nonce/current-record binding,
+exact rendered warning, one-shot recomposition, evidence/nonce/version/copy
+changes, pause/resume invalidation, required new handle, disposal and fresh
+unchecked reconstruction. They are uncompiled/unexecuted and do not test b8's
+durable verifier, actual witness ancestry integration or production warning
+localization. Existing recovered-list, transient notices and copy semantics are
+unchanged. No public ref or #530 acceptance hold is advanced.
+Trusted `reserve.py admit` returned `wp-owned` for this new interaction source
+and `reviewed-support-test` / `add-or-update-related-test` for the existing App
+consumer test. Pinned Python 3.12.4 source checks (`portmap.py`,
+`controller\validate.py`, `git diff --check`) returned 0.
+An input-only call to the supported local launcher's `execution_runtime`
+validation refused before execution with
+`Installed execution runtime is old or mismatched: controller/authority.py`.
+No WSL, Gradle, native run, runtime installation or owner recovery was started.
+Missing runtime readiness is not a failed product test. The separately successful
+Windows input preflight does not configure or repair this execution runtime.
+
+### Transient-only receiver outcome seam (not activated)
+
+`TransientRecoveryNotice` now accepts `TransientRecoveryText(attemptId, exactText,
+retention)` with only `NOT_RETAINED` or `INDETERMINATE` retention states.
+The attempt ID correlates the caller's still-held evidence; it is explicitly not
+a journal/store/submission/issuance receipt. The receiver retains actual producer
+evidence and reconciliation identity separately. This model never enters the
+durable `UnboundRecoveryList` inventory. No default labels, saveable state,
+logging, notification post, foreground launch or automatic retry is provided.
+
+The caller supplies typed localized labels for not saved, saving unconfirmed,
+process-memory loss, possible delivery uncertainty, choose/copy and acknowledge.
+Both explicit copy and acknowledgment emit the full displayed immutable value.
+Acknowledgment acknowledges the notice only; it neither retires raw text nor
+consumes/relabels producer evidence or permits a retry. The route must scope its
+acknowledgment to the exact attempt and evidence, not reuse it for another outcome.
+
+`UnboundRecoveryCopy.copyTransient` copies this still-live String into an explicitly
+selected destination through the same revision-fenced atomic draft restore.
+It does not fabricate a durable source or claim notification retention, and does
+not call the journal reader. A successful destination copy is not reconciliation
+of an indeterminate source write, delivery proof or a durable completion receipt.
+
+Two additional mounted controls are authored, one per retention outcome, at
+200% font using the real App draft store. They check visible memory/delivery
+warnings, no automatic copy, acknowledgment without disappearance/relabeling,
+newer-draft refusal, explicit reselection and exact UTF-16 destination text,
+working-state refusal and empty message/pending queues. They are uncompiled and
+unexecuted; production localization, receiver routing/evidence ownership and
+permitted Android verification remain required. Android cannot promise that an
+unretained input survives process death or that a notice automatically opens.
+
+The immutable notification storage source
+`e3f3c451fcb294aae68457e949677ac4a1cfa9b2` supplies a no-route
+`CopyText(storeId, recordId, sequence, exactText)` projection through
+`readCopyOnly()`. It is inspected, not imported or activated here.
+`UnboundRecoveryList` independently presents precisely those display fields
+without a MessageDTO, radio, recipient, issued-token or outgoing-message ID.
+Its full three-part key does not turn an observed store ID into trust.
+Selection must still exist in the supplied inventory, and copy requires a
+separately selected destination. Errors remain visible; storage failures
+must not be supplied as empty-success inventories by the future adapter.
+The feature-local display value is not a canonical persistence contract.
+
+An authored mounted 200%-font content control distinguishes sequence identity,
+preserves exact displayed text, requires independent destination selection and
+explicit copy, leaves the input records unchanged, and disables copy when a
+selected source disappears. Its callbacks are fixture-owned; no actual journal
+read, copy mutation or enrollment is exercised. Android execution is unclaimed.
+The future route must reread the actual whole projection and match full identity
+and content before atomically protecting the destination draft.
+The explicit copy event now carries the complete displayed `UnboundRecoveryText`
+(full key and exact text), rather than requiring the route to reconstruct it
+from independently mutable selection state. The mounted content assertion
+checks that exact event value. This does not replace copy-time persistence
+validation or grant a destination; both remain future adapter obligations.
+
+`UnboundRecoveryCopy` now supplies the independently safe copy-side guard.
+Its reader is injected: it must reread the entire real projection or throw,
+not substitute an empty list for storage failure. It rejects missing, duplicate
+or changed full-key entries and compares exact String code units. An explicit
+destination choice captures the actual `ComposerDraftStore` revision before
+the later read/copy action. The existing atomic `restoreIfUnchanged` rejects
+nonempty drafts and revision changes, including typing then clearing.
+Cancellation is checked after reading and before the synchronous draft write.
+No send, retention, retirement, source mutation or automatic replay exists.
+
+Four additional mounted controls are authored against the real App draft store:
+exact UTF-16 (including isolated surrogate code units), changed source text under
+the same coordinates, a newer draft during the suspended inventory read, and
+typing then clearing during that read. They use a controlled inventory reader,
+not an actual journal; storage-to-draft integration remains unproved. Each uses
+explicit selection/choose/copy gestures and checks an empty message/pending queue.
+These controls are uncompiled/unexecuted. The real journal adapter, production
+route, destination navigation custody, localized new failure labels and native
+verification remain outstanding; this helper does not activate receiver intake.
+Trusted path/operation admission returned `wp-owned` for the helper and evidence,
+and `reviewed-support-test` / `add-or-update-related-test` for the App controls.
+The historical advisory-claim identity failure is not repaired or replaced.
+With pinned Python 3.12.4, `python tools\android-port\portmap.py`,
+`python tools\android-port\controller\validate.py` and `git diff --check`
+each returned 0 for this slice. These are source checks, not Kotlin compilation
+or mounted-test execution. No native/Gradle command, runtime installation,
+owner-lock cleanup, hosted dispatch or public-ref update was performed.
+
+`RecoveryContinuityNotice` is separately authored stateless Material content
+for the coordinator-proposed loss-aware new-action-generation acknowledgment.
+It is not a user-selected product decision or an activated enrollment flow.
+All labels are supplied as shared `UiText`; production copy resources and
+the real receipt/capacity/bootstrap operations are not supplied by this slice.
+The create callback requires both explicit acknowledgment and producer readiness,
+and is disabled while working. No callback runs from composition or an effect.
+The enclosing route must invalidate acknowledgment when continuity evidence
+changes. Readable-text inspection remains a distinct action, not destination
+authentication, generation creation or automatic sending.
+
+An authored mounted 200%-font control checks initial refusal, manual inspection,
+acknowledgment without readiness, readiness without automatic invocation,
+one explicit create gesture, working-state refusal and explicit failure after
+evidence invalidation. Fixture English labels are test inputs, not production
+fallback resources or actual enrollment proof. It is uncompiled/unexecuted.
+No automatic UI launch, failed-write survival, recovery of physically lost
+text, authenticated unknown-token target, or production storage operation is
+promised. The real unbound durable receipt and full-capacity path remain
+producer-owned activation prerequisites; existing origin/fence holds remain.
+
+The bounded WP-005 resource handoff `ced55e0ef6f7a8b3cbcfd002936e2af82d1ad16a`
+and evidence successor `36fe163514b41e2318f8fdeeaa6fc1248681ea73`
+are integrated by cherry-pick as `d5434d3bc` and `4dc17e7e6`, without
+their unrelated base ancestry. `recoveredDraftLabels()` binds the seven
+content labels directly to the shared resources, and the mounted control now
+uses those actual resources rather than fixture-only action labels.
+The owner's explicit English fallbacks are not full locale parity.
+Origin-attribution and delivery status remain different concepts; a generic
+uncertainty label must not replace known SENT or DELIVERED state.
+The list renders actual stored delivery status through the existing shared
+`DeliveryFeedbackText` consumer, independently of its caller-supplied origin
+label. The mounted replacement fixture uses resource-backed unknown/replaced
+origin labels; neither those labels nor an arbitrary callback can replace the
+actual delivery-status renderer. No second status mapping was introduced.
+The owner reports a runtime mismatch before Android execution; that is not
+a consumer test result. Local portmap/controller/whitespace checks returned
+0 after resource integration. No runtime, device or execution-owner state
+was modified. Production destination/status/failure binding remains pending
+alongside the original display-custody prerequisite.
+
+The immutable storage handoff
+`2e62c5e28f46184c71915f93ba15829fa93f528e` is now composed locally
+as `88baffb4732c4dd07774d151dd5b66c9abdf3b59`. Its independent
+`ChannelDraftRecoveryPersisting` role takes radio ID and Long limit/offset,
+returns original DTOs, and performs eligibility filtering before paging.
+It is a per-call snapshot, not an original-display or dispatch witness.
+The only textual merge conflict was a duplicate
+`ChannelWriteCancellationDisposition` import in MessageService. A prior
+merge-tree check isolated that conflict; deterministic `-Xours` retained
+the identical existing import. The resulting tree matched the checked
+merge tree exactly. No service logic was manually authored or removed.
+The producer's follow-up `1ccad6d104565dd7b0134180033d6090d90f02db`
+is composed unchanged as `b23a022fbaaaa5dd866f8d1e5450b299365b0acb`.
+Its pending-evidence predicate additionally requires CHANNEL kind, NULL
+contact and the exact channel index in the same radio. Malformed direct
+pending rows cannot qualify a channel message for recovery. The independent
+API and consumer policy are unchanged. Source validators and whitespace
+checks returned 0 after this composition; Android execution remains unclaimed.
+The integration owner's subsequent immutable handoff
+`180bf1da878028fcac024deae5d7383ffc47e019` is composed unchanged as
+`1a685b73542417e70326695a3ff6932ccd2ac522`. This successor changes
+producer Room fixtures/evidence, not recovery signatures or consumer paths.
+At inspection, hosted run `41922386382` was `in_progress` and bound to that
+exact producer SHA; it is not a consumer run or green acceptance. No generic
+DeviceError(2) was reclassified as no-send proof, and no existing queue
+expectation was altered here. Local source validators and whitespace checks
+returned 0 after composition.
+
+The separately assigned R1 consumer fix includes known-old-occupant and
+unbound outgoing recovery text in a separate list with explicit copy into a
+selected composer, never automatic adoption or resend. Storage owns the
+independent recovery query and exact eligibility rules; WP-308 does not
+reimplement its SQL or change canonical contracts.
+
+`RecoveredDraftStateHolder` prepares the feature-side bounded pagination and
+selection/copy state. It preserves rows and selection on storage/copy errors,
+propagates cancellation, serializes operations, reports failures, and clears
+selection only after explicit copy completion. The port requires copy-time
+exact-key text read and protection of an existing destination
+draft. It has no sending or source-mutation operation.
+
+Six unit controls cover ordered pagination, failed refresh, explicit selection
+and destination, destination-draft conflict, cancelled copy, and a foreign-radio
+page. These controls are authored, **not compiled or executed**. They do not
+replace required actual App/Room A-to-B/reopen/summary/timeline/copy regressions.
+`ChannelDraftRecoveryAdapter` binds that actual recovery query and exact-key
+message read without a persistence fallback. It rejects foreign-radio, missing,
+incoming and non-channel sources before invoking the destination owner. The
+destination callback retains draft-conflict/navigation custody; the adapter has
+no queue dependency and never saves or relabels the original.
+
+`RecoveredDraftList` supplies a native scrolling, radio/message-keyed,
+single-selection content surface with explicit destination selection and copy.
+All content and controls scroll, including at 200% font. UI copy/status labels
+are supplied as shared `UiText`, with no production English fallback or
+assertion that a recovered row was definitely unsent.
+
+Four App controls are authored, **not compiled or executed**: actual Room
+A-to-B recovery and exact-current-text copy, missing/foreign sources, destination
+conflict/deleted source, and mounted 200%-font 45-row paging/selection/destination/
+explicit-copy into the actual App draft store with no radio or pending send.
+The mounted control injects its destination owner; it does not demonstrate
+production navigation custody or original-display capture.
+
+The mounted recovery family now has four explicit methods: unknown-origin
+successful copy, known replaced-occupant successful copy, confirmed destination
+draft conflict, and cancellation held before the destination write. Each uses
+actual Room rows, A-to-B replacement, the App draft store, resource-backed UI,
+200% font, 45-row paging and explicit source/destination/copy controls. Completed
+copy shows the localized polite live-region feedback only after the port returns.
+Conflict preserves newer destination text and source selection; cancellation
+preserves the source and does not display completion. All four assert no pending
+send, no radio connection and unchanged original DTOs. This is authored mounted
+coverage, not a discovery/execution claim; it does not resolve production
+navigation custody or the separate restart Send Again defect.
+An additional mounted disk-reopen method uses a named Room file, closes
+and joins the original store owner, reopens with a fresh owner/store,
+verifies all 45 original DTOs, then mounts the same paging/selection/copy
+flow over the reopened store and a fresh App container. Exact named-file
+cleanup happens after closing the fixture; no retained runtime owner is
+accessed. This additional method is also uncompiled/unexecuted.
+The mounted cancellation family additionally holds after the actual destination
+draft write but before the copy port returns. Cancellation must leave that
+destination text intact, preserve the original recovery row/selection, show no
+completed feedback and perform exactly one copy attempt with no automatic replay.
+This explicitly distinguishes cancelled await from rollback. It is authored,
+not executed, and supplies no durable copy receipt or notification intake proof.
+
+There is no production route registration or scoped-read activation in this
+preparation. Exact Android execution, App disk-reopen acceptance and the existing
+enabled restart Send Again defect remain open, as does the original
+display-capture/invalidation prerequisite. Producer execution is not consumer
+acceptance, and the incoming-history UNBOUND_HISTORY policy is unchanged.
+
+Local source checks: `python tools\android-port\portmap.py`,
+`python tools\android-port\controller\validate.py`, and `git diff --check`
+returned 0. No local Android runtime or retained execution owner was touched.
+New holder and related-test paths were admitted by the actual reserve tool as
+`wp-owned` and `reviewed-support-test`, respectively. The historical failed
+identity claim below remains unchanged and is not represented as a new claim.
+
+## Candidate and ownership
+
+Source pin: `db14559b39d32322b06477c6ae676112f583db50`.
+Consumer start base: `1e1ff70345f203b41f9a8b04836c2cc4640500c9`.
+Current integration base: `796a872a3565a66c74f782b738a9ecb3c273fb25`,
+including protected #531's protocol dispatch-proof prerequisite.
+Session: `aa4b9d95-ca8d-4023-bb04-049e969e6d6c`, existing managed
+`cbattlegear-literate-waffle` worktree. The historical advisory claim failed
+`Existing WP lease is bound to different source/base/manifest/backend`;
+no acquired claim, borrowed identity, ledger repair or successor authority is claimed.
+
+The original WP-308 service-path admission refusal remains historical fact.
+The separately assigned WP-208 producer subsequently supplied
+`e98a1ecb633bdc1ac1b9be6d44f4483076fdbc7b`, integrated unchanged as `6fda3fd07`,
+with WP-215 receipt prerequisite `bfd2418d9`, integrated unchanged as `6707ed391`.
+These are coordinated producer commits, not WP-308 edits to MessageService.
+Producer tests and claims are not consumer test results.
+The revised producer `0d7c139228679d88c51ad38539819ef81d060cb5` is integrated
+unchanged as `786d4c538`, with receipt prerequisite `1cb2b9ae` as `1b746ca48`.
+It distinguishes settled protocol-proven unsent cancellation from uncertain
+dispatch. This corrects the earlier e98 inline-acceptance classification; it
+does not turn creation commitment into queue acceptance or wire delivery.
+
+Fresh support admissions: AppChatsFeature and the new App test under
+`app-build-launcher/add-direct-support-wiring`; AppChatsContent under
+`app-build-launcher/update-launcher-or-composition`. Composer contracts,
+holder/tests and per-WP evidence/deviations use `wp-owned`.
+No policy, settings, localization, build graph, dependency or runtime changes.
+
+## Behavior and native adaptation
+
+Send captures its initiating radio-session identity before clearing the draft.
+Accepted creation/enqueue work belongs to the existing process UI owner rather
+than the mounted conversation. The initial operation starts undispatched so
+screen disposal cannot leave an accepted but never-entered coroutine.
+Closing the screen still cancels observers, cooldown and share/location work,
+not the radio connection or accepted process-owned send.
+
+The App adapter carries the producer's `PendingMessageCreation` context receipt
+through real pending creation. Its identity/outcome survives a service save
+followed by cancellation or failure before return. COMMITTED describes only row
+creation: never queue acceptance, radio transmission or delivery.
+Definitely-unsaved text is restored only if the local draft version and the
+process draft revision remain unchanged. A replacement holder's newer typing,
+including typing then explicitly clearing, wins.
+Observable shared draft changes publish a recovered draft to an already reopened
+empty composer; recovery does not require another reconnect or route recreation.
+If original-slot lookup also fails during definitely-unsaved recovery, the App
+retains the text, original target/generation and draft revision in process memory.
+Subsequent real App invalidations retry only local recovery after storage becomes
+readable. New typing or slot replacement invalidates that recovery; it never
+sends, enqueues or restores the text into a replacement channel. Failed reads are
+reported rather than silently interpreted as an absent channel.
+
+Committed text is not restored or created again; its exact row is retained.
+Recovered committed creation failures explicitly publish the exact saved message
+to the mounted timeline, rather than only publishing an unknown-ID status change.
+Direct recovery recomputes contact list metadata from persisted messages so a
+first-message failure remains reachable from Chats. Transient local queue-read
+or status-write failures retain the committed ID and original slot identity.
+Real App invalidations retry only local status recovery and row publication,
+serialized against the initial attempt; they never create or enqueue a message.
+Newer live whitespace/newline editor content is preserved even though the
+shared DraftStore deliberately does not persist whitespace-only drafts.
+An uncertain creation is not treated as rollback: the original receipt and
+allocated DTO/text are retained in the process adapter, the existing localized
+failure is surfaced, and no automatic creation, enqueue or wire retry occurs.
+Real App invalidations (including normal reconnect/service changes) now read
+these receipts: WRITING waits; a settled unknown outcome is read by its exact
+initiating radio/UUID. Matching immutable creation identity/content enters local
+committed-row recovery; later read/seen/status fields need not equal the original
+allocation snapshot and are preserved.
+Proven absence permits only version/slot-fenced draft restoration. Failed or
+mismatched reads remain retained and explicitly reported, never interpreted as
+absence. Reconciliation uses persistence, not a replacement session's send graph.
+Mounted cases cover an existing row, exact absence, newer drafts and same-radio
+session replacement after an initially unreadable reconciliation, including a
+row marked read before storage recovery.
+This is process-memory custody, not a durable operation journal or an automatic
+storage-repair UI. An unreadable database remains a storage failure, not success.
+
+Creation and queue access are pinned to the initiating session; a replacement
+session for the same radio cannot adopt this accepted send. Channel node-name
+metadata is read from the matching current device at enqueue, retaining the
+source's after-creation timing rather than freezing it at Send.
+The existing AppState channel-slot generation fences old-slot draft recovery.
+Channel creation and App queue entry also check the original slot ID/secret and
+generation; held creation followed by same-session replacement cannot enqueue
+old text. This App guard is not an atomic queue/firmware slot lease: a slot change
+after queue entry while service-owned persistence/drain is suspended still needs
+coordination with the WP-405/channel and queue producer. That lower-level review
+finding is explicitly unresolved, not claimed fixed by a preflight check.
+The same prerequisite includes a held pre-commit save that succeeds after slot
+replacement: its old text must not become an ordinary retryable row under the
+replacement key. The captured App send port now checks before its actual
+ChannelMessageReceived/list publication, not only after that event. Immediate
+committed recovery checks the captured slot before failing or publishing a row.
+An invalidated committed row stays PENDING, with its exact ID/text and original
+target/generation retained; same-process explicit Retry rejects that known
+invalidated intent instead of making it ordinarily retryable.
+
+The additional mounted schedule holds save before commit, replaces the slot
+through the actual ChannelService, lets the save succeed, and invokes the real
+timeline Retry adapter. A positive control retries a committed failure under the
+unchanged original occupant. These consumer regressions do not prove persistent
+origin or wire authority: raw index-only timeline/history queries can still find
+the row independently of publication, and process-local custody does not survive
+restart. Durable origin-aware query/retry disposition and the actual queue/slot
+fence remain required; no App preflight or green aggregate claims them.
+The restart regression extends that held successful-save schedule with a named
+on-disk Room database. It closes the original App container, store, database and
+store owner, reopens the same database with fresh owners, and reconnects a new
+process container whose firmware reports replacement B. Exact-key recovery must
+preserve the old DTO/text. The actual App Send Again adapter must then return the
+existing typed refusal without a message wire call or pending submission. This
+is a required safety assertion, not an expected-failure/skip annotation: the
+current index-only/process-local implementation is expected to expose the known
+restart defect until the producer and consumer integration is implemented.
+No replacement-history filtering, unbound-history presentation or new UI policy
+is selected by this regression. Exact hosted execution remains authoritative.
+On creation cancellation, only bounded local recovery completes noncancellably;
+the original cancellation propagates. An interrupted enqueue is not blindly
+failed because the queue may still own durable acceptance. A generic enqueue
+failure does not mark a row failed when its durable queue row already exists.
+
+Frozen source correspondence remains ChatInputBar / ChatConversationInputBar
+and ChatViewModel+Messages, +Channels and +SendQueues. This is a native ownership
+repair, not a change to original text, UTF-8 limits, queue attempts, ACK semantics,
+wire serialization or source-family accounting.
+
+## Mounted regression candidate
+
+`ComposerNavigationLifetimeTest` mounts production AppChatConversationScreen,
+ChatViewModel, ComposerRoute and the production App composer factory over
+ContainerHarness, real Room and the real session/send-queue graph. Fake firmware
+returns deterministic terminal rejections; no device result is inferred.
+
+The direct/channel matrix covers disposal immediately after acceptance, a gate
+inside saveMessage before Room commit, a gate after actual Room commit but before
+save returns, and gates before/after real durable pending-send insertion.
+It checks exact row identity/text/radio, draft versions, one creation/one queue
+submission, one terminal wire attempt, and no leftover terminal queue row.
+Additional schedules replace the initiating same-radio session, preserve newer
+drafts/explicit clears, restore definitely-unsaved text, throw after committed
+creation, fail reconciliation reads, and throw after durable queue insertion
+before return (then reconnect to drain the one retained operation).
+Two controls retain the former screen-owned holder wiring to demonstrate the
+original pre-commit loss schedule. APIs31/37 are configured; exact-head mounted
+discovery and outcomes are recorded in the PR's authoritative hosted references.
+An additional feature test covers typing then clearing before creation fails.
+Mounted retained-route cases check that committed-before-return failures actually
+appear as retryable rows without reopening. Same-session slot-replacement cases
+check unsaved draft suppression and committed old-text enqueue rejection.
+Unreadable-channel cases exercise failure both before creation and during
+recovery, then restore readability and invalidate the App, checking original-slot
+recovery, newer typing preservation and replacement-slot rejection.
+
+## Coordination and preservation
+
+WP-302 owns #495's distinct stale pending-list-handoff finding:
+projected A must not navigate after notification B becomes authoritative.
+The only AppChatsContent consumer hunk here is private AppChatConversation's
+sender decoration/holder construction at original base lines219-243.
+No ChatsEntry/list effect, openChat, explicit user selection, pending handoff
+acknowledgement or NavigationCoordinator changes. #495 should land first;
+later integration must reconcile these disjoint hunks, not replace its file.
+WP-405 external-route/channel-confirmation changes are outside this hunk.
+
+The earlier untracked TimelineChromeGeometryComposeTest.kt and chrome-geometry.md
+are preserved unchanged and excluded from this candidate. Historical merged
+PR328 evidence remains separate.
+
+## Verification
+
+The initial draft was compiler-unverified and its tests unexecuted.
+Historical head `5fb559fc5` subsequently passed automatic hosted run41589333033,
+including the mounted consumer matrix and the unchanged original failed-send
+two-refresh assertion. That result predates the current-base/producer integration
+and does not verify its new bytes. Exact-candidate results remain in PR530 and
+the hosted logs, not a second retained CI-result bundle.
+
+The coordinator reports a retained shared Gradle execution owner without safe
+cleanup proof. No competing Android/Gradle/JVM launch, lock/cache cleanup,
+runtime deployment, emulator or hardware operation is performed.
+Only documented source-light provenance, ownership and whitespace checks run
+locally. Exact-candidate hosted CI must establish compilation, discovery,
+method outcomes and existing-regression preservation for each new candidate.
+No hosted dispatch, rerun or budget change is requested.

@@ -431,6 +431,51 @@ class DefaultFloodScopeStateHolderTest {
     }
 
     @Test
+    fun `scope stays busy through acknowledgment and rejects an overlapping selection`() {
+        val release = CompletableDeferred<Unit>()
+        val calls = mutableListOf<String?>()
+        val held = object : SettingsRadioPort by service {
+            override suspend fun setDefaultFloodScopeVerified(name: String?): String? {
+                calls += name
+                release.await()
+                return name
+            }
+        }
+        val bound = DefaultFloodScopeStateHolder(scheduler.environment(), connection, { held }, discovery, store)
+        bound.start(); scheduler.runCurrent()
+        bound.select("zone 2")
+        scheduler.runCurrent()
+        assertTrue(bound.state.value.isApplying)
+        bound.select(null)
+        scheduler.runCurrent()
+        assertEquals(listOf("zone 2"), calls)
+        release.complete(Unit)
+        scheduler.runCurrent()
+        assertFalse(bound.state.value.isApplying)
+        assertNull(bound.state.value.errorMessage)
+        bound.stop()
+    }
+
+    @Test
+    fun `scope retry keeps the original service instead of acquiring a successor`() {
+        val successor = FakeSettingsPort()
+        var current = service
+        val bound = DefaultFloodScopeStateHolder(scheduler.environment(), connection, { current }, discovery, store)
+        bound.start(); scheduler.runCurrent()
+        service.failNext("setDefaultFloodScopeVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+        bound.select("Alpha")
+        scheduler.runCurrent()
+        assertTrue(bound.retryAlertState.value.isPresented)
+        current = successor
+        bound.retry.retry()
+        scheduler.runCurrent()
+        assertEquals(2, service.calls.size)
+        assertTrue(successor.calls.isEmpty())
+        assertFalse(bound.state.value.isApplying)
+        bound.stop()
+    }
+
+    @Test
     fun `discovery adds new regions and reports each empty outcome`() {
         started()
         discovery.outcome = RegionDiscoveryOutcome.Completed(listOf("North", "South"), allRepeatersTableFull = false)

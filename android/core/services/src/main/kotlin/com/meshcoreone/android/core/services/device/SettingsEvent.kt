@@ -16,5 +16,8 @@ sealed interface SettingsEvent {
         val persistence: CompletableDeferred<Unit>? = null,
     ) : SettingsEvent
     data class AllowedRepeatFreqUpdated(val ranges: SnapshotList<FrequencyRange>) : SettingsEvent
-    data class DefaultFloodScopeUpdated(val name: String?) : SettingsEvent
+    data class DefaultFloodScopeUpdated(
+        val name: String?,
+        val persistence: CompletableDeferred<Unit>? = null,
+    ) : SettingsEvent
 }

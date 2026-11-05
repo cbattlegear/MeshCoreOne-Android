@@ -37,6 +37,8 @@ class SettingsService(
 ) {
     private val operationLock = Mutex()
     private val eventLock = Any()
+    private val defaultScopeQueueLock = Any()
+    private var defaultScopeTail = CompletableDeferred(Unit)
     private var subscription: Subscription? = null
     private var eventsFinished = false
     private var pathHashRevision = 0L
@@ -57,7 +59,11 @@ class SettingsService(
             try {
                 for (event in channel) {
                     if (!context.isCurrent) break
-                    val persistence = (event.event as? SettingsEvent.PathHashModeUpdated)?.persistence
+                    val persistence = when (val update = event.event) {
+                        is SettingsEvent.PathHashModeUpdated -> update.persistence
+                        is SettingsEvent.DefaultFloodScopeUpdated -> update.persistence
+                        else -> null
+                    }
                     if (persistence != null && synchronized(eventLock) {
                             subscription !== this@Subscription || persistence.isCancelled
                         }) continue
@@ -112,10 +118,23 @@ class SettingsService(
         previous?.finishClose(pending)
     }
 
-    private fun publish(event: SettingsEvent) {
+    private fun publish(
+        event: SettingsEvent,
+        completion: CompletableDeferred<Unit>? = null,
+        owner: Subscription? = null,
+    ) {
         context.requireCurrent()
         synchronized(eventLock) {
-            subscription?.channel?.trySend(SessionEvent(context.token, event))?.getOrThrow()
+            if (completion == null) {
+                subscription?.channel?.trySend(SessionEvent(context.token, event))?.getOrThrow()
+            } else {
+                if (eventsFinished || subscription !== owner) {
+                    throw SettingsServiceException(SettingsServiceError.NotConnected)
+                }
+                val target = checkNotNull(owner)
+                target.pendingPersistence.add(completion)
+                target.channel.trySend(SessionEvent(context.token, event)).getOrThrow()
+            }
         }
     }
 
@@ -222,22 +241,27 @@ class SettingsService(
 
     /** Normal Settings awaits the event consumer's durable write, outside the radio-operation lock. */
     suspend fun setPathHashModePersisted(mode: UByte): UByte = context.operation {
+        val revision = acknowledged { completion, owner ->
+            writePathHashAndVerify(mode, completion, owner)
+            synchronized(eventLock) { pathHashRevision }
+        }
+        synchronized(eventLock) {
+            persistedPathHashRevision = maxOf(persistedPathHashRevision, revision)
+        }
+        mode
+    }
+
+    private suspend fun <T> acknowledged(action: suspend (CompletableDeferred<Unit>, Subscription) -> T): T {
         val completion = CompletableDeferred<Unit>()
         val owner = synchronized(eventLock) {
             subscription?.takeUnless { eventsFinished }
                 ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
         }
         try {
-            val revision = operation {
-                writePathHashAndVerify(mode, completion, owner)
-                synchronized(eventLock) { pathHashRevision }
-            }
+            val result = operation { action(completion, owner) }
             completion.await()
             context.requireCurrent()
-            synchronized(eventLock) {
-                persistedPathHashRevision = maxOf(persistedPathHashRevision, revision)
-            }
-            mode
+            return result
         } finally {
             synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
             completion.cancel()
@@ -253,40 +277,87 @@ class SettingsService(
         configuration { setPathHashMode(mode) }
         val actual = configuration { queryDevice() }.pathHashMode
         if (actual != mode) verification("pathHashMode=$mode", "pathHashMode=$actual")
-        if (completion == null) {
-            publish(SettingsEvent.PathHashModeUpdated(mode))
-        } else {
-            context.requireCurrent()
-            synchronized(eventLock) {
-                if (eventsFinished || subscription !== owner) {
-                    throw SettingsServiceException(SettingsServiceError.NotConnected)
-                }
-                val target = checkNotNull(owner)
-                target.pendingPersistence.add(completion)
-                target.channel.trySend(SessionEvent(context.token, SettingsEvent.PathHashModeUpdated(mode, completion))).getOrThrow()
-            }
-        }
+        publish(SettingsEvent.PathHashModeUpdated(mode, completion), completion, owner)
         return mode
     }
 
     suspend fun getDefaultFloodScope(): String? = operation { readDefaultFloodScope() }
 
-    private suspend fun readDefaultFloodScope(): String? {
+    private suspend fun readDefaultFloodScope(publishUpdate: Boolean = true): String? {
         val actual = configuration { getDefaultFloodScope() }?.name
-        publish(SettingsEvent.DefaultFloodScopeUpdated(actual))
+        if (publishUpdate) publish(SettingsEvent.DefaultFloodScopeUpdated(actual))
         return actual
     }
 
     suspend fun setDefaultFloodScopeVerified(name: String?): String? = operation {
-        val expected = name?.takeIf { it.isNotEmpty() }?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
+        writeDefaultFloodScopeAndVerify(name)
+    }
+
+    suspend fun setDefaultFloodScopePersisted(name: String?, currentDevice: () -> DeviceDTO?): String? = defaultScopeOperation {
+        val device = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+        if (!name.isNullOrEmpty() && name !in device.knownRegions) {
+            verification("knownRegion=$name", "knownRegions=${device.knownRegions.joinToString()}")
+        }
+        acknowledged { completion, owner -> writeDefaultFloodScopeAndVerify(name, completion, owner) }
+    }
+
+    /** Queue before sampling live/radio state; never enter the editor until the radio clear is acknowledged. */
+    suspend fun removeKnownRegionPersisted(
+        region: String,
+        currentDevice: () -> DeviceDTO?,
+        remove: suspend () -> Unit,
+    ) = defaultScopeOperation {
+        val device = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+        if (device.supportsDefaultFloodScope) {
+            val actual = operation { readDefaultFloodScope(publishUpdate = false) }
+            val radioRegion = defaultFloodScopeName(region)
+            if ((radioRegion != null && (actual == radioRegion || device.defaultFloodScopeName == radioRegion)) ||
+                device.defaultFloodScopeName == region
+            ) {
+                acknowledged { completion, owner -> writeDefaultFloodScopeAndVerify(null, completion, owner) }
+            }
+        }
+        context.requireCurrent()
+        remove()
+        context.requireCurrent()
+    }
+
+    private suspend fun <T> defaultScopeOperation(action: suspend () -> T): T = context.operation {
+        val finished = CompletableDeferred<Unit>()
+        val previous = synchronized(defaultScopeQueueLock) {
+            defaultScopeTail.also { defaultScopeTail = finished }
+        }
+        var started = false
+        try {
+            previous.await()
+            started = true
+            context.requireCurrent()
+            action()
+        } finally {
+            // A cancelled queued caller must not let its successor bypass the still-running predecessor.
+            if (started || previous.isCompleted) finished.complete(Unit)
+            else previous.invokeOnCompletion { finished.complete(Unit) }
+        }
+    }
+
+    private suspend fun writeDefaultFloodScopeAndVerify(
+        name: String?,
+        completion: CompletableDeferred<Unit>? = null,
+        owner: Subscription? = null,
+    ): String? {
+        val expected = defaultFloodScopeName(name)
         configuration {
             if (expected == null) setDefaultFloodScope("", FloodScope.Disabled)
             else setDefaultFloodScope(expected, FloodScope.Region(expected))
         }
-        val actual = readDefaultFloodScope()
+        val actual = readDefaultFloodScope(publishUpdate = completion == null)
         if (actual != expected) verification(expected ?: "(cleared)", actual ?: "(cleared)")
-        actual
+        if (completion != null) publish(SettingsEvent.DefaultFloodScopeUpdated(actual, completion), completion, owner)
+        return actual
     }
+
+    private fun defaultFloodScopeName(name: String?): String? =
+        name?.takeIf { it.isNotEmpty() }?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
 
     suspend fun getStatsCore(): CoreStats = operation { configuration { getStatsCore() } }
     suspend fun getStatsRadio(): RadioStats = operation { configuration { getStatsRadio() } }

@@ -13,6 +13,8 @@ import com.meshcoreone.android.app.container.AppSettingsFeature
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.state.AppSession
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.datastore.KeyGenerationService
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -35,11 +37,20 @@ internal suspend fun removeSettingsKnownRegion(container: AppContainer, session:
         }
     }
     requireCurrent()
-    if (container.appState.connectedDevice?.defaultFloodScopeName == region) {
-        session.settingsService.setDefaultFloodScopeVerified(null)
-        requireCurrent()
+    try {
+        session.settingsService.removeKnownRegionPersisted(
+            region,
+            currentDevice = { requireCurrent(); container.appState.connectedDevice },
+        ) {
+            requireCurrent()
+            if (!container.deviceEditor.persistKnownRegionRemoval(region, session.token)) throw SettingsNotConnectedException()
+        }
+    } catch (failure: SettingsServiceException) {
+        if (failure.error == SettingsServiceError.NotConnected) {
+            throw SettingsNotConnectedException().also { it.initCause(failure) }
+        }
+        throw failure
     }
-    if (!container.deviceEditor.persistKnownRegionRemoval(region, session.token)) throw SettingsNotConnectedException()
 }
 
 internal suspend fun addSettingsKnownRegion(container: AppContainer, session: AppSession, region: String) {

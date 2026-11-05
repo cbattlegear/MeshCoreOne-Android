@@ -562,7 +562,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                             }
                         }
                         is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges, wrapped.token)
-                        is SettingsEvent.DefaultFloodScopeUpdated -> persistSessionDeviceEdit("default scope") {
+                        is SettingsEvent.DefaultFloodScopeUpdated -> persistSessionDeviceEdit("default scope", event.persistence) {
                             connection.updateDefaultFloodScopeName(event.name, wrapped.token)
                         }
                     }

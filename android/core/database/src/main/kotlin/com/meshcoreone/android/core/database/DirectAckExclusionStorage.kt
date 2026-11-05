@@ -47,6 +47,29 @@ private const val GENERIC_ACCEPTANCE_FACTS = """
     WHERE a.argument BETWEEN 0 AND 4294967295 AND a.maximum = 1 AND a.pendingId IS NULL
 """
 
+private const val FAILURE_TARGET_ACTUALS = """
+    SELECT e.claimId,e.actualCode FROM direct_ack_emissions e
+    JOIN direct_ack_claims old ON old.radioId = e.radioId AND old.requestId = e.claimId
+    JOIN direct_ack_claims target ON target.radioId = old.radioId
+      AND target.messageId = old.messageId AND target.incarnation = old.incarnation
+    WHERE target.radioId = :radio AND target.requestId = :claim AND e.state = 'ACCEPTED'
+      AND e.actualCode BETWEEN 0 AND 4294967295 AND e.predictedCode BETWEEN 0 AND 4294967295
+      AND e.resolutionRequestId IS NOT NULL
+    UNION
+    SELECT w.claimId,w.acceptedCode FROM direct_ack_wires w
+    JOIN direct_ack_claims old ON old.radioId = w.radioId AND old.requestId = w.claimId
+    JOIN direct_ack_claims target ON target.radioId = old.radioId
+      AND target.messageId = old.messageId AND target.incarnation = old.incarnation
+    WHERE target.radioId = :radio AND target.requestId = :claim
+      AND w.acceptedCode BETWEEN 0 AND 4294967295
+    UNION
+    SELECT g.claimId,g.actualCode FROM ($GENERIC_ACCEPTANCE_FACTS) g
+    JOIN direct_ack_claims old ON old.radioId = g.radioId AND old.requestId = g.claimId
+    JOIN direct_ack_claims target ON target.radioId = old.radioId
+      AND target.messageId = old.messageId AND target.incarnation = old.incarnation
+    WHERE target.radioId = :radio AND target.requestId = :claim
+"""
+
 private const val TRACKED_ACCEPTANCE_FACTS = """
     SELECT w.radioId,w.claimId,w.requestId,w.predictedCode,w.acceptedCode AS actualCode
     FROM direct_ack_wires w WHERE w.acceptedCode IS NOT NULL AND ($COMPLETE_TRACKED_WIRE_PROVENANCE)
@@ -119,10 +142,89 @@ data class DirectAckRadioFailureRow(
     val otherLegacy: Boolean,
     val otherKnownCode: Boolean,
     val saturated: Boolean,
+    val sameIncarnationOtherUncertainty: Boolean,
+    val sameIncarnationOtherAccepted: Boolean,
+)
+
+data class DirectMessageConfirmationRow(
+    val targetUnresolved: Boolean,
+    val targetConflict: Boolean,
+    val targetLegacy: Boolean,
+    val otherUnresolved: Boolean,
+    val otherConflict: Boolean,
+    val otherLegacy: Boolean,
+    val otherKnownCode: Boolean,
+    val saturated: Boolean,
 )
 
 @Dao
 interface DirectAckExclusionDao {
+    @Query("""
+        SELECT EXISTS(SELECT 1 FROM direct_ack_wires WHERE radioId = :radio
+            AND (predictedCode NOT BETWEEN 0 AND 4294967295
+                OR (acceptedCode IS NOT NULL AND acceptedCode NOT BETWEEN 0 AND 4294967295)))
+    """)
+    suspend fun malformedRegisteredHistory(radio: UUID): Boolean
+
+    @Query("""
+        WITH target_claims AS (
+            SELECT requestId FROM direct_ack_claims
+            WHERE radioId = :radio AND messageId = :message AND incarnation = :incarnation
+        ), target_codes AS (
+            SELECT e.claimId,e.actualCode FROM direct_ack_emissions e
+            WHERE e.radioId = :radio AND e.claimId IN (SELECT requestId FROM target_claims)
+              AND e.state = 'ACCEPTED' AND e.actualCode BETWEEN 0 AND 4294967295
+              AND e.predictedCode BETWEEN 0 AND 4294967295 AND e.resolutionRequestId IS NOT NULL
+            UNION
+            SELECT w.claimId,w.acceptedCode FROM direct_ack_wires w
+            WHERE w.radioId = :radio AND w.claimId IN (SELECT requestId FROM target_claims)
+              AND w.acceptedCode BETWEEN 0 AND 4294967295
+            UNION
+            SELECT g.claimId,g.actualCode FROM ($GENERIC_ACCEPTANCE_FACTS) g
+            WHERE g.radioId = :radio AND g.claimId IN (SELECT requestId FROM target_claims)
+        )
+        SELECT
+            EXISTS(SELECT 1 FROM direct_ack_emissions
+                WHERE radioId = :radio AND claimId IN (SELECT requestId FROM target_claims)
+                  AND state = 'MAY_HAVE_WRITTEN') AS targetUnresolved,
+            (EXISTS(SELECT 1 FROM direct_ack_emissions
+                WHERE radioId = :radio AND claimId IN (SELECT requestId FROM target_claims)
+                  AND state IN ('CONFLICT','CONFLICT_UNSENT'))
+             OR EXISTS(SELECT 1 FROM ($INCONSISTENT_ACCEPTED_WIRES)
+                WHERE radioId = :radio AND claimId IN (SELECT requestId FROM target_claims))) AS targetConflict,
+            EXISTS(SELECT 1 FROM direct_ack_wires w
+                WHERE w.radioId = :radio AND w.claimId IN (SELECT requestId FROM target_claims)
+                  AND NOT ($COMPLETE_TRACKED_WIRE_PROVENANCE)) AS targetLegacy,
+            EXISTS(SELECT 1 FROM direct_ack_emissions e
+                WHERE e.radioId = :radio AND e.state = 'MAY_HAVE_WRITTEN'
+                  AND (NOT EXISTS(SELECT 1 FROM target_claims)
+                    OR EXISTS(SELECT 1 FROM target_claims t WHERE t.requestId != e.claimId))) AS otherUnresolved,
+            (EXISTS(SELECT 1 FROM direct_ack_emissions e
+                WHERE e.radioId = :radio AND e.state IN ('CONFLICT','CONFLICT_UNSENT')
+                  AND (NOT EXISTS(SELECT 1 FROM target_claims)
+                    OR EXISTS(SELECT 1 FROM target_claims t WHERE t.requestId != e.claimId)))
+             OR EXISTS(SELECT 1 FROM ($INCONSISTENT_ACCEPTED_WIRES) f
+                WHERE f.radioId = :radio
+                  AND (NOT EXISTS(SELECT 1 FROM target_claims)
+                    OR EXISTS(SELECT 1 FROM target_claims t WHERE t.requestId != f.claimId)))) AS otherConflict,
+            EXISTS(SELECT 1 FROM direct_ack_wires w
+                WHERE w.radioId = :radio AND NOT ($COMPLETE_TRACKED_WIRE_PROVENANCE)
+                  AND (NOT EXISTS(SELECT 1 FROM target_claims)
+                    OR EXISTS(SELECT 1 FROM target_claims t WHERE t.requestId != w.claimId))) AS otherLegacy,
+            (EXISTS(SELECT 1 FROM target_codes t JOIN direct_ack_emissions e
+                ON e.radioId = :radio AND e.claimId != t.claimId AND e.state != 'DEFINITELY_UNSENT'
+                  AND (e.predictedCode = t.actualCode OR e.actualCode = t.actualCode))
+             OR EXISTS(SELECT 1 FROM target_codes t JOIN direct_ack_wires w
+                ON w.radioId = :radio AND w.claimId != t.claimId
+                  AND (w.acceptedCode IS NOT NULL OR NOT ($COMPLETE_TRACKED_WIRE_PROVENANCE))
+                  AND (w.predictedCode = t.actualCode OR w.acceptedCode = t.actualCode))
+             OR EXISTS(SELECT 1 FROM target_codes t JOIN ($GENERIC_ACCEPTANCE_FACTS) g
+                ON g.radioId = :radio AND g.claimId != t.claimId AND g.actualCode = t.actualCode)) AS otherKnownCode,
+            EXISTS(SELECT 1 FROM direct_ack_radio_exclusions
+                WHERE radioId = :radio AND saturated != 0) AS saturated
+    """)
+    suspend fun messageConfirmationEvidence(radio: UUID, message: UUID, incarnation: String): DirectMessageConfirmationRow
+
     @Query("""
         SELECT
             EXISTS(SELECT 1 FROM direct_ack_emissions
@@ -152,18 +254,37 @@ interface DirectAckExclusionDao {
             EXISTS(SELECT 1 FROM direct_ack_wires w
                 WHERE w.radioId = :radio AND w.claimId != :claim
                   AND NOT ($COMPLETE_TRACKED_WIRE_PROVENANCE)) AS otherLegacy,
-            (EXISTS(SELECT 1 FROM direct_ack_emissions
-                WHERE radioId = :radio AND claimId != :claim AND state != 'DEFINITELY_UNSENT'
-                  AND (predictedCode IN ($ACCEPTED_TARGET_CODES) OR actualCode IN ($ACCEPTED_TARGET_CODES)))
-             OR EXISTS(SELECT 1 FROM direct_ack_wires w
-                WHERE w.radioId = :radio AND w.claimId != :claim
+            (EXISTS(SELECT 1 FROM ($FAILURE_TARGET_ACTUALS) t JOIN direct_ack_emissions e
+                ON e.radioId = :radio AND e.claimId != :claim AND e.claimId != t.claimId
+                  AND e.state != 'DEFINITELY_UNSENT'
+                  AND (e.predictedCode = t.actualCode OR e.actualCode = t.actualCode))
+             OR EXISTS(SELECT 1 FROM ($FAILURE_TARGET_ACTUALS) t JOIN direct_ack_wires w
+                ON w.radioId = :radio AND w.claimId != :claim AND w.claimId != t.claimId
                   AND (w.acceptedCode IS NOT NULL OR NOT ($COMPLETE_TRACKED_WIRE_PROVENANCE))
-                  AND (w.predictedCode IN ($ACCEPTED_TARGET_CODES) OR w.acceptedCode IN ($ACCEPTED_TARGET_CODES)))
-             OR EXISTS(SELECT 1 FROM ($GENERIC_ACCEPTANCE_FACTS)
-                WHERE radioId = :radio AND claimId != :claim AND actualCode IN ($ACCEPTED_TARGET_CODES)))
+                  AND (w.predictedCode = t.actualCode OR w.acceptedCode = t.actualCode))
+             OR EXISTS(SELECT 1 FROM ($FAILURE_TARGET_ACTUALS) t JOIN ($GENERIC_ACCEPTANCE_FACTS) g
+                ON g.radioId = :radio AND g.claimId != :claim AND g.claimId != t.claimId AND g.actualCode = t.actualCode))
                 AS otherKnownCode,
             EXISTS(SELECT 1 FROM direct_ack_radio_exclusions
-                WHERE radioId = :radio AND saturated != 0) AS saturated
+                WHERE radioId = :radio AND saturated != 0) AS saturated,
+            EXISTS(SELECT 1 FROM direct_ack_claims old
+                JOIN direct_ack_claims target
+                  ON target.radioId = old.radioId AND target.messageId = old.messageId
+                    AND target.incarnation = old.incarnation AND target.requestId != old.requestId
+                WHERE target.radioId = :radio AND target.requestId = :claim AND (
+                    EXISTS(SELECT 1 FROM direct_ack_emissions
+                        WHERE radioId = old.radioId AND claimId = old.requestId
+                          AND (state NOT IN ('ACCEPTED','DEFINITELY_UNSENT') OR ($MALFORMED_PHYSICAL_EVIDENCE)))
+                    OR EXISTS(SELECT 1 FROM direct_ack_wires w
+                        WHERE w.radioId = old.radioId AND w.claimId = old.requestId
+                          AND NOT ($COMPLETE_TRACKED_WIRE_PROVENANCE))
+                    OR EXISTS(SELECT 1 FROM ($INCONSISTENT_ACCEPTED_WIRES) f
+                        WHERE f.radioId = old.radioId AND f.claimId = old.requestId)
+                    OR EXISTS(SELECT 1 FROM ($MALFORMED_ACCEPTANCE_HISTORY) h
+                        WHERE h.radioId = old.radioId AND h.claimId = old.requestId)
+                )) AS sameIncarnationOtherUncertainty,
+            EXISTS(SELECT 1 FROM ($FAILURE_TARGET_ACTUALS)
+                WHERE claimId != :claim) AS sameIncarnationOtherAccepted
     """)
     suspend fun failureEvidence(radio: UUID, claim: UUID): DirectAckRadioFailureRow
 

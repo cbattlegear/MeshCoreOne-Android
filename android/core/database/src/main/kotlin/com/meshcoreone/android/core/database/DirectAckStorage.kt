@@ -272,8 +272,14 @@ object DirectAckStorage {
     }
 
     val callback: RoomDatabase.Callback = object : RoomDatabase.Callback() {
-        override fun onCreate(db: SupportSQLiteDatabase) { install(db) }
-        override fun onOpen(db: SupportSQLiteDatabase) { verify(db) }
+        override fun onCreate(db: SupportSQLiteDatabase) {
+            install(db)
+            DirectAckPrehistoryStorage.initialize(db)
+        }
+        override fun onOpen(db: SupportSQLiteDatabase) {
+            verify(db)
+            DirectAckPrehistoryStorage.verify(db)
+        }
     }
 
     val migration1To2: Migration = object : Migration(1, 2) {

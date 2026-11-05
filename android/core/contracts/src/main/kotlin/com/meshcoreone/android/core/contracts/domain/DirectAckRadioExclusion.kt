@@ -61,12 +61,19 @@ object DirectAckRadioEvidenceLimits {
  * Bounded diagnostic evidence only. COMPLETE means the snapshot contains every retained physical
  * emission and genuine legacy markerless row; tracked wires with no physical marker are omitted.
  * TRUNCATED means diagnostic rows were omitted; SATURATED means a durable radio-wide wildcard was
- * committed. Neither a public snapshot nor an empty snapshot authorizes a delivery mutation.
+ * committed. preauthorityHistoryUnknown is independently read from durable DB-wide metadata in
+ * the same transaction, including for radios with no surviving rows. COMPLETE covers retained
+ * journal rows only, not unrecorded physical prehistory. Neither a public snapshot nor an empty
+ * snapshot authorizes a delivery mutation. Callers must supply the actual flag; no default exists.
+ * Unproved physical history before current app-owned authority includes external sends on a fresh
+ * installation as well as pre-journal upgrades. Fresh local DB creation is not clean-radio proof.
+ * A false flag is not an external-radio clean-history certificate; no reset/clearing API is supplied.
  */
 data class DirectAckRadioEvidenceSnapshot(
     val radioId: RadioId,
     val wires: SnapshotList<DirectAckRadioWireEvidence>,
     val coverage: DirectAckRadioEvidenceCoverage,
+    val preauthorityHistoryUnknown: Boolean,
 )
 
 data class DirectAckEmissionReceipt(
@@ -148,6 +155,7 @@ enum class DirectAckRadioNonsettlingReason {
     /** Diagnostic-snapshot classification only; SQL settlement checks the complete journal. */
     RADIO_HISTORY_INCOMPLETE,
     RADIO_HISTORY_SATURATED,
+    PREAUTHORITY_HISTORY_UNKNOWN,
 }
 
 /**
@@ -161,6 +169,9 @@ object DirectAckRadioEvidenceAssessment {
         history: DirectAckRadioEvidenceSnapshot,
     ): SnapshotSet<DirectAckRadioNonsettlingReason> {
         val reasons = linkedSetOf<DirectAckRadioNonsettlingReason>()
+        if (history.preauthorityHistoryUnknown) {
+            reasons.add(DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN)
+        }
         val radioWires = history.wires.filter { it.radioId == history.radioId }
         val targetWires = radioWires.filter { it.claimRequestId == targetClaimRequestId }
 
@@ -297,6 +308,11 @@ interface DirectAckRadioExclusionAuthority {
      * untracked operation, or trying to upgrade an existing legacy wire is Rejected(CONFLICT).
      * This method has no begin-then-tag gap. Generic DirectAckAuthority begin remains the legacy
      * untracked path.
+     * New wire creation also atomically records independent immutable acceptance-history-required
+     * birth provenance. It certifies retention from this wire's creation, not physical no-write.
+     * Existing wires must never acquire that provenance by replay, backfill, generic acceptance or
+     * a later physical resolution. Preserve original operation replay/denial semantics without
+     * retroactively describing an older emission-tracked wire as acceptance-history-complete.
      */
     suspend fun beginDirectAckAttemptRequiringEmissionTracking(
         intent: DirectAckIntent,
@@ -309,6 +325,8 @@ interface DirectAckRadioExclusionAuthority {
      * Exact tracked replay returns AlreadyApplied; collisions and attempts to upgrade a legacy wire,
      * cross a generic untracked operation, or downgrade a tracked attempt return
      * Rejected(CONFLICT). Generic DirectAckAuthority registration remains the legacy untracked path.
+     * New retry-wire creation records the same independent acceptance-history-required birth
+     * provenance as initial tracked creation; existing-wire replay must not add missing provenance.
      */
     suspend fun registerDirectAckDispatchRequiringEmissionTracking(
         attempt: DirectAckAttempt,
@@ -369,6 +387,18 @@ interface DirectAckRadioExclusionAuthority {
         resolution: DirectAckEmissionResolution,
     ): DirectAckEmissionMutationResult
 
+    /**
+     * On an unsaturated radio, bounded diagnostics cannot represent tracked-wire acceptance without
+     * matching valid physical acceptance. Surface existing typed invalid-data/unavailable failure
+     * for that inconsistency, never fabricate a legacy/physical row or report COMPLETE emptiness.
+     * On a sticky saturated radio, CoveredBySaturation legitimately permits an unrecorded physical
+     * invocation followed by generic wire acceptance. Retain SATURATED coverage and actual stored
+     * physical rows; the unmatched wire binding alone must not cause invalid-data failure there,
+     * even alongside earlier UNSENT/MAY/mismatched rows. Structural malformed data still fails.
+     * That exception requires both immutable tracking/acceptance-history birth provenances.
+     * An older emission-tracked wire missing acceptance-history birth provenance remains
+     * unrepresentable here: typed invalid-data/unavailable applies even when the radio is saturated.
+     */
     suspend fun inspectDirectAckRadioEvidence(
         radioId: RadioId,
     ): DirectAckRadioEvidenceObservation
@@ -380,6 +410,19 @@ interface DirectAckRadioExclusionAuthority {
      * that target emission's prediction is retained history, not eligibility. Earlier accepted
      * emissions of the same current claim remain eligible across retries. Full radio-history
      * exclusion and current-grant validation occur in the same transaction as delivery.
+     * Consult durable DB-wide preauthority-history uncertainty in that transaction for every
+     * requested radio, including radios with no surviving rows or deleted/readded identities.
+     * PREAUTHORITY_HISTORY_UNKNOWN blocks new settlement without inventing a wire or saturation.
+     * Preserve genuine committed delivery and exact historical replay precedence.
+     * On an unsaturated radio, a tracked registered-wire accepted code without a valid ACCEPTED row
+     * for that exact wire/code is unresolved cross-table evidence. Target inconsistency yields
+     * TARGET_ACCEPTANCE_UNRESOLVED even if another target wire has a valid accepted emission;
+     * foreign inconsistency yields UNRESOLVED_OTHER_CLAIM_EMISSION. No generic behavior changes.
+     * Sticky saturation instead explains possible unrecorded CoveredBySaturation acceptance;
+     * that missing match alone is not corruption, but saturation still blocks new settlement.
+     * Missing acceptance-history birth provenance is independently unresolved: target maps to
+     * TARGET_ACCEPTANCE_UNRESOLVED and foreign to UNRESOLVED_OTHER_CLAIM_EMISSION, even on a
+     * saturated radio or when current physical acceptance matches. Do not retroactively certify it.
      */
     suspend fun settleDirectAckExcludingRadioHistory(
         attempt: DirectAckAttempt,
@@ -399,6 +442,13 @@ sealed interface DirectAckRadioSettlementResult {
 
 sealed interface DirectAckRadioSettlementReceipt {
     data class Applied(val receipt: DirectAckReceipt) : DirectAckRadioSettlementReceipt
+    /**
+     * Exact historical committed delivery/idempotency, not a certificate that the original
+     * exclusion met today's policy. Older operation records do not encode prehistory or acceptance
+     * coverage qualifications. Preserve actual DELIVERED without upgrading proof or authority.
+     * Replay requires a genuine valid opaque attempt; a new store after reopen cannot reconstruct
+     * that attempt from inspection/DTOs and rejects the old issuer-context handle.
+     */
     data class AlreadyApplied(val receipt: DirectAckReceipt) : DirectAckRadioSettlementReceipt
 }
 
@@ -407,6 +457,7 @@ enum class DirectAckRadioConfirmationWildcardReason {
     CONFLICTING_PHYSICAL_EVIDENCE,
     UNTRACKED_LEGACY_ANCESTRY,
     STICKY_SATURATION,
+    PREAUTHORITY_HISTORY_UNKNOWN,
 }
 
 /**
@@ -446,6 +497,15 @@ interface DirectAckRadioConfirmationEvidenceInspecting {
      * ancestry even with a known accepted code or later markers, and already-persisted sticky
      * saturation must remain distinguishable. Known accepted and definitely-unsent physical rows
      * alone are not wildcards; tracked-but-unmarked registered wires are not physical emissions.
+     * Include PREAUTHORITY_HISTORY_UNKNOWN from durable DB-wide metadata for every requested
+     * radio, even without any radio/message/wire rows. It is not a synthetic legacy emission or
+     * sticky radio saturation and may coexist with all other reasons.
+     * On an unsaturated radio, a tracked wire's accepted binding without a valid physical wire/code
+     * contributes CONFLICTING_PHYSICAL_EVIDENCE; do not omit it as tracked-but-unmarked.
+     * Sticky saturation can legitimately cover an unrecorded invocation and wire acceptance;
+     * retain STICKY_SATURATION, not an automatic conflict solely for its missing physical match.
+     * Missing acceptance-history birth provenance independently contributes
+     * UNTRACKED_LEGACY_ANCESTRY, including on saturated radios and alongside matching physical rows.
      *
      * No sample, diagnostic row cap, synthetic excluded claim, lease/grant, generation filter or
      * TTL may narrow this query. The read never creates/clears evidence or saturation. Absence of
@@ -523,6 +583,7 @@ enum class DirectAckRadioNonfailingReason {
     CONFLICTING_OTHER_CLAIM_EVIDENCE,
     UNTRACKED_OTHER_CLAIM_ANCESTRY,
     RADIO_HISTORY_SATURATED,
+    PREAUTHORITY_HISTORY_UNKNOWN,
 }
 
 sealed interface DirectAckRadioFailureResult {
@@ -555,6 +616,17 @@ sealed interface DirectAckRadioFailureResult {
  * diagnostic rows. Foreign/missing/stale/ineligible authority uses existing DirectAckRejection
  * meanings and must never mutate a replacement row.
  *
+ * Consult durable DB-wide preauthority-history uncertainty in that transaction. Report
+ * PREAUTHORITY_HISTORY_UNKNOWN independently of RADIO_HISTORY_SATURATED; neither absent rows,
+ * an empty claim history nor this attempt's unmarked/all-unsent rows prove that an older message
+ * never emitted. Unknown foreign prehistory cannot have delivered a target only if a genuine,
+ * independent whole-target no-write proof exists; current legacy/imported rows have no such birth
+ * certificate. Do not infer this exception from new local DB/session identity or retrofit proof.
+ * The preauthority marker is durable for every requested radio, including deleted/readded radios.
+ * Unproved external history on fresh installations is UNKNOWN too; new local DB/session identity
+ * cannot certify a clean radio. There is no TTL/reset or invented certificate. Sending remains
+ * permitted under its ordinary admission; new confirmation can remain unavailable indefinitely.
+ *
  * Sticky radio saturation ALWAYS blocks a new failure with RADIO_HISTORY_SATURATED, including
  * tracked attempts with no physical rows or only DefinitelyUnsent rows. CoveredBySaturation can
  * authorize a physical invocation without an emission row/handle; these rows cannot prove that
@@ -566,6 +638,61 @@ sealed interface DirectAckRadioFailureResult {
  * provenance proving no physical invocation, or every target emission DefinitelyUnsent, permits
  * the known-safe no-write failure path regardless of unrelated foreign radio history. A later
  * unsent retry cannot clear an older possible emission; a transport error alone is not proof.
+ * Here no-write covers the WHOLE persisted message incarnation, not just this claim. Include
+ * every earlier claim bound to the exact same radio/message/incarnation, even after lease retirement,
+ * payload erasure or a new claim/generation. Do not equate public keys or identical DTO fields with
+ * incarnation identity. An inherited FAILED status is not a no-write certificate. Prior same-
+ * incarnation MAY, conflict, incomplete birth coverage or inconsistent acceptance defeats the
+ * exception even when the new claim is unmarked or all its represented invocations are UNSENT.
+ * Keep distinct claim identities: report that prior claim's applicable existing OTHER_CLAIM reasons,
+ * not a fabricated current-target emission. Truly unrelated foreign MAY alone does not defeat a
+ * genuine whole-target no-write proof; preauthority uncertainty and saturation remain independent.
+ * A prior same-incarnation valid acceptance also defeats the no-invocation premise and requires
+ * ordinary complete foreign-history assessment. Include its valid physical, current wire and
+ * retained generic accepted actuals in the family's collision assessment with their source claim
+ * identities. Compare each actual against distinct competing claims, excluding the queried current
+ * claim and that actual's own source claim; an old accepted source alone is not its own collision.
+ * Thus old A Accepted(K), new same-incarnation B unmarked/UNSENT, and C MAY or known K cannot bypass
+ * the existing unresolved/collision reasons merely because B has no accepted actual. An accepted A
+ * alone is not a new unconditional blocker or a new reason literal. Deleted/recreated incarnations
+ * are not merged into this family; their retained radio evidence still receives ordinary assessment.
+ * The proof must reconcile registered-wire acceptance with physical ancestry, not inspect only
+ * emission rows. On an unsaturated radio, a tracked wire's retained accepted code requires a valid ACCEPTED
+ * physical row for the same wire and actual code. No marker, only UNSENT/MAY rows, or only
+ * mismatched actuals is contradictory/unresolved ancestry, not an uninvoked or definitely-unsent
+ * target. Classify target/foreign inconsistency with the corresponding conflicting reason.
+ * On a sticky saturated radio, CoveredBySaturation permits an unrecorded invocation and generic
+ * acceptance without a matching physical row. That gap alone, including alongside earlier
+ * UNSENT/MAY/mismatched rows, is expected rather than corruption. Saturation still blocks every
+ * new failure; never use this exception as no-write proof or manufacture a marker/handle.
+ * Generic recordDirectSendAccepted can create such a binding. For tracked wires, retain every
+ * successfully committed generic accepted actual immutably in the same transaction as acceptance.
+ * Strict assessments must reconcile every retained binding, not merely the mutable latest wire
+ * code. A later physical acceptance or generic acceptance cannot erase an earlier unmatched code.
+ * After generic Accepted(999) without a marker followed by physical Accepted(888), the unmatched
+ * 999 still denies the unsaturated no-write/consistency proof. A genuine matching physical 999 can
+ * establish a match for that binding without deleting its history or regranting mutation authority.
+ * Keep generic eligibility, results and public receipt shape unchanged; internal evidence is not
+ * a synthetic wire or delivery receipt. Commit-then-throw replay must not lose committed bindings.
+ * Retain nonpayload binding evidence across product deletion, lease retirement and file reopen;
+ * preserve existing payload erasure. Denied acceptance creates no accepted fact, and exact replay
+ * preserves the original operation's meaning without renewing permission or fabricating history.
+ * Existing committed delivery/exact historical replay precedence and saturation exceptions apply;
+ * an old committed operation is not thereby a certificate of today's stricter exclusion policy.
+ * Strict completeness requires BOTH original emission-tracking provenance and independent
+ * acceptance-history-required provenance established atomically at new tracked-wire birth. An
+ * older tracked wire without the latter remains legacy/unproven even if its latest actual matches
+ * a physical row or its internal generic-acceptance journal is empty. Absence cannot reconstruct
+ * previously overwritten generic codes. Never backfill or upgrade that wire to clean history.
+ * Internal birth markers and acceptance entries are not public bookkeeping or wire receipts;
+ * preserve existing receipt filtering, generic eligibility, original replay and denied semantics.
+ * Missing acceptance-history birth provenance contributes TARGET_UNTRACKED_LEGACY_ANCESTRY or
+ * UNTRACKED_OTHER_CLAIM_ANCESTRY independently of saturation or a matching current physical actual.
+ * The saturation exception explains missing physical rows only for fully covered new wires;
+ * it never certifies historical acceptance coverage for an older wire.
+ * Do not fabricate a marker or legacy ancestry, silently discard the accepted binding, or repair
+ * rows during assessment. Distinct genuine accepted and unsent physical invocations sharing one
+ * logical wire are valid: an unsent retry does not contradict or erase an earlier accepted send.
  *
  * Otherwise, foreign wildcard ancestry/emissions block failure. For
  * accepted target emissions, ANY accepted actual code colliding with any other claim's known

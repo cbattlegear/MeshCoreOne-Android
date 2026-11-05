@@ -12,12 +12,15 @@ import kotlinx.coroutines.flow.flow
 internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     DirectAckAuthority, DirectPendingCompletionAuthority, DirectAckRadioExclusionAuthority,
     DirectAckRadioConfirmationEvidenceInspecting, DirectAckRadioConfirmationEvidenceObserving,
-    DirectAckRadioFailureAuthority {
+    DirectAckRadioFailureAuthority, DirectMessageConfirmationEvidenceInspecting {
     private data class Lease(val issuer: UUID, val token: SessionToken, val request: UUID) : DirectAckLease
     private data class Attempt(val lease: Lease, val request: UUID) : DirectAckAttempt
     private data class Intent(val lease: Lease, val request: UUID) : DirectAckIntent
     private data class PendingCompletion(val lease: Lease, val request: UUID) : DirectPendingCompletion
     private data class Emission(val attempt: Attempt, val wire: UUID, val request: UUID) : DirectAckEmissionHandle
+
+    internal fun channelSendLease(lease: DirectAckLease): ChannelSendLease? =
+        issuedLease(lease)?.let { ChannelSendLease(it.issuer, it.token, it.request) }
 
     private suspend fun <T> transaction(
         operation: String,
@@ -29,6 +32,20 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             throw PersistenceStoreException(PersistenceStoreError.InvalidData, cause)
         }
         block()
+    }
+
+    private suspend fun RepositoryTransaction.preauthorityHistoryUnknown(): Boolean {
+        try {
+            DirectAckPrehistoryStorage.verify(database.openHelper.writableDatabase)
+        } catch (cause: IllegalStateException) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData, cause)
+        }
+        val metadata = database.directAckPrehistory().rows().singleOrNull()
+            ?: invalidData("Missing singleton physical prehistory")
+        if (metadata.singleton != 1L || metadata.state != "UNKNOWN") {
+            invalidData("Malformed physical prehistory")
+        }
+        return metadata.state == "UNKNOWN"
     }
 
     override suspend fun activateDirectAckSession(token: SessionToken, requestId: UUID): DirectAckActivationResult =
@@ -465,6 +482,41 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             }
         }
 
+    override suspend fun inspectDirectMessageConfirmationEvidence(key: EntityKey): DirectMessageConfirmationEvidence =
+        context.read("inspectDirectMessageConfirmationEvidence") {
+            val row = database.messages().byId(key.radioId.value, key.id)
+                ?: return@read DirectMessageConfirmationEvidence.Missing(key)
+            if (row.directionRawValue != MessageDirection.OUTGOING.rawValue || row.channelIndex != null) {
+                return@read DirectMessageConfirmationEvidence.NotEligible(key)
+            }
+            val status = MessageStatus.fromRawValue(row.statusRawValue) ?: invalidData("Unknown direct message status")
+            val identity = database.directAcks().incarnation(key.radioId.value, key.id, "message")
+                ?: invalidData("Missing persisted diagnostic message identity")
+            if (identity.incarnation.length != 64 || identity.incarnation.any {
+                    it !in '0'..'9' && it !in 'a'..'f' && it !in 'A'..'F'
+                } || identity.revision < 0
+            ) invalidData("Malformed persisted diagnostic message identity")
+            val history = database.directAckExclusions()
+            if (history.confirmationEvidence(key.radioId.value).malformedPhysicalEvidence ||
+                history.malformedAcceptanceHistory(key.radioId.value) ||
+                history.malformedRegisteredHistory(key.radioId.value)
+            ) invalidData("Malformed persisted message confirmation evidence")
+            val evidence = history.messageConfirmationEvidence(key.radioId.value, key.id, identity.incarnation)
+            val reasons = linkedSetOf(DirectMessageConfirmationUncertaintyReason.TARGET_PROVENANCE_UNPROVEN)
+            if (evidence.targetUnresolved) reasons += DirectMessageConfirmationUncertaintyReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION
+            if (evidence.targetConflict) reasons += DirectMessageConfirmationUncertaintyReason.TARGET_CONFLICTING_PHYSICAL_EVIDENCE
+            if (evidence.targetLegacy) reasons += DirectMessageConfirmationUncertaintyReason.TARGET_UNTRACKED_LEGACY_ANCESTRY
+            if (evidence.otherUnresolved) reasons += DirectMessageConfirmationUncertaintyReason.UNRESOLVED_OTHER_CLAIM_EMISSION
+            if (evidence.otherConflict) reasons += DirectMessageConfirmationUncertaintyReason.CONFLICTING_OTHER_CLAIM_EVIDENCE
+            if (evidence.otherLegacy) reasons += DirectMessageConfirmationUncertaintyReason.UNTRACKED_OTHER_CLAIM_ANCESTRY
+            if (evidence.otherKnownCode) reasons += DirectMessageConfirmationUncertaintyReason.KNOWN_OTHER_CLAIM_CODE
+            if (evidence.saturated) reasons += DirectMessageConfirmationUncertaintyReason.RADIO_HISTORY_SATURATED
+            if (preauthorityHistoryUnknown()) reasons += DirectMessageConfirmationUncertaintyReason.PREAUTHORITY_HISTORY_UNKNOWN
+            DirectMessageConfirmationEvidence.Present(
+                key, DirectMessageConfirmationIdentity(identity.incarnation, identity.revision), status, reasons.snapshotSet(),
+            )
+        }
+
     override suspend fun inspectDirectAckRadioConfirmationEvidence(radioId: RadioId): DirectAckRadioConfirmationEvidence =
         context.read("inspectDirectAckRadioConfirmationEvidence") {
             val dao = database.directAckExclusions()
@@ -477,6 +529,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             if (row.conflictingPhysicalEvidence) reasons += DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE
             if (row.untrackedLegacyAncestry) reasons += DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY
             if (row.stickySaturation) reasons += DirectAckRadioConfirmationWildcardReason.STICKY_SATURATION
+            if (preauthorityHistoryUnknown()) reasons += DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN
             if (reasons.isEmpty()) DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radioId)
             else DirectAckRadioConfirmationEvidence.PersistedWildcard(radioId, reasons.snapshotSet())
         }
@@ -506,7 +559,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
                         ?: DirectAckRadioWireOutcome.LegacyUnknown,
                 )
             }
-            DirectAckRadioEvidenceObservation.Found(DirectAckRadioEvidenceSnapshot(radioId, evidence.snapshot(), coverage))
+            DirectAckRadioEvidenceObservation.Found(DirectAckRadioEvidenceSnapshot(
+                radioId, evidence.snapshot(), coverage, preauthorityHistoryUnknown(),
+            ))
         }
 
     override suspend fun settleDirectAckExcludingRadioHistory(
@@ -548,6 +603,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             invalidData("Malformed persisted radio emission evidence")
         }
         val reasons = linkedSetOf<DirectAckRadioNonsettlingReason>()
+        if (preauthorityHistoryUnknown()) reasons += DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN
         if (!history.acceptedCurrentWire(radio, claim.requestId, ackCode.toLong()) ||
             history.conflictedClaim(radio, claim.requestId)
         ) {
@@ -643,7 +699,10 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         if (history.targetConflict) reasons += DirectAckRadioNonfailingReason.TARGET_CONFLICTING_PHYSICAL_EVIDENCE
         if (history.targetLegacy) reasons += DirectAckRadioNonfailingReason.TARGET_UNTRACKED_LEGACY_ANCESTRY
         if (history.saturated) reasons += DirectAckRadioNonfailingReason.RADIO_HISTORY_SATURATED
-        if (history.targetAccepted || reasons.isNotEmpty()) {
+        if (preauthorityHistoryUnknown()) reasons += DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN
+        if (history.targetAccepted || history.sameIncarnationOtherUncertainty ||
+            history.sameIncarnationOtherAccepted || reasons.isNotEmpty()
+        ) {
             if (history.otherUnresolved) reasons += DirectAckRadioNonfailingReason.UNRESOLVED_OTHER_CLAIM_EMISSION
             if (history.otherConflict) reasons += DirectAckRadioNonfailingReason.CONFLICTING_OTHER_CLAIM_EVIDENCE
             if (history.otherLegacy) reasons += DirectAckRadioNonfailingReason.UNTRACKED_OTHER_CLAIM_ANCESTRY

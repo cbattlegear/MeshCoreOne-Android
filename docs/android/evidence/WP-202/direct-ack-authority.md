@@ -1,5 +1,102 @@
 # Direct ACK storage authority
 
+## Combined v4 bootstrap and compact diagnostics: unexecuted review candidate
+
+The coordinator assigned v4 as the sole combined successor to genuine v3.
+This candidate builds on frozen acceptance source
+`4f7e747d85fd1a6d4bac29d9977511602b53c189`; it is not behavioral clearance
+of that predecessor. Its independent review identified a same-incarnation
+history defect, repaired here as described below. No exported v1, v2 or v3
+bytes were changed, and no v4 export was invented. The schema-boundary test
+now requires the genuine future KSP v4 export with 30 entities. Its absence
+is a missing verification input, not a passing schema check.
+The first publication precheck stopped before upload because local schema1
+has Windows CRLF bytes (blob `9d9c7425...`), not its immutable LF blob
+`0e6ce770...`. A read-only newline comparison proved its LF content matches
+that exact published v1; schemas2/3 match their pinned blobs byte-for-byte.
+No export was normalized or uploaded, and this source-only diagnosis is not
+Room/KSP/migration execution evidence.
+
+`DirectAckPrehistoryStorage` adds one DB-wide persisted UNKNOWN singleton,
+initialized on fresh creation and in the non-destructive 3-to-4 migration.
+Immutable insert/update/delete guards reject replacement or clearing; reads
+verify exact protection and metadata rather than default missing/corrupt state
+to clean. No clock, radio registry row, empty journal, session identity or
+restore envelope supplies a clean-history certificate. All requested radios,
+including absent/deleted/import-remapped radios, share the persisted uncertainty.
+There is no reset/clearing API. Sending and ordinary generic settlement remain
+unchanged; new strict settlement and every new guarded failure, including
+unmarked/all-unsent targets, independently retain PREAUTHORITY_HISTORY_UNKNOWN.
+Exact historical committed replay and actual DELIVERED precedence are preserved.
+
+The compact optional message inspector is wired through the actual Room store.
+One read transaction binds the actual outgoing DM/status to its literal
+persisted 64-hex incarnation and mutation revision. Constant-size SQL EXISTS
+projections inspect all target claims for that exact incarnation and all different
+claims on the radio, including different contacts and claims for the same
+message. Accepted physical actuals, registered accepted actuals and all retained
+generic actuals participate; target predictions/DTO ACKs are not invented actuals.
+Retired leases and erased payload snapshots do not discard positive ancestry.
+Every Present is TARGET_PROVENANCE_UNPROVEN, independently adding durable UNKNOWN,
+known collisions, legacy, unresolved, conflicting and saturation reasons.
+Missing/ineligible describe real rows, never query failures. Invalid identity,
+registered codes or malformed stored evidence explicitly fails; no mutation or
+handle issuance occurs. A timeline DTO still cannot bind itself by key/equality.
+
+The predecessor's conditional no-write failure path ignored an old MAY on another
+claim for the SAME persisted message incarnation when the new claim had no marker
+or only UNSENT rows. SQL now joins the actual radio/message/incarnation across
+retired claims: old uncertainty opens the existing OTHER_CLAIM classifications.
+Inherited generic FAILED is not a no-write certificate. Valid accepted ancestry
+also opens foreign checks. Whole-incarnation actual-code families carry their
+source claim identity so an ancestor accepted K does not collide with itself, but
+a third claim's MAY or known K cannot be skipped. This is separate from unconditional
+UNKNOWN; no false clean flag was used to demonstrate the retained predicates.
+The existing conditional control for truly unrelated foreign history is retained,
+not reinterpreted as real fresh-install confirmation availability.
+
+Exact WP-201 exclusion contract blob
+`8f0ad1fee0eecae66388b3368b723628b654033d` from
+`1f138b71d061f426a497a93230957940efa6c29c` and compact contract blob
+`c0394fab08955537d1f1f586a8019df5e13b1a92` are imported unchanged.
+The generic direct-authority contract remains exact `8e59fda1...`.
+WP-003 owner 808 supplies the separate channel implementation: canonical channel
+contract `5897785d7a50a5d9b3648357e60a5cbb87348d52`, storage
+`b07ffb41a237abfa2d049c22837888df9c9c193d`, repository
+`45b71761acad7818ac8e728243286e810c92a6d2`, creation digest
+`c380e0e1ee755572d1f687080f29b75a909e8867`, and 16-control test
+`ac811541a2d41061a9c7a2331332c36c5bc5c58a`. These are exact owner bytes,
+not independently authored channel semantics in this lane. Combined registration
+adds its two tables to fresh creation and the sole 3-to-4 migration; restore
+invalidates captures in the existing restore transaction. The precise same-instance
+lease bridge and store delegation are integrated. Generic message SQL and service
+files are unchanged. See the separate channel-owner evidence for its limits.
+
+Twelve new public Room source methods cover empty fresh/unknown-radio observations,
+strict unmarked/UNSENT/accepted denials, same-incarnation old MAY with inherited
+FAILED/new generation, accepted ancestry with third-claim MAY/known code and
+self-source exclusion, identical-DTO delete/recreate without incarnation adoption,
+generic DELIVERED preservation, full retained generic999/physical888 ancestry,
+real file reopen with payload erasure and INVALID_HANDLE rather than reconstructed
+restart authority, covered saturation, malformed evidence/identity/protection,
+and public backup merge/remapping, empty import, commit/failure/cancellation and
+reopen. The eight-method database exclusion source adds genuine v3 migration,
+retains old coverage as unproven, and rejects metadata clearing/replacement.
+The prior v1/fresh migration negatives now explicitly read actual durable UNKNOWN,
+not a conflated synthetic emission/saturation. Migration-chain/version assertions
+are advanced to v4; prior product-row/physical-history assertions remain.
+
+ALL source controls above are UNEXECUTED. The original strict fresh-store
+success/no-wildcard assertions were not mass-weakened, skipped or given fabricated
+clean metadata: they are incompatible with strict UNKNOWN and remain a concrete
+review/test-policy composition blocker, not expected passes. Existing 4f7's
+23 controls also carry no new execution credit. Host-memory/local-execution holds
+continue. No local builds/tests/SQL execution, Git object decompression, CI dispatch,
+PR or merge was performed. Independent source review, actual genuine hosted schema
+generation and exact-candidate hosted validation are still required. No hardware,
+ACK ingress durability, process-death delivery recovery, or full WP acceptance
+is claimed.
+
 ## Immutable acceptance-history successor for source review only
 
 This successor is based on `8a8441b25e832785dcd2719fb3e1750168f9638c`.

@@ -7,6 +7,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [
@@ -20,8 +22,10 @@ import androidx.room.TypeConverters
         DirectPendingCompletionEntity::class,
         DirectAckIntentEntity::class,
         DirectAckEmissionEntity::class, DirectAckRadioExclusionEntity::class,
+        DirectAckPrehistoryEntity::class,
+        ChannelSendAttemptEntity::class, ChannelSendOperationEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -45,13 +49,22 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun blockedSenders(): BlockedChannelSenderDao
     abstract fun directAcks(): DirectAckDao
     abstract fun directAckExclusions(): DirectAckExclusionDao
+    abstract fun directAckPrehistory(): DirectAckPrehistoryDao
+    abstract fun channelSends(): ChannelSendDao
 
     companion object {
-        const val SCHEMA_VERSION = 3
+        const val SCHEMA_VERSION = 4
+        val migration3To4: Migration = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                DirectAckPrehistoryStorage.createForMigration(db)
+                ChannelSendStorage.createTables(db)
+            }
+        }
         fun open(context: Context, name: String = "meshcoreone.db"): MeshCoreDatabase =
             Room.databaseBuilder(context.applicationContext, MeshCoreDatabase::class.java, name)
                 .addMigrations(DirectAckStorage.migration1To2)
                 .addMigrations(DirectAckExclusionStorage.migration2To3)
+                .addMigrations(migration3To4)
                 .addCallback(DirectAckStorage.callback)
                 .build()
     }

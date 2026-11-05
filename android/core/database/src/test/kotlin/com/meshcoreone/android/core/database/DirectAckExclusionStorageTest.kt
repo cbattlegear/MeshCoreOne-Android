@@ -81,6 +81,70 @@ class DirectAckExclusionStorageTest {
         preauthorityHistoryMustRemainUnknown(deleted = false)
     }
 
+    @Test fun genuineV3MigrationRetainsOldEvidenceWithoutManufacturingCoverageAndMakesUnknownImmutableAcrossReopen() = runTest {
+        val name = "ack-v3-strict-history-${UUID.randomUUID()}.db"
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}3.json").readText())
+            .getJSONObject("database")
+        val radio = UUID.randomUUID()
+        val claim = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        val marker = UUID.randomUUID()
+        val issuer = UUID.randomUUID()
+        val resolution = UUID.randomUUID()
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                .callback(object : SupportSQLiteOpenHelper.Callback(3) {
+                    override fun onCreate(old: SupportSQLiteDatabase) {
+                        createExportedSchema(old, schema)
+                        DirectAckStorage.migration1To2.migrate(old)
+                        old.execSQL("INSERT INTO direct_ack_wires VALUES (?,?,?,?,?)",
+                            arrayOf<Any?>(radio.toString().uppercase(), claim.toString().uppercase(),
+                                wire.toString().uppercase(), 123, 999))
+                        old.execSQL("INSERT INTO direct_ack_operations VALUES (?,?,?,?,?,?,?)",
+                            arrayOf<Any?>(radio.toString().uppercase(), claim.toString().uppercase(),
+                                wire.toString().uppercase(), "EMISSION_TRACKING_REQUIRED", 123, 1, null))
+                        old.execSQL("INSERT INTO direct_ack_emissions VALUES (?,?,?,?,?,?,?,?,?)",
+                            arrayOf<Any?>(radio.toString().uppercase(), claim.toString().uppercase(),
+                                wire.toString().uppercase(), issuer.toString().uppercase(), marker.toString().uppercase(),
+                                123, "ACCEPTED", 999, resolution.toString().uppercase()))
+                    }
+
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                        error("The genuine v3 fixture must be newly created")
+                }).build(),
+        )
+        try {
+            try { helper.writableDatabase } finally { helper.close() }
+            repeat(2) {
+                val current = MeshCoreDatabase.open(context, name)
+                try {
+                    assertEquals(4, current.openHelper.readableDatabase.version)
+                    assertEquals(listOf(DirectAckPrehistoryEntity(1, "UNKNOWN")), current.directAckPrehistory().rows())
+                    DirectAckPrehistoryStorage.verify(current.openHelper.readableDatabase)
+                    assertEquals(DirectAckWireEntity(radio, claim, wire, 123, 999),
+                        current.directAcks().wire(radio, claim, wire))
+                    assertEquals(DirectAckEmissionEntity(radio, claim, wire, issuer, marker, 123, "ACCEPTED", 999, resolution),
+                        current.directAckExclusions().emission(radio, claim, wire, marker))
+                    assertEquals(1L, current.directAckExclusions().legacyCount(radio))
+                    assertTrue(current.directAckExclusions().incompleteAcceptanceCoverageHistory(radio))
+                    assertEquals(1, current.directAcks().operations(radio, claim).size)
+                    assertTrue(current.channelSends().operations(radio, claim).isEmpty())
+                    for (sql in listOf(
+                        "UPDATE direct_ack_prehistory SET state='CLEAR'",
+                        "DELETE FROM direct_ack_prehistory",
+                        "INSERT OR REPLACE INTO direct_ack_prehistory VALUES (1,'UNKNOWN')",
+                    )) {
+                        assertFailsWith<android.database.sqlite.SQLiteException> {
+                            current.openHelper.writableDatabase.execSQL(sql)
+                        }
+                        assertEquals(listOf(DirectAckPrehistoryEntity(1, "UNKNOWN")), current.directAckPrehistory().rows())
+                    }
+                } finally { current.close() }
+            }
+        } finally { context.deleteDatabase(name) }
+    }
+
     @Test fun v1DeletedMessageAndAbsentRadioCannotBecomeSafeWhenRadioReturnsAfterUpgradeAndReopen() = runTest {
         preauthorityHistoryMustRemainUnknown(deleted = true)
     }
@@ -107,7 +171,9 @@ class DirectAckExclusionStorageTest {
                     }
                     assertTrue(exclusions.acceptedCurrentWire(radio, current, 999))
                     blockedAfterEachOpen += exclusions.unresolvedCompetitor(radio, current) ||
-                        exclusions.saturated(radio)
+                        exclusions.saturated(radio) || db.directAckPrehistory().rows().single().also {
+                            assertEquals(DirectAckPrehistoryEntity(1, "UNKNOWN"), it)
+                        }.state == "UNKNOWN"
                 } finally { db.close() }
             }
             assertEquals(listOf(true, true), blockedAfterEachOpen,
@@ -156,7 +222,7 @@ class DirectAckExclusionStorageTest {
             repeat(2) { opening ->
                 val db = MeshCoreDatabase.open(context, name)
                 try {
-                    assertEquals(3, db.openHelper.readableDatabase.version)
+                    assertEquals(4, db.openHelper.readableDatabase.version)
                     val exclusions = db.directAckExclusions()
                     assertEquals(0, exclusions.legacyCount(radio).toInt())
                     if (opening == 0) {
@@ -170,7 +236,9 @@ class DirectAckExclusionStorageTest {
                     assertEquals(1, exclusions.count(radio).toInt())
                     assertTrue(exclusions.acceptedCurrentWire(radio, current, 999))
                     blockedAfterEachOpen += exclusions.unresolvedCompetitor(radio, current) ||
-                        exclusions.saturated(radio)
+                        exclusions.saturated(radio) || db.directAckPrehistory().rows().single().also {
+                            assertEquals(DirectAckPrehistoryEntity(1, "UNKNOWN"), it)
+                        }.state == "UNKNOWN"
                 } finally { db.close() }
             }
             assertEquals(listOf(true, true), blockedAfterEachOpen,
@@ -217,10 +285,10 @@ class DirectAckExclusionStorageTest {
             try { helper.writableDatabase } finally { helper.close() }
             repeat(2) {
                 val db = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
-                    .addMigrations(DirectAckExclusionStorage.migration2To3)
+                    .addMigrations(DirectAckExclusionStorage.migration2To3, MeshCoreDatabase.migration3To4)
                     .addCallback(DirectAckStorage.callback).build()
                 try {
-                    assertEquals(3, db.openHelper.readableDatabase.version)
+                    assertEquals(4, db.openHelper.readableDatabase.version)
                     assertEquals(listOf(unknown), db.directAcks().wires(radio, unknownClaim))
                     assertEquals(listOf(known), db.directAcks().wires(radio, knownClaim))
                     val exclusions = db.directAckExclusions()

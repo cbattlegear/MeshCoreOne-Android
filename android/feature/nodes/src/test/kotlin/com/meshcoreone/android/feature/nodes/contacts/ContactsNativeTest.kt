@@ -87,6 +87,83 @@ class ContactsNativeTest {
     }
 
     @Test
+    fun `held same-radio sync success cannot reload through the replacement graph`() = verifySyncReplacement("success")
+
+    @Test
+    fun `held same-radio sync progress cannot overwrite replacement progress`() = verifySyncReplacement("progress")
+
+    @Test
+    fun `held same-radio sync ordinary failure cannot fail or stop the replacement sync`() = verifySyncReplacement("failure")
+
+    private fun verifySyncReplacement(outcome: String) = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val admitted = contact(radioId = radio, name = "Admitted")
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        holder.upsert(admitted)
+        val oldEntered = CompletableDeferred<Unit>()
+        val oldRelease = CompletableDeferred<Unit>()
+        harness.contactService.sync = {
+            harness.contactService.progress.emit(SyncProgress(1, 10))
+            oldEntered.complete(Unit)
+            oldRelease.await()
+            when (outcome) {
+                "failure" -> error("old graph failed")
+                "progress" -> harness.contactService.progress.emit(SyncProgress(99, 100))
+            }
+        }
+        val oldSync = scope.launch { holder.syncContacts(radio) }
+        oldEntered.await()
+        settle()
+        assertEquals(SyncProgress(1, 10), holder.state.value.syncProgress)
+        val replacement = Harness(clock).connect(radio)
+        val newEntered = CompletableDeferred<Unit>()
+        val newRelease = CompletableDeferred<Unit>()
+        var newReads = 0
+        replacement.store.fetchContactsGate = { newReads++ }
+        replacement.contactService.sync = {
+            replacement.contactService.progress.emit(SyncProgress(2, 20))
+            newEntered.complete(Unit)
+            newRelease.await()
+        }
+        harness.session.contacts = replacement.contactService
+        harness.session.adverts = replacement.adverts
+        harness.session.device = replacement.session.device
+        harness.session.servicesStore = replacement.store
+        harness.session.offlineStore = replacement.store
+        holder.onConnectionChanged()
+        assertEquals(listOf(admitted), holder.state.value.contacts)
+        assertFalse(holder.state.value.isSyncing)
+        assertNull(holder.state.value.syncProgress)
+        assertEquals(0, harness.contactService.progress.subscriberCount)
+
+        val newSync = scope.launch { holder.syncContacts(radio) }
+        newEntered.await()
+        settle()
+        assertEquals(SyncProgress(2, 20), holder.state.value.syncProgress)
+        harness.contactService.progress.emit(SyncProgress(88, 100))
+        oldRelease.complete(Unit)
+        oldSync.join()
+        settle()
+        assertTrue(holder.state.value.isSyncing, "Only B may finish B's active sync")
+        assertNull(holder.state.value.errorMessage)
+        assertEquals(SyncProgress(2, 20), holder.state.value.syncProgress)
+        assertEquals(listOf(admitted), holder.state.value.contacts)
+        assertEquals(0, newReads, "Old success must not fetch through B")
+        assertEquals(listOf("sync"), replacement.contactService.calls)
+        newRelease.complete(Unit)
+        newSync.join()
+        assertFalse(holder.state.value.isSyncing)
+        assertNull(holder.state.value.syncProgress)
+        assertNull(holder.state.value.errorMessage)
+        assertEquals(listOf(admitted), holder.state.value.contacts, "Radio-owned admission survives a graph replacement and stale fetch")
+        assertEquals(1, newReads)
+        assertEquals(listOf(true, false), harness.adverts.syncingFlags)
+        assertEquals(listOf(true, false), replacement.adverts.syncingFlags)
+        assertEquals(0, replacement.contactService.progress.subscriberCount)
+    }
+
+    @Test
     fun `sync failure surfaces the user-facing message`() = scenario {
         val harness = Harness(clock).connect()
         harness.contactService.sync = { error("radio gone") }

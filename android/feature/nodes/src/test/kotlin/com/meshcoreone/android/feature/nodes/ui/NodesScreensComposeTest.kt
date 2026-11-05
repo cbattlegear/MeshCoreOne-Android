@@ -585,7 +585,69 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         @Test
         fun mountedChatConfirmationRetiresOnSameRadioSessionReplacement() = verifyActionOwner(sameRadio = true, delete = false)
 
-        private fun verifyActionOwner(sameRadio: Boolean, delete: Boolean) {
+        @Test
+        fun mountedOpenDeleteMenuRetiresOnDifferentRadio() = verifyActionOwner(sameRadio = false, delete = true, menuHeld = true)
+
+        @Test
+        fun mountedOpenDeleteMenuRetiresOnSameRadioSessionReplacement() = verifyActionOwner(sameRadio = true, delete = true, menuHeld = true)
+
+        @Test
+        fun mountedOpenChatMenuRetiresOnDifferentRadio() = verifyActionOwner(sameRadio = false, delete = false, menuHeld = true)
+
+        @Test
+        fun mountedOpenChatMenuRetiresOnSameRadioSessionReplacement() = verifyActionOwner(sameRadio = true, delete = false, menuHeld = true)
+
+        @Test
+        fun mountedSameRadioReplacementAllowsFreshSyncWhileRetainingAdmission() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            val admitted = Fixtures.contact(radioId = radio, name = "Admitted")
+            harness.contactService.addBehavior = { _, _ -> }
+            harness.contactService.getContactBehavior = { _, _ -> admitted }
+            val inset = mutableStateOf(0)
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE, Modifier.padding(inset.value.dp)) }
+            val context = controller.get()
+            click(awaitAction(context.getString(C.contactsListAddContact)))
+            val fields = allSemanticsNodes().filter { it.config.contains(SemanticsActions.SetText) }
+            setText(fields[0], admitted.name)
+            setText(fields[1], admitted.publicKey.hexString)
+            click(awaitAction(context.getString(C.contactsAddAdd)))
+            awaitText(admitted.name)
+
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            harness.contactService.sync = {
+                entered.complete(Unit)
+                release.await()
+                error("retired sync failed")
+            }
+            val syncLabel = context.getString(C.contactsListSyncNodes)
+            click(awaitAction(syncLabel))
+            awaitCondition { entered.isCompleted }
+            val replacement = Harness().connect(radio)
+            var replacementReads = 0
+            replacement.store.fetchContactsGate = { replacementReads++ }
+            harness.session.contacts = replacement.contactService
+            harness.session.adverts = replacement.adverts
+            harness.session.device = replacement.session.device
+            harness.session.servicesStore = replacement.store
+            harness.session.offlineStore = replacement.store
+            controller.get().runOnUiThread { inset.value = 1 }
+            awaitCondition { actionNode(syncLabel)?.config?.contains(SemanticsProperties.Disabled) == false }
+            awaitText(admitted.name)
+            click(awaitAction(syncLabel))
+            awaitCondition { replacement.adverts.syncingFlags == listOf(true, false) }
+            assertFalse(release.isCompleted, "B must sync while A's request remains held")
+            release.complete(Unit)
+            awaitCondition { harness.adverts.syncingFlags == listOf(true, false) }
+            awaitText(admitted.name)
+            assertTrue(ShadowDialog.getLatestDialog()?.isShowing != true, "A's retired failure must not create B's error dialog")
+            assertEquals(1, replacementReads)
+            assertEquals(listOf("sync"), replacement.contactService.calls)
+            assertEquals(listOf("add:Admitted", "getContact", "sync"), harness.contactService.calls)
+        }
+
+        private fun verifyActionOwner(sameRadio: Boolean, delete: Boolean, menuHeld: Boolean = false) {
             val harness = Harness().connect()
             val oldRadio = checkNotNull(harness.session.radioId)
             val old = Fixtures.contact(radioId = oldRadio, name = "Old target")
@@ -606,9 +668,16 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             val context = controller.get()
             val action = context.getString(if (delete) C.contactsCommonDelete else C.contactsDetailSendMessage)
             val confirm = context.getString(if (delete) C.contactsCommonOk else C.contactsCommonDone)
-            openRowConfirmation(action)
-            val oldConfirm = checkNotNull(awaitAction(confirm).config[SemanticsActions.OnClick].action)
-            assertTrue(checkNotNull(ShadowDialog.getLatestDialog()).isShowing)
+            val oldMenuButton = checkNotNull(awaitAction("\u22EE").config[SemanticsActions.OnClick].action)
+            val oldControl = if (menuHeld) {
+                click(awaitAction("\u22EE"))
+                menuOpen = true
+                checkNotNull(awaitAction(action).config[SemanticsActions.OnClick].action)
+            } else {
+                openRowConfirmation(action)
+                assertTrue(checkNotNull(ShadowDialog.getLatestDialog()).isShowing)
+                checkNotNull(awaitAction(confirm).config[SemanticsActions.OnClick].action)
+            }
 
             harness.session.radioId = radio
             harness.session.device = replacement.session.device
@@ -616,13 +685,18 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             harness.session.adverts = replacement.adverts
             harness.session.offlineStore = replacement.store
             harness.session.servicesStore = replacement.store
+            menuOpen = false
             controller.get().runOnUiThread { inset.value = 1 }
             awaitCondition { ShadowDialog.getLatestDialog()?.isShowing != true }
+            assertTrue(actionNode(action) == null, "The old menu must retire without selecting an item")
             controller.get().runOnUiThread {
-                assertTrue(oldConfirm.invoke())
+                assertTrue(oldMenuButton.invoke())
+                assertTrue(oldControl.invoke())
                 assertTrue(oldOpen.invoke())
             }
             advanceFrames()
+            assertTrue(ShadowDialog.getLatestDialog()?.isShowing != true, "Retained controls must not recreate a confirmation")
+            assertTrue(actionNode(action) == null, "Retained menu buttons must not open B's menu")
             assertTrue(harness.contactService.calls.isEmpty(), "Retired controls must not use A's service")
             assertTrue(replacement.contactService.calls.isEmpty(), "Retired controls must not use B's service")
             assertTrue(opened.isEmpty(), "Retired row navigation must not open A on B")

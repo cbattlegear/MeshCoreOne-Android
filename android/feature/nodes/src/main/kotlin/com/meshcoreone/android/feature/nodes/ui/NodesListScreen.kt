@@ -105,6 +105,9 @@ internal fun NodesListScreen(
     LaunchedEffect(holder, radioId) {
         if (radioId != null) holder.loadContacts(radioId)
     }
+    LaunchedEffect(holder, connection, radioId) {
+        holder.onConnectionChanged()
+    }
     LaunchedEffect(state.hasLoadedOnce) {
         if (state.hasLoadedOnce && segment == NodeSegment.CONTACTS && state.hasFavorites) segment = NodeSegment.FAVORITES
     }
@@ -176,23 +179,26 @@ internal fun NodesListScreen(
             contacts.isEmpty() -> NodesEmptyState(search, segment, Modifier.fillMaxSize())
             else -> LazyColumn(Modifier.fillMaxSize()) {
                 items(contacts, key = { it.id }) { contact ->
-                    ContactListRow(
-                        contact = contact,
-                        stateHolder = holder,
-                        dependencies = dependencies,
-                        onOpen = {
-                            scope.launch {
-                                dependencies.session.ensureContactConnection(connection, radioId)
-                                navigation.openContact(contact)
-                            }
-                        },
-                        onAction = { action ->
-                            scope.launch {
-                                dependencies.session.ensureContactConnection(connection, radioId)
-                                pendingAction = action to contact
-                            }
-                        },
-                    )
+                    key(connection, contact.radioId) {
+                        ContactListRow(
+                            contact = contact,
+                            stateHolder = holder,
+                            dependencies = dependencies,
+                            connection = connection,
+                            onOpen = {
+                                scope.launch {
+                                    dependencies.session.ensureContactConnection(connection, radioId)
+                                    navigation.openContact(contact)
+                                }
+                            },
+                            onAction = { action ->
+                                scope.launch {
+                                    dependencies.session.ensureContactConnection(connection, radioId)
+                                    pendingAction = action to contact
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -275,11 +281,13 @@ private fun ContactListRow(
     contact: ContactDTO,
     stateHolder: ContactsStateHolder,
     dependencies: NodesFeatureDependencies,
+    connection: Any?,
     onOpen: () -> Unit,
     onAction: (RowActionKind) -> Unit,
 ) {
     val state by stateHolder.state.collectAsStateWithLifecycle()
-    var menu by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var menu by remember(contact.id, contact.radioId, connection) { mutableStateOf(false) }
     val route = nodesString(ContactRowPresentation.routeLabel(contact, state.inboundHopByKey[contact.publicKey]))
     val prefix = ContactRowPresentation.idPrefixHex(contact, dependencies.session.connectedDevice()?.hashSize)
     val actions = ContactRowActions.actions(
@@ -316,7 +324,12 @@ private fun ContactListRow(
             }
             Box {
                 TextButton(
-                    onClick = { menu = true },
+                    onClick = {
+                        scope.launch {
+                            dependencies.session.ensureContactConnection(connection, contact.radioId)
+                            menu = true
+                        }
+                    },
                     modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                 ) { Text("⋮") }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -324,7 +337,13 @@ private fun ContactListRow(
                         DropdownMenuItem(
                             text = { Text(nodesString(action.label)) },
                             enabled = action.enabled,
-                            onClick = { menu = false; onAction(action.kind) },
+                            onClick = {
+                                scope.launch {
+                                    dependencies.session.ensureContactConnection(connection, contact.radioId)
+                                    menu = false
+                                    onAction(action.kind)
+                                }
+                            },
                         )
                     }
                 }

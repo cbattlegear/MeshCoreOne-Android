@@ -79,6 +79,24 @@ to retire, invoke its retained callback and old row navigation with zero effects
 or navigation, then exercise the fresh radio/session's real Sync, row and confirmation actions.
 No WP-209 service or held work is modified.
 
+An open row menu now belongs to its opening graph too. Each row's interaction subtree is keyed
+by graph and radio, because retaining a Compose semantics action across recomposition can otherwise
+invoke the updated callback on the surviving modifier node. Menu visibility and its opening/item
+callbacks are owner-fenced as well. Four `mountedOpenDelete/ChatMenuRetiresOnDifferentRadio` /
+`mountedOpenDelete/ChatMenuRetiresOnSameRadioSessionReplacement` controls leave A's menu open,
+replace the graph, invoke retained A menu-button/item/row callbacks and require zero effects,
+then require fresh B actions. Existing confirmation controls and their expectations are unchanged.
+
+Sync is explicitly graph-owned within the radio-owned holder. Graph changes retire the active
+operation's progress subscription and publication rights, without removing cached contacts or
+pending admissions. Progress, success reloads, errors and cleanup are fenced to that operation;
+old cleanup cannot finish B's sync. Three `ContactsNativeTest.held same-radio sync ...` controls
+hold A across actual graph replacement, require B's own progress and active state while A succeeds,
+emits progress or fails ordinarily, prohibit any A-driven read through B and then require B success.
+`mountedSameRadioReplacementAllowsFreshSyncWhileRetainingAdmission` exercises the real add, Sync
+and rebind effects while A is held and later fails. It requires fresh B Sync without losing the
+stored DTO admitted by the actual manual-add consumer.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

@@ -8,17 +8,20 @@ import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.nodes.deps.CommandTimeoutException
+import com.meshcoreone.android.feature.nodes.deps.EventSubscription
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.deps.RadioCommandTimeout
 import com.meshcoreone.android.feature.nodes.deps.SyncProgress
 import com.meshcoreone.android.feature.nodes.deps.withCommandTimeout
+import com.meshcoreone.android.feature.nodes.deps.ensureContactConnection
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -68,6 +71,20 @@ class ContactsStateHolder(
     /** Upserted rows held until a fetch includes the same id or public key and radio. */
     private val pendingAdmissions = LinkedHashMap<UUID, ContactDTO>()
 
+    private class ContactSync(val connection: Any?, val radioId: RadioId) {
+        var progress: EventSubscription<SyncProgress>? = null
+        var listener: Job? = null
+
+        fun stopProgress() {
+            listener?.cancel()
+            listener = null
+            progress?.close()
+            progress = null
+        }
+    }
+
+    private var activeSync: ContactSync? = null
+
     private val session get() = dependencies.session
 
     /** Test/preview seam for the Swift model's publicly settable properties. */
@@ -76,23 +93,25 @@ class ContactsStateHolder(
     fun isDeletePending(id: UUID): Boolean = state.value.isDeletePending(id)
 
     /** Load contacts from the local database. */
-    suspend fun loadContacts(radioId: RadioId) {
+    suspend fun loadContacts(radioId: RadioId) = loadContacts(radioId) { true }
+
+    private suspend fun loadContacts(radioId: RadioId, canPublish: () -> Boolean) {
         val dataStore = session.offlineDataStore() ?: return
         val generation = ++loadGeneration
         val admissionsAtStart = pendingAdmissions.toMap()
         mutableState.update { it.copy(isLoading = true, errorMessage = null) }
         try {
             val fetched = dataStore.fetchContacts(radioId)
-            if (generation != loadGeneration) return
+            if (generation != loadGeneration || !canPublish()) return
             val merged = mergeAdmissions(fetched, admissionsAtStart)
             val ids = merged.mapTo(HashSet()) { it.id }
             // Self-heal the mask: once a deleted row is gone from the fetch, stop masking it.
             mutableState.update { it.copy(contacts = merged, pendingRemovalIds = it.pendingRemovalIds intersect ids) }
         } catch (cancelled: CancellationException) {
-            if (generation == loadGeneration) mutableState.update { it.copy(isLoading = false) }
+            if (generation == loadGeneration && canPublish()) mutableState.update { it.copy(isLoading = false) }
             throw cancelled
         } catch (error: Exception) {
-            if (generation != loadGeneration) return
+            if (generation != loadGeneration || !canPublish()) return
             mutableState.update { it.copy(errorMessage = failure(error)) }
         }
         // Best-effort inbound-hop fallback: a failure here must not fail the contact load.
@@ -103,7 +122,7 @@ class ContactsStateHolder(
         } catch (_: Exception) {
             emptyMap()
         }
-        if (generation != loadGeneration) return
+        if (generation != loadGeneration || !canPublish()) return
         mutableState.update { it.copy(inboundHopByKey = hops, hasLoadedOnce = true, isLoading = false) }
     }
 
@@ -146,35 +165,67 @@ class ContactsStateHolder(
 
     /** Sync contacts from the device; a re-trigger while one is in flight is a no-op. */
     suspend fun syncContacts(radioId: RadioId) {
+        onConnectionChanged()
         val contactService = session.contactService() ?: return
-        if (state.value.isSyncing) return
+        if (activeSync != null) return
+        val operation = ContactSync(session.connectionIdentity(), radioId)
+        session.ensureContactConnection(operation.connection, radioId)
+        activeSync = operation
         mutableState.update { it.copy(isSyncing = true, syncProgress = null, errorMessage = null) }
-        // Flag the advert pipeline first so an advert-driven sync cannot interleave progress events.
         val advertisementService = session.advertisementService()
-        advertisementService?.setSyncingContacts(true)
-        // Subscribed before the sync starts so no progress event is missed; scoped to this sync.
-        val subscription = contactService.syncProgressEvents()
-        val listener = scope.launch { subscription.events.collect { progress -> mutableState.update { it.copy(syncProgress = progress) } } }
         var cancellation: CancellationException? = null
         try {
+            // Flag the advert pipeline first and register before sending so no progress is missed.
+            advertisementService?.setSyncingContacts(true)
+            ensureCurrentSync(operation)
+            val subscription = contactService.syncProgressEvents()
+            operation.progress = subscription
+            operation.listener = scope.launch {
+                subscription.events.collect { progress ->
+                    if (isCurrentSync(operation)) mutableState.update { it.copy(syncProgress = progress) }
+                    else onConnectionChanged()
+                }
+            }
             contactService.syncContactsForRefresh(radioId)
-            loadContacts(radioId)
+            ensureCurrentSync(operation)
+            loadContacts(radioId) { isCurrentSync(operation) }
+            ensureCurrentSync(operation)
             mutableState.update { it.copy(syncProgress = null) }
         } catch (cancelled: CancellationException) {
             // Interrupted refresh (tab switch, teardown) is not a failure to report.
             cancellation = cancelled
         } catch (error: Exception) {
-            mutableState.update { it.copy(errorMessage = failure(error)) }
+            if (isCurrentSync(operation)) mutableState.update { it.copy(errorMessage = failure(error)) }
+            else onConnectionChanged()
         } finally {
-            listener.cancel()
-            subscription.close()
-        }
-        // Awaited so this sync's reset cannot land after a later sync's setSyncingContacts(true).
-        withContext(NonCancellable) {
-            advertisementService?.setSyncingContacts(false)
-            mutableState.update { it.copy(isSyncing = false) }
+            operation.stopProgress()
+            withContext(NonCancellable) {
+                advertisementService?.setSyncingContacts(false)
+                if (activeSync === operation) {
+                    activeSync = null
+                    mutableState.update { it.copy(isSyncing = false, syncProgress = null) }
+                }
+            }
         }
         cancellation?.let { throw it }
+    }
+
+    /** Retire only connection-owned work; cached contacts and pending admissions remain radio-owned. */
+    fun onConnectionChanged() {
+        val operation = activeSync ?: return
+        if (isCurrentSync(operation)) return
+        activeSync = null
+        operation.stopProgress()
+        ++loadGeneration
+        mutableState.update { it.copy(isSyncing = false, syncProgress = null, isLoading = false) }
+    }
+
+    private fun isCurrentSync(operation: ContactSync): Boolean =
+        activeSync === operation && session.connectionIdentity() === operation.connection && session.currentRadioId() == operation.radioId
+
+    private suspend fun ensureCurrentSync(operation: ContactSync) {
+        session.ensureContactConnection(operation.connection, operation.radioId)
+        if (activeSync !== operation) throw CancellationException("Contact sync was retired")
     }
 
     /** Toggle favorite on the device, then reload. */

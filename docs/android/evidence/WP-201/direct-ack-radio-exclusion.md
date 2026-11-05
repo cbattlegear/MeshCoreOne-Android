@@ -601,3 +601,107 @@ pre-journal upgrades, including empty/deleted history, without TTL/reset.
 That requires a separate typed-reason/producer successor; this first message
 snapshot freeze does not silently change the frozen 671 contract or claim
 that the bootstrap policy is implemented.
+
+## Separate physical-prehistory uncertainty contract
+
+The coordinator initially selected durable DB-wide UNKNOWN for untrusted
+pre-journal upgrades, including databases with no surviving messages/radios
+and deleted/readded radio identities, then provisionally extended the strict
+boundary to unproved external history on fresh installations as described
+below. Storage confirmed the additive literal
+`PREAUTHORITY_HISTORY_UNKNOWN` in four independent enums:
+`DirectAckRadioNonsettlingReason`, `DirectAckRadioNonfailingReason`,
+`DirectAckRadioConfirmationWildcardReason`, and
+`DirectMessageConfirmationUncertaintyReason`. It describes missing retained
+pre-authority physical history, not a synthetic wire, saturation or truncation.
+
+The bounded `DirectAckRadioEvidenceSnapshot` now requires
+`preauthorityHistoryUnknown: Boolean` with no default. Storage must read actual
+DB-wide metadata in the same transaction as the rows and coverage; producers
+must explicitly supply it. The diagnostic classifier independently adds the
+typed reason, preserving coexistence with COMPLETE, TRUNCATED and SATURATED
+samples. This intentional constructor evolution prevents an old producer from
+silently manufacturing a false flag; the only current-worktree construction
+site is the related test helper, updated explicitly. Other owners must update
+their separately frozen producer/test construction sites when composing.
+
+New settlement/failure reads consult the durable marker in their serialized
+write transaction for every requested radio. It blocks new confirmation;
+failure cannot infer an older target never emitted from absent rows or only
+the current attempt's unsent markers. Preserve genuine delivery and proven
+historical guarded replay precedence. Do not conflate unknown foreign history
+with radio saturation: independently proved whole-target no-write evidence
+would be a different question, but current legacy/imported rows have no birth
+certificate. Ordinary sending admission is unchanged. The marker has no
+invented TTL, auto-clear, reconnect reset or new synthetic evidence.
+
+Radio confirmation snapshots and their existing observer must include this
+DB-wide reason even when the requested radio has no rows. Message snapshots
+include it independently alongside always-unproven target provenance and any
+positive known collision. A false flag does not certify external physical
+history, delivery, code uniqueness or eligibility. This contract does not
+allocate a schema version or modify genuine schema 3, migration SQL, DAO,
+storage or service implementation.
+
+Three new radio value/classifier controls cover independent coverage flags,
+empty retained history without fake saturation, and distinct wildcard/
+nonfailure reasons. One new message value control covers prehistory plus
+known collision/unproven target without changing actual DELIVERED status.
+Enumeration cardinality assertions now include the admitted literal (five
+radio wildcard reasons, nine radio nonfailing reasons, ten message reasons);
+no earlier classifier outcome assertions are removed or weakened. Source
+annotation counts are 29 radio tests and nine message tests, all unexecuted.
+These controls do not establish metadata durability, migration behavior,
+transactional exclusion, observer visibility or cross-handle correctness.
+Storage owns real migration/file-reopen and zero-surviving-row regressions;
+source-authored expected-failing tests are not executed failure evidence.
+
+### External-radio physical-history boundary remains a product gate
+
+Pinned `PacketParser.swift:266-286` exposes a four-byte ACK plus optional
+UInt32 RTT, without installation, lease, claim or origin epoch. The inspected
+parser/event/tests match the approved source pin; parser blob is
+`67415b52f2657edfe192e3f08ed301d3165bfac1` and ACK test blob is
+`57b98cd69a8a3997e628f6ef362f39d6dd08a52f`. Current Android AckCodeBuilder
+hashes timestamp, masked attempt, text and sender key to four bytes, not a
+fresh-install nonce. New DB identity therefore cannot prove physical-radio
+prehistory clean. The service owner additionally reports an exact external
+firmware counterexample with ACK slots surviving a client switch; that is
+supplemental source evidence, not a source-pin advance or hardware/all-version
+verification performed here.
+
+No evidence-backed reset/drain/exclusive-origin boundary is established.
+Conservatively treating every externally unproven radio as UNKNOWN could deny
+all new direct-ACK confirmations on every affected ordinary install for an
+unbounded period, while sends/persistence/navigation remain available.
+Observed collision frequency has not been measured. The coordinator explicitly
+initially held that fresh/external-radio trust policy for a product decision.
+Afterward, with the user unavailable and autonomous continuation directed,
+the coordinator explicitly made a **provisional coordinator decision, not a
+user-selected option**: use the strict boundary for both fresh and upgraded
+installations unless genuine evidence establishes otherwise. This successor
+records that explicit decision rather than silently treating a new DB as a
+trusted baseline. Sending remains available; new ACK confirmations may remain
+unavailable indefinitely. Preserve genuine DELIVERED and proven historical
+replay precedence. No speculative TTL/connection reset/fake certificate or
+authority reconstruction resolves the uncertainty.
+
+An evidence-backed path to normal confirmation remains separately reviewed
+follow-up work. Neither local journal completeness nor this contract
+establishes such a path. There is no clean-baseline certificate or public
+clearing operation in these declarations. Storage must implement the
+provisional durable UNKNOWN policy for fresh and upgraded state separately;
+this source-only handoff does not claim that it already did so.
+
+### Timeline identity binding
+
+A standalone message snapshot does not atomically bind existing timeline
+DTOs, which lack the persisted diagnostic identity. The UI owner selected a
+conservative identity-independent unconfirmed label for outgoing FAILED DMs
+and an aggregate SOME-messages warning, not attribution of old snapshot
+reasons to a potentially identical recreated DTO. Row-specific diagnostics
+remain unavailable until a genuine atomic timeline row/identity projection
+exists. Storage/UI owners were asked for a real identical-key/identical-DTO
+delete/recreate and delayed-response rejection control; value equality tests
+are not that race evidence. No timeline-binding API or UI integration is
+claimed here.

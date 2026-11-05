@@ -61,12 +61,19 @@ object DirectAckRadioEvidenceLimits {
  * Bounded diagnostic evidence only. COMPLETE means the snapshot contains every retained physical
  * emission and genuine legacy markerless row; tracked wires with no physical marker are omitted.
  * TRUNCATED means diagnostic rows were omitted; SATURATED means a durable radio-wide wildcard was
- * committed. Neither a public snapshot nor an empty snapshot authorizes a delivery mutation.
+ * committed. preauthorityHistoryUnknown is independently read from durable DB-wide metadata in
+ * the same transaction, including for radios with no surviving rows. COMPLETE covers retained
+ * journal rows only, not unrecorded physical prehistory. Neither a public snapshot nor an empty
+ * snapshot authorizes a delivery mutation. Callers must supply the actual flag; no default exists.
+ * Unproved physical history before current app-owned authority includes external sends on a fresh
+ * installation as well as pre-journal upgrades. Fresh local DB creation is not clean-radio proof.
+ * A false flag is not an external-radio clean-history certificate; no reset/clearing API is supplied.
  */
 data class DirectAckRadioEvidenceSnapshot(
     val radioId: RadioId,
     val wires: SnapshotList<DirectAckRadioWireEvidence>,
     val coverage: DirectAckRadioEvidenceCoverage,
+    val preauthorityHistoryUnknown: Boolean,
 )
 
 data class DirectAckEmissionReceipt(
@@ -148,6 +155,7 @@ enum class DirectAckRadioNonsettlingReason {
     /** Diagnostic-snapshot classification only; SQL settlement checks the complete journal. */
     RADIO_HISTORY_INCOMPLETE,
     RADIO_HISTORY_SATURATED,
+    PREAUTHORITY_HISTORY_UNKNOWN,
 }
 
 /**
@@ -161,6 +169,9 @@ object DirectAckRadioEvidenceAssessment {
         history: DirectAckRadioEvidenceSnapshot,
     ): SnapshotSet<DirectAckRadioNonsettlingReason> {
         val reasons = linkedSetOf<DirectAckRadioNonsettlingReason>()
+        if (history.preauthorityHistoryUnknown) {
+            reasons.add(DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN)
+        }
         val radioWires = history.wires.filter { it.radioId == history.radioId }
         val targetWires = radioWires.filter { it.claimRequestId == targetClaimRequestId }
 
@@ -380,6 +391,10 @@ interface DirectAckRadioExclusionAuthority {
      * that target emission's prediction is retained history, not eligibility. Earlier accepted
      * emissions of the same current claim remain eligible across retries. Full radio-history
      * exclusion and current-grant validation occur in the same transaction as delivery.
+     * Consult durable DB-wide preauthority-history uncertainty in that transaction for every
+     * requested radio, including radios with no surviving rows or deleted/readded identities.
+     * PREAUTHORITY_HISTORY_UNKNOWN blocks new settlement without inventing a wire or saturation.
+     * Preserve genuine committed delivery and exact historical replay precedence.
      */
     suspend fun settleDirectAckExcludingRadioHistory(
         attempt: DirectAckAttempt,
@@ -407,6 +422,7 @@ enum class DirectAckRadioConfirmationWildcardReason {
     CONFLICTING_PHYSICAL_EVIDENCE,
     UNTRACKED_LEGACY_ANCESTRY,
     STICKY_SATURATION,
+    PREAUTHORITY_HISTORY_UNKNOWN,
 }
 
 /**
@@ -446,6 +462,9 @@ interface DirectAckRadioConfirmationEvidenceInspecting {
      * ancestry even with a known accepted code or later markers, and already-persisted sticky
      * saturation must remain distinguishable. Known accepted and definitely-unsent physical rows
      * alone are not wildcards; tracked-but-unmarked registered wires are not physical emissions.
+     * Include PREAUTHORITY_HISTORY_UNKNOWN from durable DB-wide metadata for every requested
+     * radio, even without any radio/message/wire rows. It is not a synthetic legacy emission or
+     * sticky radio saturation and may coexist with all other reasons.
      *
      * No sample, diagnostic row cap, synthetic excluded claim, lease/grant, generation filter or
      * TTL may narrow this query. The read never creates/clears evidence or saturation. Absence of
@@ -523,6 +542,7 @@ enum class DirectAckRadioNonfailingReason {
     CONFLICTING_OTHER_CLAIM_EVIDENCE,
     UNTRACKED_OTHER_CLAIM_ANCESTRY,
     RADIO_HISTORY_SATURATED,
+    PREAUTHORITY_HISTORY_UNKNOWN,
 }
 
 sealed interface DirectAckRadioFailureResult {
@@ -554,6 +574,17 @@ sealed interface DirectAckRadioFailureResult {
  * sample, truncate, filter retired generations, invent an ACK code or infer no-write from missing
  * diagnostic rows. Foreign/missing/stale/ineligible authority uses existing DirectAckRejection
  * meanings and must never mutate a replacement row.
+ *
+ * Consult durable DB-wide preauthority-history uncertainty in that transaction. Report
+ * PREAUTHORITY_HISTORY_UNKNOWN independently of RADIO_HISTORY_SATURATED; neither absent rows,
+ * an empty claim history nor this attempt's unmarked/all-unsent rows prove that an older message
+ * never emitted. Unknown foreign prehistory cannot have delivered a target only if a genuine,
+ * independent whole-target no-write proof exists; current legacy/imported rows have no such birth
+ * certificate. Do not infer this exception from new local DB/session identity or retrofit proof.
+ * The preauthority marker is durable for every requested radio, including deleted/readded radios.
+ * Unproved external history on fresh installations is UNKNOWN too; new local DB/session identity
+ * cannot certify a clean radio. There is no TTL/reset or invented certificate. Sending remains
+ * permitted under its ordinary admission; new confirmation can remain unavailable indefinitely.
  *
  * Sticky radio saturation ALWAYS blocks a new failure with RADIO_HISTORY_SATURATED, including
  * tracked attempts with no physical rows or only DefinitelyUnsent rows. CoveredBySaturation can

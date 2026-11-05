@@ -31,6 +31,7 @@ enum class DirectMessageConfirmationUncertaintyReason {
     CONFLICTING_OTHER_CLAIM_EVIDENCE,
     UNTRACKED_OTHER_CLAIM_ANCESTRY,
     RADIO_HISTORY_SATURATED,
+    PREAUTHORITY_HISTORY_UNKNOWN,
 }
 
 sealed interface DirectMessageConfirmationEvidence {
@@ -77,6 +78,9 @@ sealed interface DirectMessageConfirmationEvidence {
  * claims/wires, a public FAILED row, attempt counts, known codes or a complete scan of retained SQL
  * rows cannot certify complete physical history. Legacy/preclaim/imported and pre-authority
  * migration history remain unproven; deleted historic rows cannot be inferred never emitted.
+ * Independently include PREAUTHORITY_HISTORY_UNKNOWN whenever the durable DB-wide preauthority
+ * marker is set, even for radios with no surviving old rows. Read it atomically, not as a cached
+ * service flag or synthetic wire/saturation. It can coexist with every other uncertainty reason.
  * No future green/no-conflict or sufficient-provenance behavior is admitted by this interface.
  *
  * Missing and NotEligible describe actual current rows, not query failure. Missing/malformed

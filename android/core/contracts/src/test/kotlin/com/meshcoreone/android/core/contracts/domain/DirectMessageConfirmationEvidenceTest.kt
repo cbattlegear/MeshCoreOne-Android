@@ -18,6 +18,22 @@ class DirectMessageConfirmationEvidenceTest {
     )
 
     @Test
+    fun preauthorityUncertaintyCoexistsWithKnownCollisionAndUnprovenTarget() {
+        val reasons = setOf(
+            DirectMessageConfirmationUncertaintyReason.PREAUTHORITY_HISTORY_UNKNOWN,
+            DirectMessageConfirmationUncertaintyReason.TARGET_PROVENANCE_UNPROVEN,
+            DirectMessageConfirmationUncertaintyReason.KNOWN_OTHER_CLAIM_CODE,
+        )
+        val evidence = DirectMessageConfirmationEvidence.Present(
+            key, identity, MessageStatus.DELIVERED, SnapshotSet(reasons),
+        )
+
+        assertEquals(reasons, evidence.reasons)
+        assertEquals(MessageStatus.DELIVERED, evidence.status)
+        assertEquals(identity, evidence.identity)
+    }
+
+    @Test
     fun missingAndIneligibleAreDistinctAndRetainExactRadioMessageKey() {
         val missing = DirectMessageConfirmationEvidence.Missing(key)
         val ineligible = DirectMessageConfirmationEvidence.NotEligible(key)
@@ -83,7 +99,7 @@ class DirectMessageConfirmationEvidenceTest {
         reasons.clear()
 
         assertEquals(DirectMessageConfirmationUncertaintyReason.entries.toSet(), evidence.reasons)
-        assertEquals(9, evidence.reasons.size)
+        assertEquals(10, evidence.reasons.size)
     }
 
     @Test

@@ -375,6 +375,87 @@ class DevicePersistenceAuthorityRoomTest : RoomProcessTest() {
         assertEquals(before.authorityRevision, after.authorityRevision)
     }
 
+    @Test fun targetedSameRegionRemovalPreservesAliasDefaultAcrossAContestedCasRetry() = runTest {
+        for ((index, prefix) in listOf("P".repeat(30), "a".repeat(25) + "\u00e9\u754c").withIndex()) {
+            assertEquals(30, prefix.toByteArray(Charsets.UTF_8).size)
+            val alias = prefix + "-suffix"
+            val original = seedNamedRegions(620L + index, listOf(prefix, alias, "unrelated"), prefix)
+            val removedChannel = channel(original.radioId, 1, ChannelFloodScope.Region(prefix))
+            val aliasChannel = channel(original.radioId, 2, ChannelFloodScope.Region(alias))
+            val unrelatedChannel = channel(original.radioId, 3, ChannelFloodScope.Region("unrelated"))
+            listOf(removedChannel, aliasChannel, unrelatedChannel).forEach { store.saveChannel(it) }
+            val before = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+            val paused = PausedStore(store)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var transforms = 0
+            try {
+                paused.beforeSave = { entered.complete(Unit); release.await() }
+                val edit = async {
+                    paused.editDevice(original.id) {
+                        transforms++
+                        it.copy(knownRegions = it.knownRegions.filterNot { name -> name == prefix }.snapshot())
+                    }
+                }
+                entered.await()
+                store.removeDeviceKnownRegion(original.radioId, prefix)
+                val targeted = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+                val expected = original.copy(knownRegions = listOf(alias, "unrelated").snapshot())
+                assertEquals(expected, targeted.device, "The competing targeted writer must preserve the alias default")
+                assertEquals(before.revision + 1, targeted.revision)
+                assertEquals(before.authorityRevision, targeted.authorityRevision)
+                release.complete(Unit)
+                assertEquals(expected, edit.await())
+                assertEquals(1, paused.rejected, "The initial snapshot must actually lose its CAS")
+                assertEquals(2, transforms, "The region transform must retry against the targeted writer's row")
+                assertEquals(expected, store.fetchDevice(original.id))
+                val after = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+                assertEquals(targeted.revision + 1, after.revision)
+                assertEquals(before.authorityRevision, after.authorityRevision)
+                assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(original.radioId, 1u)!!.floodScope)
+                assertEquals(aliasChannel, store.fetchChannel(original.radioId, 2u))
+                assertEquals(unrelatedChannel, store.fetchChannel(original.radioId, 3u))
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test fun targetedLastAliasRemovalClearsNormalizedDefaultButResetsOnlyTheRawChannelScope() = runTest {
+        var id = 630L
+        for (prefix in listOf("P".repeat(30), "a".repeat(25) + "\u00e9\u754c")) {
+            assertEquals(30, prefix.toByteArray(Charsets.UTF_8).size)
+            val alias = prefix + "-suffix"
+            for ((removed, selected) in listOf(alias to prefix, prefix to alias)) {
+                val original = seedNamedRegions(id++, listOf(removed, "unrelated"), selected)
+                val removedChannel = channel(original.radioId, 1, ChannelFloodScope.Region(removed))
+                val otherAliasChannel = channel(original.radioId, 2, ChannelFloodScope.Region(selected))
+                val unrelatedChannel = channel(original.radioId, 3, ChannelFloodScope.Region("unrelated"))
+                listOf(removedChannel, otherAliasChannel, unrelatedChannel).forEach { store.saveChannel(it) }
+                val before = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+                store.removeDeviceKnownRegion(original.radioId, removed)
+                val after = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+                assertEquals(
+                    original.copy(knownRegions = listOf("unrelated").snapshot(), defaultFloodScopeName = null),
+                    after.device,
+                    "Removing the last normalized alias must clear either the short or long selected default",
+                )
+                assertEquals(before.revision + 1, after.revision)
+                assertEquals(before.authorityRevision, after.authorityRevision)
+                assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(original.radioId, 1u)!!.floodScope)
+                assertEquals(otherAliasChannel, store.fetchChannel(original.radioId, 2u))
+                assertEquals(unrelatedChannel, store.fetchChannel(original.radioId, 3u))
+            }
+        }
+    }
+
+    private suspend fun seedNamedRegions(id: Long, regions: List<String>, selected: String): DeviceDTO {
+        val original = device(id)
+        store.saveDevice(original)
+        regions.forEach { store.addDeviceKnownRegion(original.radioId, it) }
+        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+        assertTrue(store.saveDeviceIfUnchanged(ticket.device.copy(defaultFloodScopeName = selected), ticket))
+        return assertNotNull(store.fetchDevice(original.id))
+    }
+
     private suspend fun seedRegions(id: Long): DeviceDTO {
         val original = device(id)
         store.saveDevice(original)

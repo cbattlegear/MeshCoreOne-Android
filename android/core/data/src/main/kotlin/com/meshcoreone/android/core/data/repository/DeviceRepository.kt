@@ -156,9 +156,16 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         context.write("removeDeviceKnownRegion") {
             val row = database.devices().forRadio(radioId.value).firstOrNull()
                 ?: throw PersistenceStoreException(PersistenceStoreError.DeviceNotFound)
+            val remaining = row.knownRegions.filterNot { it == region }.snapshot()
+            val normalizedRegion = region.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
             database.devices().upsert(row.copy(
-                knownRegions = row.knownRegions.filterNot { it == region }.snapshot(),
-                defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { it == region },
+                knownRegions = remaining,
+                defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { selected ->
+                    selected?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedRegion &&
+                        remaining.none {
+                            it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedRegion
+                        }
+                },
             ))
             resetRemovedRegionScopes(radioId, setOf(region))
             changed(row.id, authority = false)

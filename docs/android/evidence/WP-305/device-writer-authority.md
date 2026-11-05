@@ -268,3 +268,16 @@ The review's actual Settings entry-point mismatch belongs to the Settings produc
 targeted `DeviceRepository.removeDeviceKnownRegion` mismatch belongs to the persistence producer.
 Neither integration is accepted by this editor-only change. The exact `a7fed6eb9` diagnostic
 `41952095327` is preserved, not cancelled or retargeted, and cannot execute this successor.
+
+The persistence producer transferred immutable `1a422b8679eb36a34a2ca6a97de2cadedffc1294`
+(parent `b62`) as a narrow patch, not a whole-file replacement. Composition onto editor successor
+`83a63efa86a9d9cbc7a4e78226b690ec4dcd6e6e` retains the newer committed-callback control and
+all thirteen existing persistence methods. Only the targeted `removeDeviceKnownRegion` hunk,
+two new tests and their seed helper are imported; the existing `utf8Prefix` import is deduplicated.
+The targeted writer now retains the exact selected default while a normalized alias survives
+and clears it on last-alias removal, without changing raw channel reset semantics. The transferred
+test/helper block matches the producer's immutable bytes. Its controls cover actual same-target
+CAS rejection/retry and both last-alias/default directions using ASCII and mixed thirty-byte UTF-8
+names, with exact raw-channel and revision assertions. The composed source has twenty-four writer
+and fifteen persistence methods; these are source counts, not execution evidence. Settings radio
+integration remains separately owned and unaccepted pending composed execution.

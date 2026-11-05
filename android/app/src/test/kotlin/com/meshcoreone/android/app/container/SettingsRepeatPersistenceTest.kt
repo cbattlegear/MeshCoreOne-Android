@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotReconciliationRequired
+import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotClearRequired
 import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
@@ -22,6 +23,7 @@ import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.session.RadioWritePermit
 import com.meshcoreone.android.core.services.sync.SyncState
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.settings.device.*
@@ -861,8 +863,64 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun confirmedRestoreRetirementIsSharedAcrossEditorsAndRejectsSnapshotAba() = runTest {
+        for (aba in listOf(false, true)) {
+            withRepeat(store) { h, _, _, radio ->
+                val token = assertNotNull(h.sessions.current).token
+                val original = assertNotNull(h.manager.connectedDevice)
+                val editor = h.container.deviceEditor
+                assertTrue(editor.savePreRepeatSettings(token))
+                val saved = assertNotNull(h.manager.connectedDevice)
+                assertNotNull(h.sessions.current).settingsService.setRadioParamsPersisted(
+                    saved.frequency, saved.bandwidth, saved.spreadingFactor, saved.codingRate, false,
+                    restoreAuthority = editor.preRepeatSettingsRestoreAuthority(token, saved),
+                )
+                val restored = assertNotNull(store.fetchDevice(saved.id))
+                val alternate = RoomPersistenceStore(db, backgroundScope)
+                try {
+                    val wrapped = object : PersistenceStoreProtocol by alternate {}
+                    val sibling = ConnectedDeviceEditor(
+                        h.container.deviceAccess, wrapped, wrapped, { null },
+                        RadioPresetMatcher { _, _, _, _ -> emptySet() }, backgroundScope, { java.time.Instant.EPOCH },
+                    )
+                    assertTrue(store.repeatSnapshotAuthority === alternate.repeatSnapshotAuthority)
+                    if (aba) {
+                        store.saveDevice(restored.copy(preRepeatBandwidth = restored.bandwidth + 1u))
+                        store.saveDevice(restored)
+                        val writes = radio.radioWrites.toList()
+                        assertIs<RepeatSnapshotClearRequired>(
+                            runCatching { sibling.savePreRepeatSettings(token) }.exceptionOrNull(),
+                        )
+                        assertIs<RepeatSnapshotClearRequired>(
+                            runCatching { sibling.validatePreRepeatSettings(token) }.exceptionOrNull(),
+                        )
+                        assertEquals(restored, store.fetchDevice(saved.id))
+                        assertEquals(writes, radio.radioWrites)
+                        val cleared = restored.clearingPreRepeatSettings()
+                        store.saveDevice(cleared)
+                        editor.updateDevice(cleared)
+                        assertTrue(sibling.savePreRepeatSettings(token))
+                    } else {
+                        val changed = restored.copy(pathHashMode = 2u)
+                        store.saveDevice(changed)
+                        editor.updateDevice(changed)
+                        assertTrue(sibling.savePreRepeatSettings(token), "Unrelated full-row revision is not snapshot ABA")
+                    }
+                    val fresh = assertNotNull(store.fetchDevice(saved.id))
+                    assertEquals(original.frequency, fresh.preRepeatFrequency)
+                    assertEquals(original.bandwidth, fresh.preRepeatBandwidth)
+                    assertEquals(original.spreadingFactor, fresh.preRepeatSpreadingFactor)
+                    assertEquals(original.codingRate, fresh.preRepeatCodingRate)
+                    assertEquals(fresh, h.manager.connectedDevice)
+                    assertTrue(sibling.clearPreRepeatSettings(token))
+                    assertNull(store.fetchDevice(saved.id)!!.preRepeatFrequency)
+                } finally { alternate.close() }
+            }
+        }
+    }
+
     @Test fun delayedRepeatOffObservationAfterFailedClearCannotReuseThePreviousBaseline() = runTest {
-        for (cancelClear in listOf(false, true)) {
+        for (failurePoint in listOf("save", "cancel-clear", "cancel-before-clear")) {
             val clearEntered = CompletableDeferred<Unit>()
             val clearRelease = CompletableDeferred<Unit>()
             var failClear = true
@@ -871,7 +929,10 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     if (failClear && expected.device.preRepeatFrequency != null && dto.preRepeatFrequency == null) {
                         clearEntered.complete(Unit)
                         clearRelease.await()
-                        if (cancelClear) throw kotlinx.coroutines.CancellationException("Cancelled snapshot retirement")
+                        if (failurePoint != "save") {
+                            currentCoroutineContext()[Job]!!.cancel()
+                            throw kotlinx.coroutines.CancellationException("Cancelled snapshot retirement")
+                        }
                         throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Snapshot retirement unavailable"))
                     }
                     return store.saveDeviceIfUnchanged(dto, expected)
@@ -880,7 +941,14 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             val observedDevice = MutableStateFlow<DeviceDTO?>(null)
             val observation = MutableStateFlow(SettingsDeviceObservation(null))
             try {
-                withRepeat(held, connectionOverride = { actual ->
+                withRepeat(held, beforeSnapshotClear = {
+                    if (failClear && failurePoint == "cancel-before-clear") {
+                        clearEntered.complete(Unit)
+                        clearRelease.await()
+                        currentCoroutineContext()[Job]!!.cancel()
+                        throw kotlinx.coroutines.CancellationException("Cancelled before the editor clear API")
+                    }
+                }, connectionOverride = { actual ->
                     observedDevice.value = actual.connectedDevice.value
                     observation.value = SettingsDeviceObservation(actual.connectedDevice.value)
                     object : SettingsConnection by actual {
@@ -928,6 +996,15 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     assertEquals(before.frequency, manual.preRepeatFrequency, "The failed clear really retained the obsolete snapshot")
                     deliver()
                     h.eventually("holder observes subsequent manual RF") { holder.state.value.device?.frequency == manualFrequency }
+                    val writesBeforeRetry = radio.radioWrites.toList()
+                    holder.onRepeatToggled(true)
+                    holder.confirmEnableRepeatMode()
+                    h.eventually("a new cycle refuses while snapshot retirement still fails") {
+                        !holder.state.value.isApplyingRepeat
+                    }
+                    assertFalse(h.manager.connectedDevice!!.clientRepeat)
+                    assertEquals(writesBeforeRetry, radio.radioWrites, "No new SET may reuse the retired baseline")
+                    assertEquals(manual, store.fetchDevice(before.id))
                     failClear = false
                     holder.onRepeatToggled(true)
                     holder.confirmEnableRepeatMode()
@@ -1226,6 +1303,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         room: RoomPersistenceStore = store,
         afterRestoreValidation: (suspend () -> Unit)? = null,
         beforeRestoreWrite: (suspend () -> Unit)? = null,
+        beforeSnapshotClear: (suspend () -> Unit)? = null,
         connectExisting: UUID? = null,
         initiallyRepeating: Boolean = false,
         sessionConfiguration: SessionConfiguration = SessionConfiguration.DEFAULT,
@@ -1268,15 +1346,22 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             )
             val failures = mutableListOf<Throwable>()
             val deviceStore = object : DeviceSettingsStorePort by deps.deviceStore {
+                override suspend fun clearPreRepeatSettings(expectedToken: SessionToken?) {
+                    beforeSnapshotClear?.invoke()
+                    deps.deviceStore.clearPreRepeatSettings(expectedToken)
+                }
                 override suspend fun validatePreRepeatSettings(expectedToken: SessionToken?) {
                     deps.deviceStore.validatePreRepeatSettings(expectedToken)
                     afterRestoreValidation?.invoke()
                 }
                 override fun preRepeatSettingsRestoreAuthority(expectedToken: SessionToken?, expectedDevice: DeviceDTO): RepeatSnapshotRestoreAuthority {
                     val actual = deps.deviceStore.preRepeatSettingsRestoreAuthority(expectedToken, expectedDevice)
-                    return RepeatSnapshotRestoreAuthority { write ->
-                        beforeRestoreWrite?.invoke()
-                        actual.withWrite(write)
+                    return object : RepeatSnapshotRestoreAuthority {
+                        override suspend fun withWrite(write: suspend (RadioWritePermit) -> Unit) {
+                            beforeRestoreWrite?.invoke()
+                            actual.withWrite(write)
+                        }
+                        override fun onRestoreVerified() = actual.onRestoreVerified()
                     }
                 }
             }

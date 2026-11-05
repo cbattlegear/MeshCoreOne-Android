@@ -701,6 +701,7 @@ class SettingsService(
         if (clientRepeat != null) {
             val actualRepeat = configuration { queryDevice() }.clientRepeat
             if (actualRepeat != clientRepeat) verification("clientRepeat=$clientRepeat", "clientRepeat=$actualRepeat")
+            if (!clientRepeat) restoreAuthority?.onRestoreVerified()
             publish(SettingsEvent.ClientRepeatUpdated(clientRepeat, repeatCompletion), repeatCompletion, owner)
         }
         return actual

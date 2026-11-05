@@ -21,6 +21,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.IdlingResource
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
@@ -68,6 +69,7 @@ import com.meshcoreone.android.feature.remotenodes.support.session
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
+import java.util.IdentityHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -303,7 +305,23 @@ class RemoteNeighborConfidenceComposeTest {
             }
         }
         attachAuthenticationWindow()
-        compose.onNodeWithText("Exact login").performScrollTo().assertIsDisplayed()
+        try {
+            compose.onNodeWithText("Exact login").performScrollTo().assertIsDisplayed()
+        } catch (failure: androidx.test.espresso.AppNotIdleException) {
+            val visited = IdentityHashMap<Any, Boolean>()
+            fun diagnose(value: Any, depth: Int) {
+                if (depth > 4 || visited.put(value, true) != null) return
+                if (value is IdlingResource) println("TS07 idler ${value.javaClass.name}: ${value.getDiagnosticMessageIfBusy()}")
+                value.javaClass.declaredFields.filter { field ->
+                    field.type.name.startsWith("androidx.compose.ui.test")
+                }.forEach { field ->
+                    field.isAccessible = true
+                    field.get(value)?.let { diagnose(it, depth + 1) }
+                }
+            }
+            diagnose(compose, 0)
+            throw failure
+        }
         compose.onNodeWithContentDescription("Exact login, ${text(L.remoteNodesStatusPossibleMatch)}").assertDoesNotExist()
         compose.onNodeWithText(text(L.remoteNodesAuthPathHopUnknown)).performScrollTo().assertIsDisplayed()
         openExplanation("Login Alpha")

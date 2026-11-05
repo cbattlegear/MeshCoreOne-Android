@@ -236,7 +236,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         deny(claim, issued)?.let { return@mutate it }
         if (dao.wires(claim.radioId, claim.requestId).none {
-                it.predictedCode == ackCode.toLong() || it.acceptedCode == ackCode.toLong()
+                (it.acceptedCode ?: it.predictedCode) == ackCode.toLong()
             }
         ) return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         ownWrite(dao.deliver(claim.radioId, claim.messageId, ackCode.toLong(), roundTripTime?.toLong()))

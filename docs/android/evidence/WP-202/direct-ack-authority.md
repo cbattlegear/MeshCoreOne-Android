@@ -55,8 +55,11 @@ handles. Process-store close revokes its leases, independently of radio teardown
 Backup restore invalidates grants in its commit transaction even when the
 importer would skip every message. Failed restore rolls invalidation back.
 
-Logical claims precede dispatch. Predicted and returned codes from all wires on
-the same live claim remain eligible. Only typed retry/status/send-count and exact
+Logical claims precede dispatch. A returned code supersedes only its own wire's
+prediction; earlier accepted wires on the same live claim remain eligible.
+Before acceptance, storage still recognizes the prediction; consumers must buffer
+pre-response ACKs until the actual code is bound rather than settle speculatively.
+Only typed retry/status/send-count and exact
 pending completion operations preserve the prevalidated grant. Generic retry
 or queue mutation invalidates it. Explicit resends preserve terminal baselines;
 acceptance never uses a temporary FAILED-to-SENT relabel. Matching delivery is
@@ -375,6 +378,36 @@ started for this committed follow-up; the execution-owner/publication hold
 remains in force.
 
 ## Unresolved ACK origin boundary
+
+### Separate accepted-code mismatch repair
+
+This successor is based on the fixture-only `94af032ee0a7bbe21fee822c86f63edac8745187`
+candidate, not a rewrite of `ce8307fca342121e28d9576141a8df714ecaafcb` or its failed
+run 41980426052. The fixture successor changes only the three new controls'
+initial rows from the shared SENT default to explicit PENDING; no assertions
+or production behavior were changed in that repair.
+
+The separately requested mismatch repair changes current-claim matching from
+`predicted == ack || accepted == ack` to `(accepted ?: predicted) == ack` on
+each persisted wire, while searching all wires in the claim. It does not erase
+historical predicted/actual values, add expiry, gate sends, or prove ACK origin.
+Actual-Room controls reject the contradicted prediction without row, revision,
+receipt, operation-journal or delivery mutation, then deliver using the accepted
+code, both before and after the claim's own failure. Earlier accepted wires
+remain eligible with a newer retry either prepared or accepted.
+
+Two existing post-acceptance success controls deliberately change their ACK
+inputs/expected committed code from prediction 123 to returned code 456:
+`ownFailureAndMatchingAckCommitAtomicallyWithExactTupleReplay` and the terminal
+resend loop of `earlyPredictedAckAndExplicitDeliveredOrFailedResendsPreserveTerminalBookkeeping`.
+Their success, immutable delivery, exact replay, conflicting RTT, terminal
+bookkeeping and independent-mutation assertions remain. This is an explicit
+behavioral correction, not unchanged parity evidence. The latter method's
+separate early-before-response case remains a storage capability control;
+it does not authorize consumer speculative settlement before actual acceptance.
+The existing retry control still asserts retention of all predicted/actual
+history, which is not the same as all those codes remaining eligible.
+No mismatch runtime acceptance is claimed until its own exact-head hosted run.
 
 No producer-side ACK-origin proof is established. The pinned source parser
 `MeshCore/Sources/MeshCore/Protocol/PacketParser.swift:276-286` emits only the

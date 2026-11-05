@@ -181,6 +181,7 @@ class LineOfSightNumericalTest {
         assertEquals(fetchCountAfterAnalysis, fixture.elevation.fetchCount)
         assertNear(54.9690604188, fixture.relay().segmentAR.worstClearancePercent)
         assertNear(51.1507530375, fixture.relay().segmentRB.worstClearancePercent)
+        val clearancesAtK1 = fixture.relay()
         assertTrue(cachedAR === fixture.analyzer.observations[2].profile)
         assertTrue(cachedRB === fixture.analyzer.observations[3].profile)
 
@@ -194,7 +195,9 @@ class LineOfSightNumericalTest {
         assertEquals(fetchCountAfterAnalysis, fixture.elevation.fetchCount)
         assertEquals(6, fixture.analyzer.observations.size)
         assertEquals(4.0 / 3.0, fixture.analyzer.observations.last().result.refractionK)
-        assertTrue(fixture.relay().segmentAR.worstClearancePercent > 54.9690604188)
+        val updatedAtK4Over3 = fixture.relay()
+        assertTrue(updatedAtK4Over3.segmentAR.worstClearancePercent > clearancesAtK1.segmentAR.worstClearancePercent)
+        assertTrue(updatedAtK4Over3.segmentRB.worstClearancePercent > clearancesAtK1.segmentRB.worstClearancePercent)
     }
 
     @Test

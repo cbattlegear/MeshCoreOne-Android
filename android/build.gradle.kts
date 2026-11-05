@@ -11,6 +11,12 @@ plugins {
     id("mesh.scaffold.root")
 }
 
+// AndroidOnly: WP-002 Disposable effective-quiet probe; never merge this diagnostic ref.
+check(gradle.startParameter.logLevel == org.gradle.api.logging.LogLevel.QUIET) {
+    "WP002_QUIET_CONFIGURATION_MISMATCH|${gradle.startParameter.logLevel}"
+}
+logger.quiet("WP002_QUIET_CONFIGURATION_e9287928|effective=${gradle.startParameter.logLevel}")
+
 allprojects {
     val lockName = path.removePrefix(":").replace(":", "-").ifEmpty { "root" }
     dependencyLocking {

@@ -1485,6 +1485,56 @@ class MessagingRoomIntegrationTest {
         invalidateIssuedIntent(queued = true, change = "pending")
     }
 
+    @Test fun inlineDispatchDerivesPayloadFromIssuedSnapshotNotPreCaptureDto() = runTest(scheduler) {
+        dispatchFromIssuedSnapshot(queued = false)
+    }
+
+    @Test fun queuedDispatchDerivesPayloadFromIssuedSnapshotNotPreCaptureDto() = runTest(scheduler) {
+        dispatchFromIssuedSnapshot(queued = true)
+    }
+
+    private suspend fun TestScope.dispatchFromIssuedSnapshot(queued: Boolean) {
+        seed()
+        val actual = store
+        val changed = "replacement B before capture"
+        var replaced = false
+        val replacing = object : DirectRoles(actual) {
+            override suspend fun captureDirectAckIntent(
+                lease: DirectAckLease, key: EntityKey, requestId: UUID, mode: DirectAckMode, pendingSendId: UUID?,
+            ): DirectAckIntentResult {
+                if (!replaced) {
+                    replaced = true
+                    val original = assertNotNull(actual.fetchMessage(key))
+                    actual.saveMessage(original.copy(text = changed, timestamp = original.timestamp - 1u))
+                }
+                return super.captureDirectAckIntent(lease, key, requestId, mode, pendingSendId)
+            }
+        }
+        val g = RadioGeneration(141, replacing, MessageServiceConfig(maxAttempts = 1))
+        g.start(); g.service.startEventMonitoring()
+        val result = if (queued) {
+            val row = g.service.createPendingMessage("cached A", contact)
+            store.upsertPendingSend(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(row.id, contact.id), radio))
+            g.signals.set(DeviceConnectionState.READY); g.queue.hydrate(); runCurrent()
+            g.queue.awaitDrainCompletion()
+            assertNotNull(store.fetchMessage(EntityKey(radio, row.id)))
+        } else {
+            g.service.sendDirectMessage("cached A", contact).also { runCurrent() }
+        }
+        assertTrue(replaced)
+        val wire = g.firmware.sent().single()
+        assertEquals(Bytes.utf8(changed), wire.slice(13, wire.size))
+        assertEquals(base.epochSecond.toUInt() - 1u, wire.readUInt32LE(3))
+        val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, result.id)))
+        assertEquals(changed, delivered.text)
+        assertEquals(wire.readUInt32LE(3), delivered.timestamp)
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        assertEquals(123u, delivered.roundTripTime)
+        assertEquals(0, g.service.pendingAckCount)
+        g.stop()
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, result.id)))
+    }
+
     private suspend fun TestScope.invalidateIssuedIntent(queued: Boolean, change: String) {
         seed()
         val entered = CompletableDeferred<Unit>()

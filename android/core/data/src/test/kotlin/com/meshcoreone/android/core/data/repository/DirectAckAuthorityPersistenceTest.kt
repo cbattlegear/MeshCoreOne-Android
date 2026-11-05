@@ -555,6 +555,7 @@ class DirectAckAuthorityPersistenceTest {
             { db.messages().upsert(it.toEntity()) },
             { store.saveMessage(it) },
             { db.messages().setAck(RADIO_A.value, it.id, 123, 2, null) },
+            { db.messages().setAck(RADIO_A.value, it.id, 456, 3, 7) },
             { db.messages().setRetryStatus(RADIO_A.value, it.id, 5, 1, 4) },
             { db.openHelper.writableDatabase.execSQL("UPDATE messages SET statusRawValue = statusRawValue") },
             { db.messages().delete(RADIO_A.value, it.id); db.messages().insert(it.toEntity()) },
@@ -780,6 +781,13 @@ class DirectAckAuthorityPersistenceTest {
             DirectPendingCompletionReason.ZeroAttempts(-1),
         )) assertEquals(DirectAckRejection.NOT_ELIGIBLE, assertIs<DirectPendingCaptureResult.Rejected>(
             store.captureDirectPendingCompletion(lease, entity(id = row.id), queued.id, UUID.randomUUID(), reason),
+        ).reason)
+        val delivered = row.copy(status = MessageStatus.DELIVERED)
+        store.saveMessage(delivered)
+        store.upsertPendingSend(queued.copy(isResend = true))
+        assertEquals(DirectAckRejection.NOT_ELIGIBLE, assertIs<DirectPendingCaptureResult.Rejected>(
+            store.captureDirectPendingCompletion(lease, entity(id = row.id), queued.id, UUID.randomUUID(),
+                DirectPendingCompletionReason.AlreadyDeliveredSend),
         ).reason)
     }
 

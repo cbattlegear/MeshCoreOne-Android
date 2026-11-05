@@ -829,6 +829,48 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun targetedSameAliasRemovalRebasesEditorRoomAndLiveInBothOrders() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = h.sessions.current!!.token
+            val short = "a".repeat(25) + "\u00e9\u754c"
+            assertEquals(30, short.toByteArray(Charsets.UTF_8).size)
+            val long = short + "-suffix"
+            for ((removed, survivor) in listOf(short to long, long to short)) {
+                val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(before.id))
+                val seeded = ticket.device.copy(
+                    knownRegions = listOf(short, long).snapshot(), defaultFloodScopeName = short,
+                )
+                assertTrue(store.saveDeviceIfUnchanged(seeded, ticket))
+                h.container.deviceEditor.updateDevice(seeded)
+                paused.beforeSave = {
+                    store.removeDeviceKnownRegion(before.radioId, removed)
+                    val targeted = assertNotNull(store.fetchDevice(before.id))
+                    assertEquals(listOf(survivor), targeted.knownRegions.toList())
+                    assertEquals(short, targeted.defaultFloodScopeName)
+                    assertEquals(seeded, h.manager.connectedDevice, "The direct writer has not published editor live state")
+                }
+                assertTrue(h.container.deviceEditor.persistKnownRegionRemoval(removed, token))
+                val retained = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(listOf(survivor), retained.knownRegions.toList())
+                assertEquals(short, retained.defaultFloodScopeName)
+                assertEquals(retained, h.manager.connectedDevice)
+                assertTrue(h.container.deviceEditor.persistKnownRegionRemoval(survivor, token))
+                val cleared = assertNotNull(store.fetchDevice(before.id))
+                assertTrue(cleared.knownRegions.isEmpty())
+                assertNull(cleared.defaultFloodScopeName)
+                assertEquals(cleared, h.manager.connectedDevice)
+                assertEquals(token, h.manager.snapshot.value.token)
+                assertTrue(h.manager.connectionState.isOperational)
+            }
+            assertEquals(2, paused.rejected, "Each same-target removal must invalidate the production editor's ticket")
+        } finally { h.container.close() }
+    }
+
     private fun DeviceDTO.info(frequency: Double = 915.0) = SelfInfo(
         advertisementType = 0u, txPower = txPower, maxTxPower = maxTxPower, publicKey = publicKey,
         latitude = latitude, longitude = longitude, multiAcks = multiAcks,

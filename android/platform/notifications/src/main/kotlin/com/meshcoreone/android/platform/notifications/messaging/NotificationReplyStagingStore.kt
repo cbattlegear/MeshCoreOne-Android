@@ -998,10 +998,10 @@ class NotificationReplyStagingStore internal constructor(
                             if (db.version >= 6) "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
                             else if (db.version >= 5) "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?,?)"
                             else "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?)",
-                            if (db.version >= 6) values + arrayOf<Any?>(
+                            if (db.version >= 6) values.plus(elements = arrayOf<Any?>(
                                 maxReplyCodeUnits, publicationAttempt?.attemptId?.toString(),
                                 publicationAttempt?.ownerId?.toString(),
-                            ) else if (db.version >= 5) values + maxReplyCodeUnits else values,
+                            )) else if (db.version >= 5) values + maxReplyCodeUnits else values,
                         )
                         val count = issued.records.size.toLong() + 1
                         val total = issued.contentBytes + bytes

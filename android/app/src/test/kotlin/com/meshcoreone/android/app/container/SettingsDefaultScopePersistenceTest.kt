@@ -1178,9 +1178,10 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
             radio.respond = { command ->
                 when (command[0].toInt()) {
                     0x0b -> {
+                        check(command.size == 11 || command.size == 12) { "Invalid SET_RADIO frame length ${command.size}" }
                         radioWrites += command
                         radioParams = command.slice(1, 11)
-                        repeatEnabled = command[11] != 0u.toUByte()
+                        repeatEnabled = command.size == 12 && command[11] != 0u.toUByte()
                         listOf(Bytes.of(0))
                     }
                     0x0c -> {

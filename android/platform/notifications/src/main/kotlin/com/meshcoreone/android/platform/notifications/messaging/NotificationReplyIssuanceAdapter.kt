@@ -38,8 +38,10 @@ sealed interface NotificationReplyDeliveryParsing {
 }
 
 /**
- * Deliberately unused by notification posting and the receiver until real installation provisioning,
- * atomic admission and visible failure handling exist together. Does not authenticate human/RF origin.
+ * Deliberately unused by live notification posting. Its private component rejects every delivery
+ * until real installation provisioning, atomic admission and visible failure handling exist together.
+ * A fixed explicit component isolates it from legacy decoding; extras are not that boundary.
+ * Does not authenticate human/RF origin.
  */
 class NotificationReplyIssuanceAdapter internal constructor(
     context: Context,
@@ -71,13 +73,12 @@ class NotificationReplyIssuanceAdapter internal constructor(
             return NotificationReplyPreparation.NotIssued(Failure.CORRUPT_STORAGE)
         }
         currentCoroutineContext().ensureActive()
-        val intent = Intent(context, NotificationActionReceiver::class.java)
+        val intent = Intent(context, UnactivatedIssuedReplyReceiver::class.java)
             .setAction(ACTION)
             .setData(identity(reserved.storeId, proposal.token))
             .putExtra(EXTRA_STORE, reserved.storeId.toString())
             .putExtra(EXTRA_TOKEN, proposal.token.toString())
-            // Base extras win over mutable fill-in extras. Prevent legacy payload-codec fallback
-            // even if a token holder supplies a complete forged legacy payload in its fill-in.
+            // Defense in depth only. The dedicated component, not an extra, prevents legacy routing.
             .putExtra(LEGACY_PAYLOAD_TYPE, ISSUED_TYPE)
         val pending = try {
             PendingIntent.getBroadcast(
@@ -104,9 +105,8 @@ class NotificationReplyIssuanceAdapter internal constructor(
     }
 
     private fun parseIdentityAndInput(intent: Intent): NotificationReplyDeliveryParsing {
-        if (intent.action != ACTION || intent.component?.className != NotificationActionReceiver::class.java.name ||
-            intent.component?.packageName != context.packageName ||
-            intent.getStringExtra(LEGACY_PAYLOAD_TYPE) != ISSUED_TYPE
+        if (intent.action != ACTION || intent.component?.className != UnactivatedIssuedReplyReceiver::class.java.name ||
+            intent.component?.packageName != context.packageName
         ) return rejected(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
         val rawStore = intent.getStringExtra(EXTRA_STORE)
             ?: return rejected(NotificationReplyDeliveryParsing.ParseFailure.MISSING_IDENTITY)

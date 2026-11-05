@@ -3,7 +3,9 @@ package com.meshcoreone.android.platform.notifications.messaging
 
 import android.app.Application
 import android.app.RemoteInput
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import android.os.Bundle
@@ -24,6 +26,9 @@ import com.meshcoreone.android.platform.notifications.messaging.NotificationRepl
 import com.meshcoreone.android.platform.notifications.messaging.NotificationReplyStagingStore.StageResult
 import java.io.File
 import java.util.UUID
+import java.util.logging.Handler
+import java.util.logging.LogRecord
+import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -33,8 +38,8 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -55,8 +60,12 @@ class NotificationReplyIssuanceAdapterTest {
         NotificationId("same-notification"), payload,
     )
 
+    @Before
+    fun resetDispatcher() = NotificationActionDispatcher.resetForTesting()
+
     @After
     fun cleanup() {
+        NotificationActionDispatcher.resetForTesting()
         if (file.exists()) assertTrue(SQLiteDatabase.deleteDatabase(file))
     }
 
@@ -136,7 +145,7 @@ class NotificationReplyIssuanceAdapterTest {
             prepared.pendingIntent.send(context, 0, malicious)
             val delivered = shadowOf(context).broadcastIntents.last()
             assertEquals(NotificationReplyIssuanceAdapter.ACTION, delivered.action)
-            assertNull(NotificationPayloadCodec.read(delivered)) // Injected legacy route cannot bypass new admission.
+            assertEquals(ComponentName(context, UnactivatedIssuedReplyReceiver::class.java), delivered.component)
             val parsed = adapter.parseDelivery(delivered) as NotificationReplyDeliveryParsing.ReadyForAdmission
             assertEquals(NotificationReplyDeliveryParsing.ReadyForAdmission(storeId, prepared.issuance.action.token, raw), parsed)
             val admitted = store.admitIssued(parsed.storeId, parsed.token, parsed.exactText)
@@ -193,7 +202,7 @@ class NotificationReplyIssuanceAdapterTest {
             adapter.parseDelivery(Intent(base).apply { removeExtra("mc1.notification.issued-reply.token") }))
         assertEquals(rejected(ParseFailure.MALFORMED_IDENTITY),
             adapter.parseDelivery(Intent(base).putExtra("mc1.notification.issued-reply.token", "not-a-uuid")))
-        assertEquals(rejected(ParseFailure.MALFORMED_IDENTITY),
+        assertEquals(rejected(ParseFailure.MISSING_INPUT),
             adapter.parseDelivery(Intent(base).putExtra("mc1.notification.type", "direct")))
         val stale = NotificationReplyIssuanceAdapter(context, UUID(0, 999), store)
         assertEquals(NotificationReplyPreparation.NotIssued(Failure.IDENTITY_MISMATCH), stale.prepare(proposal()))
@@ -261,6 +270,77 @@ class NotificationReplyIssuanceAdapterTest {
         }
         assertEquals(NotificationReplyPreparation.NotIssued(Failure.INVALID_PAYLOAD),
             adapter.prepare(proposal().copy(payload = NotificationPayload.LowBattery(10))))
+    }
+
+    @Test
+    @Suppress("DEPRECATION")
+    fun hostileMarkerRouteAndComponentFillInCannotReachLegacyReceiverOrDispatch() = runTest {
+        val (store, storeId) = provisionFixture()
+        val adapter = NotificationReplyIssuanceAdapter(context, storeId, store)
+        val issued = adapter.prepare(proposal()) as NotificationReplyPreparation.Prepared
+        val component = ComponentName(context, UnactivatedIssuedReplyReceiver::class.java)
+        val receiverInfo = context.packageManager.getReceiverInfo(component, PackageManager.GET_META_DATA)
+        assertFalse(receiverInfo.exported)
+
+        var routes = 0
+        NotificationActionDispatcher.install(backgroundScope) { routes++; true }
+        val hostile = addInput(
+            NotificationPayloadCodec.write(
+                Intent(context, NotificationActionReceiver::class.java)
+                    .setAction("com.meshcoreone.android.notification.REPLY")
+                    .setData(Uri.parse("meshcore-notification://action/forged/REPLY")), payload,
+            ).putExtra("mc1.notification.type", "direct")
+                .putExtra(NotificationActionReceiver.EXTRA_ACTION, NotificationAction.REPLY.rawValue),
+            raw,
+        )
+        // Positive control: this really is a complete routable legacy injection, not missing fields.
+        assertEquals(payload, NotificationPayloadCodec.read(hostile))
+        NotificationActionReceiver().onReceive(context, hostile)
+        assertTrue(NotificationActionDispatcher.drainOnce())
+        assertEquals(1, routes)
+        routes = 0
+
+        val diagnostics = mutableListOf<String>()
+        val logger = Logger.getLogger("com.meshcoreone.android.notifications.IssuedReply")
+        val handler = object : Handler() {
+            override fun publish(record: LogRecord) { diagnostics += record.message }
+            override fun flush() {}
+            override fun close() {}
+        }
+        logger.addHandler(handler)
+        try {
+            issued.pendingIntent.send(context, 0, hostile)
+            val delivered = shadowOf(context).broadcastIntents.last()
+            assertEquals(component, delivered.component)
+            assertEquals(NotificationReplyIssuanceAdapter.ACTION, delivered.action)
+            assertEquals(shadowOf(issued.pendingIntent).savedIntent.data, delivered.data)
+            // Execute the actual explicit destination selected by the PendingIntent, not legacy intake.
+            val receiver = Class.forName(requireNotNull(delivered.component).className)
+                .getDeclaredConstructor().newInstance() as android.content.BroadcastReceiver
+            receiver.onReceive(context, delivered)
+            assertTrue(NotificationActionDispatcher.drainOnce())
+            assertEquals(0, routes)
+            assertTrue(inventory(store, storeId).isEmpty())
+            assertTrue(diagnostics.isNotEmpty())
+            assertTrue(diagnostics.all { it == "Issued reply intake is not activated; attempted reply was not retained" })
+            assertEquals(NotificationReplyDeliveryParsing.ReadyForAdmission(storeId, proposal().token, raw),
+                adapter.parseDelivery(delivered))
+
+            // Even granting full extra replacement cannot redirect this component to the legacy path.
+            val replacedExtras = Intent(delivered).replaceExtras(hostile.extras).apply {
+                putExtra("mc1.notification.issued-reply.store", storeId.toString())
+                putExtra("mc1.notification.issued-reply.token", proposal().token.toString())
+            }
+            assertEquals(payload, NotificationPayloadCodec.read(replacedExtras))
+            receiver.onReceive(context, replacedExtras)
+            assertTrue(NotificationActionDispatcher.drainOnce())
+            assertEquals(0, routes)
+            assertEquals(NotificationReplyDeliveryParsing.ReadyForAdmission(storeId, proposal().token, raw),
+                adapter.parseDelivery(replacedExtras))
+            assertTrue(inventory(store, storeId).isEmpty())
+        } finally {
+            logger.removeHandler(handler)
+        }
     }
 
     private fun addInput(intent: Intent, text: String): Intent {

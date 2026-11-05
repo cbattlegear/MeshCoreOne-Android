@@ -5,5 +5,8 @@
         <receiver
             android:name="com.meshcoreone.android.platform.notifications.messaging.NotificationActionReceiver"
             android:exported="false" />
+        <receiver
+            android:name="com.meshcoreone.android.platform.notifications.messaging.UnactivatedIssuedReplyReceiver"
+            android:exported="false" />
     </application>
 </manifest>

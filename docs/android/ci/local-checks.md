@@ -615,6 +615,10 @@ actual Kotlin compiler inputs in the current invocation's source stream under
 that distinct task identity. Its compiler cannot reuse an up-to-date/cache
 result instead of emitting a fresh observation. Missing, empty, duplicate,
 wrong-task, changed or unexpected source inventories fail closed.
+Producer and authoritative log reader share the supported `src/androidTest/kotlin/`
+and `src/androidTest/java/` Kotlin roots; both still reject Java files. Root
+acceptance does not replace immutable blob equality or admit those additional
+instrumentation sources into the JVM remap.
 
 The instrumentation map must equal the immutable AndroidTest Kotlin sources
 minus the seven exact reply-test paths, retaining all three original messaging

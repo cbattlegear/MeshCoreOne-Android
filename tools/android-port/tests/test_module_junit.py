@@ -244,6 +244,56 @@ class {name} {{ @Test fun required() {{}} }}
         with self.assertRaisesRegex(PortError, "inputs differ"):
             notification_instrumentation_evidence(self.repo, inventory, tasks)
 
+    def test_instrumentation_java_root_kotlin_producer_to_authoritative_log(self):
+        from controller.ci import TASKS
+        from controller.ci_evidence import suite_case_ids
+        from controller.local_scope import candidate_plan
+        from controller.repair_acceptance import validate_build_log
+        from test_repair_acceptance import build_log
+
+        inventory, record, _ = self.instrumentation_fixture(replies=False)
+        base = self.command("rev-parse", "HEAD^")
+        module = "platform/notifications"
+        relative = "src/androidTest/java/sample/JavaRootFixture.kt"
+        self.source(module, relative, "package sample\nclass JavaRootFixture {}\n")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "Kotlin instrumentation in Java source root")
+        head = self.command("rev-parse", "HEAD")
+        path = "android/" + module + "/" + relative
+        blob = module_sources(self.repo)[module][path]
+        record["sources"].append({"path": path, "blob": blob})
+        inventory.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        tasks = [*TASKS["scaffold"], *notification_instrumentation_tasks(self.repo)]
+        instrumentation = notification_instrumentation_evidence(self.repo, inventory, tasks)
+        self.assertEqual(instrumentation["sources"][path], blob)
+        compiled = self.compiled_notification_sources()
+        self.assertNotIn(path, compiled[module])
+        suite = check_module_tests(self.repo, compiled)[module]
+        methods = [
+            {"class": case["class"], "method": case["method"]}
+            for case in suite_case_ids(notification_report(self.repo).parent)
+        ]
+        log = build_log(
+            [module], tasks=tasks, scopes=["scaffold"],
+            notification_instrumentation=instrumentation, compiled_test_sources=compiled,
+            module_unit_tests={module: suite}, unit_test_methods={module: methods},
+        )
+        proof = validate_build_log(
+            log, [module], plan_for_scopes=lambda scopes: candidate_plan(
+                self.repo, base, head, scopes, trusted_base=base,
+            ),
+        )
+        self.assertEqual(proof["methods"][module], methods)
+        record["sources"][-1]["blob"] = "0" * 40
+        inventory.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(PortError, "differs from immutable"):
+            notification_instrumentation_evidence(self.repo, inventory, tasks)
+        self.source(module, relative.replace(".kt", ".java"), "package sample; class JavaFixture {}\n")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "Java instrumentation remains unsupported")
+        with self.assertRaisesRegex(PortError, "Unsupported Java"):
+            notification_instrumentation_evidence(self.repo, inventory, tasks)
+
     def test_instrumentation_profile_preserves_candidates_without_reply_sources(self):
         inventory, _, expected = self.instrumentation_fixture(replies=False)
         tasks = [*remapped_tasks(self.repo), *notification_instrumentation_tasks(self.repo)]

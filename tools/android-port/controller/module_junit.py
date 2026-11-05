@@ -14,6 +14,7 @@ UNIT_SOURCE = re.compile(r"src/(?:test|testDebug)/(?:java|kotlin)/.+\.(?:java|kt
 SEPARATE_SUITES = {"core/contracts", "core/protocol", "core/testing"}
 REPORT_LOCATIONS = ("build/test-results/test", "build/test-results/testDebugUnitTest")
 NOTIFICATION_ROOT = "src/androidTest/kotlin/com/meshcoreone/android/platform/notifications/messaging"
+NOTIFICATION_INSTRUMENTATION_ROOTS = ("src/androidTest/kotlin/", "src/androidTest/java/")
 NOTIFICATION_RESOURCE_ROOTS = tuple(
     "src/" + source_set + "/resources" for source_set in ("main", "debug", "test", "testDebug")
 )
@@ -167,7 +168,7 @@ def notification_instrumentation_evidence(repo, path, tasks, revision=None):
     expected = {}
     for source, blob in inputs.items():
         relative = source[len(prefix):]
-        if not relative.startswith(("src/androidTest/kotlin/", "src/androidTest/java/")):
+        if not relative.startswith(NOTIFICATION_INSTRUMENTATION_ROOTS):
             continue
         if relative.endswith(".java"):
             raise PortError("Unsupported Java notification instrumentation input: " + source)

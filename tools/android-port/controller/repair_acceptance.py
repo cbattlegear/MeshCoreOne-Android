@@ -722,7 +722,7 @@ def read_job_log(native, job_id):
 def _notification_instrumentation_report(report, compiled):
     from .module_junit import (
         NOTIFICATION_INSTRUMENTATION_BASELINE, NOTIFICATION_INSTRUMENTATION_TASK,
-        NOTIFICATION_REPLY_SOURCES,
+        NOTIFICATION_INSTRUMENTATION_ROOTS, NOTIFICATION_REPLY_SOURCES,
     )
 
     proof = report.get("notification_instrumentation")
@@ -747,7 +747,8 @@ def _notification_instrumentation_report(report, compiled):
     for path, blob in sources.items():
         if (
             not isinstance(path, str) or git_path(path) != path
-            or not path.startswith(prefix + "src/androidTest/kotlin/") or not path.endswith(".kt")
+            or not path.startswith(tuple(prefix + root for root in NOTIFICATION_INSTRUMENTATION_ROOTS))
+            or not path.endswith(".kt")
             or not isinstance(blob, str) or SHA.fullmatch(blob) is None or path in replies
         ):
             raise PortError("Malformed or excluded notification instrumentation source")
